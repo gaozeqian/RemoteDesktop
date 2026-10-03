@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+        x:Class="RemoteDesktop.Client.Views.RemoteDesktopWindow"
+        x:DataType="vm:RemoteDesktopViewModel"
+        Title="{Binding Title}"
+        Width="1280" Height="760" Background="Black">
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,6">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#DDFFFFFF" FontSize="12" TextTrimming="CharacterEllipsis" />
+        <Button Grid.Column="1" Content="断开" Command="{Binding DisconnectCommand}" Margin="12,0,0,0" />
+      </Grid>
+    </Border>
+    <!-- Focusable so keyboard input goes to the remote desktop instead of moving focus around the window. -->
+    <Image x:Name="Screen" Stretch="Uniform" Focusable="True" Cursor="Arrow" />
+  </DockPanel>
+</Window>

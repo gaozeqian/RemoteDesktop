@@ -11,6 +11,9 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("Only Windows is supported in phase 1.");
 }
 
+// Capture, display bounds and SendInput must all use physical pixels.
+WindowsProcess.EnablePerMonitorDpiAwareness();
+
 var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktop");
 builder.Services.AddWindowsPlatform(dataDirectory, DataProtectionScope.LocalMachine);
 

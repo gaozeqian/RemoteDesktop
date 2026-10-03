@@ -2,8 +2,11 @@ using System.Globalization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
+using RemoteDesktop.Features.Desktop;
+using RemoteDesktop.Media;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -15,18 +18,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly HostCredentials _credentials;
     private readonly ControllerSessionService _controller;
     private readonly HostSessionService _host;
+    private readonly VideoCodecSelector _codecs;
+    private readonly TimeProvider _time;
+    private readonly ILogger<DesktopViewer> _viewerLogger;
     private RemoteSession? _session;
 
     public MainWindowViewModel(
         IRendezvousClient rendezvous,
         HostCredentials credentials,
         ControllerSessionService controller,
-        HostSessionService host)
+        HostSessionService host,
+        VideoCodecSelector codecs,
+        TimeProvider time,
+        ILogger<DesktopViewer> viewerLogger)
     {
         _rendezvous = rendezvous;
         _credentials = credentials;
         _controller = controller;
         _host = host;
+        _codecs = codecs;
+        _time = time;
+        _viewerLogger = viewerLogger;
 
         _rendezvous.StateChanged += (_, _) => Dispatcher.UIThread.Post(UpdateServerState);
         _credentials.Changed += (_, _) => Dispatcher.UIThread.Post(() => TemporaryPassword = _credentials.TemporaryPassword);
@@ -69,6 +81,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? StatusMessage { get; set; }
 
+    /// <summary>Raised on the UI thread when a remote desktop window should be shown.</summary>
+    public event EventHandler<RemoteDesktopViewModel>? RemoteDesktopOpened;
+
     [RelayCommand]
     private void RefreshPassword() => _credentials.RotateTemporaryPassword();
 
@@ -88,6 +103,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             session.Closed += (_, _) => Dispatcher.UIThread.Post(() => OnSessionClosed(session));
             IsConnected = true;
             UpdateSessionStatus(session);
+            await OpenDesktopAsync(session, cancellationToken);
         }
         catch (PeerConnectException ex)
         {
@@ -114,6 +130,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             StatusMessage = null;
         }
+    }
+
+    private async Task OpenDesktopAsync(RemoteSession session, CancellationToken cancellationToken)
+    {
+        var connection = session.Context.Connection;
+        var viewer = await DesktopViewer.StartAsync(connection, _codecs, maxFrameRate: 60, _time, _viewerLogger, cancellationToken);
+
+        // In watch mode the host would refuse the channel anyway; not opening it keeps the intent explicit.
+        var input = session.Context.Grant.Allows(Permissions.ControlInput)
+            ? await InputSender.OpenAsync(connection, cancellationToken)
+            : null;
+
+        RemoteDesktopOpened?.Invoke(this, new RemoteDesktopViewModel(session, viewer, input));
     }
 
     private bool CanDisconnect() => IsConnected;

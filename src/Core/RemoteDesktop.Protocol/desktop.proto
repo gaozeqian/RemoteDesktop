@@ -1,0 +1,114 @@
+// Messages of the desktop feature (video and input channels).
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.desktop;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Desktop";
+
+// ---- Video channel (opened by the controller, bidirectional) ----
+// Envelope frames carry VideoControl; encoded pictures use the binary VideoData frame (see VideoDataFrame).
+
+message VideoControl {
+  oneof body {
+    VideoRequest request = 1;
+    VideoStreamInfo stream_info = 2;
+    KeyFrameRequest key_frame_request = 3;
+  }
+}
+
+enum VideoCodecMessage {
+  VIDEO_CODEC_H264 = 0;
+  VIDEO_CODEC_H265 = 1;
+}
+
+enum QualityPreference {
+  QUALITY_PREFERENCE_SMOOTHNESS = 0;
+  QUALITY_PREFERENCE_QUALITY = 1;
+}
+
+message DisplayDescription {
+  string id = 1;
+  string name = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  bool primary = 5;
+}
+
+// Controller -> host, first message on the channel.
+message VideoRequest {
+  // Empty selects the primary display.
+  string display_id = 1;
+  uint32 max_frame_rate = 2;
+  QualityPreference preference = 3;
+}
+
+// Host -> controller, before the first picture and whenever the stream is reconfigured.
+message VideoStreamInfo {
+  VideoCodecMessage codec = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string display_id = 4;
+  string encoder_name = 5;
+  bool hardware_encoder = 6;
+  repeated DisplayDescription displays = 7;
+}
+
+// Controller -> host after packet loss or a decoder error.
+message KeyFrameRequest {
+}
+
+// ---- Input channel (opened by the controller, controller -> host only) ----
+
+enum PointerButtonMessage {
+  POINTER_BUTTON_LEFT = 0;
+  POINTER_BUTTON_RIGHT = 1;
+  POINTER_BUTTON_MIDDLE = 2;
+  POINTER_BUTTON_X1 = 3;
+  POINTER_BUTTON_X2 = 4;
+}
+
+message InputMessage {
+  oneof body {
+    PointerMove pointer_move = 1;
+    PointerButton pointer_button = 2;
+    PointerWheel pointer_wheel = 3;
+    Key key = 4;
+    Text text = 5;
+  }
+}
+
+// Coordinates are normalized to the display (0..1).
+message PointerMove {
+  string display_id = 1;
+  double x = 2;
+  double y = 3;
+}
+
+message PointerButton {
+  string display_id = 1;
+  double x = 2;
+  double y = 3;
+  PointerButtonMessage button = 4;
+  bool down = 5;
+}
+
+// Deltas in 1/120 of a notch (Windows WHEEL_DELTA units).
+message PointerWheel {
+  string display_id = 1;
+  double x = 2;
+  double y = 3;
+  sint32 delta_x = 4;
+  sint32 delta_y = 5;
+}
+
+// PC scan code set 1, so the host's keyboard layout applies.
+message Key {
+  uint32 scan_code = 1;
+  bool extended = 2;
+  bool down = 3;
+}
+
+message Text {
+  string value = 1;
+}

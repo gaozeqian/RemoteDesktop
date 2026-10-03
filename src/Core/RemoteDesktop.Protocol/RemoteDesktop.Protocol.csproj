@@ -8,5 +8,6 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="control.proto" GrpcServices="None" />
+    <Protobuf Include="desktop.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

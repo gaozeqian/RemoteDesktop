@@ -1,0 +1,136 @@
+namespace RemoteDesktop.Media;
+
+/// <summary>
+/// BGRA ↔ NV12 with BT.709 limited-range coefficients (16.16 fixed point). Both peers use these functions, so the
+/// colour matrix is consistent regardless of what the bitstream's VUI says. Large frames are split into row bands
+/// processed in parallel.
+/// </summary>
+public static unsafe class ColorConversion
+{
+    private const int BandRows = 32;
+
+    /// <param name="bgra">Source pixels; rows are <paramref name="bgraStride"/> bytes apart.</param>
+    /// <param name="nv12">Destination: Y plane (<paramref name="nv12Stride"/> × height) then UV plane.</param>
+    public static void BgraToNv12(ReadOnlySpan<byte> bgra, int bgraStride, int width, int height, Span<byte> nv12, int nv12Stride)
+    {
+        Validate(width, height);
+        if (bgra.Length < ((height - 1) * bgraStride) + (width * 4) || nv12.Length < nv12Stride * height * 3 / 2)
+        {
+            throw new ArgumentException("Buffer too small for the frame size.");
+        }
+
+        fixed (byte* src = bgra)
+        fixed (byte* dst = nv12)
+        {
+            var source = (nint)src;
+            var destination = (nint)dst;
+            ForEachBand(height, (top, bottom) =>
+                BgraToNv12Rows((byte*)source, bgraStride, width, (byte*)destination, nv12Stride, height, top, bottom));
+        }
+    }
+
+    public static void Nv12ToBgra(ReadOnlySpan<byte> nv12, int nv12Stride, int width, int height, Span<byte> bgra, int bgraStride)
+    {
+        Validate(width, height);
+        if (nv12.Length < nv12Stride * height * 3 / 2 || bgra.Length < ((height - 1) * bgraStride) + (width * 4))
+        {
+            throw new ArgumentException("Buffer too small for the frame size.");
+        }
+
+        fixed (byte* src = nv12)
+        fixed (byte* dst = bgra)
+        {
+            var source = (nint)src;
+            var destination = (nint)dst;
+            ForEachBand(height, (top, bottom) =>
+                Nv12ToBgraRows((byte*)source, nv12Stride, width, height, (byte*)destination, bgraStride, top, bottom));
+        }
+    }
+
+    private static void Validate(int width, int height)
+    {
+        if (width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0)
+        {
+            throw new ArgumentException("NV12 needs even dimensions of at least 2x2.");
+        }
+    }
+
+    // Bands always start on an even row so each band owns whole chroma rows.
+    private static void ForEachBand(int height, Action<int, int> body)
+    {
+        var bands = (height + BandRows - 1) / BandRows;
+        if (bands <= 2)
+        {
+            body(0, height);
+            return;
+        }
+
+        Parallel.For(0, bands, band => body(band * BandRows, Math.Min(height, (band + 1) * BandRows)));
+    }
+
+    private static void BgraToNv12Rows(byte* bgra, int bgraStride, int width, byte* nv12, int stride, int height, int top, int bottom)
+    {
+        var uvPlane = nv12 + (stride * height);
+        for (var y = top; y < bottom; y += 2)
+        {
+            var row0 = bgra + (y * bgraStride);
+            var row1 = row0 + bgraStride;
+            var y0 = nv12 + (y * stride);
+            var y1 = y0 + stride;
+            var uv = uvPlane + (y / 2 * stride);
+
+            for (var x = 0; x < width; x += 2)
+            {
+                var p00 = row0 + (x * 4);
+                var p01 = p00 + 4;
+                var p10 = row1 + (x * 4);
+                var p11 = p10 + 4;
+
+                y0[x] = Luma(p00);
+                y0[x + 1] = Luma(p01);
+                y1[x] = Luma(p10);
+                y1[x + 1] = Luma(p11);
+
+                // Average the 2x2 block for chroma.
+                var b = p00[0] + p01[0] + p10[0] + p11[0];
+                var g = p00[1] + p01[1] + p10[1] + p11[1];
+                var r = p00[2] + p01[2] + p10[2] + p11[2];
+                uv[x] = Clamp(128 + ((((-6597 * r) - (22187 * g) + (28784 * b)) / 4 + 32768) >> 16));
+                uv[x + 1] = Clamp(128 + ((((28784 * r) - (26147 * g) - (2637 * b)) / 4 + 32768) >> 16));
+            }
+        }
+    }
+
+    private static byte Luma(byte* p) => (byte)(16 + (((11966 * p[2]) + (40254 * p[1]) + (4064 * p[0]) + 32768) >> 16));
+
+    private static void Nv12ToBgraRows(byte* nv12, int stride, int width, int height, byte* bgra, int bgraStride, int top, int bottom)
+    {
+        var uvPlane = nv12 + (stride * height);
+        for (var y = top; y < bottom; y++)
+        {
+            var luma = nv12 + (y * stride);
+            var uv = uvPlane + (y / 2 * stride);
+            var output = bgra + (y * bgraStride);
+            for (var x = 0; x < width; x += 2)
+            {
+                var d = uv[x] - 128;
+                var e = uv[x + 1] - 128;
+                var red = (117489 * e) + 32768;
+                var green = (-13975 * d) - (34925 * e) + 32768;
+                var blue = (138438 * d) + 32768;
+
+                for (var i = 0; i < 2; i++)
+                {
+                    var c = 76309 * (luma[x + i] - 16);
+                    var pixel = output + ((x + i) * 4);
+                    pixel[0] = Clamp((c + blue) >> 16);
+                    pixel[1] = Clamp((c + green) >> 16);
+                    pixel[2] = Clamp((c + red) >> 16);
+                    pixel[3] = 255;
+                }
+            }
+        }
+    }
+
+    private static byte Clamp(int value) => (byte)Math.Clamp(value, 0, 255);
+}

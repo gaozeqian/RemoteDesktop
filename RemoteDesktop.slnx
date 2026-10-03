@@ -40,5 +40,6 @@
     <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.ArchitectureTests/RemoteDesktop.ArchitectureTests.csproj" />
     <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Platform.Windows.Tests/RemoteDesktop.Platform.Windows.Tests.csproj" />
   </Folder>
 </Solution>

@@ -15,6 +15,9 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("Only Windows is supported in phase 1.");
 }
 
+// Capture, display bounds and SendInput must all use physical pixels.
+WindowsProcess.EnablePerMonitorDpiAwareness();
+
 const string ServiceName = "RemoteDesktopHost";
 
 var builder = Host.CreateApplicationBuilder(args);

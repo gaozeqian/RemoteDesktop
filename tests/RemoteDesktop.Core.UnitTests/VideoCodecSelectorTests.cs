@@ -58,9 +58,13 @@ public class VideoCodecSelectorTests
     {
         public FakeEncoderFactory Factory => factory;
 
+        public string Name => factory.Name;
+
+        public bool IsHardware => factory.IsHardware;
+
         public VideoEncoderOptions Options => options;
 
-        public EncodedVideoFrame? Encode(VideoFrame frame, bool forceKeyFrame) => null;
+        public IReadOnlyList<EncodedVideoFrame> Encode(VideoFrame frame, bool forceKeyFrame) => [];
 
         public void SetBitrate(int bitrateKbps)
         {
