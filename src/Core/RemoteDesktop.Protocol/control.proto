@@ -1,0 +1,67 @@
+// Messages on the control channel of a peer connection (one frame = one envelope).
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.control;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Control";
+
+message ControlMessage {
+  oneof body {
+    Hello hello = 1;
+    AuthChallenge auth_challenge = 2;
+    AuthResponse auth_response = 3;
+    AuthResult auth_result = 4;
+    Ping ping = 5;
+    Pong pong = 6;
+  }
+}
+
+enum SessionModeMessage {
+  SESSION_MODE_CONTROL = 0;
+  SESSION_MODE_VIEW = 1;
+}
+
+// Controller -> host, first message of a session.
+message Hello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  SessionModeMessage mode = 3;
+  // RemoteDesktop.Domain.Permissions flags.
+  uint32 requested_permissions = 4;
+}
+
+// Host -> controller.
+message AuthChallenge {
+  bytes nonce = 1;
+  uint32 protocol_major = 2;
+  uint32 protocol_minor = 3;
+}
+
+// Controller -> host: HMAC over the nonce and both certificate fingerprints (see PasswordProof).
+message AuthResponse {
+  bytes proof = 1;
+}
+
+enum AuthFailure {
+  AUTH_FAILURE_NONE = 0;
+  AUTH_FAILURE_BAD_PASSWORD = 1;
+  AUTH_FAILURE_TOO_MANY_ATTEMPTS = 2;
+  AUTH_FAILURE_INCOMPATIBLE_VERSION = 3;
+}
+
+// Host -> controller.
+message AuthResult {
+  bool accepted = 1;
+  AuthFailure failure = 2;
+  SessionModeMessage mode = 3;
+  uint32 granted_permissions = 4;
+}
+
+message Ping {
+  int64 timestamp = 1;
+}
+
+message Pong {
+  int64 timestamp = 1;
+}

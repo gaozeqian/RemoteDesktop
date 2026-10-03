@@ -12,15 +12,19 @@ public enum ConnectionPath
     Relayed,
 }
 
-/// <summary>An authenticated, end-to-end encrypted connection to a peer device, carrying multiplexed channels.</summary>
+/// <summary>
+/// An end-to-end encrypted connection to a peer device, carrying multiplexed channels. Both certificates were pinned
+/// to the fingerprints exchanged through the rendezvous server, so <see cref="RemoteFingerprint"/> is authenticated.
+/// </summary>
 public interface IPeerConnection : IAsyncDisposable
 {
     DeviceId RemoteDevice { get; }
 
     ConnectionPath Path { get; }
 
-    /// <summary>Smoothed round-trip time, used for bitrate adaptation.</summary>
-    TimeSpan RoundTripTime { get; }
+    string LocalFingerprint { get; }
+
+    string RemoteFingerprint { get; }
 
     ValueTask<IChannel> OpenChannelAsync(ChannelType type, bool bidirectional, CancellationToken cancellationToken);
 

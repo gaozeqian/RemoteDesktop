@@ -2,6 +2,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="RemoteDesktop.Client.App"
              RequestedThemeVariant="Default">
+  <Application.Resources>
+    <!-- Translucent so it reads as a raised card on both the light and dark variant. -->
+    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#1F808080" />
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
   </Application.Styles>

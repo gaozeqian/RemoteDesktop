@@ -1,9 +1,10 @@
+using RemoteDesktop.Server.Rendezvous;
+
 // Rendezvous server: device registration and id allocation, presence, signaling and hole-punch coordination.
-// Endpoints are added in milestone M1.
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddHealthChecks();
+builder.Services.AddRendezvous(builder.Configuration);
 
 var app = builder.Build();
-app.MapHealthChecks("/health");
+app.MapRendezvous();
 
 await app.RunAsync().ConfigureAwait(false);

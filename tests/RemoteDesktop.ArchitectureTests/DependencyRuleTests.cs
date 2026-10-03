@@ -9,6 +9,7 @@ public class DependencyRuleTests
     private const string Domain = "RemoteDesktop.Domain";
     private const string Abstractions = "RemoteDesktop.Abstractions";
     private const string Protocol = "RemoteDesktop.Protocol";
+    private const string Signaling = "RemoteDesktop.Signaling";
     private const string Transport = "RemoteDesktop.Transport";
     private const string Application = "RemoteDesktop.Application";
     private const string Features = "RemoteDesktop.Features";
@@ -23,13 +24,14 @@ public class DependencyRuleTests
 
     public static TheoryData<string, string[]> Rules => new()
     {
-        { Domain, [Abstractions, Protocol, Transport, Application, .. Outer] },
-        { Abstractions, [Protocol, Transport, Application, .. Outer] },
-        { Protocol, [Transport, Application, .. Outer] },
+        { Domain, [Abstractions, Protocol, Signaling, Transport, Application, .. Outer] },
+        { Abstractions, [Protocol, Signaling, Transport, Application, .. Outer] },
+        { Protocol, [Signaling, Transport, Application, .. Outer] },
+        { Signaling, [Domain, Abstractions, Protocol, Transport, Application, .. Outer] },
         { Transport, [Application, .. Outer] },
         { Application, Outer },
-        { Media, [Protocol, Transport, Application, Features, Platform, Server, Client, HostService, SessionAgent] },
-        { Platform, [Protocol, Transport, Application, Features, Media, Server, Client, HostService, SessionAgent] },
+        { Media, [Protocol, Signaling, Transport, Application, Features, Platform, Server, Client, HostService, SessionAgent] },
+        { Platform, [Protocol, Signaling, Transport, Application, Features, Media, Server, Client, HostService, SessionAgent] },
         { Server, [Abstractions, Protocol, Transport, Application, Features, Media, Platform, Client, HostService, SessionAgent] },
     };
 

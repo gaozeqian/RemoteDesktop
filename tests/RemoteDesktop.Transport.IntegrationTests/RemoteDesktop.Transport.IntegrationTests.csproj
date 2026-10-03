@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- QUIC types are platform-annotated; these tests run where MsQuic is available. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Rendezvous\RemoteDesktop.Server.Rendezvous.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Relay\RemoteDesktop.Server.Relay.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+</Project>

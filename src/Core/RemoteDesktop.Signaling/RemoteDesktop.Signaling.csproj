@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Wire contracts between clients and the rendezvous / relay servers. Deliberately has no internal
+       dependencies so the servers do not pull in any client-side layer. -->
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="signaling.proto" GrpcServices="None" />
+  </ItemGroup>
+</Project>

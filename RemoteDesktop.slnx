@@ -10,6 +10,7 @@
     <Project Path="src/Core/RemoteDesktop.Domain/RemoteDesktop.Domain.csproj" />
     <Project Path="src/Core/RemoteDesktop.Abstractions/RemoteDesktop.Abstractions.csproj" />
     <Project Path="src/Core/RemoteDesktop.Protocol/RemoteDesktop.Protocol.csproj" />
+    <Project Path="src/Core/RemoteDesktop.Signaling/RemoteDesktop.Signaling.csproj" />
     <Project Path="src/Core/RemoteDesktop.Transport/RemoteDesktop.Transport.csproj" />
     <Project Path="src/Core/RemoteDesktop.Application/RemoteDesktop.Application.csproj" />
   </Folder>
@@ -38,5 +39,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.ArchitectureTests/RemoteDesktop.ArchitectureTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />
   </Folder>
 </Solution>

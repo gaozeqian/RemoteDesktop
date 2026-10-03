@@ -1,0 +1,102 @@
+// Messages exchanged over the rendezvous WebSocket (one binary WebSocket message = one envelope).
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.signaling;
+
+option csharp_namespace = "RemoteDesktop.Signaling.Messages";
+
+message ClientMessage {
+  oneof body {
+    Register register = 1;
+    ConnectRequest connect_request = 2;
+    ConnectAccept connect_accept = 3;
+    ConnectReject connect_reject = 4;
+  }
+}
+
+message ServerMessage {
+  oneof body {
+    RegisterChallenge register_challenge = 1;
+    Registered registered = 2;
+    IncomingConnection incoming_connection = 3;
+    ConnectReady connect_ready = 4;
+    ConnectFailed connect_failed = 5;
+  }
+}
+
+// Sent by the server right after the WebSocket opens.
+message RegisterChallenge {
+  bytes nonce = 1;
+}
+
+// Proves possession of the device key: signature = ECDSA-P256-SHA256(nonce) with the certificate key.
+message Register {
+  bytes certificate = 1;
+  bytes signature = 2;
+}
+
+message Registered {
+  uint32 device_id = 1;
+  // UDP port of the server's address reflector (same host as the WebSocket).
+  uint32 reflector_port = 2;
+}
+
+message PeerEndpoint {
+  string address = 1;
+  uint32 port = 2;
+}
+
+message RelayInfo {
+  PeerEndpoint endpoint = 1;
+  // Opaque to clients; validated by the relay.
+  bytes ticket = 2;
+}
+
+// Controller -> server.
+message ConnectRequest {
+  string request_id = 1;
+  uint32 target_device_id = 2;
+  repeated PeerEndpoint candidates = 3;
+}
+
+// Server -> host.
+message IncomingConnection {
+  string request_id = 1;
+  uint32 controller_device_id = 2;
+  string controller_fingerprint = 3;
+  repeated PeerEndpoint controller_candidates = 4;
+  RelayInfo relay = 5;
+}
+
+// Host -> server, once it is ready to accept the QUIC connection.
+message ConnectAccept {
+  string request_id = 1;
+  repeated PeerEndpoint candidates = 2;
+}
+
+// Host -> server.
+message ConnectReject {
+  string request_id = 1;
+}
+
+// Server -> controller.
+message ConnectReady {
+  string request_id = 1;
+  string host_fingerprint = 2;
+  repeated PeerEndpoint host_candidates = 3;
+  RelayInfo relay = 4;
+}
+
+enum FailureReason {
+  FAILURE_REASON_UNSPECIFIED = 0;
+  FAILURE_REASON_TARGET_OFFLINE = 1;
+  FAILURE_REASON_REJECTED = 2;
+  FAILURE_REASON_TIMEOUT = 3;
+}
+
+// Server -> controller.
+message ConnectFailed {
+  string request_id = 1;
+  FailureReason reason = 2;
+}

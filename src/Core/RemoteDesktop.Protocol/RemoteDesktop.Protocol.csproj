@@ -2,4 +2,11 @@
   <ItemGroup>
     <ProjectReference Include="..\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="control.proto" GrpcServices="None" />
+  </ItemGroup>
 </Project>
