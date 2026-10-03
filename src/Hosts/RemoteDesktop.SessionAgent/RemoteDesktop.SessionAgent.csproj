@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- No console window: the agent runs invisibly in the interactive session. -->
+    <OutputType>WinExe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+</Project>

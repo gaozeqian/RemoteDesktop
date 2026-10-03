@@ -1,1 +1,42 @@
-<Solution />
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Core/">
+    <Project Path="src/Core/RemoteDesktop.Domain/RemoteDesktop.Domain.csproj" />
+    <Project Path="src/Core/RemoteDesktop.Abstractions/RemoteDesktop.Abstractions.csproj" />
+    <Project Path="src/Core/RemoteDesktop.Protocol/RemoteDesktop.Protocol.csproj" />
+    <Project Path="src/Core/RemoteDesktop.Transport/RemoteDesktop.Transport.csproj" />
+    <Project Path="src/Core/RemoteDesktop.Application/RemoteDesktop.Application.csproj" />
+  </Folder>
+  <Folder Name="/src/Features/">
+    <Project Path="src/Features/RemoteDesktop.Features.Desktop/RemoteDesktop.Features.Desktop.csproj" />
+    <Project Path="src/Features/RemoteDesktop.Features.FileTransfer/RemoteDesktop.Features.FileTransfer.csproj" />
+    <Project Path="src/Features/RemoteDesktop.Features.Terminal/RemoteDesktop.Features.Terminal.csproj" />
+    <Project Path="src/Features/RemoteDesktop.Features.Camera/RemoteDesktop.Features.Camera.csproj" />
+  </Folder>
+  <Folder Name="/src/Media/">
+    <Project Path="src/Media/RemoteDesktop.Media/RemoteDesktop.Media.csproj" />
+  </Folder>
+  <Folder Name="/src/Platform/">
+    <Project Path="src/Platform/RemoteDesktop.Platform.Windows/RemoteDesktop.Platform.Windows.csproj" />
+  </Folder>
+  <Folder Name="/src/Hosts/">
+    <Project Path="src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj" />
+    <Project Path="src/Hosts/RemoteDesktop.HostService/RemoteDesktop.HostService.csproj" />
+    <Project Path="src/Hosts/RemoteDesktop.SessionAgent/RemoteDesktop.SessionAgent.csproj" />
+  </Folder>
+  <Folder Name="/src/Server/">
+    <Project Path="src/Server/RemoteDesktop.Server.Shared/RemoteDesktop.Server.Shared.csproj" />
+    <Project Path="src/Server/RemoteDesktop.Server.Rendezvous/RemoteDesktop.Server.Rendezvous.csproj" />
+    <Project Path="src/Server/RemoteDesktop.Server.Relay/RemoteDesktop.Server.Relay.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
+    <Project Path="tests/RemoteDesktop.ArchitectureTests/RemoteDesktop.ArchitectureTests.csproj" />
+  </Folder>
+</Solution>

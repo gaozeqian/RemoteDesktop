@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

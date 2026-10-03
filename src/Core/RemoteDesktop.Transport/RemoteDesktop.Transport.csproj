@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteDesktop.Protocol\RemoteDesktop.Protocol.csproj" />
+  </ItemGroup>
+</Project>

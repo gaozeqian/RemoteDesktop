@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- CA1716 guards against VB keywords (Get, Set, Shared); this is a C#-only code base. -->
+    <NoWarn>$(NoWarn);CA1716</NoWarn>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Company>RemoteDesktop</Company>
+    <Product>RemoteDesktop</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+        x:Class="RemoteDesktop.Client.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="RemoteDesktop"
+        Width="760" Height="420" MinWidth="640" MinHeight="380">
+  <Grid ColumnDefinitions="*,*" RowDefinitions="*,Auto" Margin="24">
+    <!-- This device -->
+    <Border Grid.Column="0" Margin="0,0,12,0" Padding="20" CornerRadius="8"
+            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+      <StackPanel Spacing="12">
+        <TextBlock Text="允许控制本设备" FontSize="18" FontWeight="SemiBold" />
+        <TextBlock Text="设备代码" Opacity="0.7" />
+        <SelectableTextBlock Text="{Binding LocalDeviceId}" FontSize="28" FontWeight="Bold" />
+        <TextBlock Text="临时密码" Opacity="0.7" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
+          <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- Remote device -->
+    <Border Grid.Column="1" Margin="12,0,0,0" Padding="20" CornerRadius="8"
+            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+      <StackPanel Spacing="12">
+        <TextBlock Text="远程控制设备" FontSize="18" FontWeight="SemiBold" />
+        <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="伙伴设备代码" />
+        <TextBox Text="{Binding RemotePassword}" PlaceholderText="密码" PasswordChar="●" />
+        <CheckBox IsChecked="{Binding IsWatchMode}" Content="观看模式（只看不控）" />
+        <Button Content="连接" Command="{Binding ConnectCommand}" HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Center" Classes="accent" />
+      </StackPanel>
+    </Border>
+
+    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Margin="0,16,0,0" Text="{Binding StatusMessage}" Opacity="0.8" />
+  </Grid>
+</Window>

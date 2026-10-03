@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>RemoteDesktop.HostService</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
+    <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build:
+    # Phase 1 targets Windows only; macOS and Linux join the matrix with their platform projects.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      - run: dotnet test RemoteDesktop.slnx --no-build -c Release
