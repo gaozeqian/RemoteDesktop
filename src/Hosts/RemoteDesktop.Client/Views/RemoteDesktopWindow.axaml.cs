@@ -25,6 +25,7 @@ public sealed partial class RemoteDesktopWindow : Window
 {
     private RemoteDesktopViewModel? _viewModel;
     private FileManagerWindow? _filesWindow;
+    private TerminalWindow? _terminalWindow;
     private WriteableBitmap? _bitmap;
     private int _updateQueued;
     private WriteableBitmap? _cursorBitmap;
@@ -70,6 +71,8 @@ public sealed partial class RemoteDesktopWindow : Window
         viewModel.Closed += (_, _) => Close();
         viewModel.FileManagerRequested += (_, files) => ShowFileManager(viewModel, files);
         viewModel.FileManagerUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _filesWindow?.Close());
+        viewModel.TerminalRequested += (_, terminal) => ShowTerminal(viewModel, terminal);
+        viewModel.TerminalUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _terminalWindow?.Close());
         RecreateBitmap();
     }
 
@@ -92,10 +95,30 @@ public sealed partial class RemoteDesktopWindow : Window
         window.Show();
     }
 
+    // One terminal window per session, like the file manager.
+    private void ShowTerminal(RemoteDesktopViewModel viewModel, TerminalWindowViewModel terminal)
+    {
+        if (_terminalWindow is { } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        var window = new TerminalWindow { DataContext = terminal };
+        window.Closed += (_, _) =>
+        {
+            _terminalWindow = null;
+            _ = viewModel.ReleaseTerminalAsync();
+        };
+        _terminalWindow = window;
+        window.Show();
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
         _filesWindow?.Close();
+        _terminalWindow?.Close();
         _bitmap?.Dispose();
         _bitmap = null;
         _cursorBitmap?.Dispose();

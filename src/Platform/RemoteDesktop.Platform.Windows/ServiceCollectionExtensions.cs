@@ -8,12 +8,14 @@ using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
+using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Windows.Agent;
 using RemoteDesktop.Platform.Windows.Audio;
 using RemoteDesktop.Platform.Windows.Clipboard;
 using RemoteDesktop.Platform.Windows.Display;
 using RemoteDesktop.Platform.Windows.Input;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
+using RemoteDesktop.Platform.Windows.Terminal;
 
 namespace RemoteDesktop.Platform.Windows;
 
@@ -32,7 +34,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDisplayEnumerator, DxgiDisplayEnumerator>();
         services.AddSingleton<IScreenCapturerFactory, DxgiScreenCapturerFactory>();
         services.AddSingleton<IInputInjector, SendInputInjector>();
-        services.AddSingleton<IFileAccessGuard, WindowsFileAccessGuard>();
+        services.AddSingleton<IUserContextGuard, WindowsUserContextGuard>();
+        services.AddSingleton<IPtyHost, ConPtyHost>();
         services.AddSingleton<IClipboard>(_ => new WindowsClipboard());
         services.AddSingleton<IAudioCapturerFactory, WasapiAudioCapturerFactory>();
         services.AddSingleton<IAudioPlayerFactory, WasapiAudioPlayerFactory>();

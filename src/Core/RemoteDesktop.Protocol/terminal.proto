@@ -1,0 +1,73 @@
+// Messages of the terminal channel. One channel carries one terminal: the controller may ask which shells exist, then
+// opens one; after that, keystrokes and shell output travel as raw frames (see TerminalDataFrame) and only resizing
+// and the end of the shell are messages. Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.terminal;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Terminal";
+
+enum TerminalError {
+  TERMINAL_ERROR_NONE = 0;
+  // The host cannot run shells right now (e.g. it only has the login screen).
+  TERMINAL_ERROR_NOT_ALLOWED = 1;
+  // The requested shell is not one of the offered ones.
+  TERMINAL_ERROR_SHELL_UNAVAILABLE = 2;
+  TERMINAL_ERROR_START_FAILED = 3;
+  TERMINAL_ERROR_TOO_MANY = 4;
+  TERMINAL_ERROR_UNSUPPORTED = 5;
+}
+
+// ---- Controller -> host ----
+
+message TerminalRequest {
+  oneof body {
+    ListShellsRequest list_shells = 1;
+    OpenTerminal open = 2;
+    ResizeTerminal resize = 3;
+  }
+}
+
+message ListShellsRequest {
+}
+
+message OpenTerminal {
+  // One of the names the host offered; empty selects the host's default shell. Never a path.
+  string shell = 1;
+  uint32 columns = 2;
+  uint32 rows = 3;
+}
+
+message ResizeTerminal {
+  uint32 columns = 1;
+  uint32 rows = 2;
+}
+
+// ---- Host -> controller ----
+
+message TerminalEvent {
+  oneof body {
+    ShellList shells = 1;
+    TerminalOpened opened = 2;
+    TerminalExited exited = 3;
+    TerminalFailed failed = 4;
+  }
+}
+
+message ShellList {
+  repeated string shells = 1;
+}
+
+message TerminalOpened {
+  // The shell that was started.
+  string shell = 1;
+}
+
+message TerminalExited {
+  int32 exit_code = 1;
+}
+
+message TerminalFailed {
+  TerminalError error = 1;
+  string message = 2;
+}

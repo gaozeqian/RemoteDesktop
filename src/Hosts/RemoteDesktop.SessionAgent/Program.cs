@@ -8,6 +8,7 @@ using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
+using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Platform.Windows.Agent;
@@ -73,6 +74,7 @@ await using (link.ConfigureAwait(false))
         .AddRemoteDesktopMedia()
         .AddDesktopFeature()
         .AddFileTransferFeature()
+        .AddTerminalFeature()
         .AddSingleton(link)
         // Last registration wins: Ctrl+Alt+Del goes through the service instead of SendInput.
         .AddSingleton<IInputInjector>(sp => new AgentInputInjector(

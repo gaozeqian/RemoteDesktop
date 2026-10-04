@@ -54,6 +54,13 @@ public static class ServiceCollectionExtensions
             ChannelType.FileTransfer, Permissions.FileTransfer, AgentChannelKind.File, replayFirstFrame: false,
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
             maxInboundFrame: 2 * 1024 * 1024, lossless: true));
+
+        // Shells are the signed-in user's too. Keystrokes must not be dropped or replayed, so the channel is lossless and
+        // simply ends if the agent is replaced (for example by the lock screen).
+        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+            ChannelType.Terminal, Permissions.Terminal, AgentChannelKind.Terminal, replayFirstFrame: false,
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+            lossless: true));
         return services;
     }
 

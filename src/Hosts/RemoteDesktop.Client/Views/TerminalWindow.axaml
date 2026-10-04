@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+        xmlns:v="using:RemoteDesktop.Client.Views"
+        x:Class="RemoteDesktop.Client.Views.TerminalWindow"
+        x:DataType="vm:TerminalWindowViewModel"
+        Title="远程终端"
+        Width="1000" Height="640" MinWidth="480" MinHeight="300">
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Padding="8,6" Background="#202020">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="Shell" Foreground="#DDFFFFFF" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" MinWidth="140" />
+        <Button Content="新建标签" Command="{Binding NewTabCommand}" />
+        <TextBlock Text="{Binding Message}" Foreground="OrangeRed" VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+    <TabControl ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" Padding="0">
+      <TabControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:TerminalTabViewModel">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
+            <Button Content="✕" Command="{Binding CloseCommand}" Padding="4,0" MinHeight="0" Background="Transparent" BorderThickness="0" />
+          </StackPanel>
+        </DataTemplate>
+      </TabControl.ItemTemplate>
+      <TabControl.ContentTemplate>
+        <DataTemplate x:DataType="vm:TerminalTabViewModel">
+          <v:TerminalTabView />
+        </DataTemplate>
+      </TabControl.ContentTemplate>
+    </TabControl>
+  </DockPanel>
+</Window>

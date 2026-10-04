@@ -37,6 +37,7 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 - **音频**：被控端正在播放的声音（WASAPI 环回，Opus 编码）在控制端播放，可静音；输出设备切换后自动跟随；观看模式下仍可听。
 - **被控端的权限**：被控端界面列出正在控制本机的人，可随时点"仅观看"（立即关闭其输入、剪贴板等通道，控制端界面随之变化）或"断开"。
 - **文件传输**：见下一节。
+- **远程终端**：见"远程终端"一节。
 
 ## 文件传输
 
@@ -53,6 +54,21 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
   `AddFileTransferFeature(new FileAccessPolicy([根目录…]))` 可把可访问范围限制在指定目录内（默认不限制，即登录用户能访问的都可以）。
   观看模式由被控端拒绝文件通道。会话 ID、操作类型和路径写入 Agent 日志（`agent-*.log`）作为审计记录。
 - 服务到 Agent 的文件通道是无损转发：带背压、不丢帧、不因为 Agent 被替换而续传到另一个 Agent；Agent 丢失时传输中止，重试即可续传。
+
+## 远程终端
+
+工具栏的"终端"按钮（观看模式或被控端收回权限后不显示）打开终端窗口：每个标签是被控端上的一个 shell，可以同时开多个。
+
+- 被控端用 Windows 伪控制台（ConPTY）运行 PowerShell 7（有则用）、Windows PowerShell 或 cmd，窗口顶部可选 shell。
+  控制端只能选被控端列出的名字，不能指定程序路径；同一台被控端最多同时开 8 个终端。
+- shell 由 Agent 以登录用户的身份启动，从不以 SYSTEM 启动；只有登录界面 / UAC 可用时拒绝。shell 及它启动的子进程放在作业对象里，
+  关闭标签、断开连接或 Agent 退出都会把它们一起结束。打开、退出和关闭写入 Agent 日志（`agent-*.log`），不记录键入内容。
+- 终端窗口是自带的 VT 模拟器（`Features.Terminal/Emulation`）：xterm 兼容的光标与滚动区、16 / 256 / 真彩色、粗体斜体下划线、
+  备用屏幕（vim、less、nano 用）、滚动缓冲（5000 行）、宽字符（中日韩和 emoji 占两格）、括号粘贴、鼠标上报（vim、htop 用）、窗口大小随窗口变化。
+  已用真实的 PowerShell（含 PSReadLine 的历史与行编辑）、vim、less、nano 验证。
+- 操作：选中文字即可复制（Ctrl+Shift+C，或有选中时按 Ctrl+C；双击选词，三击选行）；Ctrl+V、Shift+Insert、右键或中键粘贴**控制端**剪贴板的内容；
+  Shift+PageUp / PageDown 或滚轮翻看历史；程序开启鼠标上报时按住 Shift 可以照常选中文字。
+- 限制：被控端锁屏、注销或切换到安全桌面时 Agent 会被替换，终端随之结束（窗口会提示，重新开一个即可）。
 
 ## 后台服务（被控端）
 
@@ -90,12 +106,12 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 | `src/Core/RemoteDesktop.Signaling` | 客户端与服务器之间的信令协议（protobuf）和 UDP 控制包 |
 | `src/Core/RemoteDesktop.Transport` | QUIC 对端连接、证书指纹固定、NAT 打洞、中继回退、Rendezvous 客户端 |
 | `src/Core/RemoteDesktop.Application` | 会话握手与密码鉴权、失败限流、功能模块契约 `IFeatureModule`、按权限分发通道的 `ChannelDispatcher` |
-| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal、Camera |
+| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（ConPTY 终端与 VT 模拟器）、Camera |
 | `src/Media` | 编解码器选择（硬件优先、软件兜底）、BT.709 颜色转换、码率自适应 |
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
-| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕、输入、剪贴板、音频、文件通道转发给 Agent、给 UI 提供控制管道 |
-| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入、文件操作（以登录用户身份） |
+| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕、输入、剪贴板、音频、文件、终端通道转发给 Agent、给 UI 提供控制管道 |
+| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入、文件操作和终端（以登录用户身份） |
 | `src/Server/*` | Rendezvous（ID / 信令）与 Relay（UDP 中继）服务器 |
 
 ## 新增功能或平台
@@ -105,4 +121,4 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 ## 里程碑
 
-M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输（当前） → M6 终端 → M7 摄像头 → M8 安装包（WiX v5）与加固。
+M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端（当前） → M7 摄像头 → M8 安装包（WiX v5）与加固。

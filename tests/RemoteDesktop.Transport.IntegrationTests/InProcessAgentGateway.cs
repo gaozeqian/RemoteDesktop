@@ -36,6 +36,7 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
             AgentChannelKind.Input => ChannelType.Input,
             AgentChannelKind.Clipboard => ChannelType.Clipboard,
             AgentChannelKind.File => ChannelType.FileTransfer,
+            AgentChannelKind.Terminal => ChannelType.Terminal,
             _ => ChannelType.Audio,
         };
         var module = _modules.First(m => m.ChannelType == type);

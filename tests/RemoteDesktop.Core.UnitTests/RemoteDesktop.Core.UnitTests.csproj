@@ -3,6 +3,7 @@
     <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
     <ProjectReference Include="..\..\src\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>

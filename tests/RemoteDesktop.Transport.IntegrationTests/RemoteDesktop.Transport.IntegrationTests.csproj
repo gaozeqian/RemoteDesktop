@@ -7,6 +7,7 @@
     <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
     <ProjectReference Include="..\..\src\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Rendezvous\RemoteDesktop.Server.Rendezvous.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Relay\RemoteDesktop.Server.Relay.csproj" />

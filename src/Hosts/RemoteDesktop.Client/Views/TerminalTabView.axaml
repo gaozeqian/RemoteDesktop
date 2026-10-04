@@ -1,0 +1,13 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:RemoteDesktop.Client.Controls"
+             xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+             x:Class="RemoteDesktop.Client.Views.TerminalTabView"
+             x:DataType="vm:TerminalTabViewModel">
+  <Grid RowDefinitions="*,Auto" Background="#0C0C0C">
+    <c:TerminalControl x:Name="Terminal" Margin="6,4,0,0" />
+    <Border Grid.Row="1" Background="#303030" Padding="10,5" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Text="{Binding Status}" Foreground="White" TextWrapping="Wrap" />
+    </Border>
+  </Grid>
+</UserControl>

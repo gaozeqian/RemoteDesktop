@@ -24,6 +24,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     private InputSender? _input;
     private ClipboardShare? _clipboard;
     private FileManagerViewModel? _files;
+    private TerminalWindowViewModel? _terminal;
     private bool _updatingDisplays;
     private int _closed;
 
@@ -39,6 +40,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _clipboard = clipboard;
         CanControl = input is not null;
         CanTransferFiles = session.Context.Grant.Allows(Permissions.FileTransfer);
+        CanUseTerminal = session.Context.Grant.Allows(Permissions.Terminal);
         HasAudio = audio is not null;
         UpdateTitle();
 
@@ -73,6 +75,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [NotifyCanExecuteChangedFor(nameof(OpenFilesCommand))]
     public partial bool CanTransferFiles { get; set; }
 
+    /// <summary>Whether the host lets this session open shells. Goes false when the host takes it away mid-session.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenTerminalCommand))]
+    public partial bool CanUseTerminal { get; set; }
+
     [ObservableProperty]
     public partial bool HasAudio { get; set; }
 
@@ -93,6 +100,12 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
     /// <summary>The file manager can no longer work (access taken away, session over) and its window should close.</summary>
     public event EventHandler? FileManagerUnavailable;
+
+    /// <summary>The user asked for the terminal window (the same instance each time while it is open).</summary>
+    public event EventHandler<TerminalWindowViewModel>? TerminalRequested;
+
+    /// <summary>Terminals can no longer work (access taken away, session over) and the window should close.</summary>
+    public event EventHandler? TerminalUnavailable;
 
     public void SendInput(InputEvent inputEvent) => _input?.Send(inputEvent);
 
@@ -120,6 +133,28 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         }
 
         FileManagerRequested?.Invoke(this, _files);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanUseTerminal))]
+    private void OpenTerminal()
+    {
+        if (_terminal is null)
+        {
+            _terminal = new TerminalWindowViewModel(_session.Context.Connection);
+            _ = _terminal.InitializeAsync();
+        }
+
+        TerminalRequested?.Invoke(this, _terminal);
+    }
+
+    /// <summary>Called when the user closed the terminal window: ends its shells on the host.</summary>
+    public async Task ReleaseTerminalAsync()
+    {
+        var terminal = Interlocked.Exchange(ref _terminal, null);
+        if (terminal is not null)
+        {
+            await terminal.DisposeAsync();
+        }
     }
 
     /// <summary>Called when the user closed the file manager window: ends its transfers (partial files stay, so they can be continued later).</summary>
@@ -158,6 +193,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     {
         _statusTimer.Stop();
         await ReleaseFileManagerAsync();
+        await ReleaseTerminalAsync();
         if (_input is not null)
         {
             await _input.DisposeAsync();
@@ -196,6 +232,13 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             CanTransferFiles = false;
             FileManagerUnavailable?.Invoke(this, EventArgs.Empty);
             await ReleaseFileManagerAsync();
+        }
+
+        if (!grant.Allows(Permissions.Terminal))
+        {
+            CanUseTerminal = false;
+            TerminalUnavailable?.Invoke(this, EventArgs.Empty);
+            await ReleaseTerminalAsync();
         }
 
         if (!grant.Allows(Permissions.Clipboard))

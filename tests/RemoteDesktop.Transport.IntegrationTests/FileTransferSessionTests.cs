@@ -323,7 +323,7 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
         return bytes;
     }
 
-    private sealed class SwitchableGuard : IFileAccessGuard
+    private sealed class SwitchableGuard : IUserContextGuard
     {
         public volatile string? Reason;
 
@@ -361,7 +361,7 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
             ServerFixture server,
             SessionMode mode,
             FileAccessPolicy? policy = null,
-            IFileAccessGuard? guard = null,
+            IUserContextGuard? guard = null,
             InProcessAgentGateway? relay = null)
         {
             var pair = new Pair();

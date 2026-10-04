@@ -12,11 +12,11 @@ namespace RemoteDesktop.Features.FileTransfer;
 /// <summary>
 /// Host side of file transfer. A channel either serves browsing requests (list, places, new folder, rename, delete)
 /// one after another, or carries a single upload or download. Every path is validated by the
-/// <see cref="FileAccessPolicy"/>, nothing is served while the <see cref="IFileAccessGuard"/> objects, and each
+/// <see cref="FileAccessPolicy"/>, nothing is served while the <see cref="IUserContextGuard"/> objects, and each
 /// operation that changes or moves files is written to the log with the session it came from.
 /// </summary>
 public sealed partial class FileTransferModule(
-    IFileAccessGuard guard,
+    IUserContextGuard guard,
     FileAccessPolicy policy,
     ILogger<FileTransferModule> logger) : IFeatureModule
 {
