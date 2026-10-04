@@ -10,7 +10,8 @@ public class SecretStoreTests
     public void Machine_scope_secrets_live_in_a_folder_only_system_administrators_and_the_owner_can_enter()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "DPAPI and ACLs are Windows only.");
-        var directory = Path.Combine(Path.GetTempPath(), $"rd-secrets-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"rd-secrets-{Guid.NewGuid():N}");
+        var directory = Path.Combine(root, "secrets");
         try
         {
             var store = new DpapiSecretStore(directory, DataProtectionScope.LocalMachine);
@@ -26,12 +27,15 @@ public class SecretStoreTests
             Assert.DoesNotContain(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), allowed);
             Assert.DoesNotContain(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), allowed);
             Assert.DoesNotContain(new SecurityIdentifier(WellKnownSidType.WorldSid, null), allowed);
+
+            // The folder above it (where logs live) keeps the inherited rules.
+            Assert.False(new DirectoryInfo(root).GetAccessControl().AreAccessRulesProtected);
         }
         finally
         {
-            if (Directory.Exists(directory))
+            if (Directory.Exists(root))
             {
-                Directory.Delete(directory, recursive: true);
+                Directory.Delete(root, recursive: true);
             }
         }
     }

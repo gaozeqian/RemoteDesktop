@@ -53,6 +53,12 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
                 sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
         }
 
+        // CreateDirectory(security) would give the missing parent folders the same restrictive rules; only this folder needs them.
+        if (Path.GetDirectoryName(directory) is { Length: > 0 } parent)
+        {
+            Directory.CreateDirectory(parent);
+        }
+
         security.CreateDirectory(directory);
     }
 

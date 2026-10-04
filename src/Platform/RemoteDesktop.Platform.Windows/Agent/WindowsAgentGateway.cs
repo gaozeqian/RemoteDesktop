@@ -87,8 +87,11 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
                 var started = Stopwatch.StartNew();
                 try
                 {
-                    desktop = await RunAgentAsync(executable, sessionId, desktop, stoppingToken).ConfigureAwait(false);
-                    failures = started.Elapsed >= HealthyRun ? 0 : failures + 1;
+                    var run = await RunAgentAsync(executable, sessionId, desktop, stoppingToken).ConfigureAwait(false);
+                    desktop = run.Next;
+
+                    // Only an agent that died young counts against the back-off; switching desktops or sessions is normal.
+                    failures = run.Planned || started.Elapsed >= HealthyRun ? 0 : failures + 1;
                 }
                 catch (NoUserLoggedOnException)
                 {
@@ -124,8 +127,11 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
         }
     }
 
-    /// <summary>Runs one agent until it should be replaced. Returns the desktop the next one should serve.</summary>
-    private async Task<DesktopKind> RunAgentAsync(string executable, uint sessionId, DesktopKind desktop, CancellationToken stoppingToken)
+    /// <summary>
+    /// Runs one agent until it should be replaced. Returns the desktop the next one should serve, and whether the
+    /// replacement was planned (the input moved or the console changed hands) rather than a death.
+    /// </summary>
+    private async Task<(DesktopKind Next, bool Planned)> RunAgentAsync(string executable, uint sessionId, DesktopKind desktop, CancellationToken stoppingToken)
     {
         using var prepared = SessionProcessLauncher.Prepare(desktop, sessionId);
         var clients = prepared.User is { } user ? new[] { user } : [];
@@ -140,6 +146,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
         LogAgentStarted(logger, agent.Id, desktop, sessionId);
 
         var nextDesktop = desktop;
+        var planned = false;
         var switchRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         connection.DesktopChanged += (_, reported) =>
         {
@@ -168,6 +175,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
 
             var sessionChanged = WatchSessionAsync(sessionId, run.Token);
             await Task.WhenAny(exited, connection.Closed, switchRequested.Task, sessionChanged).ConfigureAwait(false);
+            planned = switchRequested.Task.IsCompleted || sessionChanged.IsCompleted;
             if (switchRequested.Task.IsCompleted)
             {
                 LogDesktopSwitch(logger, desktop, nextDesktop);
@@ -181,7 +189,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
             SetState(AgentStatus.Stopped, desktop, null);
         }
 
-        return nextDesktop;
+        return (nextDesktop, planned);
     }
 
     private static async Task WatchSessionAsync(uint sessionId, CancellationToken cancellationToken)
