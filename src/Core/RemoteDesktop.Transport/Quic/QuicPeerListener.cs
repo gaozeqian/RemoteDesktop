@@ -30,6 +30,11 @@ public sealed partial class QuicPeerListener(
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        if (!options.AcceptIncoming)
+        {
+            return;
+        }
+
         if (!QuicListener.IsSupported)
         {
             LogQuicUnsupported(logger);

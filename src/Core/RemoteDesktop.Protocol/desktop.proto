@@ -75,6 +75,7 @@ message InputMessage {
     PointerWheel pointer_wheel = 3;
     Key key = 4;
     Text text = 5;
+    SecureAttention secure_attention = 6;
   }
 }
 
@@ -111,4 +112,8 @@ message Key {
 
 message Text {
   string value = 1;
+}
+
+// Ctrl+Alt+Del. Raised by the host service, since it cannot be injected as keys.
+message SecureAttention {
 }

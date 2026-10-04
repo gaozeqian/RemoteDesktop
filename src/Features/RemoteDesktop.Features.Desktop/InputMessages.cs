@@ -21,6 +21,7 @@ public static class InputMessages
         },
         KeyEvent e => new InputMessage { Key = new Key { ScanCode = (uint)e.ScanCode, Extended = e.IsExtended, Down = e.IsDown } },
         TextInputEvent e => new InputMessage { Text = new ProtoText { Value = e.Text } },
+        SecureAttentionEvent => new InputMessage { SecureAttention = new SecureAttention() },
         _ => throw new ArgumentException($"Unsupported input event {inputEvent?.GetType().Name}.", nameof(inputEvent)),
     };
 
@@ -38,6 +39,7 @@ public static class InputMessages
                 Normalize(message.PointerWheel.Y), Math.Clamp(message.PointerWheel.DeltaX, -1200, 1200), Math.Clamp(message.PointerWheel.DeltaY, -1200, 1200)),
             InputMessage.BodyOneofCase.Key when message.Key.ScanCode is > 0 and <= 0xFF => new KeyEvent((int)message.Key.ScanCode, message.Key.Extended, message.Key.Down),
             InputMessage.BodyOneofCase.Text when message.Text.Value.Length is > 0 and <= 256 => new TextInputEvent(message.Text.Value),
+            InputMessage.BodyOneofCase.SecureAttention => new SecureAttentionEvent(),
             _ => null,
         };
     }

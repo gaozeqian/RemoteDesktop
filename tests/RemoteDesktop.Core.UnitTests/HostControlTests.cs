@@ -1,0 +1,116 @@
+using System.IO.Pipes;
+using Microsoft.Extensions.Logging.Abstractions;
+using RemoteDesktop.Application.Hosting;
+
+namespace RemoteDesktop.Core.UnitTests;
+
+/// <summary>The UI ↔ service pipe: the UI's client against the service's handler over a real named pipe.</summary>
+public class HostControlTests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task The_ui_reads_the_status_and_rotates_the_password_through_the_pipe()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName);
+
+        var status = await client.GetStatusAsync(Ct);
+        Assert.Equal(123456789, status.DeviceId);
+        Assert.Equal("Online", status.ServerState);
+        Assert.Equal("pw-1", status.TemporaryPassword);
+        Assert.Equal([new HostSessionInfo("987 654 321", "view", "direct")], status.Sessions);
+        Assert.True(status.IsService);
+
+        await client.RotateTemporaryPasswordAsync(Ct);
+        Assert.Equal("pw-2", (await client.GetStatusAsync(Ct)).TemporaryPassword);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task Availability_probe_tells_a_present_service_from_an_absent_one()
+    {
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        Assert.False(await PipeHostControl.IsAvailableAsync(pipeName, Ct));
+
+        var server = Serve(pipeName, new FakeHostControl(), stop.Token);
+        Assert.True(await PipeHostControl.IsAvailableAsync(pipeName, Ct));
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task Garbage_and_oversized_requests_are_ignored_without_hurting_the_server()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+
+        // No newline and too long: the server hangs up (possibly while the client is still writing).
+        Assert.False(await GetsAnswerAsync(pipeName, new byte[HostControlProtocol.MaxLineBytes + 10].Select(_ => (byte)'x').ToArray()));
+
+        // A command nobody defined: no answer either.
+        Assert.False(await GetsAnswerAsync(pipeName, "{\"command\":\"format-disk\"}\n"u8.ToArray()));
+
+        Assert.Equal(123456789, (await new PipeHostControl(pipeName).GetStatusAsync(Ct)).DeviceId); // still serving
+        Assert.Equal(0, control.Rotations);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    private static async Task<bool> GetsAnswerAsync(string pipeName, byte[] request)
+    {
+        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(5000, Ct);
+        try
+        {
+            await pipe.WriteAsync(request, Ct);
+            return await pipe.ReadAsync(new byte[16], Ct) > 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Accepts one connection after another, like the service's control server.</summary>
+    private static async Task Serve(string pipeName, IHostControl control, CancellationToken stop)
+    {
+        try
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                await pipe.WaitForConnectionAsync(stop);
+                await HostControlHandler.HandleAsync(pipe, control, NullLogger.Instance, stop);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private sealed class FakeHostControl : IHostControl
+    {
+        public int Rotations { get; private set; }
+
+        public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("987 654 321", "view", "direct")], "Running (User)", true));
+
+        public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
+        {
+            Rotations++;
+            return Task.CompletedTask;
+        }
+    }
+}

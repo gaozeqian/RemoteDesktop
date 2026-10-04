@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Application;
+using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Client.ViewModels;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Features.Desktop;
@@ -16,13 +17,15 @@ using RemoteDesktop.Transport;
 namespace RemoteDesktop.Client;
 
 /// <summary>
-/// Composition root of the desktop client. Until the host service takes over in milestone M3, the client also
-/// hosts incoming sessions in-process.
+/// Composition root of the desktop client. When the background service is installed it owns "being controlled" (device
+/// code, password, incoming sessions) and the client is only a controller plus a window onto the service. Without it,
+/// the client hosts incoming sessions itself.
 /// </summary>
 /// <remarks>
 /// Configuration: <c>appsettings.json</c> next to the executable, overridable on the command line, e.g.
 /// <c>--DataDirectory D:\rd2 --Transport:RendezvousUri ws://10.0.0.5:5080/ws</c>. A separate data directory gives a
-/// separate device identity, which allows two instances on one machine.
+/// separate device identity, which allows two instances on one machine. <c>--HostMode standalone</c> ignores an
+/// installed service; <c>--HostControlPipe name</c> talks to a service started with another pipe name (development).
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class ClientHost
@@ -40,16 +43,35 @@ internal static class ClientHost
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RemoteDesktop");
         var transport = builder.Configuration.GetSection("Transport").Get<TransportOptions>() ?? new TransportOptions();
 
+        var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
+        var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
+                         PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
+
         builder.Services
             .AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser)
-            .AddQuicTransport(transport)
-            .AddRemoteDesktopApplication()
             .AddRemoteDesktopMedia()
-            .AddDesktopFeature()
-            .AddFileTransferFeature()
-            .AddTerminalFeature()
-            .AddCameraFeature()
             .AddSingleton<MainWindowViewModel>();
+
+        if (useService)
+        {
+            // The service is the device others connect to; this process only makes outgoing connections.
+            transport.AcceptIncoming = false;
+            builder.Services
+                .AddQuicTransport(transport)
+                .AddRemoteDesktopApplication()
+                .AddSingleton<IHostControl>(new PipeHostControl(pipeName));
+        }
+        else
+        {
+            builder.Services
+                .AddQuicTransport(transport)
+                .AddRemoteDesktopApplication()
+                .AddDesktopFeature()
+                .AddFileTransferFeature()
+                .AddTerminalFeature()
+                .AddCameraFeature()
+                .AddLocalHostControl(isService: false);
+        }
 
         return builder.Build();
     }

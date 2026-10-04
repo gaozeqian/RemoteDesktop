@@ -15,6 +15,9 @@ public sealed record KeyEvent(int ScanCode, bool IsExtended, bool IsDown) : Inpu
 /// <summary>Text that cannot be expressed as scan codes (IME output, emoji).</summary>
 public sealed record TextInputEvent(string Text) : InputEvent;
 
+/// <summary>Ctrl+Alt+Del. It cannot be injected as keys; only the privileged host service can raise it.</summary>
+public sealed record SecureAttentionEvent : InputEvent;
+
 public enum PointerButton
 {
     Left,

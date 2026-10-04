@@ -16,9 +16,6 @@ namespace RemoteDesktop.Transport.IntegrationTests;
 /// </summary>
 public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<ServerFixture>
 {
-    private const int Width = 640;
-    private const int Height = 360;
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -45,13 +42,13 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
 
         await frames.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct);
 
-        Assert.Equal(new DesktopStreamInfo(FakeDisplays.Display.Id, Width, Height, viewer.StreamInfo!.EncoderName, viewer.StreamInfo.HardwareEncoder, viewer.StreamInfo.DecoderName), viewer.StreamInfo);
-        var bgra = new byte[Width * Height * 4];
-        Assert.True(viewer.CopyLatestFrame(bgra, Width * 4, Width, Height) > 0);
+        Assert.Equal(new DesktopStreamInfo(FakeDisplays.Display.Id, TestScreen.Width, TestScreen.Height, viewer.StreamInfo!.EncoderName, viewer.StreamInfo.HardwareEncoder, viewer.StreamInfo.DecoderName), viewer.StreamInfo);
+        var bgra = new byte[TestScreen.Width * TestScreen.Height * 4];
+        Assert.True(viewer.CopyLatestFrame(bgra, TestScreen.Width * 4, TestScreen.Width, TestScreen.Height) > 0);
 
         // The synthetic frame's left half is red, the right half blue (BGRA order).
-        var left = ((Height / 2 * Width) + (Width / 4)) * 4;
-        var right = ((Height / 2 * Width) + (Width * 3 / 4)) * 4;
+        var left = ((TestScreen.Height / 2 * TestScreen.Width) + (TestScreen.Width / 4)) * 4;
+        var right = ((TestScreen.Height / 2 * TestScreen.Width) + (TestScreen.Width * 3 / 4)) * 4;
         Assert.InRange(bgra[left + 2], 180, 255);
         Assert.InRange(bgra[right + 0], 180, 255);
         Assert.InRange(bgra[right + 2], 0, 80);
@@ -126,87 +123,4 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     private static VideoChannelModule CreateVideoModule(VideoCodecSelector codecs) =>
         new(new FakeDisplays(), new FakeCapturerFactory(), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
 
-    private sealed class FakeDisplays : IDisplayEnumerator
-    {
-        public static readonly DisplayInfo Display = new("\\\\.\\FAKE1", "FAKE1", new PixelRect(0, 0, Width, Height), 1.0, true);
-
-#pragma warning disable CS0067
-        public event EventHandler? DisplaysChanged;
-#pragma warning restore CS0067
-
-        public IReadOnlyList<DisplayInfo> GetDisplays() => [Display];
-    }
-
-    private sealed class FakeCapturerFactory(int maxFrames = int.MaxValue) : IScreenCapturerFactory
-    {
-        public IScreenCapturer Create(DisplayInfo display) => new FakeCapturer(display, maxFrames);
-    }
-
-    /// <summary>Left half red, right half blue, with a moving bar so every frame differs.</summary>
-    private sealed class FakeCapturer(DisplayInfo display, int maxFrames) : IScreenCapturer
-    {
-        private int _index;
-
-        public DisplayInfo Display => display;
-
-#pragma warning disable CS0067
-        public event EventHandler<CursorShape>? CursorChanged;
-#pragma warning restore CS0067
-
-        public ValueTask<VideoFrame?> CaptureAsync(TimeSpan timeout, CancellationToken cancellationToken)
-        {
-            if (_index >= maxFrames)
-            {
-                return ValueTask.FromResult<VideoFrame?>(null);
-            }
-
-            var frame = new MemoryVideoFrame(Width, Height, PixelFormat.Bgra32, TimeSpan.FromMilliseconds(_index * 33));
-            var pixels = frame.Buffer;
-            var bar = (_index++ * 8) % Width;
-            for (var y = 0; y < Height; y++)
-            {
-                for (var x = 0; x < Width; x++)
-                {
-                    var p = ((y * Width) + x) * 4;
-                    var onBar = y < 20 && Math.Abs(x - bar) < 10;
-                    pixels[p + 0] = (byte)(onBar ? 255 : x < Width / 2 ? 20 : 230);
-                    pixels[p + 1] = (byte)(onBar ? 255 : 20);
-                    pixels[p + 2] = (byte)(onBar ? 255 : x < Width / 2 ? 230 : 20);
-                    pixels[p + 3] = 255;
-                }
-            }
-
-            return ValueTask.FromResult<VideoFrame?>(frame);
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class RecordingInjector : IInputInjector, IDisposable
-    {
-        private readonly ConcurrentQueue<InputEvent> _events = new();
-        private readonly SemaphoreSlim _signal = new(0);
-
-        public IReadOnlyList<InputEvent> Events => [.. _events];
-
-        public void Inject(InputEvent inputEvent)
-        {
-            _events.Enqueue(inputEvent);
-            _signal.Release();
-        }
-
-        public void SendSecureAttentionSequence()
-        {
-        }
-
-        public void Dispose() => _signal.Dispose();
-
-        public async Task WaitForAsync(int count)
-        {
-            while (_events.Count < count)
-            {
-                Assert.True(await _signal.WaitAsync(TimeSpan.FromSeconds(10), Ct), $"Only {_events.Count} input events arrived.");
-            }
-        }
-    }
 }

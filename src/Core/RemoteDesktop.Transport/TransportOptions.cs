@@ -19,6 +19,12 @@ public sealed class TransportOptions
     /// <summary>How long a signaling answer may take before the client gives up.</summary>
     public TimeSpan SignalingTimeout { get; set; } = TimeSpan.FromSeconds(25);
 
+    /// <summary>
+    /// False on a client whose machine is hosted by the background service: the UI then only makes outgoing
+    /// connections and leaves "being controlled" to the service.
+    /// </summary>
+    public bool AcceptIncoming { get; set; } = true;
+
     /// <summary>How long the host waits for the controller's QUIC connection after accepting.</summary>
     public TimeSpan HostAcceptTimeout { get; set; } = TimeSpan.FromSeconds(20);
 }

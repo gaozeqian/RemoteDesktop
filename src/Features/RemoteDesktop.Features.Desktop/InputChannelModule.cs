@@ -51,7 +51,15 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
                         break;
                 }
 
-                injector.Inject(inputEvent);
+                try
+                {
+                    injector.Inject(inputEvent);
+                }
+                catch (NotSupportedException ex)
+                {
+                    // E.g. Ctrl+Alt+Del without the host service: ignore it, keep serving the rest.
+                    LogUnsupported(logger, ex.Message);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException)
@@ -76,6 +84,9 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
             }
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Input ignored: {Reason}")]
+    private static partial void LogUnsupported(ILogger logger, string reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Released {Keys} keys and {Buttons} buttons left pressed by the controller.")]
     private static partial void LogReleased(ILogger logger, int keys, int buttons);

@@ -3,50 +3,42 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Media;
 using RemoteDesktop.Transport;
-using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Client.ViewModels;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
-    private readonly IRendezvousClient _rendezvous;
-    private readonly HostCredentials _credentials;
+    private readonly IHostControl _hostControl;
     private readonly ControllerSessionService _controller;
-    private readonly HostSessionService _host;
     private readonly VideoCodecSelector _codecs;
     private readonly TimeProvider _time;
     private readonly ILogger<DesktopViewer> _viewerLogger;
+    private readonly DispatcherTimer _statusTimer;
     private RemoteSession? _session;
 
     public MainWindowViewModel(
-        IRendezvousClient rendezvous,
-        HostCredentials credentials,
+        IHostControl hostControl,
         ControllerSessionService controller,
-        HostSessionService host,
         VideoCodecSelector codecs,
         TimeProvider time,
         ILogger<DesktopViewer> viewerLogger)
     {
-        _rendezvous = rendezvous;
-        _credentials = credentials;
+        _hostControl = hostControl;
         _controller = controller;
-        _host = host;
         _codecs = codecs;
         _time = time;
         _viewerLogger = viewerLogger;
 
-        _rendezvous.StateChanged += (_, _) => Dispatcher.UIThread.Post(UpdateServerState);
-        _credentials.Changed += (_, _) => Dispatcher.UIThread.Post(() => TemporaryPassword = _credentials.TemporaryPassword);
-        _host.SessionStarted += (_, _) => Dispatcher.UIThread.Post(UpdateIncomingStatus);
-        _host.SessionEnded += (_, _) => Dispatcher.UIThread.Post(UpdateIncomingStatus);
-
-        TemporaryPassword = _credentials.TemporaryPassword;
-        UpdateServerState();
+        // The host side may live in another process (the background service), so its state is polled rather than observed.
+        _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => _ = RefreshHostStatusAsync());
+        _statusTimer.Start();
+        _ = RefreshHostStatusAsync();
     }
 
     [ObservableProperty]
@@ -56,7 +48,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public partial string ServerStatus { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial string TemporaryPassword { get; set; }
+    public partial string TemporaryPassword { get; set; } = string.Empty;
+
+    /// <summary>Where the host side runs and what its session agent is doing, when a background service hosts it.</summary>
+    [ObservableProperty]
+    public partial string? HostDetail { get; set; }
 
     /// <summary>Who is controlling this device right now, if anyone.</summary>
     [ObservableProperty]
@@ -85,7 +81,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public event EventHandler<RemoteDesktopViewModel>? RemoteDesktopOpened;
 
     [RelayCommand]
-    private void RefreshPassword() => _credentials.RotateTemporaryPassword();
+    private async Task RefreshPasswordAsync()
+    {
+        try
+        {
+            await _hostControl.RotateTemporaryPasswordAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
+        {
+            StatusMessage = "无法联系后台服务。";
+        }
+
+        await RefreshHostStatusAsync();
+    }
 
     private bool CanConnect() => !IsConnected && DeviceId.TryParse(RemoteDeviceId, out _) && RemotePassword.Length > 0;
 
@@ -185,23 +193,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
         StatusMessage = $"已连接 {target} · {mode} · {path}{rtt}";
     }
 
-    private void UpdateServerState()
+    private async Task RefreshHostStatusAsync()
     {
-        LocalDeviceId = _rendezvous.DeviceId?.ToDisplayString() ?? "--- --- ---";
-        ServerStatus = _rendezvous.State switch
+        HostStatus status;
+        try
         {
-            RendezvousState.Online => "● 已连接服务器",
-            RendezvousState.Connecting => "○ 正在连接服务器…",
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            status = await _hostControl.GetStatusAsync(timeout.Token);
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or OperationCanceledException)
+        {
+            LocalDeviceId = "--- --- ---";
+            TemporaryPassword = string.Empty;
+            ServerStatus = "○ 无法联系后台服务";
+            IncomingStatus = null;
+            HostDetail = null;
+            return;
+        }
+
+        LocalDeviceId = status.DeviceId is { } id ? new DeviceId(id).ToDisplayString() : "--- --- ---";
+        TemporaryPassword = status.TemporaryPassword;
+        ServerStatus = status.ServerState switch
+        {
+            nameof(Transport.Rendezvous.RendezvousState.Online) => "● 已连接服务器",
+            nameof(Transport.Rendezvous.RendezvousState.Connecting) => "○ 正在连接服务器…",
             _ => "○ 未连接服务器",
         };
-    }
-
-    private void UpdateIncomingStatus()
-    {
-        var sessions = _host.ActiveSessions;
-        IncomingStatus = sessions.Count == 0
+        HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
+        IncomingStatus = status.Sessions.Count == 0
             ? null
-            : string.Join("\n", sessions.Select(s =>
-                $"{s.Connection.RemoteDevice.ToDisplayString()} 正在{(s.Grant.Mode == SessionMode.View ? "观看" : "控制")}本机"));
+            : string.Join("\n", status.Sessions.Select(s => $"{s.Controller} 正在{(s.Mode == "view" ? "观看" : "控制")}本机"));
     }
 }

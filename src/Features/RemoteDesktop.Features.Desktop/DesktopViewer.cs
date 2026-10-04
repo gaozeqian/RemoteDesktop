@@ -255,11 +255,11 @@ public sealed partial class DesktopViewer : IAsyncDisposable
             throw new InvalidDataException($"Invalid stream size {width}x{height}.");
         }
 
-        if (_decoder is null || StreamInfo is null || StreamInfo.Width != width || StreamInfo.Height != height)
-        {
-            _decoder?.Dispose();
-            _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
-        }
+        // Every stream info starts a new encoder on the host: the stream is reconfigured, or the host swapped its
+        // agent (login screen, UAC) and continues with a fresh encoder. A decoder from the old stream must not be
+        // fed the new one, even at the same resolution.
+        _decoder?.Dispose();
+        _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
 
         lock (_frameLock)
         {

@@ -29,7 +29,30 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 跨机器测试时需要放通服务器的 TCP 5080、UDP 5081（地址反射）和 UDP 5082（中继），并把 Rendezvous 的
 `Rendezvous:RelayEndpoint` 配置为客户端可达的中继公网地址。生产环境必须为两个服务配置新的 `RelaySharedKey`。
 
+## 后台服务（被控端）
+
+被控端由一个 Windows 服务（LocalSystem）托管，它本身无法采集屏幕或注入输入（Session 0），所以它在当前控制台会话里启动并监督一个 **Agent**
+（`RemoteDesktop.SessionAgent`），屏幕和输入由 Agent 完成，服务只负责连接、鉴权、授权和转发：
+
+- 输入桌面在用户桌面和登录界面 / 锁屏 / UAC 之间切换时，服务会换上另一种 Agent（用户令牌 / winlogon 的 SYSTEM 令牌），
+  控制端的画面不中断；注销、登录、快速用户切换、Agent 崩溃同理。
+- Ctrl+Alt+Del 不能用按键注入，只能由服务调用 `SendSAS`（安装脚本会打开所需策略 `SoftwareSASGeneration`）。
+- 客户端检测到服务后，设备代码和临时密码显示的是服务的；客户端自己只负责发起连接。`--HostMode standalone` 可忽略服务。
+
+```
+# 管理员 PowerShell
+dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
+.uildserviceinstall-service.ps1 -SourceDirectory artifactshost -RendezvousUri ws://<服务器>:5080/ws
+.uildserviceNinstall-service.ps1
+```
+
+日志在 `%ProgramData%RemoteDesktopogs`（`service-*.log`、`agent-*.log`），设备身份在同目录的 `secrets`（仅 SYSTEM、管理员可访问）。
+不安装服务也能开发调试：以普通用户直接运行 `RemoteDesktop.HostService.exe --DataDirectory <目录> --HostControlPipe RemoteDesktop.HostControl.Dev`，
+客户端加同样的 `--HostControlPipe` 参数；此时只能控制用户桌面，看不到登录界面和 UAC。
+
 ## 代码结构
+
+
 
 依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`。
 `Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.ArchitectureTests` 强制检查。
@@ -46,8 +69,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 | `src/Media` | 编解码器选择（硬件优先、软件兜底）、BT.709 颜色转换、码率自适应 |
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
-| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务 |
-| `src/Hosts/RemoteDesktop.SessionAgent` | 在用户会话内负责采集和输入的 Agent |
+| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕和输入通道转发给 Agent、给 UI 提供控制管道 |
+| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入 |
 | `src/Server/*` | Rendezvous（ID / 信令）与 Relay（UDP 中继）服务器 |
 
 ## 新增功能或平台
@@ -57,4 +80,4 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 
 ## 里程碑
 
-M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP（当前） → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端 → M7 摄像头 → M8 安装包（WiX v5）与加固。
+M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面，当前） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端 → M7 摄像头 → M8 安装包（WiX v5）与加固。

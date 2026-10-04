@@ -56,6 +56,9 @@ public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IIn
                 }
 
                 break;
+            case SecureAttentionEvent:
+                SendSecureAttentionSequence();
+                break;
             default:
                 throw new ArgumentException($"Unsupported input event {inputEvent.GetType().Name}.", nameof(inputEvent));
         }

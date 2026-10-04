@@ -1,10 +1,12 @@
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
+using RemoteDesktop.Platform.Windows.Agent;
 using RemoteDesktop.Platform.Windows.Display;
 using RemoteDesktop.Platform.Windows.Input;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
@@ -29,6 +31,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVideoEncoderFactory>(new MediaFoundationH264EncoderFactory(hardware: true));
         services.AddSingleton<IVideoEncoderFactory>(new MediaFoundationH264EncoderFactory(hardware: false));
         services.AddSingleton<IVideoDecoderFactory, MediaFoundationH264DecoderFactory>();
+        return services;
+    }
+
+    /// <summary>
+    /// Host service side of the agent: supervises the session agent and exposes it as an <see cref="IAgentGateway"/>.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    public static IServiceCollection AddWindowsAgentGateway(this IServiceCollection services, AgentGatewayOptions options)
+    {
+        services.AddSingleton(options);
+        services.AddSingleton<WindowsAgentGateway>();
+        services.AddSingleton<IAgentGateway>(sp => sp.GetRequiredService<WindowsAgentGateway>());
+        services.AddHostedService(sp => sp.GetRequiredService<WindowsAgentGateway>());
         return services;
     }
 }

@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using RemoteDesktop.Abstractions.Platform;
 
 namespace RemoteDesktop.Platform.Windows;
@@ -15,7 +17,7 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
 
     public void Save(string name, ReadOnlySpan<byte> secret)
     {
-        Directory.CreateDirectory(directory);
+        EnsureDirectory();
         var protectedBytes = ProtectedData.Protect(secret.ToArray(), Entropy, scope);
         File.WriteAllBytes(GetPath(name), protectedBytes);
     }
@@ -32,6 +34,27 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
     }
 
     public void Delete(string name) => File.Delete(GetPath(name));
+
+    // Machine-scope DPAPI lets any process on the computer decrypt the files, so the folder itself is what protects the
+    // device key: only SYSTEM, administrators and the account running this process get in.
+    private void EnsureDirectory()
+    {
+        if (Directory.Exists(directory) || scope != DataProtectionScope.LocalMachine)
+        {
+            Directory.CreateDirectory(directory);
+            return;
+        }
+
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var sid in new[] { new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), WindowsIdentity.GetCurrent().User! })
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        }
+
+        security.CreateDirectory(directory);
+    }
 
     private string GetPath(string name)
     {

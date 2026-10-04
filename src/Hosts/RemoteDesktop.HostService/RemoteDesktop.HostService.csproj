@@ -5,15 +5,24 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
-    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
-    <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
+    <!-- Built before the service so the agent executable can be copied next to it; nothing is referenced from it. -->
+    <ProjectReference Include="..\RemoteDesktop.SessionAgent\RemoteDesktop.SessionAgent.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Sinks.File" />
   </ItemGroup>
+  <!-- The service starts the agent from its own folder (see AgentGatewayOptions.ExecutablePath). -->
+  <Target Name="CopySessionAgent" AfterTargets="Build">
+    <ItemGroup>
+      <AgentFiles Include="$(MSBuildThisFileDirectory)..\RemoteDesktop.SessionAgent\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AgentFiles)" DestinationFiles="@(AgentFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

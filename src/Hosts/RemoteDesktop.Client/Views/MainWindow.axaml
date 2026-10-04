@@ -18,6 +18,7 @@
           <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
           <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
         </StackPanel>
+        <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
         <TextBlock Text="{Binding IncomingStatus}" IsVisible="{Binding IncomingStatus, Converter={x:Static ObjectConverters.IsNotNull}}"
                    Foreground="{DynamicResource SystemAccentColor}" TextWrapping="Wrap" />
       </StackPanel>

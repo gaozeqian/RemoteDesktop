@@ -9,7 +9,11 @@
     <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,6">
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#DDFFFFFF" FontSize="12" TextTrimming="CharacterEllipsis" />
-        <Button Grid.Column="1" Content="断开" Command="{Binding DisconnectCommand}" Margin="12,0,0,0" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0">
+          <!-- Only the host service can raise Ctrl+Alt+Del, so it is a button instead of a key combination. -->
+          <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanControl}" />
+          <Button Content="断开" Command="{Binding DisconnectCommand}" />
+        </StackPanel>
       </Grid>
     </Border>
     <!-- Focusable so keyboard input goes to the remote desktop instead of moving focus around the window. -->

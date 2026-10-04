@@ -57,6 +57,9 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [RelayCommand]
     private Task DisconnectAsync() => CloseAsync();
 
+    [RelayCommand]
+    private void SendSecureAttention() => SendInput(new SecureAttentionEvent());
+
     public async Task CloseAsync()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
