@@ -25,6 +25,7 @@ public sealed partial class HostSessionService(
     ChannelDispatcher dispatcher,
     HostCredentials credentials,
     AuthAttemptLimiter limiter,
+    ConnectionAdmission admission,
     ILogger<HostSessionService> logger) : BackgroundService
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
@@ -51,6 +52,15 @@ public sealed partial class HostSessionService(
                 break;
             }
 
+            // Half-open connections are cheap to start and expensive to hold; anything over the limit is dropped here.
+            if (!admission.TryEnter())
+            {
+                admission.RecordRefusal();
+                LogTooManyHandshakes(logger, connection.RemoteDevice, admission.InFlight, admission.Refused);
+                await connection.DisposeAsync().ConfigureAwait(false);
+                continue;
+            }
+
             _ = ServeAsync(connection, stoppingToken);
         }
     }
@@ -66,13 +76,18 @@ public sealed partial class HostSessionService(
                 using (var handshakeTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken))
                 {
                     handshakeTimeout.CancelAfter(HandshakeTimeout);
-                    control = await connection.AcceptChannelAsync(handshakeTimeout.Token).ConfigureAwait(false);
-                    if (control?.Type != ChannelType.Control)
+                    try
                     {
-                        return;
+                        control = await connection.AcceptChannelAsync(handshakeTimeout.Token).ConfigureAwait(false);
+                        session = control?.Type == ChannelType.Control
+                            ? await AuthenticateAsync(connection, control, handshakeTimeout.Token).ConfigureAwait(false)
+                            : null;
                     }
-
-                    session = await AuthenticateAsync(connection, control, handshakeTimeout.Token).ConfigureAwait(false);
+                    finally
+                    {
+                        // The slot only covers the handshake; a session may last for hours.
+                        admission.Release();
+                    }
                 }
 
                 if (session is null)
@@ -81,7 +96,7 @@ public sealed partial class HostSessionService(
                 }
 
                 using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                var hosted = new HostedSession(session, control, end);
+                var hosted = new HostedSession(session, control!, end);
                 _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
                 SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
@@ -349,6 +364,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session handshake with {Controller} failed: {Reason}.")]
     private static partial void LogHandshakeFailed(ILogger logger, DeviceId controller, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Controller}: {InFlight} other connections are still in their handshake ({Refused} refused so far).")]
+    private static partial void LogTooManyHandshakes(ILogger logger, DeviceId controller, int inFlight, long refused);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: refused {Channel} channel ({Result}).")]
     private static partial void LogChannelRefused(ILogger logger, SessionId sessionId, ChannelType channel, DispatchResult result);

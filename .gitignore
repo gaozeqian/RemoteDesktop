@@ -426,3 +426,6 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# Generated from the publish output by build/installer/windows/build-installer.ps1 (never edit or commit).
+build/installer/windows/Files.generated.wxs

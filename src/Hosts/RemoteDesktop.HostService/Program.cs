@@ -19,6 +19,17 @@ if (!OperatingSystem.IsWindows())
 
 const string ServiceName = "RemoteDesktopHost";
 
+// The installer runs this executable for its setup and cleanup steps; the service itself is not started then.
+if (SetupCommands.TryRun(
+        args,
+        AppContext.BaseDirectory,
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktop"),
+        Console.Out,
+        out var setupExitCode))
+{
+    return setupExitCode;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
 
@@ -48,3 +59,4 @@ builder.Services
     .AddHostedService<HostControlServer>();
 
 await builder.Build().RunAsync().ConfigureAwait(false);
+return 0;

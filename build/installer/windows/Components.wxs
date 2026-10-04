@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The components that need more than "a file": the service, the shortcuts and the settings file. Everything else is
+  generated from the publish output into Files.generated.wxs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall">
+
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+
+      <!-- The client: the window of this computer and the controller of others. -->
+      <Component Id="ClientExe" Guid="d2d5f9c1-3a4b-4e5f-9c8d-1e2f3a4b5c6d">
+        <File Id="ClientExeFile" Source="$(var.SourceRoot)\RemoteDesktop.Client.exe" KeyPath="yes" />
+      </Component>
+
+      <!-- The start menu shortcut lives in a component of its own, keyed by a registry value under HKCU: a shortcut is
+           per-user data even when the program itself is installed for everybody, and Windows Installer wants such a
+           component to have a per-user key path (ICE43/ICE57). -->
+      <Component Id="StartMenuShortcut" Guid="b4c5d6e7-f8a9-4b0c-9d1e-2f3a4b5c6d7e" Directory="AppShortcutFolder">
+        <Shortcut Id="StartMenuShortcutLink" Name="RemoteDesktop"
+                  Description="Remote desktop: control, file transfer, terminal and camera"
+                  Target="[INSTALLFOLDER]RemoteDesktop.Client.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\RemoteDesktop" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <!-- Windows Installer only removes folders it is told about. -->
+        <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
+      </Component>
+
+      <!-- The service that accepts connections and starts the agent inside the interactive session. -->
+      <Component Id="HostServiceExe" Guid="a7b8c9d0-1e2f-4a5b-8c7d-9e0f1a2b3c4d">
+        <File Id="HostServiceExeFile" Source="$(var.SourceRoot)\RemoteDesktop.HostService.exe" KeyPath="yes" />
+        <ServiceInstall Id="HostServiceInstall"
+                        Name="RemoteDesktopHost"
+                        DisplayName="Remote Desktop Host"
+                        Description="Lets other devices connect to this computer with RemoteDesktop."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
+        <!-- Started when installed, stopped on uninstall and on upgrades, so the executable is never in use. -->
+        <ServiceControl Id="HostServiceControl" Name="RemoteDesktopHost" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+
+        <!-- Inbound UDP for peer connections: without the rule Windows silently drops the hole-punched packets, so
+             every connection would fall back to the relay. A failure to add it must not fail the installation
+             (the software works relayed), hence IgnoreFailure. -->
+        <firewall:FirewallException Id="PeerUdp"
+                                    Name="RemoteDesktop peer connections (UDP)"
+                                    Description="Incoming connections from other RemoteDesktop devices."
+                                    Program="[#HostServiceExeFile]"
+                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+      </Component>
+
+      <!-- The agent runs inside the session; the service starts it from this folder. -->
+      <Component Id="SessionAgentExe" Guid="f1e2d3c4-b5a6-4c7d-8e9f-0a1b2c3d4e5f">
+        <File Id="SessionAgentExeFile" Source="$(var.SourceRoot)\RemoteDesktop.SessionAgent.exe" KeyPath="yes" />
+      </Component>
+
+      <!-- Both the service and the client read this. Never overwritten: the server address in it belongs to the person
+           who installed the software, and an upgrade must not put the built-in default back. -->
+      <Component Id="Settings" Guid="c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f" NeverOverwrite="yes">
+        <File Id="AppSettingsFile" Source="$(var.SourceRoot)\appsettings.json" KeyPath="yes" />
+      </Component>
+
+    </DirectoryRef>
+
+    <!--
+      The steps that need elevated rights go through the service executable, which the installer has just put in place.
+      All are deferred, run as the system, and are safe to repeat.
+
+      They live in this fragment, next to the components, on purpose: WiX 5.0.2 drops a fragment that holds no
+      component when linking (silently), which would quietly leave the installer without its custom actions.
+    -->
+    <CustomAction Id="ConfigureSystem"
+                  FileRef="HostServiceExeFile"
+                  ExeCommand="--configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <CustomAction Id="CleanupKeepData"
+                  FileRef="HostServiceExeFile"
+                  ExeCommand="--cleanup-system --keep-data"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <CustomAction Id="CleanupRemoveData"
+                  FileRef="HostServiceExeFile"
+                  ExeCommand="--cleanup-system"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Installing: allow the service to send Ctrl+Alt+Del and write the server address. Skipped when the old product
+           is removed as part of a major upgrade (the new one configures itself) and when uninstalling. -->
+      <Custom Action="ConfigureSystem"
+              After="InstallFiles"
+              Condition="NOT REMOVE OR UPGRADINGPRODUCTCODE" />
+
+      <!-- Uninstalling: take the policy bit back, and the machine's data only when asked. Both run before the files go,
+           so there is still an executable to run, and neither runs while a major upgrade removes the old product
+           (that would wipe the device identity on every upgrade). -->
+      <Custom Action="CleanupKeepData"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEDATA&lt;&gt;&quot;1&quot;" />
+      <Custom Action="CleanupRemoveData"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEDATA=&quot;1&quot;" />
+    </InstallExecuteSequence>
+  </Fragment>
+
+</Wix>

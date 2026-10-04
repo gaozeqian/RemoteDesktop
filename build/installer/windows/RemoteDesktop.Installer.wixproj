@@ -1,0 +1,36 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <!-- WiX v5 on purpose: from v6 the Open Source Maintenance Fee applies to commercial use. v5 gets no more
+         community fixes, so the installer is kept to standard features (no custom actions of our own beyond calling
+         the service executable) to keep a later move to another tool cheap. -->
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputName>RemoteDesktop-$(ProductVersion)-x64</OutputName>
+    <OutputType>Package</OutputType>
+    <SuppressIces>ICE61</SuppressIces>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Passed by build-installer.ps1: -p:ProductVersion=0.1.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
+    <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>
+    <DefineConstants>ProductVersion=$(ProductVersion);SourceRoot=$(SourceRoot);DefaultRendezvousUri=$(DefaultRendezvousUri)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+  <!-- The WiX SDK already compiles every *.wxs in this folder (EnableDefaultCompileItems); listing them again
+       would compile each one twice and the linker would see two packages. -->
+
+  <Target Name="RequireGeneratedFiles" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Files.generated.wxs')"
+           Text="Files.generated.wxs is missing. Run build\installer\windows\build-installer.ps1, which publishes the applications and generates the file list from the publish output." />
+    <Error Condition="'$(SourceRoot)' == ''"
+           Text="SourceRoot is not set. Run build\installer\windows\build-installer.ps1 -SourceDirectory &lt;publish folder&gt;." />
+  </Target>
+
+</Project>

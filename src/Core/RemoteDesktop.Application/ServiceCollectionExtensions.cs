@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddRemoteDesktopApplication(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<ConnectionAdmission>();
         services.AddSingleton<ChannelDispatcher>();
         services.AddSingleton(sp => new HostCredentials
         {

@@ -10,6 +10,12 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
+安装包（Windows MSI，需要 .NET SDK 与网络还原 WiX 包）：
+
+```
+pwsh -File build/installer/windows/build-installer.ps1
+```
+
 ## 本地运行（单机两个客户端互连）
 
 ```
@@ -105,6 +111,37 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 不安装服务也能开发调试：以普通用户直接运行 `RemoteDesktop.HostService.exe --DataDirectory <目录> --HostControlPipe RemoteDesktop.HostControl.Dev`，
 客户端加同样的 `--HostControlPipe` 参数；此时只能控制用户桌面，看不到登录界面和 UAC。
 
+## 安装包（Windows MSI）
+
+一个安装包同时装下客户端、后台服务和会话 Agent（三者本来就在同一个目录里协作）。
+
+```
+# 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
+.\build\installer\windows\build-installer.ps1                      # 用内置默认服务器地址
+.\build\installer\windows\build-installer.ps1 -RendezvousUri ws://rd.example.com:5080/ws
+.\build\installer\windows\build-installer.ps1 -SignCertificate <证书指纹>
+```
+
+脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 签名（给了证书才做）→
+**不安装就直接检查包内容**（`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
+自定义操作和属性，缺什么就报错）。产物在 `build/installer/windows/artifacts/`，约 49 MB。
+
+- 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒、5 秒、30 秒重启），
+  加一条**只针对该程序**的入站 UDP 防火墙规则（打洞需要；没有它连接会退回中继），加开始菜单快捷方式。
+- 安装时把服务器地址写进 `appsettings.json`；这个文件在升级时**不会被覆盖**，所以就地改过的地址会保留。
+  静默安装可以覆盖：`msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
+- 安装时会打开"服务可以发送 Ctrl+Alt+Del"的策略位（`SoftwareSASGeneration` 的第 0 位，只加这一位，
+  并记住是我们加的）；卸载时只把自己加的那一位去掉。另外还会写入设备身份和日志所在的目录。
+- **升级**：同版本号重装按升级处理（开发期刷版本号方便），升级不会清掉设备身份和日志。
+- **卸载**：默认保留 `%ProgramData%\RemoteDesktop`（设备身份 + 日志，重装后设备代码不变）；
+  `msiexec /x RemoteDesktop-0.1.0.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
+- `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
+- 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持，风险见方案）。
+  改动 `build/installer/windows` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
+  自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——上面那个包内容检查就是为了这个。
+
+安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/security.md](docs/security.md)。
+
 ## 代码结构
 
 
@@ -135,4 +172,4 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 ## 里程碑
 
-M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端 → M7 摄像头（当前） → M8 安装包（WiX v5）与加固。
+M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端 → M7 摄像头 → M8 安装包（WiX v5）与加固（当前）。
