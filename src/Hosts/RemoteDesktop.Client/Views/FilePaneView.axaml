@@ -1,0 +1,55 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ft="using:RemoteDesktop.Features.FileTransfer"
+             xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+             x:Class="RemoteDesktop.Client.Views.FilePaneView"
+             x:DataType="vm:FilePaneViewModel">
+  <Border BorderBrush="#40808080" BorderThickness="1" CornerRadius="4" Padding="8">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" RowSpacing="6">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1" ItemsSource="{Binding Places}" SelectedItem="{Binding SelectedPlace}" PlaceholderText="快速访问" MinWidth="150">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="ft:PlaceInfo">
+              <TextBlock Text="{Binding Name}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </Grid>
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="4">
+        <Button Content="↑" Command="{Binding UpCommand}" IsEnabled="{Binding CanGoUp}" ToolTip.Tip="上一级" />
+        <Button Grid.Column="1" Content="⟳" Command="{Binding RefreshCommand}" ToolTip.Tip="刷新" />
+        <TextBox Grid.Column="2" x:Name="PathBox" Text="{Binding PathInput}" PlaceholderText="路径（留空显示所有驱动器）" />
+        <Button Grid.Column="3" Content="转到" Command="{Binding GoCommand}" />
+      </Grid>
+      <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="4">
+        <TextBox Text="{Binding NewName}" PlaceholderText="名称" MinWidth="140" />
+        <Button Content="新建文件夹" Command="{Binding NewFolderCommand}" IsEnabled="{Binding HasFolder}" />
+        <Button Content="重命名" Command="{Binding RenameCommand}" IsEnabled="{Binding HasExactlyOneSelected}" />
+        <Button Content="删除" Command="{Binding AskDeleteCommand}" IsEnabled="{Binding HasSelection}" />
+      </StackPanel>
+      <ListBox Grid.Row="3" x:Name="Files" ItemsSource="{Binding Items}" SelectionMode="Multiple">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:FileItemViewModel">
+            <Grid ColumnDefinitions="24,*,80,120" Opacity="{Binding RowOpacity}">
+              <TextBlock Text="{Binding Icon}" />
+              <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="2" Text="{Binding SizeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Opacity="0.7" />
+              <TextBlock Grid.Column="3" Text="{Binding ModifiedText}" Opacity="0.7" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <Border Grid.Row="4" Background="#30FF8000" Padding="8,4" CornerRadius="4" IsVisible="{Binding ConfirmingDelete}">
+        <StackPanel Spacing="4">
+          <TextBlock Text="{Binding ConfirmText}" TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <Button Content="删除" Command="{Binding ConfirmDeleteCommand}" />
+            <Button Content="取消" Command="{Binding CancelDeleteCommand}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+      <TextBlock Grid.Row="5" Text="{Binding Message}" Foreground="OrangeRed" TextWrapping="Wrap" IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    </Grid>
+  </Border>
+</UserControl>

@@ -28,13 +28,14 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
     /// <summary>How many agents have existed, starting at 1.</summary>
     public int Generations { get; private set; } = 1;
 
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken)
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId sessionId, CancellationToken cancellationToken)
     {
         var type = kind switch
         {
             AgentChannelKind.Video => ChannelType.Video,
             AgentChannelKind.Input => ChannelType.Input,
             AgentChannelKind.Clipboard => ChannelType.Clipboard,
+            AgentChannelKind.File => ChannelType.FileTransfer,
             _ => ChannelType.Audio,
         };
         var module = _modules.First(m => m.ChannelType == type);
@@ -50,7 +51,7 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
             token = _generation.Token;
         }
 
-        var session = new SessionContext(SessionId.New(), SessionRole.Host, null!, AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
+        var session = new SessionContext(sessionId, SessionRole.Host, null!, AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
         var task = Task.Run(async () =>
         {
             try

@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Hosting;
@@ -40,7 +41,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
 
     public event EventHandler? StateChanged;
 
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken)
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + options.ChannelWait;
         while (true)
@@ -49,7 +50,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
             {
                 try
                 {
-                    return await connection.OpenChannelAsync(kind, cancellationToken).ConfigureAwait(false);
+                    return await connection.OpenChannelAsync(kind, session, cancellationToken).ConfigureAwait(false);
                 }
                 catch (AgentUnavailableException) when (DateTime.UtcNow < deadline)
                 {

@@ -19,6 +19,7 @@
             </ComboBox.ItemTemplate>
           </ComboBox>
           <ToggleButton Content="静音" IsChecked="{Binding IsMuted, Mode=OneWay}" Command="{Binding ToggleMuteCommand}" IsVisible="{Binding HasAudio}" />
+          <Button Content="文件" Command="{Binding OpenFilesCommand}" IsVisible="{Binding CanTransferFiles}" />
           <!-- Only the host service can raise Ctrl+Alt+Del, so it is a button instead of a key combination. -->
           <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanControl}" />
           <Button Content="断开" Command="{Binding DisconnectCommand}" />

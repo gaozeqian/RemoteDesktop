@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using System.Diagnostics;
 using System.Security.Principal;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,11 +29,13 @@ public class AgentIpcTests
         await using var link = await AgentLink.ConnectAsync(connection.PipeName, Ct);
         await connection.Connected.WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
+        var session = SessionId.New();
         var agentSide = Task.Run(async () =>
         {
             await foreach (var request in link.ReadRequestsAsync(Ct))
             {
                 Assert.Equal(AgentChannelKind.Input, request.Kind);
+                Assert.Equal(session, request.Session); // the agent can tell which session a channel serves (audit log)
                 await using var stream = await link.OpenChannelAsync(request, Ct);
                 var buffer = new byte[5];
                 await stream.ReadExactlyAsync(buffer, Ct);
@@ -41,7 +44,7 @@ public class AgentIpcTests
             }
         }, Ct);
 
-        await using var channel = await connection.OpenChannelAsync(AgentChannelKind.Input, Ct);
+        await using var channel = await connection.OpenChannelAsync(AgentChannelKind.Input, session, Ct);
         await channel.WriteAsync(new byte[] { 1, 2, 3, 4, 5 }, Ct);
         var echoed = new byte[5];
         await channel.ReadExactlyAsync(echoed, Ct);
@@ -91,13 +94,13 @@ public class AgentIpcTests
         await connection.Connected.WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
         // The agent never answers the channel request; then it dies.
-        var opening = connection.OpenChannelAsync(AgentChannelKind.Video, Ct);
+        var opening = connection.OpenChannelAsync(AgentChannelKind.Video, SessionId.New(), Ct);
         await Task.Delay(200, Ct);
         await link.DisposeAsync();
 
         await connection.Closed.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         await Assert.ThrowsAsync<AgentUnavailableException>(() => opening);
-        await Assert.ThrowsAsync<AgentUnavailableException>(() => connection.OpenChannelAsync(AgentChannelKind.Video, Ct));
+        await Assert.ThrowsAsync<AgentUnavailableException>(() => connection.OpenChannelAsync(AgentChannelKind.Video, SessionId.New(), Ct));
     }
 
     [Fact]

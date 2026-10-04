@@ -1,3 +1,5 @@
+using RemoteDesktop.Domain;
+
 namespace RemoteDesktop.Abstractions.Agent;
 
 /// <summary>Which desktop an agent works on.</summary>
@@ -17,6 +19,7 @@ public enum AgentChannelKind : byte
     Input = 2,
     Clipboard = 3,
     Audio = 4,
+    File = 5,
 }
 
 public enum AgentStatus
@@ -62,8 +65,8 @@ public interface IAgentGateway
 
     /// <summary>
     /// Opens a byte stream to the agent's implementation of a feature channel. Waits a short while for an agent that is
-    /// starting; the stream ends when that agent exits.
+    /// starting; the stream ends when that agent exits. <paramref name="session"/> is the session the channel serves; the agent uses it to tell its log entries apart.
     /// </summary>
     /// <exception cref="AgentUnavailableException">No agent became ready in time.</exception>
-    Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken);
+    Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken);
 }

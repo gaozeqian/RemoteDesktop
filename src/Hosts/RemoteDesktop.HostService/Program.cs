@@ -3,7 +3,6 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using RemoteDesktop.Application;
 using RemoteDesktop.Features.Camera;
-using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.HostService;
 using RemoteDesktop.Platform.Windows;
@@ -47,7 +46,6 @@ builder.Services
     .AddQuicTransport(transport)
     .AddRemoteDesktopApplication()
     .AddAgentForwardedDesktop()
-    .AddFileTransferFeature()
     .AddTerminalFeature()
     .AddCameraFeature()
     .AddLocalHostControl(isService: true)

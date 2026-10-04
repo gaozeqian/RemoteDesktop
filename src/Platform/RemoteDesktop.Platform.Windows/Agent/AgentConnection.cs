@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -58,7 +59,7 @@ internal sealed partial class AgentConnection : IAsyncDisposable
     public void ExpectProcess(int processId) => _expectedProcess.TrySetResult(processId);
 
     /// <exception cref="AgentUnavailableException">The agent is not connected or went away.</exception>
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken)
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
     {
         var control = _control ?? throw new AgentUnavailableException("The agent is not connected.");
         var id = Guid.NewGuid();
@@ -69,7 +70,7 @@ internal sealed partial class AgentConnection : IAsyncDisposable
             await _controlWrite.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await AgentPipeMessages.WriteMessageAsync(control, AgentPipeMessage.OpenChannel, AgentPipeMessages.OpenChannelPayload(id, kind), cancellationToken)
+                await AgentPipeMessages.WriteMessageAsync(control, AgentPipeMessage.OpenChannel, AgentPipeMessages.OpenChannelPayload(id, kind, session), cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)

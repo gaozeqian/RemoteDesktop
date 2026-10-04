@@ -48,6 +48,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
             ChannelType.Audio, Permissions.Audio, AgentChannelKind.Audio, replayFirstFrame: true,
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
+
+        // Files are handled as the signed-in user, which only the agent can be. Chunks are up to 1 MiB plus framing.
+        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+            ChannelType.FileTransfer, Permissions.FileTransfer, AgentChannelKind.File, replayFirstFrame: false,
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+            maxInboundFrame: 2 * 1024 * 1024, lossless: true));
         return services;
     }
 

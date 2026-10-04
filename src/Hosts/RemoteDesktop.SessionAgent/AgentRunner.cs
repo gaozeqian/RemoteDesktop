@@ -50,6 +50,7 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
             AgentChannelKind.Input => ChannelType.Input,
             AgentChannelKind.Clipboard => ChannelType.Clipboard,
             AgentChannelKind.Audio => ChannelType.Audio,
+            AgentChannelKind.File => ChannelType.FileTransfer,
             _ => throw new InvalidDataException($"Unknown channel kind {request.Kind}."),
         };
         try
@@ -63,7 +64,7 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
             var stream = await link.OpenChannelAsync(request, cancellationToken).ConfigureAwait(false);
             await using var channel = new PipeChannel(type, stream);
             var session = new SessionContext(
-                SessionId.New(),
+                request.Session,
                 SessionRole.Host,
                 new DetachedPeerConnection(),
                 AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));

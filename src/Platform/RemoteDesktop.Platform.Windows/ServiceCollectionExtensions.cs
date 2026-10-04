@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDisplayEnumerator, DxgiDisplayEnumerator>();
         services.AddSingleton<IScreenCapturerFactory, DxgiScreenCapturerFactory>();
         services.AddSingleton<IInputInjector, SendInputInjector>();
+        services.AddSingleton<IFileAccessGuard, WindowsFileAccessGuard>();
         services.AddSingleton<IClipboard>(_ => new WindowsClipboard());
         services.AddSingleton<IAudioCapturerFactory, WasapiAudioCapturerFactory>();
         services.AddSingleton<IAudioPlayerFactory, WasapiAudioPlayerFactory>();

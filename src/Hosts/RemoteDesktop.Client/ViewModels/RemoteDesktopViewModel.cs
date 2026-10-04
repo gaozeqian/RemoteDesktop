@@ -23,6 +23,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     private readonly DispatcherTimer _statusTimer;
     private InputSender? _input;
     private ClipboardShare? _clipboard;
+    private FileManagerViewModel? _files;
     private bool _updatingDisplays;
     private int _closed;
 
@@ -37,6 +38,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _audio = audio;
         _clipboard = clipboard;
         CanControl = input is not null;
+        CanTransferFiles = session.Context.Grant.Allows(Permissions.FileTransfer);
         HasAudio = audio is not null;
         UpdateTitle();
 
@@ -66,6 +68,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [ObservableProperty]
     public partial bool CanControl { get; set; }
 
+    /// <summary>Whether the host lets this session reach its files. Goes false when the host takes it away mid-session.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenFilesCommand))]
+    public partial bool CanTransferFiles { get; set; }
+
     [ObservableProperty]
     public partial bool HasAudio { get; set; }
 
@@ -80,6 +87,12 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
     /// <summary>Raised once when the window should close.</summary>
     public event EventHandler? Closed;
+
+    /// <summary>The user asked for the file manager (the same instance each time while it is open).</summary>
+    public event EventHandler<FileManagerViewModel>? FileManagerRequested;
+
+    /// <summary>The file manager can no longer work (access taken away, session over) and its window should close.</summary>
+    public event EventHandler? FileManagerUnavailable;
 
     public void SendInput(InputEvent inputEvent) => _input?.Send(inputEvent);
 
@@ -96,6 +109,28 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
     [RelayCommand]
     private void SendSecureAttention() => SendInput(new SecureAttentionEvent());
+
+    [RelayCommand(CanExecute = nameof(CanTransferFiles))]
+    private void OpenFiles()
+    {
+        if (_files is null)
+        {
+            _files = new FileManagerViewModel(_session.Context.Connection);
+            _ = _files.InitializeAsync();
+        }
+
+        FileManagerRequested?.Invoke(this, _files);
+    }
+
+    /// <summary>Called when the user closed the file manager window: ends its transfers (partial files stay, so they can be continued later).</summary>
+    public async Task ReleaseFileManagerAsync()
+    {
+        var files = Interlocked.Exchange(ref _files, null);
+        if (files is not null)
+        {
+            await files.DisposeAsync();
+        }
+    }
 
     [RelayCommand]
     private void ToggleMute()
@@ -122,6 +157,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     public async ValueTask DisposeAsync()
     {
         _statusTimer.Stop();
+        await ReleaseFileManagerAsync();
         if (_input is not null)
         {
             await _input.DisposeAsync();
@@ -153,6 +189,13 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             {
                 await input.DisposeAsync();
             }
+        }
+
+        if (!grant.Allows(Permissions.FileTransfer))
+        {
+            CanTransferFiles = false;
+            FileManagerUnavailable?.Invoke(this, EventArgs.Empty);
+            await ReleaseFileManagerAsync();
         }
 
         if (!grant.Allows(Permissions.Clipboard))

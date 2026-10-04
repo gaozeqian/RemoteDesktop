@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using System.Buffers.Binary;
 using RemoteDesktop.Abstractions.Agent;
 
@@ -125,11 +126,15 @@ internal static class AgentPipeMessages
         return ((AgentPipeMessage)header[0], payload);
     }
 
-    public static byte[] OpenChannelPayload(Guid channelId, AgentChannelKind kind)
+    /// <summary>Channel id (16), kind (1), id of the session the channel serves (16).</summary>
+    public const int OpenChannelPayloadLength = 33;
+
+    public static byte[] OpenChannelPayload(Guid channelId, AgentChannelKind kind, SessionId session)
     {
-        var payload = new byte[17];
+        var payload = new byte[OpenChannelPayloadLength];
         channelId.TryWriteBytes(payload, bigEndian: true, out _);
         payload[16] = (byte)kind;
+        session.Value.TryWriteBytes(payload.AsSpan(17), bigEndian: true, out _);
         return payload;
     }
 }

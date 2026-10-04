@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
@@ -6,7 +7,7 @@ using RemoteDesktop.Abstractions.Agent;
 namespace RemoteDesktop.Platform.Windows.Agent;
 
 /// <summary>A feature channel the service wants the agent to serve.</summary>
-public readonly record struct AgentChannelRequest(AgentChannelKind Kind, Guid ChannelId);
+public readonly record struct AgentChannelRequest(AgentChannelKind Kind, Guid ChannelId, SessionId Session);
 
 /// <summary>
 /// Agent side of the pipes to the host service: one control connection, plus one data connection per feature channel.
@@ -43,9 +44,9 @@ public sealed class AgentLink : IAsyncDisposable
                 yield break;
             }
 
-            if (message.Type == AgentPipeMessage.OpenChannel && message.Payload.Length == 17 && Enum.IsDefined((AgentChannelKind)message.Payload[16]))
+            if (message.Type == AgentPipeMessage.OpenChannel && message.Payload.Length == AgentPipeMessages.OpenChannelPayloadLength && Enum.IsDefined((AgentChannelKind)message.Payload[16]))
             {
-                yield return new AgentChannelRequest((AgentChannelKind)message.Payload[16], new Guid(message.Payload.AsSpan(0, 16), bigEndian: true));
+                yield return new AgentChannelRequest((AgentChannelKind)message.Payload[16], new Guid(message.Payload.AsSpan(0, 16), bigEndian: true), new SessionId(new Guid(message.Payload.AsSpan(17, 16), bigEndian: true)));
             }
         }
     }

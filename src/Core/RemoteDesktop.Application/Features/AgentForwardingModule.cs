@@ -19,6 +19,12 @@ namespace RemoteDesktop.Application.Features;
 /// login screen or a UAC prompt) the module opens a channel to the new agent and carries on, so the controller never
 /// notices more than a short freeze. Frames are relayed whole, in both directions, so a dying agent can never leave a
 /// half-written frame in the controller's stream.
+/// <para>
+/// A <c>lossless</c> channel (file transfer) carries data that must arrive complete and in order, so it behaves
+/// differently: the queue holds the controller back instead of dropping frames, nothing is discarded as stale, and when
+/// the agent goes away the channel ends (the controller retries the operation) rather than continuing on a new agent
+/// that knows nothing about the transfer in progress.
+/// </para>
 /// </remarks>
 public sealed partial class AgentForwardingModule(
     ChannelType channelType,
@@ -27,10 +33,14 @@ public sealed partial class AgentForwardingModule(
     bool replayFirstFrame,
     IAgentGateway gateway,
     ILogger<AgentForwardingModule> logger,
-    int maxInboundFrame = AgentForwardingModule.DefaultMaxInboundFrame) : IFeatureModule
+    int maxInboundFrame = AgentForwardingModule.DefaultMaxInboundFrame,
+    bool lossless = false) : IFeatureModule
 {
     /// <summary>Frames waiting for an agent; the oldest are dropped if the agent is away for long.</summary>
     private const int QueueCapacity = 256;
+
+    /// <summary>Lossless channels hold the controller back early: only a few chunks of file data wait here.</summary>
+    private const int LosslessQueueCapacity = 4;
 
     /// <summary>Controller → host messages are mostly small requests and input events; clipboard sharing needs more.</summary>
     public const int DefaultMaxInboundFrame = 64 * 1024;
@@ -51,15 +61,17 @@ public sealed partial class AgentForwardingModule(
     public async Task HandleAsync(IChannel channel, SessionContext session, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(session);
 
-        var queue = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(QueueCapacity)
+        var queue = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(lossless ? LosslessQueueCapacity : QueueCapacity)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = lossless ? BoundedChannelFullMode.Wait : BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = true,
         });
         var state = new ForwardState();
-        var reader = ReadInboundAsync(channel.Stream, queue.Writer, state, cancellationToken);
+        using var inbound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var reader = ReadInboundAsync(channel.Stream, queue.Writer, state, inbound.Token);
 
         try
         {
@@ -68,18 +80,23 @@ public sealed partial class AgentForwardingModule(
                 Stream agentStream;
                 try
                 {
-                    agentStream = await gateway.OpenChannelAsync(agentKind, cancellationToken).ConfigureAwait(false);
+                    agentStream = await gateway.OpenChannelAsync(agentKind, session.Id, cancellationToken).ConfigureAwait(false);
                 }
                 catch (AgentUnavailableException ex)
                 {
                     LogAgentUnavailable(logger, agentKind, ex.Message);
+                    if (lossless)
+                    {
+                        break;
+                    }
+
                     await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
                 var started = DateTime.UtcNow;
                 var controllerGone = await RunGenerationAsync(agentStream, channel.Stream, queue.Reader, state, cancellationToken).ConfigureAwait(false);
-                if (controllerGone)
+                if (controllerGone || lossless)
                 {
                     break;
                 }
@@ -100,6 +117,9 @@ public sealed partial class AgentForwardingModule(
         finally
         {
             queue.Writer.TryComplete();
+
+            // Ending early (agent lost) leaves the reader waiting for a controller that may say nothing more.
+            await inbound.CancelAsync().ConfigureAwait(false);
             await reader.ConfigureAwait(false);
         }
     }
@@ -131,7 +151,7 @@ public sealed partial class AgentForwardingModule(
                 return false;
             }
 
-            toAgent = PumpToAgentAsync(queue, agentStream, replayFirstFrame ? state.First?.Sequence : null, generation.Token);
+            toAgent = PumpToAgentAsync(queue, agentStream, replayFirstFrame ? state.First?.Sequence : null, lossless, generation.Token);
             fromAgent = PumpFromAgentAsync(agentStream, controllerStream, generation.Token, sessionToken);
             await Task.WhenAny(toAgent, fromAgent).ConfigureAwait(false);
             await generation.CancelAsync().ConfigureAwait(false);
@@ -144,7 +164,7 @@ public sealed partial class AgentForwardingModule(
     }
 
     /// <param name="replayedSequence">The opening request, when it was already written to this agent on its own.</param>
-    private static async Task PumpToAgentAsync(ChannelReader<QueuedFrame> queue, Stream agent, long? replayedSequence, CancellationToken generation)
+    private static async Task PumpToAgentAsync(ChannelReader<QueuedFrame> queue, Stream agent, long? replayedSequence, bool keepStale, CancellationToken generation)
     {
         try
         {
@@ -152,7 +172,7 @@ public sealed partial class AgentForwardingModule(
             {
                 while (queue.TryRead(out var queued))
                 {
-                    if (queued.Sequence == replayedSequence || Stopwatch.GetElapsedTime(queued.Timestamp) > MaxStaleness)
+                    if (queued.Sequence == replayedSequence || (!keepStale && Stopwatch.GetElapsedTime(queued.Timestamp) > MaxStaleness))
                     {
                         continue;
                     }
@@ -205,7 +225,14 @@ public sealed partial class AgentForwardingModule(
             {
                 var queued = new QueuedFrame(frame, ++sequence, Stopwatch.GetTimestamp());
                 state.First ??= queued;
-                queue.TryWrite(queued);
+                if (lossless)
+                {
+                    await queue.WriteAsync(queued, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    queue.TryWrite(queued);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException or OperationCanceledException)

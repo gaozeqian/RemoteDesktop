@@ -16,6 +16,8 @@ namespace RemoteDesktop.Core.UnitTests;
 /// </summary>
 public class AgentForwardingModuleTests
 {
+    private static readonly SessionContext TestSession = new(SessionId.New(), SessionRole.Host, null!, AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -154,7 +156,7 @@ public class AgentForwardingModuleTests
                 NullLogger<AgentForwardingModule>.Instance);
 
             var stop = new CancellationTokenSource();
-            var run = module.HandleAsync(new TestChannel(ChannelType.Video, moduleEnd), null!, stop.Token);
+            var run = module.HandleAsync(new TestChannel(ChannelType.Video, moduleEnd), TestSession, stop.Token);
             return new Rig(gateway, controller, run, stop);
         }
 
@@ -199,7 +201,7 @@ public class AgentForwardingModuleTests
 
         public void OfferFailure() => _opens.Writer.TryWrite(() => throw new AgentUnavailableException("still starting"));
 
-        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken) =>
+        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken) =>
             (await _opens.Reader.ReadAsync(cancellationToken))();
     }
 

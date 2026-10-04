@@ -1,0 +1,167 @@
+// Messages of the file transfer channel. Every operation runs on a channel of its own; a channel used for browsing
+// handles any number of list / folder requests one after another, while a transfer channel carries one transfer.
+// File contents travel as raw frames (see FileChunkFrame), not protobuf.
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.file;
+
+option csharp_namespace = "RemoteDesktop.Protocol.File";
+
+enum FileError {
+  FILE_ERROR_NONE = 0;
+  FILE_ERROR_NOT_FOUND = 1;
+  FILE_ERROR_ACCESS_DENIED = 2;
+  FILE_ERROR_ALREADY_EXISTS = 3;
+  FILE_ERROR_INVALID_PATH = 4;
+  // The host cannot serve files right now (e.g. it only has the login screen) or the path is outside what it shares.
+  FILE_ERROR_NOT_ALLOWED = 5;
+  FILE_ERROR_IO = 6;
+  FILE_ERROR_HASH_MISMATCH = 7;
+  // Not a failure: the transfer was not done because of the conflict policy.
+  FILE_ERROR_SKIPPED = 8;
+  // The file changed while it was being transferred, or the request does not fit what the file is.
+  FILE_ERROR_CHANGED = 9;
+  FILE_ERROR_UNSUPPORTED = 10;
+}
+
+message FileStatus {
+  FileError error = 1;
+  string message = 2;
+}
+
+// ---- Requests (controller -> host) ----
+
+message FileRequest {
+  oneof body {
+    ListRequest list = 1;
+    PlacesRequest places = 2;
+    MakeDirectoryRequest make_directory = 3;
+    RenameRequest rename = 4;
+    DeleteRequest delete = 5;
+    DownloadRequest download = 6;
+    UploadRequest upload = 7;
+    // Download: the receiver (controller) says where to start, after it has seen DownloadAccepted.
+    TransferStart start = 8;
+    // Upload: the sender's (controller's) closing message with the hash of the whole file.
+    TransferComplete finish = 9;
+  }
+}
+
+message ListRequest {
+  // Absolute path; empty lists the drives.
+  string path = 1;
+}
+
+message PlacesRequest {
+}
+
+message MakeDirectoryRequest {
+  string path = 1;
+}
+
+message RenameRequest {
+  string path = 1;
+  // A name, not a path: the item stays in its folder.
+  string new_name = 2;
+}
+
+message DeleteRequest {
+  string path = 1;
+  // Required for a folder that is not empty.
+  bool recursive = 2;
+}
+
+message DownloadRequest {
+  string path = 1;
+}
+
+enum ConflictPolicy {
+  CONFLICT_POLICY_OVERWRITE = 0;
+  CONFLICT_POLICY_SKIP = 1;
+  // Keep both: the new file gets "name (1).ext".
+  CONFLICT_POLICY_RENAME = 2;
+}
+
+message UploadRequest {
+  string directory = 1;
+  string file_name = 2;
+  uint64 size = 3;
+  int64 modified_unix_ms = 4;
+  ConflictPolicy conflict_policy = 5;
+}
+
+// ---- Responses (host -> controller) ----
+
+message FileResponse {
+  oneof body {
+    DirectoryListing listing = 1;
+    PlacesResponse places = 2;
+    // Answer to folder operations, and the way to refuse any request (status carries the reason).
+    OperationResult result = 3;
+    DownloadAccepted download_accepted = 4;
+    UploadAccepted upload_accepted = 5;
+    // Download: the sender's (host's) closing message. Upload: the receiver's (host's) verdict.
+    TransferComplete complete = 6;
+  }
+}
+
+message FileEntry {
+  string name = 1;
+  bool is_directory = 2;
+  uint64 size = 3;
+  int64 modified_unix_ms = 4;
+  // 1 hidden, 2 read-only, 4 system.
+  uint32 attributes = 5;
+}
+
+message DirectoryListing {
+  FileStatus status = 1;
+  // The path as the host understands it (absolute, normalized).
+  string path = 2;
+  // Empty at the top (the drive list).
+  string parent = 3;
+  repeated FileEntry entries = 4;
+  bool truncated = 5;
+}
+
+message Place {
+  string name = 1;
+  string path = 2;
+  bool is_drive = 3;
+}
+
+message PlacesResponse {
+  FileStatus status = 1;
+  repeated Place places = 2;
+}
+
+message OperationResult {
+  FileStatus status = 1;
+}
+
+message DownloadAccepted {
+  FileStatus status = 1;
+  uint64 size = 2;
+  int64 modified_unix_ms = 3;
+}
+
+message UploadAccepted {
+  // SKIPPED when the conflict policy says not to transfer.
+  FileStatus status = 1;
+  // Where the file will end up (differs from the request when the policy renames).
+  string final_path = 2;
+  // The receiver already has this many bytes of the same file; the sender continues from there.
+  uint64 resume_offset = 3;
+}
+
+message TransferStart {
+  uint64 offset = 1;
+}
+
+message TransferComplete {
+  FileStatus status = 1;
+  // xxHash64 of the whole file, prefix included.
+  fixed64 hash = 2;
+  uint64 size = 3;
+}

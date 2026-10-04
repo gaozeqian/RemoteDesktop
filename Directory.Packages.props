@@ -18,6 +18,8 @@
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
     <PackageVersion Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <!-- File transfer integrity check -->
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.12" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->
     <PackageVersion Include="NAudio.Wasapi" Version="3.1.0" />
     <PackageVersion Include="Concentus" Version="2.2.2" />

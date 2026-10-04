@@ -24,6 +24,7 @@ public sealed partial class RemoteDesktopWindow : Window
 #pragma warning restore CA1001
 {
     private RemoteDesktopViewModel? _viewModel;
+    private FileManagerWindow? _filesWindow;
     private WriteableBitmap? _bitmap;
     private int _updateQueued;
     private WriteableBitmap? _cursorBitmap;
@@ -67,12 +68,34 @@ public sealed partial class RemoteDesktopWindow : Window
         Overlay.SizeChanged += (_, _) => PositionCursor();
         UpdateLocalCursor();
         viewModel.Closed += (_, _) => Close();
+        viewModel.FileManagerRequested += (_, files) => ShowFileManager(viewModel, files);
+        viewModel.FileManagerUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _filesWindow?.Close());
         RecreateBitmap();
+    }
+
+    // One file manager per session: asking again brings the open one forward.
+    private void ShowFileManager(RemoteDesktopViewModel viewModel, FileManagerViewModel files)
+    {
+        if (_filesWindow is { } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        var window = new FileManagerWindow { DataContext = files };
+        window.Closed += (_, _) =>
+        {
+            _filesWindow = null;
+            _ = viewModel.ReleaseFileManagerAsync();
+        };
+        _filesWindow = window;
+        window.Show();
     }
 
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _filesWindow?.Close();
         _bitmap?.Dispose();
         _bitmap = null;
         _cursorBitmap?.Dispose();

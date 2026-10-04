@@ -1,0 +1,54 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:RemoteDesktop.Client.ViewModels"
+        xmlns:v="using:RemoteDesktop.Client.Views"
+        x:Class="RemoteDesktop.Client.Views.FileManagerWindow"
+        x:DataType="vm:FileManagerViewModel"
+        Title="文件传输"
+        Width="1100" Height="720" MinWidth="760" MinHeight="480">
+  <Grid RowDefinitions="*,Auto,Auto,180" Margin="10" RowSpacing="8">
+    <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="8">
+      <v:FilePaneView DataContext="{Binding LocalPane}" />
+      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+        <Button Content="上传 →" Command="{Binding UploadCommand}" HorizontalAlignment="Stretch" />
+        <Button Content="← 下载" Command="{Binding DownloadCommand}" HorizontalAlignment="Stretch" />
+      </StackPanel>
+      <!-- Files can be dropped from the Windows Explorer onto this side. -->
+      <v:FilePaneView x:Name="RemotePaneView" Grid.Column="2" DataContext="{Binding RemotePane}" />
+    </Grid>
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+      <TextBlock Text="文件已存在时：" VerticalAlignment="Center" />
+      <ComboBox Grid.Column="1" ItemsSource="{Binding Conflicts}" SelectedItem="{Binding SelectedConflict}" MinWidth="180">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:ConflictChoice">
+            <TextBlock Text="{Binding Label}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+      <TextBlock Grid.Column="2" Text="{Binding Message}" Foreground="OrangeRed" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+      <Button Grid.Column="3" Content="清除已完成" Command="{Binding ClearFinishedCommand}" />
+    </Grid>
+    <TextBlock Grid.Row="2" Text="传输列表" FontWeight="SemiBold" />
+    <ListBox Grid.Row="3" ItemsSource="{Binding Transfers}" SelectionMode="Single">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="vm:TransferItemViewModel">
+          <Grid ColumnDefinitions="2*,3*,Auto" ColumnSpacing="12">
+            <StackPanel>
+              <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+              <ProgressBar Minimum="0" Maximum="100" Value="{Binding Percent}" />
+              <TextBlock Text="{Binding Detail}" FontSize="12" Opacity="0.7" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <Button Content="暂停" Command="{Binding PauseCommand}" IsVisible="{Binding CanPause}" />
+              <Button Content="{Binding ResumeLabel}" Command="{Binding ResumeCommand}" IsVisible="{Binding CanResume}" />
+              <Button Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding CanCancel}" />
+            </StackPanel>
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </Grid>
+</Window>
