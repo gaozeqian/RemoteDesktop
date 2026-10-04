@@ -15,8 +15,14 @@ public sealed partial class HostSessionItem(HostSessionInfo info, IHostControl c
 
     public bool CanDowngrade => info.Mode != "view";
 
+    /// <summary>The controller is looking through this computer's camera right now; shown so nobody is watched unknowingly.</summary>
+    public bool CameraActive => info.CameraActive;
+
     [RelayCommand]
     private Task DowngradeAsync() => TryAsync(() => control.DowngradeSessionAsync(info.Id, CancellationToken.None));
+
+    [RelayCommand]
+    private Task StopCameraAsync() => TryAsync(() => control.StopCameraAsync(info.Id, CancellationToken.None));
 
     [RelayCommand]
     private Task DisconnectAsync() => TryAsync(() => control.DisconnectSessionAsync(info.Id, CancellationToken.None));

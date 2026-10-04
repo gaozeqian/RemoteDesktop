@@ -26,6 +26,7 @@ public sealed partial class RemoteDesktopWindow : Window
     private RemoteDesktopViewModel? _viewModel;
     private FileManagerWindow? _filesWindow;
     private TerminalWindow? _terminalWindow;
+    private CameraWindow? _cameraWindow;
     private WriteableBitmap? _bitmap;
     private int _updateQueued;
     private WriteableBitmap? _cursorBitmap;
@@ -73,6 +74,8 @@ public sealed partial class RemoteDesktopWindow : Window
         viewModel.FileManagerUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _filesWindow?.Close());
         viewModel.TerminalRequested += (_, terminal) => ShowTerminal(viewModel, terminal);
         viewModel.TerminalUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _terminalWindow?.Close());
+        viewModel.CameraRequested += (_, camera) => ShowCamera(viewModel, camera);
+        viewModel.CameraUnavailable += (_, _) => Dispatcher.UIThread.Post(() => _cameraWindow?.Close());
         RecreateBitmap();
     }
 
@@ -92,6 +95,25 @@ public sealed partial class RemoteDesktopWindow : Window
             _ = viewModel.ReleaseFileManagerAsync();
         };
         _filesWindow = window;
+        window.Show();
+    }
+
+    // One camera window per session. Closing it ends the stream, which releases the camera on the host.
+    private void ShowCamera(RemoteDesktopViewModel viewModel, CameraWindowViewModel camera)
+    {
+        if (_cameraWindow is { } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        var window = new CameraWindow { DataContext = camera };
+        window.Closed += (_, _) =>
+        {
+            _cameraWindow = null;
+            _ = viewModel.ReleaseCameraAsync();
+        };
+        _cameraWindow = window;
         window.Show();
     }
 
@@ -119,6 +141,7 @@ public sealed partial class RemoteDesktopWindow : Window
         base.OnClosed(e);
         _filesWindow?.Close();
         _terminalWindow?.Close();
+        _cameraWindow?.Close();
         _bitmap?.Dispose();
         _bitmap = null;
         _cursorBitmap?.Dispose();

@@ -38,6 +38,7 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 - **被控端的权限**：被控端界面列出正在控制本机的人，可随时点"仅观看"（立即关闭其输入、剪贴板等通道，控制端界面随之变化）或"断开"。
 - **文件传输**：见下一节。
 - **远程终端**：见"远程终端"一节。
+- **远程摄像头**：见"远程摄像头"一节。
 
 ## 文件传输
 
@@ -69,6 +70,19 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 - 操作：选中文字即可复制（Ctrl+Shift+C，或有选中时按 Ctrl+C；双击选词，三击选行）；Ctrl+V、Shift+Insert、右键或中键粘贴**控制端**剪贴板的内容；
   Shift+PageUp / PageDown 或滚轮翻看历史；程序开启鼠标上报时按住 Shift 可以照常选中文字。
 - 限制：被控端锁屏、注销或切换到安全桌面时 Agent 会被替换，终端随之结束（窗口会提示，重新开一个即可）。
+
+## 远程摄像头
+
+工具栏的"摄像头"按钮打开摄像头窗口：选被控端的摄像头和分辨率（最高 30 fps），点"开始"即可看到画面，窗口底部显示分辨率、帧率、码率、编码器和延迟。
+
+- **默认关闭，由被控端明确允许**：被控端界面里勾选"允许控制端使用本机摄像头"后，之后新建的连接才有摄像头权限（已建立的连接不变，
+  控制端的按钮在没有权限时是灰的）。这个选择会保存，重启后仍然有效。观看模式永远没有摄像头。
+- **被控端始终看得到**：有人正在通过摄像头看时，被控端界面在该连接下显示"正在使用本机摄像头"，并有"关闭摄像头"按钮（只关这一个连接的摄像头，
+  连接继续）；取消勾选则立刻关闭所有连接的摄像头。摄像头自带的指示灯和 Windows 的摄像头使用提示也会亮。
+- 采集用 Media Foundation（USB 摄像头、笔记本内置摄像头、虚拟摄像头都行），摄像头给什么格式（MJPEG、YUY2、NV12）都转成 NV12，
+  之后和远程桌面用同一条编码管线（优先硬件编码，否则软件编码；码率自适应；丢帧后自动请求关键帧）。只保留最新画面，所以网络慢时延迟不会累积。
+- 摄像头由 Agent 以登录用户的身份打开（和文件、终端一样），从不以 SYSTEM 打开；只有登录界面 / UAC 可用时拒绝。打开和关闭写入 Agent 日志（`agent-*.log`）。
+  如果摄像头被别的程序占用、被拔掉，或 Windows 的"设置 > 隐私和安全性 > 摄像头"不允许桌面应用使用，控制端会看到原因。
 
 ## 后台服务（被控端）
 
@@ -106,12 +120,12 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 | `src/Core/RemoteDesktop.Signaling` | 客户端与服务器之间的信令协议（protobuf）和 UDP 控制包 |
 | `src/Core/RemoteDesktop.Transport` | QUIC 对端连接、证书指纹固定、NAT 打洞、中继回退、Rendezvous 客户端 |
 | `src/Core/RemoteDesktop.Application` | 会话握手与密码鉴权、失败限流、功能模块契约 `IFeatureModule`、按权限分发通道的 `ChannelDispatcher` |
-| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（ConPTY 终端与 VT 模拟器）、Camera |
+| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（ConPTY 终端与 VT 模拟器）、Camera（摄像头采集与串流） |
 | `src/Media` | 编解码器选择（硬件优先、软件兜底）、BT.709 颜色转换、码率自适应 |
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
-| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕、输入、剪贴板、音频、文件、终端通道转发给 Agent、给 UI 提供控制管道 |
-| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入、文件操作和终端（以登录用户身份） |
+| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕、输入、剪贴板、音频、文件、终端、摄像头通道转发给 Agent、给 UI 提供控制管道 |
+| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份） |
 | `src/Server/*` | Rendezvous（ID / 信令）与 Relay（UDP 中继）服务器 |
 
 ## 新增功能或平台
@@ -121,4 +135,4 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 ## 里程碑
 
-M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端（当前） → M7 摄像头 → M8 安装包（WiX v5）与加固。
+M0 骨架 → M1 网络（QUIC、打洞、中继） → M2 远程控制 MVP → M3 服务化（UAC / 登录界面） → M4 观看模式 / 剪贴板 / 音频 / 多显示器 → M5 文件传输 → M6 终端 → M7 摄像头（当前） → M8 安装包（WiX v5）与加固。

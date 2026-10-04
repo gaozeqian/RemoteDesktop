@@ -41,6 +41,14 @@ public static partial class HostControlHandler
                     await control.DisconnectSessionAsync(sessionId, timeout.Token).ConfigureAwait(false);
                     await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
                     break;
+                case HostControlProtocol.CameraAllowCommand when request.Argument is { } flag:
+                    await control.SetCameraAllowedAsync(flag == "1", timeout.Token).ConfigureAwait(false);
+                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    break;
+                case HostControlProtocol.CameraStopCommand when request.Argument is { } sessionId:
+                    await control.StopCameraAsync(sessionId, timeout.Token).ConfigureAwait(false);
+                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    break;
                 default:
                     LogUnknownCommand(logger, request?.Command);
                     break;

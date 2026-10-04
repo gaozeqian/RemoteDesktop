@@ -27,6 +27,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ILoggerFactory _loggers;
     private readonly DispatcherTimer _statusTimer;
     private RemoteSession? _session;
+    private bool _updatingFromHost;
+    private int _cameraChangesPending;
 
     public MainWindowViewModel(
         IHostControl hostControl,
@@ -72,6 +74,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial bool HasIncoming { get; set; }
 
+    /// <summary>Whether controllers may use this computer's camera. Off until the person here switches it on.</summary>
+    [ObservableProperty]
+    public partial bool AllowCamera { get; set; }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
     public partial string RemoteDeviceId { get; set; } = string.Empty;
@@ -93,6 +99,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>Raised on the UI thread when a remote desktop window should be shown.</summary>
     public event EventHandler<RemoteDesktopViewModel>? RemoteDesktopOpened;
+
+    partial void OnAllowCameraChanged(bool value)
+    {
+        if (!_updatingFromHost)
+        {
+            _ = ChangeCameraPolicyAsync(value);
+        }
+    }
+
+    private async Task ChangeCameraPolicyAsync(bool allowed)
+    {
+        Interlocked.Increment(ref _cameraChangesPending);
+        try
+        {
+            await _hostControl.SetCameraAllowedAsync(allowed, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
+        {
+            StatusMessage = "无法联系后台服务。";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _cameraChangesPending);
+        }
+
+        await RefreshHostStatusAsync();
+    }
 
     [RelayCommand]
     private async Task RefreshPasswordAsync()
@@ -168,7 +201,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var audio = session.Context.Grant.Allows(Permissions.Audio) ? await TryStartAsync(() => AudioPlayback.StartAsync(connection, _players, _loggers.CreateLogger<AudioPlayback>(), cancellationToken)) : null;
         var clipboard = session.Context.Grant.Allows(Permissions.Clipboard) ? await TryStartAsync(() => ClipboardShare.StartAsync(connection, _clipboard, _loggers, cancellationToken)) : null;
 
-        RemoteDesktopOpened?.Invoke(this, new RemoteDesktopViewModel(session, viewer, input, audio, clipboard));
+        RemoteDesktopOpened?.Invoke(this, new RemoteDesktopViewModel(
+            session,
+            viewer,
+            input,
+            audio,
+            clipboard,
+            cameraConnection => new CameraWindowViewModel(cameraConnection, _codecs, _time, _loggers.CreateLogger<CameraWindowViewModel>())));
     }
 
     private static async Task<T?> TryStartAsync<T>(Func<Task<T>> start)
@@ -250,6 +289,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             nameof(Transport.Rendezvous.RendezvousState.Connecting) => "○ 正在连接服务器…",
             _ => "○ 未连接服务器",
         };
+        if (Volatile.Read(ref _cameraChangesPending) == 0 && AllowCamera != status.CameraAllowed)
+        {
+            _updatingFromHost = true;
+            AllowCamera = status.CameraAllowed;
+            _updatingFromHost = false;
+        }
+
         HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
         SetIncoming(status.Sessions);
     }
@@ -257,7 +303,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     // The list is rebuilt only when it really changed, so buttons do not flicker under the mouse once a second.
     private void SetIncoming(IReadOnlyList<HostSessionInfo> sessions)
     {
-        if (!sessions.Select(s => (s.Id, s.Mode)).SequenceEqual(IncomingSessions.Select(s => (s.Id, s.Mode))))
+        if (!sessions.Select(s => (s.Id, s.Mode, s.CameraActive)).SequenceEqual(IncomingSessions.Select(s => (s.Id, s.Mode, s.CameraActive))))
         {
             IncomingSessions.Clear();
             foreach (var session in sessions)

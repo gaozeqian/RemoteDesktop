@@ -258,11 +258,47 @@ public sealed partial class HostSessionService(
             return false;
         }
 
-        var session = hosted.Context;
-        session.Grant = session.Grant.DowngradeToView();
-        hosted.Cancel(type => dispatcher.GetRequiredPermission(type) is { } required && !session.Grant.Allows(required));
+        hosted.Context.Grant = hosted.Context.Grant.DowngradeToView();
         LogDowngraded(logger, id);
+        await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 
+    /// <summary>
+    /// Takes a permission away from a running session (for example the camera): the channels that need it are closed and
+    /// the controller is told so its UI follows. The session itself goes on.
+    /// </summary>
+    /// <returns><c>false</c> when there is no such session.</returns>
+    public async Task<bool> RevokeAsync(SessionId id, Permissions permissions, CancellationToken cancellationToken)
+    {
+        if (!_hosted.TryGetValue(id, out var hosted))
+        {
+            return false;
+        }
+
+        hosted.Context.Grant = hosted.Context.Grant.Revoke(permissions);
+        LogRevoked(logger, id, permissions);
+        await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Takes a permission away from every running session.</summary>
+    public async Task RevokeFromAllAsync(Permissions permissions, CancellationToken cancellationToken)
+    {
+        foreach (var id in _hosted.Keys)
+        {
+            await RevokeAsync(id, permissions, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Whether the session has a channel of this type open right now (e.g. the camera is streaming).</summary>
+    public bool IsChannelOpen(SessionId id, ChannelType type) => _hosted.TryGetValue(id, out var hosted) && hosted.HasOpen(type);
+
+    // Closes what the new grant no longer covers and tells the controller.
+    private async Task ApplyGrantAsync(HostedSession hosted, CancellationToken cancellationToken)
+    {
+        var session = hosted.Context;
+        hosted.Cancel(type => dispatcher.GetRequiredPermission(type) is { } required && !session.Grant.Allows(required));
         try
         {
             await hosted.WriteControlAsync(new ControlMessage
@@ -272,10 +308,8 @@ public sealed partial class HostSessionService(
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
         {
-            // The controller is already gone; the downgrade stands.
+            // The controller is already gone; the change stands.
         }
-
-        return true;
     }
 
     /// <summary>Ends a running session.</summary>
@@ -300,6 +334,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} switched to watch-only by the host.")]
     private static partial void LogDowngraded(ILogger logger, SessionId sessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: {Permissions} taken away by the local user.")]
+    private static partial void LogRevoked(ILogger logger, SessionId sessionId, Permissions permissions);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} disconnected by the host.")]
     private static partial void LogDisconnected(ILogger logger, SessionId sessionId);

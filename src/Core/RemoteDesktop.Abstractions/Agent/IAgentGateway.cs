@@ -21,6 +21,7 @@ public enum AgentChannelKind : byte
     Audio = 4,
     File = 5,
     Terminal = 6,
+    Camera = 7,
 }
 
 public enum AgentStatus

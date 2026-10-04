@@ -23,7 +23,9 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
         await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
 
         Assert.Equal(ConnectionPath.Direct, session.Path);
-        Assert.Equal(Permissions.All, session.Context.Grant.Permissions);
+
+        // Everything except the camera, which stays off until the person at the host allows it.
+        Assert.Equal(Permissions.All & ~Permissions.Camera, session.Context.Grant.Permissions);
         var hostSide = await started.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(controller.Id, hostSide.Connection.RemoteDevice);
         Assert.Equal(ConnectionPath.Direct, hostSide.Connection.Path);

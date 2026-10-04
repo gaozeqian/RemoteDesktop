@@ -52,6 +52,7 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
             AgentChannelKind.Audio => ChannelType.Audio,
             AgentChannelKind.File => ChannelType.FileTransfer,
             AgentChannelKind.Terminal => ChannelType.Terminal,
+            AgentChannelKind.Camera => ChannelType.Camera,
             _ => throw new InvalidDataException($"Unknown channel kind {request.Kind}."),
         };
         try

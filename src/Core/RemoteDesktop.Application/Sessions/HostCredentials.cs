@@ -23,8 +23,11 @@ public sealed class HostCredentials
         }
     }
 
-    /// <summary>Upper bound of what any controller is granted (the host's policy).</summary>
-    public Permissions AllowedPermissions { get; set; } = Permissions.All;
+    /// <summary>
+    /// Upper bound of what any controller is granted (the host's policy). The camera is not part of the default: it has
+    /// to be switched on by the person at this computer (see <see cref="HostPolicy"/>).
+    /// </summary>
+    public Permissions AllowedPermissions { get; set; } = HostPolicy.Default;
 
     public event EventHandler? Changed;
 

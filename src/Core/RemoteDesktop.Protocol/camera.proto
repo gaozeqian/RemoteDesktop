@@ -1,0 +1,86 @@
+// Messages of the camera channel. One channel is one camera view: the controller may ask which cameras the host has,
+// then opens one; the picture arrives as video data frames (see VideoDataFrame), the same encoded form the desktop
+// uses. Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.camera;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Camera";
+
+enum CameraError {
+  CAMERA_ERROR_NONE = 0;
+  // The host does not let controllers use its camera right now (switched off, or only the login screen is available).
+  CAMERA_ERROR_NOT_ALLOWED = 1;
+  // The camera is not one of the offered ones.
+  CAMERA_ERROR_NOT_FOUND = 2;
+  // The camera is in use by another program, unplugged, or blocked by the operating system's privacy settings.
+  CAMERA_ERROR_UNAVAILABLE = 3;
+  CAMERA_ERROR_UNSUPPORTED = 4;
+}
+
+// ---- Controller -> host ----
+
+message CameraRequest {
+  oneof body {
+    ListCamerasRequest list = 1;
+    OpenCamera open = 2;
+    KeyFrameRequest key_frame_request = 3;
+  }
+}
+
+message ListCamerasRequest {
+}
+
+message OpenCamera {
+  // One of the ids the host offered.
+  string camera_id = 1;
+  // The wanted mode; the host uses the closest one the camera supports.
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 frame_rate = 4;
+}
+
+// Sent when the controller cannot decode the stream (it just joined, or lost a picture).
+message KeyFrameRequest {
+}
+
+// ---- Host -> controller ----
+
+message CameraEvent {
+  oneof body {
+    CameraList cameras = 1;
+    CameraStreamInfo stream_info = 2;
+    CameraFailed failed = 3;
+  }
+}
+
+message CameraList {
+  repeated CameraDescription cameras = 1;
+}
+
+message CameraDescription {
+  string id = 1;
+  string name = 2;
+  repeated CameraModeDescription modes = 3;
+}
+
+message CameraModeDescription {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 frame_rate = 3;
+}
+
+// The stream that follows; sent again if the host has to restart the encoder.
+message CameraStreamInfo {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 frame_rate = 3;
+  string camera_name = 4;
+  string encoder_name = 5;
+  bool hardware_encoder = 6;
+}
+
+message CameraFailed {
+  CameraError error = 1;
+  string message = 2;
+}

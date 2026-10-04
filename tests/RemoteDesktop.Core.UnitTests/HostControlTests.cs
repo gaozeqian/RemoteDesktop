@@ -22,7 +22,8 @@ public class HostControlTests
         Assert.Equal(123456789, status.DeviceId);
         Assert.Equal("Online", status.ServerState);
         Assert.Equal("pw-1", status.TemporaryPassword);
-        Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct")], status.Sessions);
+        Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], status.Sessions);
+        Assert.False(status.CameraAllowed);
         Assert.True(status.IsService);
 
         await client.RotateTemporaryPasswordAsync(Ct);
@@ -46,6 +47,27 @@ public class HostControlTests
 
         Assert.Equal(["session-1"], control.Downgraded);
         Assert.Equal(["session-2"], control.Disconnected);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task The_ui_can_allow_the_camera_and_stop_it_for_one_session()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName);
+
+        await client.SetCameraAllowedAsync(true, Ct);
+        Assert.True((await client.GetStatusAsync(Ct)).CameraAllowed);
+        await client.StopCameraAsync("session-3", Ct);
+        await client.SetCameraAllowedAsync(false, Ct);
+
+        Assert.Equal(["session-3"], control.CameraStopped);
+        Assert.False((await client.GetStatusAsync(Ct)).CameraAllowed);
 
         await stop.CancelAsync();
         await server;
@@ -124,7 +146,7 @@ public class HostControlTests
         public int Rotations { get; private set; }
 
         public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("abc", "987 654 321", "view", "direct")], "Running (User)", true));
+            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], "Running (User)", true, CameraAllowed));
 
         public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
         {
@@ -135,6 +157,22 @@ public class HostControlTests
         public List<string> Downgraded { get; } = [];
 
         public List<string> Disconnected { get; } = [];
+
+        public bool CameraAllowed { get; private set; }
+
+        public List<string> CameraStopped { get; } = [];
+
+        public Task SetCameraAllowedAsync(bool allowed, CancellationToken cancellationToken)
+        {
+            CameraAllowed = allowed;
+            return Task.CompletedTask;
+        }
+
+        public Task StopCameraAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            CameraStopped.Add(sessionId);
+            return Task.CompletedTask;
+        }
 
         public Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken)
         {

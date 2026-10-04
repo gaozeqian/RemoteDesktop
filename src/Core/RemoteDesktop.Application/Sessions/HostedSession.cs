@@ -45,6 +45,14 @@ internal sealed class HostedSession(SessionContext context, IChannel control, Ca
         }
     }
 
+    public bool HasOpen(ChannelType type)
+    {
+        lock (_lock)
+        {
+            return _channels.Any(c => c.Type == type);
+        }
+    }
+
     public void Remove(CancellationTokenSource cts)
     {
         lock (_lock)

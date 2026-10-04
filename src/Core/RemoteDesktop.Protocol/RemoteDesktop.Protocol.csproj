@@ -13,5 +13,6 @@
     <Protobuf Include="audio.proto" GrpcServices="None" />
     <Protobuf Include="file.proto" GrpcServices="None" />
     <Protobuf Include="terminal.proto" GrpcServices="None" />
+    <Protobuf Include="camera.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using RemoteDesktop.Application;
-using RemoteDesktop.Features.Camera;
 using RemoteDesktop.HostService;
 using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Platform.Windows.Agent;
@@ -45,7 +44,6 @@ builder.Services
     .AddQuicTransport(transport)
     .AddRemoteDesktopApplication()
     .AddAgentForwardedDesktop()
-    .AddCameraFeature()
     .AddLocalHostControl(isService: true)
     .AddHostedService<HostControlServer>();
 

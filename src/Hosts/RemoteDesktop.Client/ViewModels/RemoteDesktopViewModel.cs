@@ -25,15 +25,26 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     private ClipboardShare? _clipboard;
     private FileManagerViewModel? _files;
     private TerminalWindowViewModel? _terminal;
+    private CameraWindowViewModel? _camera;
+    private readonly Func<IPeerConnection, CameraWindowViewModel>? _cameraFactory;
     private bool _updatingDisplays;
     private int _closed;
 
-    public RemoteDesktopViewModel(RemoteSession session, DesktopViewer viewer, InputSender? input, AudioPlayback? audio, ClipboardShare? clipboard)
+    public RemoteDesktopViewModel(
+        RemoteSession session,
+        DesktopViewer viewer,
+        InputSender? input,
+        AudioPlayback? audio,
+        ClipboardShare? clipboard,
+        Func<IPeerConnection, CameraWindowViewModel>? cameraFactory = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(viewer);
 
         _session = session;
+        _cameraFactory = cameraFactory;
+        CanUseCamera = session.Context.Grant.Allows(Permissions.Camera);
+        ShowCameraButton = session.Context.Grant.Mode == SessionMode.Control && cameraFactory is not null;
         Viewer = viewer;
         _input = input;
         _audio = audio;
@@ -80,6 +91,17 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [NotifyCanExecuteChangedFor(nameof(OpenTerminalCommand))]
     public partial bool CanUseTerminal { get; set; }
 
+    /// <summary>
+    /// Whether the host lets this session use its camera. Off by default on the host, so the button is shown (in control
+    /// mode) but disabled until the person there allows it; it also goes false when they take it away mid-session.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenCameraCommand))]
+    public partial bool CanUseCamera { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowCameraButton { get; set; }
+
     [ObservableProperty]
     public partial bool HasAudio { get; set; }
 
@@ -106,6 +128,12 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
     /// <summary>Terminals can no longer work (access taken away, session over) and the window should close.</summary>
     public event EventHandler? TerminalUnavailable;
+
+    /// <summary>The user asked for the camera window (the same instance each time while it is open).</summary>
+    public event EventHandler<CameraWindowViewModel>? CameraRequested;
+
+    /// <summary>The host took the camera away; the window shows nothing useful any more and should close.</summary>
+    public event EventHandler? CameraUnavailable;
 
     public void SendInput(InputEvent inputEvent) => _input?.Send(inputEvent);
 
@@ -145,6 +173,31 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         }
 
         TerminalRequested?.Invoke(this, _terminal);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanUseCamera))]
+    private void OpenCamera()
+    {
+        if (_camera is null && _cameraFactory is not null)
+        {
+            _camera = _cameraFactory(_session.Context.Connection);
+            _ = _camera.InitializeAsync();
+        }
+
+        if (_camera is not null)
+        {
+            CameraRequested?.Invoke(this, _camera);
+        }
+    }
+
+    /// <summary>Called when the camera window closed (or the host took the camera away): stops the stream, which frees the camera on the host.</summary>
+    public async Task ReleaseCameraAsync()
+    {
+        var camera = Interlocked.Exchange(ref _camera, null);
+        if (camera is not null)
+        {
+            await camera.DisposeAsync();
+        }
     }
 
     /// <summary>Called when the user closed the terminal window: ends its shells on the host.</summary>
@@ -194,6 +247,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _statusTimer.Stop();
         await ReleaseFileManagerAsync();
         await ReleaseTerminalAsync();
+        await ReleaseCameraAsync();
         if (_input is not null)
         {
             await _input.DisposeAsync();
@@ -232,6 +286,13 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             CanTransferFiles = false;
             FileManagerUnavailable?.Invoke(this, EventArgs.Empty);
             await ReleaseFileManagerAsync();
+        }
+
+        if (!grant.Allows(Permissions.Camera))
+        {
+            CanUseCamera = false;
+            CameraUnavailable?.Invoke(this, EventArgs.Empty);
+            await ReleaseCameraAsync();
         }
 
         if (!grant.Allows(Permissions.Terminal))

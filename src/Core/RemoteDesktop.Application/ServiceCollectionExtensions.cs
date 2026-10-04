@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Agent;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
@@ -20,7 +21,11 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ChannelDispatcher>();
-        services.AddSingleton<HostCredentials>();
+        services.AddSingleton(sp => new HostCredentials
+        {
+            // What the person at this computer decided earlier (the camera stays off until they switch it on).
+            AllowedPermissions = sp.GetService<ISecretStore>() is { } store ? HostPolicy.Load(store) : HostPolicy.Default,
+        });
         services.AddSingleton<AuthAttemptLimiter>();
         services.AddSingleton<ControllerSessionService>();
         services.AddSingleton<HostSessionService>();
@@ -61,6 +66,13 @@ public static class ServiceCollectionExtensions
             ChannelType.Terminal, Permissions.Terminal, AgentChannelKind.Terminal, replayFirstFrame: false,
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
             lossless: true));
+
+        // The camera belongs to the signed-in user as well. Lossless: a stream silently moved to another agent would not
+        // decode, and the viewer simply opens the camera again.
+        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+            ChannelType.Camera, Permissions.Camera, AgentChannelKind.Camera, replayFirstFrame: false,
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+            lossless: true));
         return services;
     }
 
@@ -73,7 +85,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<HostCredentials>(),
             sp.GetRequiredService<HostSessionService>(),
             sp.GetService<IAgentGateway>(),
-            isService));
+            isService,
+            sp.GetService<ISecretStore>()));
         return services;
     }
 }
