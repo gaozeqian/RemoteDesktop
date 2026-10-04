@@ -14,6 +14,7 @@ message ControlMessage {
     AuthResult auth_result = 4;
     Ping ping = 5;
     Pong pong = 6;
+    GrantChanged grant_changed = 7;
   }
 }
 
@@ -64,4 +65,11 @@ message Ping {
 
 message Pong {
   int64 timestamp = 1;
+}
+
+// Host -> controller when the host changes what this controller may do during the session (e.g. switches it to
+// watch-only). The controller must stop offering what is no longer allowed; the host enforces it regardless.
+message GrantChanged {
+  SessionModeMessage mode = 1;
+  uint32 granted_permissions = 2;
 }

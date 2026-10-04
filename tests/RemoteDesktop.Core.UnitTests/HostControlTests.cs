@@ -22,11 +22,30 @@ public class HostControlTests
         Assert.Equal(123456789, status.DeviceId);
         Assert.Equal("Online", status.ServerState);
         Assert.Equal("pw-1", status.TemporaryPassword);
-        Assert.Equal([new HostSessionInfo("987 654 321", "view", "direct")], status.Sessions);
+        Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct")], status.Sessions);
         Assert.True(status.IsService);
 
         await client.RotateTemporaryPasswordAsync(Ct);
         Assert.Equal("pw-2", (await client.GetStatusAsync(Ct)).TemporaryPassword);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task The_ui_can_downgrade_or_disconnect_a_named_session()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName);
+
+        await client.DowngradeSessionAsync("session-1", Ct);
+        await client.DisconnectSessionAsync("session-2", Ct);
+
+        Assert.Equal(["session-1"], control.Downgraded);
+        Assert.Equal(["session-2"], control.Disconnected);
 
         await stop.CancelAsync();
         await server;
@@ -105,11 +124,27 @@ public class HostControlTests
         public int Rotations { get; private set; }
 
         public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("987 654 321", "view", "direct")], "Running (User)", true));
+            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("abc", "987 654 321", "view", "direct")], "Running (User)", true));
 
         public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
         {
             Rotations++;
+            return Task.CompletedTask;
+        }
+
+        public List<string> Downgraded { get; } = [];
+
+        public List<string> Disconnected { get; } = [];
+
+        public Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            Downgraded.Add(sessionId);
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            Disconnected.Add(sessionId);
             return Task.CompletedTask;
         }
     }

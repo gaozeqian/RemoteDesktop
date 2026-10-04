@@ -3,17 +3,20 @@ using System.Text.Json;
 
 namespace RemoteDesktop.Application.Hosting;
 
-public sealed record HostControlRequest(string Command);
+public sealed record HostControlRequest(string Command, string? Argument = null);
 
 /// <summary>
 /// Wire format of the UI ↔ service pipe: one JSON object per line, request then response. Commands are
-/// <see cref="StatusCommand"/> (answered with a <see cref="HostStatus"/>) and <see cref="RotateCommand"/>.
+/// <see cref="StatusCommand"/> (answered with a <see cref="HostStatus"/>), <see cref="RotateCommand"/>, and
+/// <see cref="DowngradeCommand"/> / <see cref="DisconnectCommand"/>, which name a session in the argument.
 /// </summary>
 public static class HostControlProtocol
 {
     public const string PipeName = "RemoteDesktop.HostControl";
     public const string StatusCommand = "status";
     public const string RotateCommand = "rotate";
+    public const string DowngradeCommand = "downgrade";
+    public const string DisconnectCommand = "disconnect";
 
     /// <summary>Requests and responses are a few hundred bytes; anything bigger is not from us.</summary>
     public const int MaxLineBytes = 16 * 1024;

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
@@ -13,9 +14,11 @@ using RemoteDesktop.Transport;
 namespace RemoteDesktop.Features.Desktop;
 
 /// <summary>
-/// Streams one display to the controller: capture → BGRA→NV12 → H.264 → video channel. Used by both control and
-/// watch mode. The loop is strictly sequential, so a slow network naturally lowers the frame rate (the capturer
-/// always hands out the newest image) while the bitrate controller lowers quality.
+/// Streams one display to the controller: capture → BGRA→NV12 → H.264 → video channel, plus the pointer shape and
+/// position so the controller can draw the real cursor itself. Used by both control and watch mode. The loop is
+/// strictly sequential, so a slow network naturally lowers the frame rate (the capturer always hands out the newest
+/// image) while the bitrate controller lowers quality. The controller can switch displays at any time, and monitors
+/// may come and go: the loop follows both.
 /// </summary>
 public sealed partial class VideoChannelModule(
     IDisplayEnumerator displays,
@@ -27,6 +30,7 @@ public sealed partial class VideoChannelModule(
     private const int MaxFrameRate = 60;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureTimeout = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan DisplayPoll = TimeSpan.FromSeconds(2);
 
     public ChannelType ChannelType => ChannelType.Video;
 
@@ -50,7 +54,7 @@ public sealed partial class VideoChannelModule(
         }
 
         var available = displays.GetDisplays();
-        var display = available.FirstOrDefault(d => d.Id == request.DisplayId) ?? available.FirstOrDefault(d => d.IsPrimary) ?? (available.Count > 0 ? available[0] : null);
+        var display = available.FirstOrDefault(d => d.Id == request.DisplayId) ?? Primary(available);
         if (display is null)
         {
             LogNoDisplay(logger);
@@ -81,6 +85,9 @@ public sealed partial class VideoChannelModule(
         }
     }
 
+    private static DisplayInfo? Primary(IReadOnlyList<DisplayInfo> available) =>
+        available.FirstOrDefault(d => d.IsPrimary) ?? (available.Count > 0 ? available[0] : null);
+
     private async Task StreamAsync(
         IChannel channel,
         DisplayInfo display,
@@ -96,6 +103,7 @@ public sealed partial class VideoChannelModule(
         IVideoEncoder? encoder = null;
         BitrateController? bitrate = null;
         var nextFrameDue = TimeSpan.Zero;
+        var nextDisplayPoll = DisplayPoll;
 
         // The newest image is kept: on a static screen nothing new is captured, yet a controller that lost a frame
         // (or just joined) still needs a key frame to show anything.
@@ -104,11 +112,46 @@ public sealed partial class VideoChannelModule(
         // Set when the newest image has not been encoded yet because it arrived before the frame-rate cap allowed.
         var pending = false;
 
-        await using var capturer = capturers.Create(display);
+        // The capturer raises its cursor events from inside CaptureAsync, i.e. on this loop; they are flushed to the
+        // channel right after. Only the newest position matters; the shape is remembered to re-announce it on a new stream.
+        var cursor = new CursorRelay();
+        var capturer = capturers.Create(display);
+        capturer.CursorChanged += cursor.OnShape;
+        capturer.CursorMoved += cursor.OnMoved;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
+                var switchTo = NextDisplay(stream, ref available, display, clock.Elapsed, ref nextDisplayPoll, out var listChanged);
+                if (switchTo is not null && switchTo.Id != display.Id)
+                {
+                    var next = TryCreateCapturer(switchTo);
+                    if (next is not null)
+                    {
+                        capturer.CursorChanged -= cursor.OnShape;
+                        capturer.CursorMoved -= cursor.OnMoved;
+                        await capturer.DisposeAsync().ConfigureAwait(false);
+                        capturer = next;
+                        capturer.CursorChanged += cursor.OnShape;
+                        capturer.CursorMoved += cursor.OnMoved;
+                        display = switchTo;
+                        LogDisplaySwitched(logger, display.Id);
+
+                        // A new stream (fresh encoder, fresh StreamInfo) tells the controller which display it is looking at.
+                        latest?.Dispose();
+                        latest = null;
+                        encoder?.Dispose();
+                        encoder = null;
+                        pending = false;
+                        listChanged = false;
+                    }
+                }
+
+                if (listChanged && encoder is not null)
+                {
+                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
+                }
+
                 // Pacing comes from the capture itself (it blocks until the screen changes, at most at the refresh
                 // rate). Sleeping between frames would not work: timer resolution (~15.6 ms on Windows) turns a few
                 // milliseconds of wait into a whole extra frame interval and halves the frame rate.
@@ -129,6 +172,7 @@ public sealed partial class VideoChannelModule(
                     }
                 }
 
+                await cursor.FlushAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
                 if (latest is null)
                 {
                     continue;
@@ -151,7 +195,7 @@ public sealed partial class VideoChannelModule(
                 {
                     encoder?.Dispose();
                     (encoder, bitrate) = CreateEncoder(latest.Width, latest.Height, frameRate, preference, allowHardware);
-                    await SendStreamInfoAsync(channel, display, available, encoder, cancellationToken).ConfigureAwait(false);
+                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
                     stream.KeyFrameRequested = true;
                 }
 
@@ -184,8 +228,61 @@ public sealed partial class VideoChannelModule(
         }
         finally
         {
+            capturer.CursorChanged -= cursor.OnShape;
+            capturer.CursorMoved -= cursor.OnMoved;
+            await capturer.DisposeAsync().ConfigureAwait(false);
             encoder?.Dispose();
             latest?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Decides whether to change display: the controller asked for one, or the current one vanished. Also refreshes
+    /// the display list now and then, reporting whether it changed.
+    /// </summary>
+    private DisplayInfo? NextDisplay(
+        StreamState stream,
+        ref IReadOnlyList<DisplayInfo> available,
+        DisplayInfo current,
+        TimeSpan now,
+        ref TimeSpan nextPoll,
+        out bool listChanged)
+    {
+        listChanged = false;
+        var requested = stream.TakeDisplayRequest();
+        if (requested is null && now < nextPoll)
+        {
+            return null;
+        }
+
+        nextPoll = now + DisplayPoll;
+        var fresh = displays.GetDisplays();
+        if (fresh.Count > 0 && !fresh.SequenceEqual(available))
+        {
+            available = fresh;
+            listChanged = true;
+        }
+
+        if (requested is not null && available.FirstOrDefault(d => d.Id == requested) is { } chosen)
+        {
+            return chosen;
+        }
+
+        return available.Any(d => d.Id == current.Id) ? null : Primary(available);
+    }
+
+    private IScreenCapturer? TryCreateCapturer(DisplayInfo display)
+    {
+        try
+        {
+            return capturers.Create(display);
+        }
+#pragma warning disable CA1031 // The display may have been unplugged in the meantime; keep streaming the current one.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogSwitchFailed(logger, display.Id, ex);
+            return null;
         }
     }
 
@@ -201,7 +298,13 @@ public sealed partial class VideoChannelModule(
         return (encoder, new BitrateController(initialKbps, Math.Max(300, initialKbps / 8), initialKbps * 2, frameRate));
     }
 
-    private static ValueTask SendStreamInfoAsync(IChannel channel, DisplayInfo display, IReadOnlyList<DisplayInfo> available, IVideoEncoder encoder, CancellationToken cancellationToken)
+    private static async ValueTask SendStreamInfoAsync(
+        IChannel channel,
+        DisplayInfo display,
+        IReadOnlyList<DisplayInfo> available,
+        IVideoEncoder encoder,
+        CursorRelay cursor,
+        CancellationToken cancellationToken)
     {
         var info = new VideoStreamInfo
         {
@@ -220,7 +323,10 @@ public sealed partial class VideoChannelModule(
             Height = (uint)d.Bounds.Height,
             Primary = d.IsPrimary,
         }));
-        return ProtobufFrames.WriteAsync(channel.Stream, new VideoControl { StreamInfo = info }, cancellationToken);
+        await ProtobufFrames.WriteAsync(channel.Stream, new VideoControl { StreamInfo = info }, cancellationToken).ConfigureAwait(false);
+
+        // A new stream starts with the controller knowing no pointer yet.
+        await cursor.ResendShapeAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task ReadControlAsync(IChannel channel, StreamState stream, CancellationTokenSource stop)
@@ -229,9 +335,16 @@ public sealed partial class VideoChannelModule(
         {
             while (await ProtobufFrames.ReadAsync(channel.Stream, VideoControl.Parser, 64 * 1024, stop.Token).ConfigureAwait(false) is { } message)
             {
-                if (message.BodyCase == VideoControl.BodyOneofCase.KeyFrameRequest)
+                switch (message.BodyCase)
                 {
-                    stream.KeyFrameRequested = true;
+                    case VideoControl.BodyOneofCase.KeyFrameRequest:
+                        stream.KeyFrameRequested = true;
+                        break;
+                    case VideoControl.BodyOneofCase.SelectDisplay:
+                        stream.RequestDisplay(message.SelectDisplay.DisplayId);
+                        break;
+                    default:
+                        break;
                 }
             }
         }
@@ -243,9 +356,64 @@ public sealed partial class VideoChannelModule(
         await stop.CancelAsync().ConfigureAwait(false);
     }
 
+    /// <summary>Collects cursor events raised during a capture and writes the newest of each kind afterwards.</summary>
+    private sealed class CursorRelay
+    {
+        private CursorShape? _pendingShape;
+        private CursorShape? _lastShape;
+        private CursorPosition? _pendingPosition;
+
+        public void OnShape(object? sender, CursorShape shape)
+        {
+            _pendingShape = shape;
+            _lastShape = shape;
+        }
+
+        public void OnMoved(object? sender, CursorPosition position) => _pendingPosition = position;
+
+        public async ValueTask FlushAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            if (_pendingShape is { } shape)
+            {
+                _pendingShape = null;
+                await WriteShapeAsync(stream, shape, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_pendingPosition is { } position)
+            {
+                _pendingPosition = null;
+                var update = new CursorPositionUpdate { X = position.X, Y = position.Y, Visible = position.Visible };
+                await ProtobufFrames.WriteAsync(stream, new VideoControl { CursorPosition = update }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public async ValueTask ResendShapeAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            _pendingShape = null;
+            if (_lastShape is { } shape)
+            {
+                await WriteShapeAsync(stream, shape, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private static ValueTask WriteShapeAsync(Stream stream, CursorShape shape, CancellationToken cancellationToken)
+        {
+            var update = new CursorShapeUpdate
+            {
+                Width = (uint)shape.Width,
+                Height = (uint)shape.Height,
+                HotspotX = shape.HotspotX,
+                HotspotY = shape.HotspotY,
+                Bgra = UnsafeByteOperations.UnsafeWrap(shape.Bgra),
+            };
+            return ProtobufFrames.WriteAsync(stream, new VideoControl { CursorShape = update }, cancellationToken);
+        }
+    }
+
     private sealed class StreamState
     {
         private volatile bool _keyFrameRequested;
+        private volatile string? _requestedDisplay;
 
         public bool KeyFrameRequested
         {
@@ -259,10 +427,20 @@ public sealed partial class VideoChannelModule(
             _keyFrameRequested = false;
             return requested;
         }
+
+        public void RequestDisplay(string id) => _requestedDisplay = id;
+
+        public string? TakeDisplayRequest() => Interlocked.Exchange(ref _requestedDisplay, null);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No display available to stream.")]
     private static partial void LogNoDisplay(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Now streaming display {Display}.")]
+    private static partial void LogDisplaySwitched(ILogger logger, string display);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not switch to display {Display}; staying on the current one.")]
+    private static partial void LogSwitchFailed(ILogger logger, string display, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Video encoder {Encoder} (hardware: {Hardware}) {Width}x{Height}@{FrameRate}, {Kbps} kbps.")]
     private static partial void LogEncoderCreated(ILogger logger, string encoder, bool hardware, int width, int height, int frameRate, int kbps);

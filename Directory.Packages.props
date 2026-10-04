@@ -18,6 +18,9 @@
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
     <PackageVersion Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <!-- Audio: WASAPI capture/playback and the Opus codec -->
+    <PackageVersion Include="NAudio.Wasapi" Version="3.1.0" />
+    <PackageVersion Include="Concentus" Version="2.2.2" />
     <!-- Protocol -->
     <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
     <PackageVersion Include="Grpc.Tools" Version="2.84.0" />

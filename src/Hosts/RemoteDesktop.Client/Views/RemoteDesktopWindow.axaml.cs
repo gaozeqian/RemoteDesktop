@@ -2,9 +2,11 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Client.Input;
 using RemoteDesktop.Client.ViewModels;
@@ -24,6 +26,9 @@ public sealed partial class RemoteDesktopWindow : Window
     private RemoteDesktopViewModel? _viewModel;
     private WriteableBitmap? _bitmap;
     private int _updateQueued;
+    private WriteableBitmap? _cursorBitmap;
+    private CursorPosition? _cursorPosition;
+    private int _cursorQueued;
 
     public RemoteDesktopWindow()
     {
@@ -50,6 +55,17 @@ public sealed partial class RemoteDesktopWindow : Window
         _viewModel = viewModel;
         viewModel.Viewer.StreamInfoChanged += (_, _) => Dispatcher.UIThread.Post(RecreateBitmap);
         viewModel.Viewer.FrameReady += (_, _) => QueueUpdate();
+        viewModel.Viewer.CursorShapeChanged += (_, shape) => Dispatcher.UIThread.Post(() => SetCursorShape(shape));
+        viewModel.Viewer.CursorMoved += (_, position) => QueueCursor(position);
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RemoteDesktopViewModel.CanControl))
+            {
+                UpdateLocalCursor();
+            }
+        };
+        Overlay.SizeChanged += (_, _) => PositionCursor();
+        UpdateLocalCursor();
         viewModel.Closed += (_, _) => Close();
         RecreateBitmap();
     }
@@ -59,6 +75,8 @@ public sealed partial class RemoteDesktopWindow : Window
         base.OnClosed(e);
         _bitmap?.Dispose();
         _bitmap = null;
+        _cursorBitmap?.Dispose();
+        _cursorBitmap = null;
         if (_viewModel is { } viewModel)
         {
             _ = viewModel.CloseAsync();
@@ -79,6 +97,69 @@ public sealed partial class RemoteDesktopWindow : Window
             Screen.Source = _bitmap;
             previous?.Dispose();
         }
+
+        PositionCursor();
+    }
+
+    // In control mode the host's own pointer is what the user steers, so the local one is hidden; while only watching, it stays.
+    private void UpdateLocalCursor() =>
+        Screen.Cursor = _viewModel is { CanControl: true } ? new Cursor(StandardCursorType.None) : Cursor.Default;
+
+    private unsafe void SetCursorShape(CursorShape shape)
+    {
+        var bitmap = new WriteableBitmap(new PixelSize(shape.Width, shape.Height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
+        using (var buffer = bitmap.Lock())
+        {
+            var pixels = shape.Bgra.Span;
+            for (var y = 0; y < shape.Height; y++)
+            {
+                pixels.Slice(y * shape.Width * 4, shape.Width * 4).CopyTo(new Span<byte>((byte*)buffer.Address + (y * buffer.RowBytes), shape.Width * 4));
+            }
+        }
+
+        var previous = _cursorBitmap;
+        _cursorBitmap = bitmap;
+        RemoteCursor.Source = bitmap;
+        previous?.Dispose();
+        PositionCursor();
+    }
+
+    // Moves arrive as fast as the mouse; only the newest matters, so at most one update is queued.
+    private void QueueCursor(CursorPosition position)
+    {
+        _cursorPosition = position;
+        if (Interlocked.Exchange(ref _cursorQueued, 1) == 0)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                Volatile.Write(ref _cursorQueued, 0);
+                PositionCursor();
+            }, DispatcherPriority.Render);
+        }
+    }
+
+    private void PositionCursor()
+    {
+        if (_viewModel?.Viewer.StreamInfo is not { } info || _cursorBitmap is null || _cursorPosition is not { Visible: true } position)
+        {
+            RemoteCursor.IsVisible = false;
+            return;
+        }
+
+        var (scale, offsetX, offsetY) = Layout(info.Width, info.Height);
+        RemoteCursor.Width = _cursorBitmap.PixelSize.Width * scale;
+        RemoteCursor.Height = _cursorBitmap.PixelSize.Height * scale;
+        Canvas.SetLeft(RemoteCursor, offsetX + (position.X * scale));
+        Canvas.SetTop(RemoteCursor, offsetY + (position.Y * scale));
+        RemoteCursor.IsVisible = true;
+    }
+
+    /// <summary>How the remote picture is placed in the control: a uniform scale, centered (letterboxed).</summary>
+    private (double Scale, double OffsetX, double OffsetY) Layout(int width, int height)
+    {
+        var bounds = Screen.Bounds.Size;
+        var scale = Math.Min(bounds.Width / width, bounds.Height / height);
+        return (scale, (bounds.Width - (width * scale)) / 2, (bounds.Height - (height * scale)) / 2);
     }
 
     private void QueueUpdate()
@@ -189,15 +270,12 @@ public sealed partial class RemoteDesktopWindow : Window
             return false;
         }
 
-        var bounds = Screen.Bounds.Size;
-        var scale = Math.Min(bounds.Width / info.Width, bounds.Height / info.Height);
+        var (scale, offsetX, offsetY) = Layout(info.Width, info.Height);
         if (scale <= 0)
         {
             return false;
         }
 
-        var offsetX = (bounds.Width - (info.Width * scale)) / 2;
-        var offsetY = (bounds.Height - (info.Height * scale)) / 2;
         x = Math.Clamp((point.X - offsetX) / (info.Width * scale), 0, 1);
         y = Math.Clamp((point.Y - offsetY) / (info.Height * scale), 0, 1);
         displayId = info.DisplayId;

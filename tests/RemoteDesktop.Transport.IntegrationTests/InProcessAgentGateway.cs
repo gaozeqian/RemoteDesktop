@@ -30,7 +30,13 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
 
     public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, CancellationToken cancellationToken)
     {
-        var type = kind == AgentChannelKind.Video ? ChannelType.Video : ChannelType.Input;
+        var type = kind switch
+        {
+            AgentChannelKind.Video => ChannelType.Video,
+            AgentChannelKind.Input => ChannelType.Input,
+            AgentChannelKind.Clipboard => ChannelType.Clipboard,
+            _ => ChannelType.Audio,
+        };
         var module = _modules.First(m => m.ChannelType == type);
 
         var name = $"rd-agent-{Guid.NewGuid():N}";

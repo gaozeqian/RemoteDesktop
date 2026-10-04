@@ -5,10 +5,11 @@ using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Application.Hosting;
 
+/// <param name="Id">Identifies the session for <see cref="IHostControl.DowngradeSessionAsync"/> and <see cref="IHostControl.DisconnectSessionAsync"/>.</param>
 /// <param name="Controller">Display form of the controller's device id.</param>
 /// <param name="Mode"><c>control</c> or <c>view</c>.</param>
 /// <param name="Path"><c>direct</c> or <c>relayed</c>.</param>
-public sealed record HostSessionInfo(string Controller, string Mode, string Path);
+public sealed record HostSessionInfo(string Id, string Controller, string Mode, string Path);
 
 /// <param name="DeviceId">Null until the host registered with the rendezvous server.</param>
 /// <param name="ServerState">Offline, Connecting or Online.</param>
@@ -31,6 +32,12 @@ public interface IHostControl
     Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken);
 
     Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken);
+
+    /// <summary>Switches a running session to watch-only: input, clipboard, files and the like stop at once.</summary>
+    Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken);
+
+    /// <summary>Ends a running session.</summary>
+    Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken);
 }
 
 /// <summary>Answers from the host components living in this process.</summary>
@@ -44,6 +51,7 @@ public sealed class LocalHostControl(
     public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken)
     {
         var active = sessions.ActiveSessions.Select(s => new HostSessionInfo(
+            s.Id.ToString(),
             s.Connection.RemoteDevice.ToDisplayString(),
             s.Grant.Mode == SessionMode.View ? "view" : "control",
             s.Connection.Path == Transport.ConnectionPath.Direct ? "direct" : "relayed")).ToList();
@@ -64,6 +72,24 @@ public sealed class LocalHostControl(
     public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
     {
         credentials.RotateTemporaryPassword();
+        return Task.CompletedTask;
+    }
+
+    public async Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        if (SessionId.TryParse(sessionId, out var id))
+        {
+            await sessions.DowngradeToViewAsync(id, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        if (SessionId.TryParse(sessionId, out var id))
+        {
+            sessions.Disconnect(id);
+        }
+
         return Task.CompletedTask;
     }
 }

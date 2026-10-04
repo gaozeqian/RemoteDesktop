@@ -26,13 +26,14 @@ public sealed partial class AgentForwardingModule(
     AgentChannelKind agentKind,
     bool replayFirstFrame,
     IAgentGateway gateway,
-    ILogger<AgentForwardingModule> logger) : IFeatureModule
+    ILogger<AgentForwardingModule> logger,
+    int maxInboundFrame = AgentForwardingModule.DefaultMaxInboundFrame) : IFeatureModule
 {
     /// <summary>Frames waiting for an agent; the oldest are dropped if the agent is away for long.</summary>
     private const int QueueCapacity = 256;
 
-    /// <summary>Controller → host messages are small requests and input events.</summary>
-    private const int MaxInboundFrame = 64 * 1024;
+    /// <summary>Controller → host messages are mostly small requests and input events; clipboard sharing needs more.</summary>
+    public const int DefaultMaxInboundFrame = 64 * 1024;
 
     /// <summary>
     /// Input older than this when an agent finally takes it is dropped: replaying a click or keystroke seconds later,
@@ -195,12 +196,12 @@ public sealed partial class AgentForwardingModule(
         return false;
     }
 
-    private static async Task ReadInboundAsync(Stream controller, ChannelWriter<QueuedFrame> queue, ForwardState state, CancellationToken cancellationToken)
+    private async Task ReadInboundAsync(Stream controller, ChannelWriter<QueuedFrame> queue, ForwardState state, CancellationToken cancellationToken)
     {
         var sequence = 0L;
         try
         {
-            while (await FrameCodec.ReadAsync(controller, MaxInboundFrame, cancellationToken).ConfigureAwait(false) is { } frame)
+            while (await FrameCodec.ReadAsync(controller, maxInboundFrame, cancellationToken).ConfigureAwait(false) is { } frame)
             {
                 var queued = new QueuedFrame(frame, ++sequence, Stopwatch.GetTimestamp());
                 state.First ??= queued;

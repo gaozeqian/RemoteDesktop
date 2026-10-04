@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Media;
 using RemoteDesktop.Protocol;
@@ -53,6 +54,12 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     /// <summary>Raised when the stream starts or changes resolution.</summary>
     public event EventHandler? StreamInfoChanged;
+
+    /// <summary>Raised from the receive loop when the host's pointer image changes.</summary>
+    public event EventHandler<CursorShape>? CursorShapeChanged;
+
+    /// <summary>Raised from the receive loop when the host's pointer moves; positions are in pixels of the stream.</summary>
+    public event EventHandler<CursorPosition>? CursorMoved;
 
     /// <summary>Raised from the decode loop after a new picture is available via <see cref="CopyLatestFrame"/>.</summary>
     public event EventHandler? FrameReady;
@@ -112,6 +119,10 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
     }
 
+    /// <summary>Asks the host to stream another of its displays; it answers with a new stream info.</summary>
+    public Task SelectDisplayAsync(string displayId, CancellationToken cancellationToken) =>
+        WriteAsync(new VideoControl { SelectDisplay = new SelectDisplay { DisplayId = displayId } }, cancellationToken).AsTask();
+
     public Task RequestKeyFrameAsync(CancellationToken cancellationToken) =>
         WriteAsync(new VideoControl { KeyFrameRequest = new KeyFrameRequest() }, cancellationToken).AsTask();
 
@@ -141,9 +152,21 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 if (frame.MessageType == ProtobufFrames.EnvelopeMessageType)
                 {
                     var control = VideoControl.Parser.ParseFrom(frame.Payload.Span);
-                    if (control.BodyCase == VideoControl.BodyOneofCase.StreamInfo)
+                    switch (control.BodyCase)
                     {
-                        OnStreamInfo(control.StreamInfo);
+                        case VideoControl.BodyOneofCase.StreamInfo:
+                            OnStreamInfo(control.StreamInfo);
+                            break;
+                        case VideoControl.BodyOneofCase.CursorShape when IsValidCursor(control.CursorShape):
+                            var shape = control.CursorShape;
+                            CursorShapeChanged?.Invoke(this, new CursorShape((int)shape.Width, (int)shape.Height, shape.HotspotX, shape.HotspotY, shape.Bgra.ToByteArray()));
+                            break;
+                        case VideoControl.BodyOneofCase.CursorPosition:
+                            var position = control.CursorPosition;
+                            CursorMoved?.Invoke(this, new CursorPosition(position.X, position.Y, position.Visible));
+                            break;
+                        default:
+                            break;
                     }
 
                     continue;
@@ -245,6 +268,10 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         {
         }
     }
+
+    // The host is trusted to be well-formed, but a size that does not match the pixel data would read out of bounds.
+    private static bool IsValidCursor(CursorShapeUpdate shape) =>
+        shape.Width is > 0 and <= 512 && shape.Height is > 0 and <= 512 && shape.Bgra.Length == shape.Width * shape.Height * 4;
 
     private void OnStreamInfo(VideoStreamInfo info)
     {

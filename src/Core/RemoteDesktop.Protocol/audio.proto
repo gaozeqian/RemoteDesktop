@@ -1,0 +1,27 @@
+// Messages of the audio channel. Encoded audio travels as raw frames (see AudioDataFrame), not protobuf.
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.audio;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Audio";
+
+message AudioControl {
+  oneof body {
+    AudioRequest request = 1;
+    AudioStreamInfo stream_info = 2;
+  }
+}
+
+// Controller -> host, first message on the channel.
+message AudioRequest {
+}
+
+// Host -> controller, before the first packet and whenever the capture device changes.
+message AudioStreamInfo {
+  uint32 sample_rate = 1;
+  uint32 channels = 2;
+  // Length of audio in each packet.
+  uint32 frame_milliseconds = 3;
+  string codec = 4;
+}

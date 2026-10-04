@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -6,19 +7,26 @@ using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
+using RemoteDesktop.Protocol.Desktop;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client.ViewModels;
 
-/// <summary>One remote desktop window: the video stream, the input path and the session they belong to.</summary>
+/// <summary>A display of the host that can be streamed.</summary>
+public sealed record DisplayChoice(string Id, string Label);
+
+/// <summary>One remote desktop window: the video stream, the input path, audio, clipboard and the session they belong to.</summary>
 public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly RemoteSession _session;
-    private readonly InputSender? _input;
+    private readonly AudioPlayback? _audio;
     private readonly DispatcherTimer _statusTimer;
+    private InputSender? _input;
+    private ClipboardShare? _clipboard;
+    private bool _updatingDisplays;
     private int _closed;
 
-    public RemoteDesktopViewModel(RemoteSession session, DesktopViewer viewer, InputSender? input)
+    public RemoteDesktopViewModel(RemoteSession session, DesktopViewer viewer, InputSender? input, AudioPlayback? audio, ClipboardShare? clipboard)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(viewer);
@@ -26,39 +34,78 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _session = session;
         Viewer = viewer;
         _input = input;
+        _audio = audio;
+        _clipboard = clipboard;
         CanControl = input is not null;
-
-        var mode = session.Context.Grant.Mode == SessionMode.View ? "观看" : "控制";
-        Title = $"{session.Context.Connection.RemoteDevice.ToDisplayString()}（{mode}）";
+        HasAudio = audio is not null;
+        UpdateTitle();
 
         _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => UpdateStatus());
         _statusTimer.Start();
 
+        viewer.StreamInfoChanged += (_, _) => Dispatcher.UIThread.Post(UpdateDisplays);
         viewer.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
         session.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
+        session.GrantChanged += (_, _) => Dispatcher.UIThread.Post(() => _ = OnGrantChangedAsync());
         UpdateStatus();
+        UpdateDisplays();
     }
 
     public DesktopViewer Viewer { get; }
 
-    /// <summary>False in watch mode: input is neither captured nor sent.</summary>
-    public bool CanControl { get; }
+    /// <summary>The host's displays, when there is more than one to choose from.</summary>
+    public ObservableCollection<DisplayChoice> Displays { get; } = [];
 
-    public string Title { get; }
+    [ObservableProperty]
+    public partial string Title { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial string StatusText { get; set; } = "正在等待画面…";
+
+    /// <summary>False in watch mode, and from the moment the host switches the session to watch-only: input is neither captured nor sent.</summary>
+    [ObservableProperty]
+    public partial bool CanControl { get; set; }
+
+    [ObservableProperty]
+    public partial bool HasAudio { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsMuted { get; set; }
+
+    [ObservableProperty]
+    public partial DisplayChoice? SelectedDisplay { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowDisplayPicker { get; set; }
 
     /// <summary>Raised once when the window should close.</summary>
     public event EventHandler? Closed;
 
     public void SendInput(InputEvent inputEvent) => _input?.Send(inputEvent);
 
+    partial void OnSelectedDisplayChanged(DisplayChoice? value)
+    {
+        if (!_updatingDisplays && value is not null && value.Id != Viewer.StreamInfo?.DisplayId)
+        {
+            _ = Viewer.SelectDisplayAsync(value.Id, CancellationToken.None);
+        }
+    }
+
     [RelayCommand]
     private Task DisconnectAsync() => CloseAsync();
 
     [RelayCommand]
     private void SendSecureAttention() => SendInput(new SecureAttentionEvent());
+
+    [RelayCommand]
+    private void ToggleMute()
+    {
+        IsMuted = !IsMuted;
+        if (_audio is not null)
+        {
+            _audio.Muted = IsMuted;
+        }
+    }
 
     public async Task CloseAsync()
     {
@@ -80,9 +127,79 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             await _input.DisposeAsync();
         }
 
+        if (_clipboard is not null)
+        {
+            await _clipboard.DisposeAsync();
+        }
+
+        if (_audio is not null)
+        {
+            await _audio.DisposeAsync();
+        }
+
         await Viewer.DisposeAsync();
         await _session.DisposeAsync();
     }
+
+    // The host took something away mid-session: stop offering it. The host has already closed those channels.
+    private async Task OnGrantChangedAsync()
+    {
+        var grant = _session.Context.Grant;
+        if (!grant.Allows(Permissions.ControlInput))
+        {
+            CanControl = false;
+            var input = Interlocked.Exchange(ref _input, null);
+            if (input is not null)
+            {
+                await input.DisposeAsync();
+            }
+        }
+
+        if (!grant.Allows(Permissions.Clipboard))
+        {
+            var clipboard = Interlocked.Exchange(ref _clipboard, null);
+            if (clipboard is not null)
+            {
+                await clipboard.DisposeAsync();
+            }
+        }
+
+        UpdateTitle();
+    }
+
+    private void UpdateTitle()
+    {
+        var mode = _session.Context.Grant.Mode == SessionMode.View ? "观看" : "控制";
+        Title = $"{_session.Context.Connection.RemoteDevice.ToDisplayString()}（{mode}）";
+    }
+
+    private void UpdateDisplays()
+    {
+        _updatingDisplays = true;
+        try
+        {
+            var choices = Viewer.Displays.Select(ToChoice).ToList();
+            if (!choices.SequenceEqual(Displays))
+            {
+                Displays.Clear();
+                foreach (var choice in choices)
+                {
+                    Displays.Add(choice);
+                }
+            }
+
+            ShowDisplayPicker = Displays.Count > 1;
+            SelectedDisplay = Displays.FirstOrDefault(d => d.Id == Viewer.StreamInfo?.DisplayId);
+        }
+        finally
+        {
+            _updatingDisplays = false;
+        }
+    }
+
+    private static DisplayChoice ToChoice(DisplayDescription display) => new(
+        display.Id,
+        string.Create(CultureInfo.InvariantCulture, $"{display.Name} · {display.Width}×{display.Height}{(display.Primary ? " · 主" : string.Empty)}"));
 
     private void UpdateStatus()
     {

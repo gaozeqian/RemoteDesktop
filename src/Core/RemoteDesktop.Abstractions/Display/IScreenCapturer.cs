@@ -18,8 +18,16 @@ public interface IScreenCapturer : IAsyncDisposable
     /// </summary>
     ValueTask<VideoFrame?> CaptureAsync(TimeSpan timeout, CancellationToken cancellationToken);
 
-    /// <summary>Raised when the cursor shape changes, so it can be rendered locally on the controller.</summary>
+    /// <summary>Raised when the cursor shape changes, so the controller can draw the real pointer itself.</summary>
     event EventHandler<CursorShape>? CursorChanged;
+
+    /// <summary>Raised when the cursor moves or is shown / hidden. Both cursor events fire from inside <see cref="CaptureAsync"/>.</summary>
+    event EventHandler<CursorPosition>? CursorMoved;
 }
 
+/// <param name="Bgra">Straight-alpha pixels, <paramref name="Width"/> × <paramref name="Height"/> × 4 bytes.</param>
 public sealed record CursorShape(int Width, int Height, int HotspotX, int HotspotY, ReadOnlyMemory<byte> Bgra);
+
+/// <param name="X">Left edge of the cursor image in pixels of the captured display.</param>
+/// <param name="Y">Top edge of the cursor image in pixels of the captured display.</param>
+public readonly record struct CursorPosition(int X, int Y, bool Visible);

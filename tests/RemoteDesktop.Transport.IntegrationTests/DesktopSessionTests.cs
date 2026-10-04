@@ -55,6 +55,66 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     }
 
     [Fact]
+    public async Task The_hosts_pointer_shape_and_movement_reach_the_controller()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
+        var codecs = CreateCodecs();
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        await using var host = await TestDevice.StartAsync(server, forceRelay: false, CreateVideoModule(codecs));
+        await using var controller = await TestDevice.StartAsync(server);
+        await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
+
+        CursorShape? shape = null;
+        var positions = new ConcurrentQueue<CursorPosition>();
+        await using var viewer = await DesktopViewer.StartAsync(session.Context.Connection, codecs, 30, TimeProvider.System, NullLogger.Instance, Ct);
+        viewer.CursorShapeChanged += (_, s) => shape = s;
+        viewer.CursorMoved += (_, p) => positions.Enqueue(p);
+
+        await WaitForAsync(() => shape is not null && positions.Count >= 5, "the pointer");
+
+        Assert.Equal((4, 4, 1, 1, 64), (shape!.Width, shape.Height, shape.HotspotX, shape.HotspotY, shape.Bgra.Length));
+        Assert.Equal(255, shape.Bgra.Span[2]); // red
+        var moves = positions.Take(5).ToList();
+        Assert.All(moves, p => Assert.True(p.Visible));
+        Assert.True(moves[4].X > moves[0].X, "The pointer keeps moving.");
+    }
+
+    [Fact]
+    public async Task The_controller_can_switch_displays_and_sees_the_list_change()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
+        var codecs = CreateCodecs();
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        var displays = new FakeDisplays(FakeDisplays.Display, FakeDisplays.Second);
+        await using var host = await TestDevice.StartAsync(server, forceRelay: false, CreateVideoModule(codecs, displays));
+        await using var controller = await TestDevice.StartAsync(server);
+        await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
+
+        var pictures = 0;
+        await using var viewer = await DesktopViewer.StartAsync(session.Context.Connection, codecs, 30, TimeProvider.System, NullLogger.Instance, Ct);
+        viewer.FrameReady += (_, _) => Interlocked.Increment(ref pictures);
+        await WaitForAsync(() => Volatile.Read(ref pictures) >= 5, "the first display");
+        Assert.Equal(FakeDisplays.Display.Id, viewer.StreamInfo!.DisplayId);
+        Assert.Equal(2, viewer.Displays.Count);
+
+        await viewer.SelectDisplayAsync(FakeDisplays.Second.Id, Ct);
+
+        await WaitForAsync(() => viewer.StreamInfo!.DisplayId == FakeDisplays.Second.Id, "the second display");
+        Assert.Equal((480, 270), (viewer.StreamInfo!.Width, viewer.StreamInfo.Height));
+        var before = Volatile.Read(ref pictures);
+        await WaitForAsync(() => Volatile.Read(ref pictures) >= before + 5, "pictures of the second display");
+        var bgra = new byte[480 * 270 * 4];
+        Assert.True(viewer.CopyLatestFrame(bgra, 480 * 4, 480, 270) > 0);
+        var left = ((135 * 480) + 120) * 4;
+        Assert.InRange(bgra[left + 1], 180, 255); // green on the left of the second display
+
+        // The second monitor is unplugged: the host falls back to the primary one and the list shrinks.
+        displays.Set(FakeDisplays.Display);
+        await WaitForAsync(() => viewer.StreamInfo!.DisplayId == FakeDisplays.Display.Id && viewer.Displays.Count == 1, "the fallback to the primary display");
+        Assert.Equal((TestScreen.Width, TestScreen.Height), (viewer.StreamInfo!.Width, viewer.StreamInfo.Height));
+    }
+
+    [Fact]
     public async Task Static_screen_still_answers_key_frame_requests()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
@@ -120,7 +180,16 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     private static VideoCodecSelector CreateCodecs() =>
         new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
 
-    private static VideoChannelModule CreateVideoModule(VideoCodecSelector codecs) =>
-        new(new FakeDisplays(), new FakeCapturerFactory(), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
+    private static VideoChannelModule CreateVideoModule(VideoCodecSelector codecs, FakeDisplays? displays = null) =>
+        new(displays ?? new FakeDisplays(), new FakeCapturerFactory(), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
 
+    private static async Task WaitForAsync(Func<bool> condition, string what)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
+            await Task.Delay(50, Ct);
+        }
+    }
 }

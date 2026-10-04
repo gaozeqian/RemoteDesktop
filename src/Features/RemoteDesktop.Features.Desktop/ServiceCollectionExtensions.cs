@@ -9,6 +9,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IFeatureModule, VideoChannelModule>();
         services.AddSingleton<IFeatureModule, InputChannelModule>();
+        services.AddSingleton<IFeatureModule, ClipboardChannelModule>();
+        services.AddSingleton<IFeatureModule, AudioChannelModule>();
         return services;
     }
 }

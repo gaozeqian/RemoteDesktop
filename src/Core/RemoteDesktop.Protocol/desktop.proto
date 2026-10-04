@@ -14,6 +14,9 @@ message VideoControl {
     VideoRequest request = 1;
     VideoStreamInfo stream_info = 2;
     KeyFrameRequest key_frame_request = 3;
+    CursorShapeUpdate cursor_shape = 4;
+    CursorPositionUpdate cursor_position = 5;
+    SelectDisplay select_display = 6;
   }
 }
 
@@ -56,6 +59,28 @@ message VideoStreamInfo {
 
 // Controller -> host after packet loss or a decoder error.
 message KeyFrameRequest {
+}
+
+// Host -> controller when the pointer image changes. Pixels are straight-alpha BGRA, width * height * 4 bytes.
+message CursorShapeUpdate {
+  uint32 width = 1;
+  uint32 height = 2;
+  sint32 hotspot_x = 3;
+  sint32 hotspot_y = 4;
+  bytes bgra = 5;
+}
+
+// Host -> controller when the pointer moves or is shown / hidden. The position is the top-left of the pointer image
+// in pixels of the streamed display.
+message CursorPositionUpdate {
+  sint32 x = 1;
+  sint32 y = 2;
+  bool visible = 3;
+}
+
+// Controller -> host: stream another display. The host answers with a new VideoStreamInfo.
+message SelectDisplay {
+  string display_id = 1;
 }
 
 // ---- Input channel (opened by the controller, controller -> host only) ----

@@ -22,19 +22,25 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     }
 
     public async Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
-        await RequestAsync<HostStatus>(HostControlProtocol.StatusCommand, cancellationToken).ConfigureAwait(false)
+        await RequestAsync<HostStatus>(HostControlProtocol.StatusCommand, argument: null, cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidDataException("The host service sent no status.");
 
     public async Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.RotateCommand, cancellationToken).ConfigureAwait(false);
+        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.RotateCommand, argument: null, cancellationToken).ConfigureAwait(false);
 
-    private async Task<T?> RequestAsync<T>(string command, CancellationToken cancellationToken)
+    public async Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.DowngradeCommand, sessionId, cancellationToken).ConfigureAwait(false);
+
+    public async Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.DisconnectCommand, sessionId, cancellationToken).ConfigureAwait(false);
+
+    private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {
         var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         await using (pipe.ConfigureAwait(false))
         {
             await pipe.ConnectAsync(ConnectTimeout, cancellationToken).ConfigureAwait(false);
-            await HostControlProtocol.WriteLineAsync(pipe, new HostControlRequest(command), cancellationToken).ConfigureAwait(false);
+            await HostControlProtocol.WriteLineAsync(pipe, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);
             return await HostControlProtocol.ReadLineAsync<T>(pipe, cancellationToken).ConfigureAwait(false);
         }
     }

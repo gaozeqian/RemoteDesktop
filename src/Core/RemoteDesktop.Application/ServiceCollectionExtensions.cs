@@ -30,7 +30,7 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Serves the desktop channels (screen and input) through the session agent instead of in this process. Used by
+    /// Serves the desktop channels (screen, input, clipboard, audio) through the session agent instead of in this process. Used by
     /// the background service, which cannot touch the interactive desktop itself. Requires an <see cref="IAgentGateway"/>.
     /// </summary>
     public static IServiceCollection AddAgentForwardedDesktop(this IServiceCollection services)
@@ -40,6 +40,13 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
         services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
             ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, replayFirstFrame: false,
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
+        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+            ChannelType.Clipboard, Permissions.Clipboard, AgentChannelKind.Clipboard, replayFirstFrame: false,
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+            maxInboundFrame: 16 * 1024 * 1024));
+        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+            ChannelType.Audio, Permissions.Audio, AgentChannelKind.Audio, replayFirstFrame: true,
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
         return services;
     }

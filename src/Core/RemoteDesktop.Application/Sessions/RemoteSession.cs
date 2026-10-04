@@ -1,4 +1,5 @@
 using RemoteDesktop.Application.Features;
+using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol.Control;
 using RemoteDesktop.Transport;
 
@@ -38,6 +39,9 @@ public sealed class RemoteSession : IAsyncDisposable
 
     /// <summary>Raised once when the session ends for any reason (peer closed, network lost, disposed).</summary>
     public event EventHandler? Closed;
+
+    /// <summary>Raised when the host changed what this session may do (e.g. switched it to watch-only); see <see cref="SessionContext.Grant"/>.</summary>
+    public event EventHandler? GrantChanged;
 
     internal static RemoteSession Start(SessionContext context, IChannel control, TimeProvider time)
     {
@@ -80,6 +84,13 @@ public sealed class RemoteSession : IAsyncDisposable
                     var sent = message.Pong.Timestamp;
                     RoundTripTime = _time.GetElapsedTime(sent);
                     RoundTripTimeChanged?.Invoke(this, EventArgs.Empty);
+                }
+                else if (message.BodyCase == ControlMessage.BodyOneofCase.GrantChanged)
+                {
+                    // The host decides; this only mirrors it so the UI stops offering what is no longer allowed.
+                    var granted = ControlMessages.FromWire(message.GrantChanged.GrantedPermissions);
+                    Context.Grant = AccessGrant.Create(ControlMessages.FromMessage(message.GrantChanged.Mode), granted, granted);
+                    GrantChanged?.Invoke(this, EventArgs.Empty);
                 }
             }
         }

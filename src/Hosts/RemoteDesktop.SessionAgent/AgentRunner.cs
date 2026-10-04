@@ -44,7 +44,14 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
 
     private async Task ServeAsync(AgentChannelRequest request, CancellationToken cancellationToken)
     {
-        var type = request.Kind == AgentChannelKind.Video ? ChannelType.Video : ChannelType.Input;
+        var type = request.Kind switch
+        {
+            AgentChannelKind.Video => ChannelType.Video,
+            AgentChannelKind.Input => ChannelType.Input,
+            AgentChannelKind.Clipboard => ChannelType.Clipboard,
+            AgentChannelKind.Audio => ChannelType.Audio,
+            _ => throw new InvalidDataException($"Unknown channel kind {request.Kind}."),
+        };
         try
         {
             if (!_modules.TryGetValue(type, out var module))

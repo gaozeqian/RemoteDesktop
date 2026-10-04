@@ -33,6 +33,14 @@ public static partial class HostControlHandler
                     await control.RotateTemporaryPasswordAsync(timeout.Token).ConfigureAwait(false);
                     await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
                     break;
+                case HostControlProtocol.DowngradeCommand when request.Argument is { } sessionId:
+                    await control.DowngradeSessionAsync(sessionId, timeout.Token).ConfigureAwait(false);
+                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    break;
+                case HostControlProtocol.DisconnectCommand when request.Argument is { } sessionId:
+                    await control.DisconnectSessionAsync(sessionId, timeout.Token).ConfigureAwait(false);
+                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    break;
                 default:
                     LogUnknownCommand(logger, request?.Command);
                     break;

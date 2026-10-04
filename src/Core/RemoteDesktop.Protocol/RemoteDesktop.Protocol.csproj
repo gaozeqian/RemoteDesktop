@@ -9,5 +9,7 @@
   <ItemGroup>
     <Protobuf Include="control.proto" GrpcServices="None" />
     <Protobuf Include="desktop.proto" GrpcServices="None" />
+    <Protobuf Include="clipboard.proto" GrpcServices="None" />
+    <Protobuf Include="audio.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

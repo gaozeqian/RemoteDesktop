@@ -15,6 +15,8 @@ public enum AgentChannelKind : byte
 {
     Video = 1,
     Input = 2,
+    Clipboard = 3,
+    Audio = 4,
 }
 
 public enum AgentStatus

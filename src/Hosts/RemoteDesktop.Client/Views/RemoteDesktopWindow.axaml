@@ -10,13 +10,28 @@
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#DDFFFFFF" FontSize="12" TextTrimming="CharacterEllipsis" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0">
+          <ComboBox ItemsSource="{Binding Displays}" SelectedItem="{Binding SelectedDisplay}" IsVisible="{Binding ShowDisplayPicker}"
+                    MinWidth="200" FontSize="12">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:DisplayChoice">
+                <TextBlock Text="{Binding Label}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <ToggleButton Content="静音" IsChecked="{Binding IsMuted, Mode=OneWay}" Command="{Binding ToggleMuteCommand}" IsVisible="{Binding HasAudio}" />
           <!-- Only the host service can raise Ctrl+Alt+Del, so it is a button instead of a key combination. -->
           <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanControl}" />
           <Button Content="断开" Command="{Binding DisconnectCommand}" />
         </StackPanel>
       </Grid>
     </Border>
-    <!-- Focusable so keyboard input goes to the remote desktop instead of moving focus around the window. -->
-    <Image x:Name="Screen" Stretch="Uniform" Focusable="True" Cursor="Arrow" />
+    <!-- The screen is focusable so keyboard input goes to the remote desktop instead of moving focus around the window.
+         The host's real pointer is drawn on the overlay above it. -->
+    <Grid>
+      <Image x:Name="Screen" Stretch="Uniform" Focusable="True" />
+      <Canvas x:Name="Overlay" IsHitTestVisible="False" ClipToBounds="True">
+        <Image x:Name="RemoteCursor" IsVisible="False" IsHitTestVisible="False" />
+      </Canvas>
+    </Grid>
   </DockPanel>
 </Window>

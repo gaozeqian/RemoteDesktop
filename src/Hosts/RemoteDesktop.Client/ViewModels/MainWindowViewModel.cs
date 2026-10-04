@@ -1,8 +1,11 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using RemoteDesktop.Abstractions.Audio;
+using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
@@ -19,6 +22,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly VideoCodecSelector _codecs;
     private readonly TimeProvider _time;
     private readonly ILogger<DesktopViewer> _viewerLogger;
+    private readonly IAudioPlayerFactory _players;
+    private readonly IClipboard _clipboard;
+    private readonly ILoggerFactory _loggers;
     private readonly DispatcherTimer _statusTimer;
     private RemoteSession? _session;
 
@@ -27,13 +33,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ControllerSessionService controller,
         VideoCodecSelector codecs,
         TimeProvider time,
-        ILogger<DesktopViewer> viewerLogger)
+        ILogger<DesktopViewer> viewerLogger,
+        IAudioPlayerFactory players,
+        IClipboard clipboard,
+        ILoggerFactory loggers)
     {
         _hostControl = hostControl;
         _controller = controller;
         _codecs = codecs;
         _time = time;
         _viewerLogger = viewerLogger;
+        _players = players;
+        _clipboard = clipboard;
+        _loggers = loggers;
 
         // The host side may live in another process (the background service), so its state is polled rather than observed.
         _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => _ = RefreshHostStatusAsync());
@@ -54,9 +66,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
 
-    /// <summary>Who is controlling this device right now, if anyone.</summary>
+    /// <summary>Who is controlling this device right now; the person at the keyboard can cut them down to watching or disconnect them.</summary>
+    public ObservableCollection<HostSessionItem> IncomingSessions { get; } = [];
+
     [ObservableProperty]
-    public partial string? IncomingStatus { get; set; }
+    public partial bool HasIncoming { get; set; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
@@ -150,7 +164,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? await InputSender.OpenAsync(connection, cancellationToken)
             : null;
 
-        RemoteDesktopOpened?.Invoke(this, new RemoteDesktopViewModel(session, viewer, input));
+        // Sound and clipboard are extras: a device without a sound card or a locked clipboard must not cost the connection.
+        var audio = session.Context.Grant.Allows(Permissions.Audio) ? await TryStartAsync(() => AudioPlayback.StartAsync(connection, _players, _loggers.CreateLogger<AudioPlayback>(), cancellationToken)) : null;
+        var clipboard = session.Context.Grant.Allows(Permissions.Clipboard) ? await TryStartAsync(() => ClipboardShare.StartAsync(connection, _clipboard, _loggers, cancellationToken)) : null;
+
+        RemoteDesktopOpened?.Invoke(this, new RemoteDesktopViewModel(session, viewer, input, audio, clipboard));
+    }
+
+    private static async Task<T?> TryStartAsync<T>(Func<Task<T>> start)
+        where T : class
+    {
+        try
+        {
+            return await start();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private bool CanDisconnect() => IsConnected;
@@ -206,7 +237,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             LocalDeviceId = "--- --- ---";
             TemporaryPassword = string.Empty;
             ServerStatus = "○ 无法联系后台服务";
-            IncomingStatus = null;
+            SetIncoming([]);
             HostDetail = null;
             return;
         }
@@ -220,8 +251,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _ => "○ 未连接服务器",
         };
         HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
-        IncomingStatus = status.Sessions.Count == 0
-            ? null
-            : string.Join("\n", status.Sessions.Select(s => $"{s.Controller} 正在{(s.Mode == "view" ? "观看" : "控制")}本机"));
+        SetIncoming(status.Sessions);
+    }
+
+    // The list is rebuilt only when it really changed, so buttons do not flicker under the mouse once a second.
+    private void SetIncoming(IReadOnlyList<HostSessionInfo> sessions)
+    {
+        if (!sessions.Select(s => (s.Id, s.Mode)).SequenceEqual(IncomingSessions.Select(s => (s.Id, s.Mode))))
+        {
+            IncomingSessions.Clear();
+            foreach (var session in sessions)
+            {
+                IncomingSessions.Add(new HostSessionItem(session, _hostControl));
+            }
+        }
+
+        HasIncoming = IncomingSessions.Count > 0;
     }
 }

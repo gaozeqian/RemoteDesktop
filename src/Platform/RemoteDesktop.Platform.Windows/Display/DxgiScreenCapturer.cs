@@ -52,9 +52,9 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
 
     public DisplayInfo Display { get; }
 
-#pragma warning disable CS0067 // Cursor shapes are forwarded in M4.
     public event EventHandler<CursorShape>? CursorChanged;
-#pragma warning restore CS0067
+
+    public event EventHandler<CursorPosition>? CursorMoved;
 
     public ValueTask<VideoFrame?> CaptureAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -92,6 +92,8 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
         result.CheckError();
         try
         {
+            RaiseCursorEvents(info);
+
             // LastPresentTime 0 means only the pointer moved; the image is unchanged.
             if (info.LastPresentTime == 0 && !_firstFrame)
             {
@@ -187,6 +189,29 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
         {
             _nextRetry = _clock.Elapsed + RetryInterval;
             return false;
+        }
+    }
+
+    // Must run while the frame is still held: the pointer shape is only available until ReleaseFrame.
+    private unsafe void RaiseCursorEvents(in OutduplFrameInfo info)
+    {
+        if (info.PointerShapeBufferSize > 0 && CursorChanged is { } shapeChanged)
+        {
+            var buffer = new byte[info.PointerShapeBufferSize];
+            fixed (byte* pointer = buffer)
+            {
+                if (_duplication!.GetFramePointerShape((uint)buffer.Length, (nint)pointer, out _, out var shape).Success &&
+                    PointerShapeConverter.Convert(shape.Type, (int)shape.Width, (int)shape.Height, (int)shape.Pitch, buffer) is var (width, height, bgra))
+                {
+                    shapeChanged(this, new CursorShape(width, height, shape.HotSpot.X, shape.HotSpot.Y, bgra));
+                }
+            }
+        }
+
+        if (info.LastMouseUpdateTime != 0)
+        {
+            var position = info.PointerPosition;
+            CursorMoved?.Invoke(this, new CursorPosition(position.Position.X, position.Position.Y, position.Visible));
         }
     }
 

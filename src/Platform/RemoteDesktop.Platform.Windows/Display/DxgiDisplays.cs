@@ -12,10 +12,6 @@ namespace RemoteDesktop.Platform.Windows.Display;
 [SupportedOSPlatform("windows")]
 public sealed class DxgiDisplayEnumerator : IDisplayEnumerator
 {
-#pragma warning disable CS0067 // Hot-plug notification (WM_DISPLAYCHANGE) arrives with multi-monitor support in M4.
-    public event EventHandler? DisplaysChanged;
-#pragma warning restore CS0067
-
     public IReadOnlyList<DisplayInfo> GetDisplays()
     {
         var displays = new List<DisplayInfo>();

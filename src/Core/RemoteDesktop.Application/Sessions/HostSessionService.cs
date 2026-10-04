@@ -29,9 +29,9 @@ public sealed partial class HostSessionService(
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
 
-    private readonly ConcurrentDictionary<SessionId, SessionContext> _sessions = [];
+    private readonly ConcurrentDictionary<SessionId, HostedSession> _hosted = [];
 
-    public IReadOnlyCollection<SessionContext> ActiveSessions => [.. _sessions.Values];
+    public IReadOnlyCollection<SessionContext> ActiveSessions => [.. _hosted.Values.Select(h => h.Context)];
 
     public event EventHandler<HostSessionEventArgs>? SessionStarted;
 
@@ -80,16 +80,19 @@ public sealed partial class HostSessionService(
                     return;
                 }
 
-                _sessions[session.Id] = session;
+                using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var hosted = new HostedSession(session, control, end);
+                _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
                 SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {
-                    await RunSessionAsync(session, control, stoppingToken).ConfigureAwait(false);
+                    await RunSessionAsync(hosted).ConfigureAwait(false);
                 }
                 finally
                 {
-                    _sessions.TryRemove(session.Id, out _);
+                    _hosted.TryRemove(session.Id, out _);
+                    hosted.Dispose();
                     LogSessionEnded(logger, session.Id);
                     SessionEnded?.Invoke(this, new HostSessionEventArgs(session));
                 }
@@ -168,23 +171,23 @@ public sealed partial class HostSessionService(
         return new SessionContext(SessionId.New(), SessionRole.Host, connection, grant);
     }
 
-    private async Task RunSessionAsync(SessionContext session, IChannel control, CancellationToken stoppingToken)
+    private async Task RunSessionAsync(HostedSession hosted)
     {
-        using var sessionEnd = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        var channels = AcceptChannelsAsync(session, sessionEnd.Token);
+        using var sessionEnd = CancellationTokenSource.CreateLinkedTokenSource(hosted.End.Token);
+        var channels = AcceptChannelsAsync(hosted, sessionEnd.Token);
         try
         {
             // The session lives as long as the control channel.
-            while (await ControlMessages.ReadAsync(control, sessionEnd.Token).ConfigureAwait(false) is { } message)
+            while (await ControlMessages.ReadAsync(hosted.Control, sessionEnd.Token).ConfigureAwait(false) is { } message)
             {
                 if (message.BodyCase == ControlMessage.BodyOneofCase.Ping)
                 {
                     var pong = new ControlMessage { Pong = new Pong { Timestamp = message.Ping.Timestamp } };
-                    await ControlMessages.WriteAsync(control, pong, sessionEnd.Token).ConfigureAwait(false);
+                    await hosted.WriteControlAsync(pong, sessionEnd.Token).ConfigureAwait(false);
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException)
         {
             // Connection lost or the controller misbehaved: either way the session is over.
         }
@@ -195,14 +198,14 @@ public sealed partial class HostSessionService(
         }
     }
 
-    private async Task AcceptChannelsAsync(SessionContext session, CancellationToken cancellationToken)
+    private async Task AcceptChannelsAsync(HostedSession hosted, CancellationToken cancellationToken)
     {
         var running = new List<Task>();
         try
         {
-            while (await session.Connection.AcceptChannelAsync(cancellationToken).ConfigureAwait(false) is { } channel)
+            while (await hosted.Context.Connection.AcceptChannelAsync(cancellationToken).ConfigureAwait(false) is { } channel)
             {
-                running.Add(DispatchAsync(channel, session, cancellationToken));
+                running.Add(DispatchAsync(channel, hosted, cancellationToken));
                 running.RemoveAll(t => t.IsCompleted);
             }
         }
@@ -213,17 +216,22 @@ public sealed partial class HostSessionService(
         await Task.WhenAll(running).ConfigureAwait(false);
     }
 
-    private async Task DispatchAsync(IChannel channel, SessionContext session, CancellationToken cancellationToken)
+    private async Task DispatchAsync(IChannel channel, HostedSession hosted, CancellationToken cancellationToken)
     {
+        var session = hosted.Context;
+
+        // Its own token, so that revoking a permission can end this channel without ending the session.
+        using var channelEnd = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        hosted.Add(channel.Type, channelEnd);
         try
         {
-            var result = await dispatcher.DispatchAsync(channel, session, cancellationToken).ConfigureAwait(false);
+            var result = await dispatcher.DispatchAsync(channel, session, channelEnd.Token).ConfigureAwait(false);
             if (result != DispatchResult.Accepted)
             {
                 LogChannelRefused(logger, session.Id, channel.Type, result);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
         }
 #pragma warning disable CA1031 // One failing feature must not end the whole session.
@@ -232,6 +240,56 @@ public sealed partial class HostSessionService(
         {
             LogChannelFailed(logger, session.Id, channel.Type, ex);
         }
+        finally
+        {
+            hosted.Remove(channelEnd);
+        }
+    }
+
+    /// <summary>
+    /// Takes away everything but watching from a running session: the grant becomes view-only, channels that are no
+    /// longer allowed are closed, and the controller is told so its UI follows. Enforcement does not depend on that.
+    /// </summary>
+    /// <returns><c>false</c> when there is no such session.</returns>
+    public async Task<bool> DowngradeToViewAsync(SessionId id, CancellationToken cancellationToken)
+    {
+        if (!_hosted.TryGetValue(id, out var hosted))
+        {
+            return false;
+        }
+
+        var session = hosted.Context;
+        session.Grant = session.Grant.DowngradeToView();
+        hosted.Cancel(type => dispatcher.GetRequiredPermission(type) is { } required && !session.Grant.Allows(required));
+        LogDowngraded(logger, id);
+
+        try
+        {
+            await hosted.WriteControlAsync(new ControlMessage
+            {
+                GrantChanged = new GrantChanged { Mode = ControlMessages.ToMessage(session.Grant.Mode), GrantedPermissions = (uint)session.Grant.Permissions },
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+            // The controller is already gone; the downgrade stands.
+        }
+
+        return true;
+    }
+
+    /// <summary>Ends a running session.</summary>
+    /// <returns><c>false</c> when there is no such session.</returns>
+    public bool Disconnect(SessionId id)
+    {
+        if (!_hosted.TryGetValue(id, out var hosted))
+        {
+            return false;
+        }
+
+        LogDisconnected(logger, id);
+        hosted.End.Cancel();
+        return true;
     }
 
     private static ValueTask RefuseAsync(IChannel control, AuthFailure failure, CancellationToken cancellationToken) =>
@@ -239,6 +297,12 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} started: {Controller}, {Mode}, {Permissions}, {Path}.")]
     private static partial void LogSessionStarted(ILogger logger, SessionId sessionId, DeviceId controller, SessionMode mode, Permissions permissions, ConnectionPath path);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} switched to watch-only by the host.")]
+    private static partial void LogDowngraded(ILogger logger, SessionId sessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} disconnected by the host.")]
+    private static partial void LogDisconnected(ILogger logger, SessionId sessionId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} ended.")]
     private static partial void LogSessionEnded(ILogger logger, SessionId sessionId);

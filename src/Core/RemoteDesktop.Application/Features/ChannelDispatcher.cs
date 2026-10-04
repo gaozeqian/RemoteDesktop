@@ -1,3 +1,4 @@
+using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Transport;
 
@@ -31,6 +32,10 @@ public sealed class ChannelDispatcher
             }
         }
     }
+
+    /// <summary>The permission a channel of this type needs, or <c>null</c> when no module serves it.</summary>
+    public Permissions? GetRequiredPermission(ChannelType type) =>
+        _modules.TryGetValue(type, out var module) ? module.RequiredPermission : null;
 
     public DispatchResult Authorize(ChannelType type, SessionContext session, out IFeatureModule? module)
     {

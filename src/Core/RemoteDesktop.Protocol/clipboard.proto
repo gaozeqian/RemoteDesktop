@@ -1,0 +1,23 @@
+// Messages of the clipboard channel. Both sides send the same messages: each pushes its own clipboard changes.
+// Field numbers are on the wire: never renumber, only append.
+syntax = "proto3";
+
+package remotedesktop.clipboard;
+
+option csharp_namespace = "RemoteDesktop.Protocol.Clipboard";
+
+message ClipboardMessage {
+  oneof body {
+    ClipboardText text = 1;
+    ClipboardImage image = 2;
+  }
+}
+
+message ClipboardText {
+  string text = 1;
+}
+
+message ClipboardImage {
+  // PNG-encoded.
+  bytes png = 1;
+}
