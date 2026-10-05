@@ -1,0 +1,18 @@
+# The relay: forwards encrypted QUIC datagrams between two peers that cannot reach each other directly.
+# Build from the repository root:  docker build -f build/docker/Dockerfile.relay .
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY src/Core/ src/Core/
+COPY src/Server/ src/Server/
+RUN dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app ./
+
+EXPOSE 5082/udp
+
+USER $APP_UID
+ENTRYPOINT ["dotnet", "RemoteDesktop.Server.Relay.dll"]

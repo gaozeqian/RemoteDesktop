@@ -5,7 +5,8 @@
   controller of others. Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Package Name="RemoteDesktop" Manufacturer="RemoteDesktop" Version="$(var.ProductVersion)"
            UpgradeCode="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30"
@@ -51,8 +52,20 @@
       <ComponentGroupRef Id="Payload" />
     </Feature>
 
-    <!-- Welcome, license, folder, progress, finish. The license text is a placeholder that has to be replaced before
-         this is handed to anybody (see License.rtf). -->
+    <!--
+      Processes left over from an earlier version hold their own files open, and then the installer can neither replace
+      those files nor run them: a real upgrade failed exactly here, with error 1721 on the custom action that runs the
+      service executable, because a session agent started by the client (standalone mode) was still alive. Windows' own
+      Restart Manager cannot help either: it refuses to restart an application that belongs to another user's session
+      ("Application SID does not match Conductor SID"), so the installer closes them itself.
+    -->
+    <util:CloseApplication Id="CloseAgent" Target="RemoteDesktop.SessionAgent.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <util:CloseApplication Id="CloseClient" Target="RemoteDesktop.Client.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+
+    <!-- Welcome, license, folder, progress, finish. The license text is License.txt next to this file; the RTF the
+         dialog needs is generated from it by New-LicenseRtf.ps1 while building, so the two cannot drift apart. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 

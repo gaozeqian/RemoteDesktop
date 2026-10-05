@@ -78,23 +78,38 @@ public sealed class InstallerPackageTests
         Assert.Single(package.Rows("SELECT `Root` FROM `Registry`", 1)); // the shortcut's per-user key path
 
         // --- the custom actions that set the machine up and clean it up ------------------------------------------
-        var actions = package.Rows("SELECT `Action`, `Type`, `Source` FROM `CustomAction`", 3);
+        var actions = package.Rows("SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`", 4);
+
+        // These run through System32\cmd.exe rather than through the service executable itself. That is not a style
+        // choice: a type 18 action (the installed file as the target) fails the whole installation with error 1721 when
+        // Windows cannot start that file - a leftover process holding it, or a pending rename waiting for a reboot -
+        // and "ignore" does not cover a launch failure. It only covers a non-zero exit code, which is what cmd.exe
+        // gives us instead. An upgrade failed exactly that way, so this is checked here.
         foreach (var name in new[] { "ConfigureSystem", "CleanupKeepData", "CleanupRemoveData" })
         {
-            var action = actions.Where(row => row[0] == name).ToList();
-            var only = Assert.Single(action);
-            // The type is the low six bits; the rest are flags (deferred, no impersonation).
-            Assert.Equal(18, int.Parse(only[1], CultureInfo.InvariantCulture) & 0x3F); // runs an installed file
-            Assert.Equal("HostServiceExeFile", only[2]);
+            var only = Assert.Single(actions, row => row[0] == name);
+            var type = int.Parse(only[1], CultureInfo.InvariantCulture);
+            Assert.Equal(34, type & 0x3F);          // exe from a directory
+            Assert.Equal(64, type & 64);            // ignore the exit code
+            Assert.Equal("SystemFolder", only[2]);
+            Assert.Contains("cmd.exe", only[3], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("RemoteDesktop.HostService.exe", only[3], StringComparison.Ordinal);
         }
+
+        // Leftover processes are closed before validation, which is when Windows decides whether a restart is needed.
+        var stopLeftovers = Assert.Single(actions, row => row[0] == "StopLeftoverProcesses");
+        Assert.Contains("taskkill", stopLeftovers[3], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("RemoteDesktop.SessionAgent.exe", stopLeftovers[3], StringComparison.Ordinal);
+        Assert.Single(package.Rows("SELECT `Action` FROM `InstallExecuteSequence`", 1), row => row[0] == "StopLeftoverProcesses");
 
         var sequence = package.Rows("SELECT `Action`, `Condition` FROM `InstallExecuteSequence`", 2);
         var configure = Assert.Single(sequence, row => row[0] == "ConfigureSystem");
         var keep = Assert.Single(sequence, row => row[0] == "CleanupKeepData");
         var remove = Assert.Single(sequence, row => row[0] == "CleanupRemoveData");
 
-        Assert.Contains("NOT REMOVE", configure[1], StringComparison.Ordinal);
-        Assert.Contains("UPGRADINGPRODUCTCODE", configure[1], StringComparison.Ordinal);
+        // "NOT REMOVE" and nothing more: adding UPGRADINGPRODUCTCODE here made the *old* product run this action while
+        // it was being removed during an upgrade, with its files already gone - error 1721 and a rolled-back install.
+        Assert.Equal("NOT REMOVE", configure[1]);
 
         // The two uninstall paths only differ in what they do with the machine's data, and neither runs while a major
         // upgrade removes the old product: that would wipe the device identity on every upgrade.
@@ -121,7 +136,26 @@ public sealed class InstallerPackageTests
         Assert.NotEmpty(package.Rows("SELECT `UpgradeCode` FROM `Upgrade`", 1));
         Assert.Contains("INSTALLFOLDER", package.Rows("SELECT `Directory` FROM `Directory`", 1).Select(row => row[0]));
         // The dialog table's key column is Dialog (not the Dialog_ of WiX 3).
-        Assert.True(package.Rows("SELECT `Dialog` FROM `Dialog`", 1).Count >= 8, "The installer has no user interface.");
+        var dialogs = package.Rows("SELECT `Dialog` FROM `Dialog`", 1).Select(row => row[0]).ToList();
+        Assert.True(dialogs.Count >= 8, $"The installer has no user interface ({dialogs.Count} dialogs).");
+
+        // The license page shows the agreement text (License.txt turned into RTF by the build); a missing page would mean
+        // the wizard silently skips it.
+        Assert.Contains("LicenseAgreementDlg", dialogs);
+        Assert.Contains("InstallDirDlg", dialogs);
+
+        // And the text itself travels in the package: without it the dialog would come up empty. WiX 5 puts it straight
+        // into the control that shows it (a WixUI extension that inlines the RTF) rather than into the Binary table.
+        var license = package.Rows(
+            "SELECT `Text` FROM `Control` WHERE `Dialog_` = 'LicenseAgreementDlg' AND `Control` = 'LicenseText'", 1);
+        var text = Assert.Single(license)[0];
+        Assert.StartsWith(@"{\rtf1", text, StringComparison.Ordinal);
+
+        // Chinese is written as RTF Unicode escapes (\uN?), which is what makes it survive any code page. A BMP code
+        // point above 32767 is written as a negative number, so the first escape being negative means CJK text.
+        var escape = System.Text.RegularExpressions.Regex.Match(text, @"\\u(-?\d+)\?");
+        Assert.True(escape.Success, "The license text has no Unicode escapes; it is probably not the one built from License.txt.");
+        Assert.True(int.Parse(escape.Groups[1].Value, CultureInfo.InvariantCulture) < 0, "The license text does not start with Chinese text.");
     }
 
     /// <summary>The installer database, opened read-only through the Windows Installer API.</summary>

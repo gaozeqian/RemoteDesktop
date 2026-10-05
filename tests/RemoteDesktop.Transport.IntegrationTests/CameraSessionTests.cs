@@ -111,6 +111,8 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         await using var pair = await Pair.StartAsync(server, allowCamera: true);
+        // The host registers the session a moment after the handshake, so wait for it rather than assume it is there.
+        await WaitUntilAsync(() => pair.Host.HostSessions.ActiveSessions.Count == 1);
         var hostId = pair.Host.HostSessions.ActiveSessions.Single().Id;
         Assert.False(pair.Host.HostSessions.IsChannelOpen(hostId, ChannelType.Camera));
 

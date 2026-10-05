@@ -19,6 +19,7 @@ public sealed record HostSessionInfo(string Id, string Controller, string Mode, 
 /// <param name="AgentState">What the session agent is doing (service only), e.g. <c>Running (Secure)</c>.</param>
 /// <param name="IsService">True when the host runs in the background service rather than inside the UI.</param>
 /// <param name="CameraAllowed">The person at this computer let controllers use the camera (off until they say so).</param>
+/// <param name="RendezvousUri">The signaling server this device is configured to use, shown when it cannot be reached.</param>
 public sealed record HostStatus(
     int? DeviceId,
     string ServerState,
@@ -26,7 +27,8 @@ public sealed record HostStatus(
     IReadOnlyList<HostSessionInfo> Sessions,
     string? AgentState,
     bool IsService,
-    bool CameraAllowed = false);
+    bool CameraAllowed = false,
+    string? RendezvousUri = null);
 
 /// <summary>
 /// What the UI needs from the "be controlled" side of this machine, whether that side runs in the UI process itself
@@ -58,7 +60,8 @@ public sealed class LocalHostControl(
     HostSessionService sessions,
     IAgentGateway? agent,
     bool isService,
-    ISecretStore? secrets = null) : IHostControl
+    ISecretStore? secrets = null,
+    string? rendezvousUri = null) : IHostControl
 {
     public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken)
     {
@@ -80,7 +83,8 @@ public sealed class LocalHostControl(
             active,
             agentState,
             isService,
-            credentials.AllowedPermissions.HasFlag(Permissions.Camera)));
+            credentials.AllowedPermissions.HasFlag(Permissions.Camera),
+            rendezvousUri));
     }
 
     public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)

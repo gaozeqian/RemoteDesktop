@@ -32,6 +32,10 @@ public sealed partial class ConnectionBroker
         if (!string.IsNullOrEmpty(_options.RelayEndpoint))
         {
             var relay = IPEndPoint.Parse(_options.RelayEndpoint);
+
+            // The key signs the tickets that let a peer use the relay. RendezvousOptions.Validate has already refused an
+            // empty, malformed or too-short one at start-up (AddRendezvous wires it up with ValidateOnStart), so what is
+            // parsed here always satisfies the relay's own check.
             _relayEndpoint = new PeerEndpoint { Address = relay.Address.ToString(), Port = (uint)relay.Port };
             _relayKey = Convert.FromBase64String(_options.RelaySharedKey);
         }

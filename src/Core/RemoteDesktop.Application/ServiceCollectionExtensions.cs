@@ -8,6 +8,7 @@ using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Application;
@@ -87,7 +88,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<HostSessionService>(),
             sp.GetService<IAgentGateway>(),
             isService,
-            sp.GetService<ISecretStore>()));
+            sp.GetService<ISecretStore>(),
+            sp.GetService<TransportOptions>()?.RendezvousUri?.ToString()));
         return services;
     }
 }

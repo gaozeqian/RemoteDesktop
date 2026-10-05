@@ -4,7 +4,8 @@
   generated from the publish output into Files.generated.wxs.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall">
+     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Fragment>
     <DirectoryRef Id="INSTALLFOLDER">
@@ -67,27 +68,65 @@
       They live in this fragment, next to the components, on purpose: WiX 5.0.2 drops a fragment that holds no
       component when linking (silently), which would quietly leave the installer without its custom actions.
     -->
+    <!--
+      These run through System32\cmd.exe instead of using the service executable as the action's own target, and they
+      ignore the exit code. Both details come from a real failed upgrade:
+
+        * A type 18 action (the packaged file as the target) fails the whole installation with error 1721 when Windows
+          cannot start that file, which is what happens when an earlier version's file is waiting for a reboot because
+          a process still held it. "ignore" covers a non-zero exit code, not a failure to launch. Going through
+          cmd.exe turns every failure, including "the file is not there", into an exit code that is ignored.
+        * The work is best-effort by design: the server address is already baked into appsettings.json when the
+          installer is built, and the same steps can be repeated by hand at any time.
+
+      A configuration step must never leave a half-installed product behind.
+    -->
     <CustomAction Id="ConfigureSystem"
-                  FileRef="HostServiceExeFile"
-                  ExeCommand="--configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot;"
-                  Execute="deferred" Impersonate="no" Return="check" />
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot;&quot;"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
 
     <CustomAction Id="CleanupKeepData"
-                  FileRef="HostServiceExeFile"
-                  ExeCommand="--cleanup-system --keep-data"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --cleanup-system --keep-data&quot;"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <CustomAction Id="CleanupRemoveData"
-                  FileRef="HostServiceExeFile"
-                  ExeCommand="--cleanup-system"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --cleanup-system&quot;"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!--
+      Leftover processes hold their own files open. The Restart Manager sees them during validation - that is what
+      decides "a restart is required" - and it cannot help when they belong to another user's session ("Application SID
+      does not match Conductor SID"), which is exactly the case for the session agent running on the signed-in user's
+      desktop. Closing them before validation keeps an upgrade a plain file replacement: nothing is left for a restart
+      to fix. taskkill reports an error when there is nothing to kill, which is ignored.
+    -->
+    <CustomAction Id="StopLeftoverProcesses"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c taskkill /f /im RemoteDesktop.SessionAgent.exe /im RemoteDesktop.Client.exe"
+                  Execute="immediate" Return="ignore" />
+
     <InstallExecuteSequence>
-      <!-- Installing: allow the service to send Ctrl+Alt+Del and write the server address. Skipped when the old product
-           is removed as part of a major upgrade (the new one configures itself) and when uninstalling. -->
+      <!-- Before validation, because that is when Windows decides whether a restart will be needed. -->
+      <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
+      <!--
+        Installing only: "NOT REMOVE" is the whole condition, and nothing else may be added to it.
+
+        An earlier version of this line read "NOT REMOVE OR UPGRADINGPRODUCTCODE", meaning to cover the new product of an
+        upgrade. It did the opposite: during a major upgrade the installer sets UPGRADINGPRODUCTCODE while it *removes
+        the old product*, so the condition became true there too, and the old product ran this action after its own
+        files had been deleted. Windows then reported error 1721 ("a program required for this install to complete
+        could not be run") for an executable that was no longer there, and the installation rolled back with 1603 -
+        three upgrades in a row failed exactly that way.
+
+        During an upgrade the new product installs with REMOVE empty, so "NOT REMOVE" is already true when it should be,
+        and false while the old product is being removed.
+      -->
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
-              Condition="NOT REMOVE OR UPGRADINGPRODUCTCODE" />
+              Condition="NOT REMOVE" />
 
       <!-- Uninstalling: take the policy bit back, and the machine's data only when asked. Both run before the files go,
            so there is still an executable to run, and neither runs while a major upgrade removes the old product

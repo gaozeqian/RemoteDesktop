@@ -1,0 +1,49 @@
+# The two servers, ready to run:
+#
+#   cd build/docker
+#   export RELAY_SHARED_KEY="$(openssl rand -base64 48)"     # PowerShell: $env:RELAY_SHARED_KEY = ...
+#   export RELAY_PUBLIC_ENDPOINT="rd.example.com:5082"       # the address clients will be told to relay through
+#   docker compose up -d --build
+#
+# Both servers refuse to start with a missing or too short key (at least 32 bytes of base64): the rendezvous signs relay
+# tickets with it and the relay checks the signature, so a mismatch or a weak key fails loudly at start-up instead of
+# quietly letting anybody relay through this server.
+name: remotedesktop
+
+services:
+  rendezvous:
+    build:
+      context: ../..
+      dockerfile: build/docker/Dockerfile.rendezvous
+    image: remotedesktop/rendezvous:0.1.0
+    environment:
+      # The address handed to clients for relayed connections. It must be reachable by the clients, so 127.0.0.1
+      # only works when everything runs on the same machine.
+      Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:-127.0.0.1:5082}
+      Rendezvous__RelaySharedKey: ${RELAY_SHARED_KEY:-}
+      Rendezvous__ReflectorPort: 5081
+    ports:
+      - "5080:5080/tcp"   # signaling: clients connect here (WebSocket /ws, health /health)
+      - "5081:5081/udp"   # address reflection: tells each side what the other sees
+    restart: unless-stopped
+    healthcheck:
+      # The runtime image has no curl; this only checks that the port answers.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5080' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  relay:
+    build:
+      context: ../..
+      dockerfile: build/docker/Dockerfile.relay
+    image: remotedesktop/relay:0.1.0
+    environment:
+      Relay__Port: 5082
+      Relay__SharedKey: ${RELAY_SHARED_KEY:-}
+    ports:
+      - "5082:5082/udp"
+    restart: unless-stopped
+    depends_on:
+      - rendezvous

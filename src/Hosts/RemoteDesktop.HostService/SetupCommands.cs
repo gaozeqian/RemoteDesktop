@@ -56,6 +56,13 @@ internal static class SetupCommands
                     output.WriteLine(ex.Message);
                     return InvalidArguments;
                 }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+                {
+                    // The installer runs this as the system and does not care about the exit code, but somebody running
+                    // it by hand should get a sentence rather than a stack trace.
+                    output.WriteLine($"Could not write the server address into {installDirectory}: {ex.Message}");
+                    return InvalidArguments;
+                }
             }
         }
 

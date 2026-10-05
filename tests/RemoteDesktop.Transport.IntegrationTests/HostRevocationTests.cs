@@ -39,6 +39,8 @@ public sealed class HostRevocationTests(ServerFixture server) : IClassFixture<Se
 
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         session.GrantChanged += (_, _) => changed.TrySetResult();
+        // The host registers the session a moment after it answers the handshake, so wait for it rather than assume it.
+        await WaitForAsync(() => host.HostSessions.ActiveSessions.Count == 1, "the session to appear on the host");
         var hostSession = host.HostSessions.ActiveSessions.Single();
         Assert.True(await host.HostSessions.DowngradeToViewAsync(hostSession.Id, Ct));
 
@@ -79,6 +81,7 @@ public sealed class HostRevocationTests(ServerFixture server) : IClassFixture<Se
         await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         session.Closed += (_, _) => closed.TrySetResult();
+        await WaitForAsync(() => host.HostSessions.ActiveSessions.Count == 1, "the session to appear on the host");
         var id = host.HostSessions.ActiveSessions.Single().Id;
 
         Assert.True(host.HostSessions.Disconnect(id));

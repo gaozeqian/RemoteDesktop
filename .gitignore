@@ -429,3 +429,6 @@ FodyWeavers.xsd
 
 # Generated from the publish output by build/installer/windows/build-installer.ps1 (never edit or commit).
 build/installer/windows/Files.generated.wxs
+
+# Private keys and exported certificates never belong in the repository.
+build/signing/certificates/

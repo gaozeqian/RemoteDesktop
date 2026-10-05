@@ -7,7 +7,10 @@ public static class RendezvousServer
 
     public static IServiceCollection AddRendezvous(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<RendezvousOptions>(configuration.GetSection(RendezvousOptions.SectionName));
+        services.AddOptions<RendezvousOptions>()
+            .Bind(configuration.GetSection(RendezvousOptions.SectionName))
+            .Validate(options => { options.Validate(); return true; }, "Rendezvous settings are not usable.")
+            .ValidateOnStart();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IDeviceRegistry, InMemoryDeviceRegistry>();
         services.AddSingleton<DevicePresence>();

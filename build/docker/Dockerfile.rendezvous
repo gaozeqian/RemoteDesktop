@@ -1,0 +1,24 @@
+# The signaling server: device codes, presence, hole-punch coordination and relay tickets.
+# Build from the repository root:  docker build -f build/docker/Dockerfile.rendezvous .
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Project files first, so restoring is cached until a dependency changes.
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY src/Core/ src/Core/
+COPY src/Server/ src/Server/
+RUN dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app ./
+
+# Signaling (WebSocket on /ws, health on /health) and the UDP address reflector.
+EXPOSE 5080/tcp
+EXPOSE 5081/udp
+
+# The container is not root: nothing here needs to be.
+USER $APP_UID
+
+# The reflector is a UDP socket inside the container; the published port must be a UDP mapping.
+ENTRYPOINT ["dotnet", "RemoteDesktop.Server.Rendezvous.dll"]

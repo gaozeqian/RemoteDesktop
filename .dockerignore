@@ -1,0 +1,7 @@
+# Nothing built belongs in a Docker build context: the images build from source inside the container.
+**/bin/
+**/obj/
+**/artifacts/
+.git/
+build/installer/windows/_none_
+*.log

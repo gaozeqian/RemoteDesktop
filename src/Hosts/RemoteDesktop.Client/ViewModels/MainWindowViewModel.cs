@@ -68,6 +68,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
 
+    /// <summary>Shown when this computer cannot reach the signaling server: without it there is no device code at all.</summary>
+    [ObservableProperty]
+    public partial string? ServerHint { get; set; }
+
     /// <summary>Who is controlling this device right now; the person at the keyboard can cut them down to watching or disconnect them.</summary>
     public ObservableCollection<HostSessionItem> IncomingSessions { get; } = [];
 
@@ -278,17 +282,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ServerStatus = "○ 无法联系后台服务";
             SetIncoming([]);
             HostDetail = null;
+            ServerHint = null;
             return;
         }
 
         LocalDeviceId = status.DeviceId is { } id ? new DeviceId(id).ToDisplayString() : "--- --- ---";
         TemporaryPassword = status.TemporaryPassword;
+        var online = status.ServerState == nameof(Transport.Rendezvous.RendezvousState.Online);
+        var where = string.IsNullOrEmpty(status.RendezvousUri) ? string.Empty : $"（{status.RendezvousUri}）";
         ServerStatus = status.ServerState switch
         {
             nameof(Transport.Rendezvous.RendezvousState.Online) => "● 已连接服务器",
-            nameof(Transport.Rendezvous.RendezvousState.Connecting) => "○ 正在连接服务器…",
-            _ => "○ 未连接服务器",
+            nameof(Transport.Rendezvous.RendezvousState.Connecting) => $"○ 正在连接服务器{where}…",
+            _ => $"○ 未连接服务器{where}",
         };
+
+        // The device code comes from the server, so a machine that cannot reach it has no code to give out. Saying so
+        // here is the difference between "it is broken" and "the server address is wrong".
+        ServerHint = online
+            ? null
+            : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
+              + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。";
         if (Volatile.Read(ref _cameraChangesPending) == 0 && AllowCamera != status.CameraAllowed)
         {
             _updatingFromHost = true;

@@ -2,4 +2,8 @@
   <ItemGroup>
     <ProjectReference Include="..\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Lets the same executable run as a console app in development and as a Windows service in production. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+  </ItemGroup>
 </Project>

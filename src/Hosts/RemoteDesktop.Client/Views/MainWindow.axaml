@@ -20,6 +20,9 @@
         </StackPanel>
         <CheckBox IsChecked="{Binding AllowCamera, Mode=TwoWay}" Content="允许控制端使用本机摄像头" />
         <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+        <!-- No device code means no server: say so where the code would be, instead of leaving an empty field. -->
+        <TextBlock Text="{Binding ServerHint}" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}"
+                   Foreground="OrangeRed" FontSize="12" TextWrapping="Wrap" />
         <ItemsControl ItemsSource="{Binding IncomingSessions}" IsVisible="{Binding HasIncoming}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:HostSessionItem">
