@@ -8,7 +8,7 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <Package Name="RemoteDesktop" Manufacturer="RemoteDesktop" Version="$(var.ProductVersion)"
+  <Package Name="Remote Desktop" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
            UpgradeCode="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30"
            Scope="perMachine" Compressed="yes" InstallerVersion="500">
 
@@ -36,10 +36,10 @@
       <Directory Id="INSTALLFOLDER" Name="RemoteDesktop" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="AppShortcutFolder" Name="RemoteDesktop" />
+      <Directory Id="AppShortcutFolder" Name="Remote Desktop" />
     </StandardDirectory>
 
-    <Feature Id="Main" Title="RemoteDesktop" Level="1" AllowAbsent="no">
+    <Feature Id="Main" Title="Remote Desktop" Level="1" AllowAbsent="no">
       <!-- The window of this computer and the controller for others. -->
       <ComponentRef Id="ClientExe" />
       <!-- The service that accepts connections, plus the agent that does the work inside the session. -->

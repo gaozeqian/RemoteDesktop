@@ -19,7 +19,7 @@
            per-user data even when the program itself is installed for everybody, and Windows Installer wants such a
            component to have a per-user key path (ICE43/ICE57). -->
       <Component Id="StartMenuShortcut" Guid="b4c5d6e7-f8a9-4b0c-9d1e-2f3a4b5c6d7e" Directory="AppShortcutFolder">
-        <Shortcut Id="StartMenuShortcutLink" Name="RemoteDesktop"
+        <Shortcut Id="StartMenuShortcutLink" Name="Remote Desktop"
                   Description="Remote desktop: control, file transfer, terminal and camera"
                   Target="[INSTALLFOLDER]RemoteDesktop.Client.exe" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\RemoteDesktop" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
@@ -33,7 +33,7 @@
         <ServiceInstall Id="HostServiceInstall"
                         Name="RemoteDesktopHost"
                         DisplayName="Remote Desktop Host"
-                        Description="Lets other devices connect to this computer with RemoteDesktop."
+                        Description="Lets other devices connect to this computer with Remote Desktop."
                         Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
         <!-- Started when installed, stopped on uninstall and on upgrades, so the executable is never in use. -->
         <ServiceControl Id="HostServiceControl" Name="RemoteDesktopHost" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
@@ -42,8 +42,8 @@
              every connection would fall back to the relay. A failure to add it must not fail the installation
              (the software works relayed), hence IgnoreFailure. -->
         <firewall:FirewallException Id="PeerUdp"
-                                    Name="RemoteDesktop peer connections (UDP)"
-                                    Description="Incoming connections from other RemoteDesktop devices."
+                                    Name="Remote Desktop peer connections (UDP)"
+                                    Description="Incoming connections from other Remote Desktop devices."
                                     Program="[#HostServiceExeFile]"
                                     Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
       </Component>

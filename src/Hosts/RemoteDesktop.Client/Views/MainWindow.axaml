@@ -3,7 +3,7 @@
         xmlns:vm="using:RemoteDesktop.Client.ViewModels"
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="RemoteDesktop"
+        Title="Remote Desktop"
         Icon="/Assets/icon.ico"
         Width="760" Height="500" MinWidth="640" MinHeight="460">
   <Grid ColumnDefinitions="*,*" RowDefinitions="*,Auto" Margin="24">

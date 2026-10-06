@@ -11,7 +11,7 @@
     <NoWarn>$(NoWarn);CA1716</NoWarn>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Company>RemoteDesktop</Company>
-    <Product>RemoteDesktop</Product>
+    <Product>Remote Desktop</Product>
     <Version>0.1.0</Version>
   </PropertyGroup>
 </Project>
