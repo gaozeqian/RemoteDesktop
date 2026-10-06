@@ -16,4 +16,52 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
-      - run: dotnet test RemoteDesktop.slnx --no-build -c Release
+      - name: Test
+        run: dotnet test RemoteDesktop.slnx --no-build -c Release --logger "trx" --logger "console;verbosity=normal" --results-directory TestResults
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults/*.trx
+      - name: Generate Test Summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path TestResults) {
+            $trxFiles = Get-ChildItem TestResults/*.trx
+            $summary = @()
+            $summary += "### 🧪 Test Results Summary"
+            $summary += ""
+            $summary += "| Test Suite | Total | Passed | Failed | Skipped | Status |"
+            $summary += "| :--- | :---: | :---: | :---: | :---: | :---: |"
+            $hasFailures = $false
+            foreach ($file in $trxFiles) {
+              [xml]$xml = Get-Content $file.FullName
+              $storage = $xml.TestRun.TestDefinitions.UnitTest[0].storage
+              $suite = if ($storage) { [System.IO.Path]::GetFileNameWithoutExtension($storage) } else { $file.BaseName }
+              $counters = $xml.TestRun.ResultSummary.Counters
+              $failed = [int]$counters.failed
+              if ($failed -gt 0) { $hasFailures = $true }
+              $status = if ($failed -eq 0) { "✅ Passed" } else { "❌ Failed" }
+              $summary += "| $($suite) | $($counters.total) | $($counters.passed) | $($counters.failed) | $($counters.notExecuted) | $($status) |"
+            }
+            if ($hasFailures) {
+              $summary += ""
+              $summary += "### ❌ Failed Tests"
+              foreach ($file in $trxFiles) {
+                [xml]$xml = Get-Content $file.FullName
+                $failedResults = $xml.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' }
+                foreach ($f in $failedResults) {
+                  $msg = $f.Output.ErrorInfo.Message
+                  $summary += "<details><summary><b>$($f.testName)</b></summary>"
+                  $summary += ""
+                  $summary += '```'
+                  $summary += $msg
+                  $summary += '```'
+                  $summary += "</details>"
+                }
+              }
+            }
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }

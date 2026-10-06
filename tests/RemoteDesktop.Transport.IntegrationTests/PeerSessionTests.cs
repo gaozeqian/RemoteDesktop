@@ -77,8 +77,7 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
 
         // Even a controller that ignores its own grant gets nothing: the echo module requires Clipboard.
         await using var channel = await session.Context.Connection.OpenChannelAsync(ChannelType.Clipboard, bidirectional: true, Ct);
-        await channel.Stream.WriteAsync(new byte[] { 1 }, Ct);
-        var read = await ReadOrFailAsync(channel.Stream);
+        var read = await ReadEchoOrFailAsync(channel.Stream);
         Assert.Equal(0, read);
     }
 
@@ -143,11 +142,12 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
         return started.Task;
     }
 
-    /// <summary>Returns the bytes read; a refused stream ends (0) or is aborted (also reported as 0).</summary>
-    private static async Task<int> ReadOrFailAsync(Stream stream)
+    /// <summary>Returns the bytes echoed back; a refused stream is aborted on write/read or ends (0).</summary>
+    private static async Task<int> ReadEchoOrFailAsync(Stream stream)
     {
         try
         {
+            await stream.WriteAsync(new byte[] { 1 }, Ct);
             return await stream.ReadAsync(new byte[16], Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
         }
         catch (IOException)
