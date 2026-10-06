@@ -23,7 +23,7 @@ public class HostControlTests
         Assert.Equal("Online", status.ServerState);
         Assert.Equal("pw-1", status.TemporaryPassword);
         Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], status.Sessions);
-        Assert.False(status.CameraAllowed);
+        Assert.True(status.CameraAllowed);
         Assert.True(status.IsService);
 
         await client.RotateTemporaryPasswordAsync(Ct);
@@ -61,13 +61,15 @@ public class HostControlTests
         var server = Serve(pipeName, control, stop.Token);
         var client = new PipeHostControl(pipeName);
 
-        await client.SetCameraAllowedAsync(true, Ct);
         Assert.True((await client.GetStatusAsync(Ct)).CameraAllowed);
         await client.StopCameraAsync("session-3", Ct);
         await client.SetCameraAllowedAsync(false, Ct);
 
         Assert.Equal(["session-3"], control.CameraStopped);
         Assert.False((await client.GetStatusAsync(Ct)).CameraAllowed);
+
+        await client.SetCameraAllowedAsync(true, Ct);
+        Assert.True((await client.GetStatusAsync(Ct)).CameraAllowed);
 
         await stop.CancelAsync();
         await server;
@@ -158,7 +160,7 @@ public class HostControlTests
 
         public List<string> Disconnected { get; } = [];
 
-        public bool CameraAllowed { get; private set; }
+        public bool CameraAllowed { get; private set; } = true;
 
         public List<string> CameraStopped { get; } = [];
 

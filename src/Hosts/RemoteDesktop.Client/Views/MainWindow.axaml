@@ -4,6 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="RemoteDesktop"
+        Icon="/Assets/icon.ico"
         Width="760" Height="440" MinWidth="640" MinHeight="400">
   <Grid ColumnDefinitions="*,*" RowDefinitions="*,Auto" Margin="24">
     <!-- This device -->
@@ -18,7 +19,6 @@
           <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
           <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
         </StackPanel>
-        <CheckBox IsChecked="{Binding AllowCamera, Mode=TwoWay}" Content="允许控制端使用本机摄像头" />
         <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
         <!-- No device code means no server: say so where the code would be, instead of leaving an empty field. -->
         <TextBlock Text="{Binding ServerHint}" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}"

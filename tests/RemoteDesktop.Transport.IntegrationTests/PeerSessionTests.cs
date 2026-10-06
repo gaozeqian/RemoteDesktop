@@ -24,8 +24,8 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
 
         Assert.Equal(ConnectionPath.Direct, session.Path);
 
-        // Everything except the camera, which stays off until the person at the host allows it.
-        Assert.Equal(Permissions.All & ~Permissions.Camera, session.Context.Grant.Permissions);
+        // All capabilities including the camera are granted for standard control.
+        Assert.Equal(Permissions.All, session.Context.Grant.Permissions);
         var hostSide = await started.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(controller.Id, hostSide.Connection.RemoteDevice);
         Assert.Equal(ConnectionPath.Direct, hostSide.Connection.Path);

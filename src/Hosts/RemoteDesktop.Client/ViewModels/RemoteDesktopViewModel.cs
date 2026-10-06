@@ -43,8 +43,8 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
         _session = session;
         _cameraFactory = cameraFactory;
-        CanUseCamera = session.Context.Grant.Allows(Permissions.Camera);
-        ShowCameraButton = session.Context.Grant.Mode == SessionMode.Control && cameraFactory is not null;
+        CanUseCamera = session.Context.Grant.Allows(Permissions.Camera) && cameraFactory is not null;
+        ShowCameraButton = CanUseCamera;
         Viewer = viewer;
         _input = input;
         _audio = audio;
@@ -291,6 +291,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         if (!grant.Allows(Permissions.Camera))
         {
             CanUseCamera = false;
+            ShowCameraButton = false;
             CameraUnavailable?.Invoke(this, EventArgs.Empty);
             await ReleaseCameraAsync();
         }

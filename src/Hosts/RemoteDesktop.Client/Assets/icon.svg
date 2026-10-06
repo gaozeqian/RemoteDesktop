@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- 时空折叠 · 跨平台全天候自由悬浮版 (Freeform Warp Screen) -->
+  <!-- 核心逻辑：双屏自带明暗自平衡，去除沉重方块底座，深浅环境皆坚实灵动 -->
+  <defs>
+    <!-- 后屏（远端）：深邃科技群青渐变，在纯白与浅色背景下提供 >7:1 的坚实轮廓 -->
+    <linearGradient id="wf-back-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#172554" />
+      <stop offset="60%" stop-color="#1E3A8A" />
+      <stop offset="100%" stop-color="#1D4ED8" />
+    </linearGradient>
+
+    <!-- 前屏（近端）：明亮高透天青渐变，在纯黑与深色模式下散发通透科技光芒 -->
+    <linearGradient id="wf-front-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7" />
+      <stop offset="50%" stop-color="#0EA5E9" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+
+    <!-- 前屏玻璃高光反光边框：增强暗色下的晶体质感 -->
+    <linearGradient id="wf-front-stroke" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#BAE6FD" stop-opacity="0.3" />
+    </linearGradient>
+
+    <!-- 时空折叠光带（从后屏跃迁到前屏的能量穿透通道） -->
+    <linearGradient id="wf-tunnel-grad" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0EA5E9" stop-opacity="0.3" />
+      <stop offset="35%" stop-color="#38BDF8" />
+      <stop offset="70%" stop-color="#7DD3FC" />
+      <stop offset="100%" stop-color="#FFFFFF" />
+    </linearGradient>
+
+    <!-- 柔和微环境阴影，确保在任何背景上图形自然浮起 -->
+    <filter id="wf-shadow-back" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.35" />
+    </filter>
+
+    <filter id="wf-shadow-front" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#082F49" flood-opacity="0.45" />
+    </filter>
+
+    <filter id="wf-cursor-pop" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0F172A" flood-opacity="0.4" />
+    </filter>
+  </defs>
+
+  <!-- 1. 后屏（远端宿主电脑 - 悬浮于右上方） -->
+  <g filter="url(#wf-shadow-back)">
+    <!-- 屏幕外壳：深蓝实心体块，自带微光描边保证暗色可见度 -->
+    <rect x="180" y="75" width="260" height="180" rx="36" fill="url(#wf-back-grad)" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.18" />
+    <!-- 屏幕顶栏极简微光反光 -->
+    <path d="M 180 110 C 180 90, 196 75, 216 75 L 404 75 C 424 75, 440 90, 440 110 L 440 115 L 180 115 Z" fill="#FFFFFF" opacity="0.12" />
+    <!-- 远端在线状态信号点 -->
+    <circle cx="214" cy="95" r="4.5" fill="#38BDF8" />
+    <circle cx="230" cy="95" r="4.5" fill="#38BDF8" opacity="0.5" />
+    <circle cx="246" cy="95" r="4.5" fill="#38BDF8" opacity="0.3" />
+
+    <!-- 远端虫洞发射源光环 -->
+    <circle cx="340" cy="165" r="24" fill="none" stroke="#38BDF8" stroke-width="3" stroke-dasharray="6,6" opacity="0.5" />
+    <circle cx="340" cy="165" r="10" fill="#E0F2FE" opacity="0.8" />
+  </g>
+
+  <!-- 2. 时空穿透流光隧道 (立体贯穿带) -->
+  <!-- 从后屏中央 (340, 165) 穿透而出，以平滑优雅的 S 弧线跨过两屏边界，注入前屏中枢 (210, 280) -->
+  <path d="M 340 165 C 340 250, 240 215, 225 285"
+        fill="none" stroke="#0284C7" stroke-width="28" stroke-linecap="round" opacity="0.25" />
+  <path d="M 340 165 C 340 250, 240 215, 225 285"
+        fill="none" stroke="url(#wf-tunnel-grad)" stroke-width="16" stroke-linecap="round" />
+
+  <!-- 3. 前屏（本地控制端 - 悬浮于左下方） -->
+  <g filter="url(#wf-shadow-front)">
+    <!-- 屏幕外壳：明亮天青玻璃实块 -->
+    <rect x="75" y="195" width="280" height="195" rx="38" fill="url(#wf-front-grad)" />
+    <rect x="76" y="196" width="278" height="193" rx="37" fill="none" stroke="url(#wf-front-stroke)" stroke-width="2.5" />
+
+    <!-- 屏幕对角通透大反光面 (展现现代晶体质感) -->
+    <path d="M 76 233 C 76 212, 92 196, 113 196 L 240 196 L 76 360 Z" fill="#FFFFFF" opacity="0.15" />
+
+    <!-- 前屏底座微提示条 -->
+    <rect x="105" y="352" width="75" height="12" rx="6" fill="#FFFFFF" opacity="0.3" />
+  </g>
+
+  <!-- 4. 掌控光标：纯白实心，落在前屏核心，破空指引 -->
+  <g transform="translate(195, 260)" filter="url(#wf-cursor-pop)">
+    <!-- 纯白主体光标 (高亮白在深浅两色皆极其醒目) -->
+    <path d="M 0 0 L 36 22 L 20 23 L 30 44 L 20 49 L 10 28 L 0 38 Z" 
+          fill="#FFFFFF" stroke="#0369A1" stroke-width="2" stroke-linejoin="round" />
+    <!-- 核心能量点 -->
+    <circle cx="2" cy="2" r="3" fill="#38BDF8" />
+  </g>
+
+  <!-- 5. 焦点能量涟漪环 (强调无延迟命中) -->
+  <circle cx="197" cy="262" r="15" fill="none" stroke="#FFFFFF" stroke-width="2" opacity="0.7" />
+  <circle cx="197" cy="262" r="28" fill="none" stroke="#BAE6FD" stroke-width="1.5" stroke-dasharray="4,6" opacity="0.4" />
+</svg>

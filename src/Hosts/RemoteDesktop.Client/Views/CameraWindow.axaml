@@ -4,6 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.CameraWindow"
         x:DataType="vm:CameraWindowViewModel"
         Title="远程摄像头"
+        Icon="/Assets/icon.ico"
         Width="960" Height="640" MinWidth="520" MinHeight="380" Background="Black">
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,8">

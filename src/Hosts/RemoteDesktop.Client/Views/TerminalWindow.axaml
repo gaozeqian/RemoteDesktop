@@ -5,6 +5,7 @@
         x:Class="RemoteDesktop.Client.Views.TerminalWindow"
         x:DataType="vm:TerminalWindowViewModel"
         Title="远程终端"
+        Icon="/Assets/icon.ico"
         Width="1000" Height="640" MinWidth="480" MinHeight="300">
   <DockPanel>
     <Border DockPanel.Dock="Top" Padding="8,6" Background="#202020">

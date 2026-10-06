@@ -4,6 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.RemoteDesktopWindow"
         x:DataType="vm:RemoteDesktopViewModel"
         Title="{Binding Title}"
+        Icon="/Assets/icon.ico"
         Width="1280" Height="760" Background="Black">
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,6">
@@ -21,8 +22,7 @@
           <ToggleButton Content="静音" IsChecked="{Binding IsMuted, Mode=OneWay}" Command="{Binding ToggleMuteCommand}" IsVisible="{Binding HasAudio}" />
           <Button Content="文件" Command="{Binding OpenFilesCommand}" IsVisible="{Binding CanTransferFiles}" />
           <Button Content="终端" Command="{Binding OpenTerminalCommand}" IsVisible="{Binding CanUseTerminal}" />
-          <Button Content="摄像头" Command="{Binding OpenCameraCommand}" IsVisible="{Binding ShowCameraButton}"
-                  ToolTip.Tip="被控端需要先在它的界面里勾选“允许控制端使用本机摄像头”，并在之后新建的连接里才可用" />
+          <Button Content="摄像头" Command="{Binding OpenCameraCommand}" IsVisible="{Binding CanUseCamera}" />
           <!-- Only the host service can raise Ctrl+Alt+Del, so it is a button instead of a key combination. -->
           <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanControl}" />
           <Button Content="断开" Command="{Binding DisconnectCommand}" />

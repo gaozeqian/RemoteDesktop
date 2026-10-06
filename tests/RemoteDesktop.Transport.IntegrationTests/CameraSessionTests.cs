@@ -46,10 +46,15 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     public void A_camera_without_modes_has_nothing_to_choose() => Assert.Null(CameraModule.ChooseMode([], 640, 480, 30));
 
     [Fact]
-    public async Task The_camera_stays_off_until_the_host_allows_it()
+    public async Task The_camera_is_available_by_default_and_can_be_disabled_by_policy()
     {
-        await using var pair = await Pair.StartAsync(server, allowCamera: false);
+        // Available by default
+        await using var defaultPair = await Pair.StartAsync(server, allowCamera: true);
+        Assert.True(defaultPair.Session.Context.Grant.Allows(Permissions.Camera));
+        Assert.NotEmpty(await CameraViewer.ListCamerasAsync(defaultPair.Session.Context.Connection, Ct));
 
+        // When disallowed by policy, the session cannot use it
+        await using var pair = await Pair.StartAsync(server, allowCamera: false);
         Assert.False(pair.Session.Context.Grant.Allows(Permissions.Camera));
         await Assert.ThrowsAsync<CameraException>(() => CameraViewer.ListCamerasAsync(pair.Session.Context.Connection, Ct));
 
@@ -195,7 +200,7 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     }
 
     [Fact]
-    public async Task Switching_the_camera_off_on_the_host_ends_it_in_every_session_and_is_remembered()
+    public async Task Switching_the_camera_off_on_the_host_ends_it_in_every_session()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         var store = new MemorySecrets();
@@ -210,11 +215,9 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
 
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct);
         Assert.False((await control.GetStatusAsync(Ct)).CameraAllowed);
-        Assert.False(HostPolicy.Load(store).HasFlag(Permissions.Camera) && false); // stored as "no"
-        Assert.Equal(HostPolicy.Default, HostPolicy.Load(store));
 
         await control.SetCameraAllowedAsync(true, Ct);
-        Assert.Equal(Permissions.All, HostPolicy.Load(store));
+        Assert.True((await control.GetStatusAsync(Ct)).CameraAllowed);
     }
 
     [Fact]
@@ -391,9 +394,9 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
             var cameras = new FakeCameras(pair.Source);
             var module = new CameraModule(cameras, cameras, guard ?? new SwitchableGuard(), CreateCodecs(), TimeProvider.System, NullLogger<CameraModule>.Instance);
             pair.Host = await TestDevice.StartAsync(server, forceRelay: false, module);
-            if (allowCamera)
+            if (!allowCamera)
             {
-                pair.Host.Credentials.AllowedPermissions = Permissions.All;
+                pair.Host.Credentials.AllowedPermissions &= ~Permissions.Camera;
             }
 
             pair.Controller = await TestDevice.StartAsync(server);

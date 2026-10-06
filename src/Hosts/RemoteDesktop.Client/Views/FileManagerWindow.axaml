@@ -5,6 +5,7 @@
         x:Class="RemoteDesktop.Client.Views.FileManagerWindow"
         x:DataType="vm:FileManagerViewModel"
         Title="文件传输"
+        Icon="/Assets/icon.ico"
         Width="1100" Height="720" MinWidth="760" MinHeight="480">
   <Grid RowDefinitions="*,Auto,Auto,180" Margin="10" RowSpacing="8">
     <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="8">

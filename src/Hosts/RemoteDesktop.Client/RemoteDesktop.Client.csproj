@@ -4,7 +4,11 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
