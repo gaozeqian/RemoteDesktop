@@ -19,7 +19,7 @@ services:
       POSTGRES_USER: remotedesktop
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rd_secure_postgres_pass}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U remotedesktop -d remotedesktop"]
       interval: 5s
