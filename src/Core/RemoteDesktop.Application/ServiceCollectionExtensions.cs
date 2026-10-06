@@ -23,10 +23,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<ConnectionAdmission>();
         services.AddSingleton<ChannelDispatcher>();
-        services.AddSingleton(sp => new HostCredentials
+        services.AddSingleton(sp =>
         {
-            // What the person at this computer decided earlier (the camera stays off until they switch it on).
-            AllowedPermissions = sp.GetService<ISecretStore>() is { } store ? HostPolicy.Load(store) : HostPolicy.Default,
+            var store = sp.GetService<ISecretStore>();
+            return new HostCredentials
+            {
+                AllowedPermissions = store is not null ? HostPolicy.Load(store) : HostPolicy.Default,
+                FixedPassword = store is not null ? FixedPasswordPolicy.Load(store) : null,
+            };
         });
         services.AddSingleton<AuthAttemptLimiter>();
         services.AddSingleton<ControllerSessionService>();

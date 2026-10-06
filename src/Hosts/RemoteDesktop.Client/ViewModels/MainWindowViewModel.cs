@@ -64,6 +64,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string TemporaryPassword { get; set; } = string.Empty;
 
+    [ObservableProperty]
+    public partial bool HasFixedPassword { get; set; }
+
+    [ObservableProperty]
+    public partial string FixedPasswordStatus { get; set; } = "未设置";
+
+    [ObservableProperty]
+    public partial bool IsEditingFixedPassword { get; set; }
+
+    [ObservableProperty]
+    public partial string NewFixedPassword { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string? FixedPasswordError { get; set; }
+
     /// <summary>Where the host side runs and what its session agent is doing, when a background service hosts it.</summary>
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
@@ -128,6 +143,49 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Interlocked.Decrement(ref _cameraChangesPending);
         }
 
+        await RefreshHostStatusAsync();
+    }
+
+    [RelayCommand]
+    private void OpenFixedPasswordEditor()
+    {
+        NewFixedPassword = string.Empty;
+        FixedPasswordError = null;
+        IsEditingFixedPassword = true;
+    }
+
+    [RelayCommand]
+    private void CancelFixedPasswordEditor()
+    {
+        NewFixedPassword = string.Empty;
+        FixedPasswordError = null;
+        IsEditingFixedPassword = false;
+    }
+
+    [RelayCommand]
+    private async Task SaveFixedPasswordAsync()
+    {
+        var password = NewFixedPassword?.Trim();
+        if (string.IsNullOrEmpty(password) || password.Length < 6)
+        {
+            FixedPasswordError = "固定密码长度至少需要 6 个字符。";
+            return;
+        }
+
+        FixedPasswordError = null;
+        await _hostControl.SetFixedPasswordAsync(password, CancellationToken.None);
+        IsEditingFixedPassword = false;
+        NewFixedPassword = string.Empty;
+        await RefreshHostStatusAsync();
+    }
+
+    [RelayCommand]
+    private async Task ClearFixedPasswordAsync()
+    {
+        await _hostControl.SetFixedPasswordAsync(null, CancellationToken.None);
+        IsEditingFixedPassword = false;
+        NewFixedPassword = string.Empty;
+        FixedPasswordError = null;
         await RefreshHostStatusAsync();
     }
 
@@ -288,6 +346,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         LocalDeviceId = status.DeviceId is { } id ? new DeviceId(id).ToDisplayString() : "--- --- ---";
         TemporaryPassword = status.TemporaryPassword;
+        HasFixedPassword = status.HasFixedPassword;
+        FixedPasswordStatus = status.HasFixedPassword ? "已开启（长效密码）" : "未设置";
         var online = status.ServerState == nameof(Transport.Rendezvous.RendezvousState.Online);
         var where = string.IsNullOrEmpty(status.RendezvousUri) ? string.Empty : $"（{status.RendezvousUri}）";
         ServerStatus = status.ServerState switch

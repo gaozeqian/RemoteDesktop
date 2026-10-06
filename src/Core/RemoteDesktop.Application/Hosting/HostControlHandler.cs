@@ -49,6 +49,10 @@ public static partial class HostControlHandler
                     await control.StopCameraAsync(sessionId, timeout.Token).ConfigureAwait(false);
                     await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
                     break;
+                case HostControlProtocol.FixedPasswordCommand:
+                    await control.SetFixedPasswordAsync(request.Argument, timeout.Token).ConfigureAwait(false);
+                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    break;
                 default:
                     LogUnknownCommand(logger, request?.Command);
                     break;

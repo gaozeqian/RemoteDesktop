@@ -40,6 +40,9 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) =>
         _ = await RequestAsync<HostControlRequest>(HostControlProtocol.CameraStopCommand, sessionId, cancellationToken).ConfigureAwait(false);
 
+    public async Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken) =>
+        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.FixedPasswordCommand, password, cancellationToken).ConfigureAwait(false);
+
     private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {
         var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);

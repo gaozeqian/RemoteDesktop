@@ -7,6 +7,7 @@ using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.Control;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Application.Sessions;
@@ -26,7 +27,8 @@ public sealed partial class HostSessionService(
     HostCredentials credentials,
     AuthAttemptLimiter limiter,
     ConnectionAdmission admission,
-    ILogger<HostSessionService> logger) : BackgroundService
+    ILogger<HostSessionService> logger,
+    ISystemKeepAwake? keepAwake = null) : BackgroundService
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
 
@@ -99,6 +101,7 @@ public sealed partial class HostSessionService(
                 var hosted = new HostedSession(session, control!, end);
                 _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
+                keepAwake?.Acquire();
                 SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {
@@ -108,6 +111,7 @@ public sealed partial class HostSessionService(
                 {
                     _hosted.TryRemove(session.Id, out _);
                     hosted.Dispose();
+                    keepAwake?.Release();
                     LogSessionEnded(logger, session.Id);
                     SessionEnded?.Invoke(this, new HostSessionEventArgs(session));
                 }

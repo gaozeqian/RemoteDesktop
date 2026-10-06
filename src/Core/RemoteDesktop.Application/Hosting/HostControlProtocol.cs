@@ -20,6 +20,7 @@ public static class HostControlProtocol
     public const string DisconnectCommand = "disconnect";
     public const string CameraAllowCommand = "camera-allow";
     public const string CameraStopCommand = "camera-stop";
+    public const string FixedPasswordCommand = "fixed-password";
 
     /// <summary>Requests and responses are a few hundred bytes; anything bigger is not from us.</summary>
     public const int MaxLineBytes = 16 * 1024;

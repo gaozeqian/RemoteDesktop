@@ -23,6 +23,7 @@ public class HostControlTests
         Assert.Equal("Online", status.ServerState);
         Assert.Equal("pw-1", status.TemporaryPassword);
         Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], status.Sessions);
+        Assert.False(status.HasFixedPassword);
         Assert.True(status.CameraAllowed);
         Assert.True(status.IsService);
 
@@ -47,6 +48,29 @@ public class HostControlTests
 
         Assert.Equal(["session-1"], control.Downgraded);
         Assert.Equal(["session-2"], control.Disconnected);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task The_ui_can_set_and_clear_fixed_password()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName);
+
+        Assert.False((await client.GetStatusAsync(Ct)).HasFixedPassword);
+
+        await client.SetFixedPasswordAsync("my-unattended-pass", Ct);
+        Assert.Equal("my-unattended-pass", control.FixedPassword);
+        Assert.True((await client.GetStatusAsync(Ct)).HasFixedPassword);
+
+        await client.SetFixedPasswordAsync(null, Ct);
+        Assert.Null(control.FixedPassword);
+        Assert.False((await client.GetStatusAsync(Ct)).HasFixedPassword);
 
         await stop.CancelAsync();
         await server;
@@ -148,7 +172,15 @@ public class HostControlTests
         public int Rotations { get; private set; }
 
         public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new HostStatus(123456789, "Online", $"pw-{Rotations + 1}", [new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], "Running (User)", true, CameraAllowed));
+            Task.FromResult(new HostStatus(
+                123456789,
+                "Online",
+                $"pw-{Rotations + 1}",
+                [new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)],
+                "Running (User)",
+                true,
+                CameraAllowed,
+                !string.IsNullOrEmpty(FixedPassword)));
 
         public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
         {
@@ -157,6 +189,14 @@ public class HostControlTests
         }
 
         public List<string> Downgraded { get; } = [];
+
+        public string? FixedPassword { get; private set; }
+
+        public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
+        {
+            FixedPassword = password;
+            return Task.CompletedTask;
+        }
 
         public List<string> Disconnected { get; } = [];
 

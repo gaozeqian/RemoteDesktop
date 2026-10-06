@@ -19,6 +19,7 @@ public sealed record HostSessionInfo(string Id, string Controller, string Mode, 
 /// <param name="AgentState">What the session agent is doing (service only), e.g. <c>Running (Secure)</c>.</param>
 /// <param name="IsService">True when the host runs in the background service rather than inside the UI.</param>
 /// <param name="CameraAllowed">The person at this computer let controllers use the camera (off until they say so).</param>
+/// <param name="HasFixedPassword">Whether a fixed password for unattended access has been configured.</param>
 /// <param name="RendezvousUri">The signaling server this device is configured to use, shown when it cannot be reached.</param>
 public sealed record HostStatus(
     int? DeviceId,
@@ -28,6 +29,7 @@ public sealed record HostStatus(
     string? AgentState,
     bool IsService,
     bool CameraAllowed = false,
+    bool HasFixedPassword = false,
     string? RendezvousUri = null);
 
 /// <summary>
@@ -51,6 +53,9 @@ public interface IHostControl
 
     /// <summary>Stops one session's camera use, keeping the session.</summary>
     Task StopCameraAsync(string sessionId, CancellationToken cancellationToken);
+
+    /// <summary>Configures or clears the long-lived fixed password for unattended access.</summary>
+    Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken);
 }
 
 /// <summary>Answers from the host components living in this process.</summary>
@@ -84,6 +89,7 @@ public sealed class LocalHostControl(
             agentState,
             isService,
             credentials.AllowedPermissions.HasFlag(Permissions.Camera),
+            !string.IsNullOrEmpty(credentials.FixedPassword),
             rendezvousUri));
     }
 
@@ -131,5 +137,17 @@ public sealed class LocalHostControl(
         {
             await sessions.RevokeAsync(id, Permissions.Camera, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
+    {
+        var normalized = string.IsNullOrWhiteSpace(password) ? null : password.Trim();
+        credentials.FixedPassword = normalized;
+        if (secrets is not null)
+        {
+            FixedPasswordPolicy.Save(secrets, normalized);
+        }
+
+        return Task.CompletedTask;
     }
 }

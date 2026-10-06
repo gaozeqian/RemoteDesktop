@@ -5,7 +5,7 @@
         x:DataType="vm:MainWindowViewModel"
         Title="RemoteDesktop"
         Icon="/Assets/icon.ico"
-        Width="760" Height="440" MinWidth="640" MinHeight="400">
+        Width="760" Height="500" MinWidth="640" MinHeight="460">
   <Grid ColumnDefinitions="*,*" RowDefinitions="*,Auto" Margin="24">
     <!-- This device -->
     <Border Grid.Column="0" Margin="0,0,12,0" Padding="20" CornerRadius="8"
@@ -18,6 +18,31 @@
         <StackPanel Orientation="Horizontal" Spacing="8">
           <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
           <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
+        </StackPanel>
+
+        <!-- 固定密码 (无人值守) -->
+        <TextBlock Text="固定密码（无人值守）" Opacity="0.7" />
+        <StackPanel Spacing="6">
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !IsEditingFixedPassword}">
+            <SelectableTextBlock Text="{Binding FixedPasswordStatus}" FontSize="15" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource SystemAccentColor}" />
+            <Button Content="设置" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding !HasFixedPassword}" />
+            <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding HasFixedPassword}" />
+            <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}" IsVisible="{Binding HasFixedPassword}" />
+          </StackPanel>
+
+          <!-- 密码编辑内嵌面板 -->
+          <Border Background="#15FFFFFF" CornerRadius="6" Padding="10" IsVisible="{Binding IsEditingFixedPassword}">
+            <StackPanel Spacing="8">
+              <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●" PlaceholderText="输入新固定密码（至少 6 位）" />
+              <TextBlock Text="{Binding FixedPasswordError}" Foreground="OrangeRed" FontSize="12"
+                         IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="保存" Command="{Binding SaveFixedPasswordCommand}" />
+                <Button Content="取消" Command="{Binding CancelFixedPasswordEditorCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
         </StackPanel>
         <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
         <!-- No device code means no server: say so where the code would be, instead of leaving an empty field. -->

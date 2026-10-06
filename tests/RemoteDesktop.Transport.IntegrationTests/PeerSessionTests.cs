@@ -1,4 +1,5 @@
 using RemoteDesktop.Application.Features;
+using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
@@ -107,6 +108,19 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
         host.Credentials.FixedPassword = "unattended-secret";
 
         await using var session = await controller.Controller.ConnectAsync(host.Id, "unattended-secret", SessionMode.Control, Ct);
+
+        Assert.Equal(SessionMode.Control, session.Context.Grant.Mode);
+    }
+
+    [Fact]
+    public async Task Fixed_password_set_through_host_control_allows_unattended_access()
+    {
+        await using var host = await TestDevice.StartAsync(server);
+        await using var controller = await TestDevice.StartAsync(server);
+        var control = new LocalHostControl(host.Rendezvous, host.Credentials, host.HostSessions, null, false);
+        await control.SetFixedPasswordAsync("my-long-lived-pass", Ct);
+
+        await using var session = await controller.Controller.ConnectAsync(host.Id, "my-long-lived-pass", SessionMode.Control, Ct);
 
         Assert.Equal(SessionMode.Control, session.Context.Grant.Mode);
     }
