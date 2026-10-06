@@ -44,6 +44,7 @@ public sealed class RealProgramTerminalTests : IDisposable
         await shell.WaitForAsync("PS ", predicate: screen => screen.Split('\n').Any(l => l.TrimEnd().EndsWith("echo wrong!", StringComparison.Ordinal) && l.Contains("PS ", StringComparison.Ordinal)));
 
         shell.Control('c');
+        await Task.Delay(200, Ct);
         shell.Type("exit");
         shell.Key(TerminalKey.Enter);
         Assert.Equal(0, await shell.ExitCodeAsync());
@@ -157,7 +158,17 @@ public sealed class RealProgramTerminalTests : IDisposable
         shell.Control('o'); // write out
         await shell.WaitForAsync("Write to File");
         shell.Key(TerminalKey.Enter);
-        await shell.WaitUntilAsync(_ => File.Exists(file) && File.ReadAllText(file).Contains("typed in nano", StringComparison.Ordinal), "the file being written");
+        await shell.WaitUntilAsync(_ =>
+        {
+            try
+            {
+                return File.Exists(file) && File.ReadAllText(file).Contains("typed in nano", StringComparison.Ordinal);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }, "the file being written");
         shell.Control('x');
         await shell.WaitUntilAsync(s => !s.Emulator.IsAlternateScreen, "leaving nano");
     }

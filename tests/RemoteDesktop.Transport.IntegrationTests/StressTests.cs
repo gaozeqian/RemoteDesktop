@@ -55,6 +55,7 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
                 
                 var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
                 sessions.Add(session);
+                await WaitForAsync(() => host.HostSessions.ActiveSessions.Any(s => s.Connection.RemoteDevice == controller.Id), $"session {i} to appear on the host");
                 hostSessionIds.Add(host.HostSessions.ActiveSessions.Single(s => s.Connection.RemoteDevice == controller.Id).Id);
                 viewers.Add(await DesktopViewer.StartAsync(session.Context.Connection, codecs, 30, TimeProvider.System, NullLogger.Instance, Ct));
                 terminals.Add(await TerminalSession.StartAsync(session.Context.Connection, "cmd", 80, 24, Ct));
@@ -63,8 +64,8 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
             Assert.Equal(Controllers, host.HostSessions.ActiveSessions.Count);
             foreach (var id in hostSessionIds)
             {
-                Assert.True(host.HostSessions.IsChannelOpen(id, ChannelType.Video));
-                Assert.True(host.HostSessions.IsChannelOpen(id, ChannelType.Terminal));
+                await WaitForAsync(() => host.HostSessions.IsChannelOpen(id, ChannelType.Video), $"video channel for {id}");
+                await WaitForAsync(() => host.HostSessions.IsChannelOpen(id, ChannelType.Terminal), $"terminal channel for {id}");
             }
 
             // Each of them gets pictures, runs its own shell and receives a file.
@@ -148,6 +149,7 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
             await using var controller = await TestDevice.StartAsync(server);
             var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
             var viewer = await DesktopViewer.StartAsync(session.Context.Connection, codecs, 30, TimeProvider.System, NullLogger.Instance, Ct);
+            await WaitForAsync(() => host.HostSessions.ActiveSessions.Any(s => s.Connection.RemoteDevice == controller.Id), $"session {round} to appear on the host");
             var hostId = host.HostSessions.ActiveSessions.Single(s => s.Connection.RemoteDevice == controller.Id).Id;
             var terminal = await TerminalSession.StartAsync(session.Context.Connection, "cmd", 80, 24, Ct);
 
