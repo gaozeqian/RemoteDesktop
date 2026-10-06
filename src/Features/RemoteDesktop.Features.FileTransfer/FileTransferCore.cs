@@ -154,7 +154,7 @@ public static class FileReceiver
         FileStream file;
         try
         {
-            file = new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous);
+            file = new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous);
         }
         catch (UnauthorizedAccessException ex)
         {

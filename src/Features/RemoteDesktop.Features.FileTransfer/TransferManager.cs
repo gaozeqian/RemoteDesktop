@@ -473,14 +473,24 @@ public sealed class TransferManager : IAsyncDisposable
             return;
         }
 
-        try
+        var side = job.Direction == TransferDirection.Download ? _local : _remote;
+        // The receiver may still be unwinding and closing its stream after cancellation; retry briefly if transiently locked.
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            var side = job.Direction == TransferDirection.Download ? _local : _remote;
-            await side.DeleteAsync(partial, recursive: false, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (FileOperationException)
-        {
-            // Already gone, or the connection is: a leftover partial is harmless and gets reused by a later attempt.
+            try
+            {
+                await side.DeleteAsync(partial, recursive: false, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+            catch (FileOperationException ex) when (ex.Error is FileError.Io or FileError.AccessDenied)
+            {
+                await Task.Delay(50 * (attempt + 1), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (FileOperationException)
+            {
+                // Already gone (NotFound) or not allowed.
+                return;
+            }
         }
     }
 }
