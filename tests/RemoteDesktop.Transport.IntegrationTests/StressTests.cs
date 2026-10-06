@@ -97,7 +97,10 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
 
             foreach (var viewer in viewers)
             {
-                await WaitForAsync(() => viewer.Statistics.FramesPerSecond > 0 && Volatile.Read(ref frames[Array.IndexOf([.. viewers], viewer)]) >= 5, "video frames");
+                var index = Array.IndexOf([.. viewers], viewer);
+                await WaitForAsync(
+                    () => viewer.Statistics.FramesPerSecond >= 5 && Volatile.Read(ref frames[index]) >= 5,
+                    $"video frames on controller {index} to reach at least 5 fps");
 
                 // Four streams at once must still be smooth: the host may not serialize them. The floor is well below
                 // what the machine manages (about 30 fps each), so a slow machine does not fail the test.
