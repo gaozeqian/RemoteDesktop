@@ -105,10 +105,11 @@ docker compose up -d --build
   容器会立刻退出并说明原因，不会带着弱密钥跑起来。
 - `RELAY_PUBLIC_ENDPOINT` 必须是客户端可达的地址。写成 `127.0.0.1:5082` 只有所有东西都在同一台机器上时才对。
 - 健康检查：`curl http://<服务器>:5080/health` 返回 `Healthy`；`docker compose ps` 里 rendezvous 会显示 `(healthy)`。
-- 停掉：`docker compose down`（加 `-v` 会连网络一起清掉，镜像保留）。
-
-> 注意：设备注册表在**内存**里，服务器重启后设备代码会重新分配（同一台机器重连会拿到新代码）。
-> 需要固定代码的部署要等设备库落盘，这是当前版本的已知限制。
+- 停掉：`docker compose down`（加 `-v` 会连同数据库数据卷一起清掉，慎用）。
+- **设备代码持久化（PostgreSQL）**：Compose 默认启动 PostgreSQL 服务与独立数据卷（`postgres-data`）。
+  Rendezvous 会自动建立数据表，将设备证书指纹与 9 位设备代码的映射持久化在数据库中；
+  即使服务重启、升级或重建容器，所有被控端的设备代码永久固定不变，完全保障无人值守长效可用。
+  如果本地开发不需要 PostgreSQL，留空 `Rendezvous:PostgresConnectionString` 会自动回退为纯内存模式。
 
 ### 5. 防火墙
 

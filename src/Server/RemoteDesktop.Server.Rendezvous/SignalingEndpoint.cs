@@ -80,7 +80,7 @@ public sealed partial class SignalingEndpoint(
             return null;
         }
 
-        var deviceId = registry.GetOrAllocate(fingerprint);
+        var deviceId = await registry.GetOrAllocateAsync(fingerprint, cancellationToken).ConfigureAwait(false);
         var session = new DeviceSession(deviceId, fingerprint, socket);
         await session.SendAsync(
             new ServerMessage { Registered = new Registered { DeviceId = deviceId, ReflectorPort = (uint)reflector.Port } },

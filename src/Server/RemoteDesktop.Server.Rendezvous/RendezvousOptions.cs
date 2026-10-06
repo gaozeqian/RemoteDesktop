@@ -18,6 +18,9 @@ public sealed class RendezvousOptions
 
     public TimeSpan RelayTicketLifetime { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>Optional PostgreSQL connection string. When provided, device ids are persisted across restarts.</summary>
+    public string? PostgresConnectionString { get; set; }
+
     /// <summary>
     /// Checks the settings the server cannot work without. Called when the options are first used (ValidateOnStart), so
     /// a misconfigured deployment stops at start-up with a sentence instead of failing later on the first connection.

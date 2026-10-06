@@ -1,16 +1,32 @@
-# The two servers, ready to run:
+# The servers and database, ready to run:
 #
 #   cd build/docker
-#   export RELAY_SHARED_KEY="$(openssl rand -base64 48)"     # PowerShell: $env:RELAY_SHARED_KEY = ...
-#   export RELAY_PUBLIC_ENDPOINT="rd.example.com:5082"       # the address clients will be told to relay through
+#   export RELAY_SHARED_KEY="$(openssl rand -base64 48)"       # PowerShell: $env:RELAY_SHARED_KEY = ...
+#   export RELAY_PUBLIC_ENDPOINT="rd.example.com:5082"         # the address clients will be told to relay through
+#   export POSTGRES_PASSWORD="$(openssl rand -base64 24)"      # optional: custom database password
 #   docker compose up -d --build
 #
-# Both servers refuse to start with a missing or too short key (at least 32 bytes of base64): the rendezvous signs relay
-# tickets with it and the relay checks the signature, so a mismatch or a weak key fails loudly at start-up instead of
-# quietly letting anybody relay through this server.
+# Device codes are stored persistently in PostgreSQL (volume postgres-data):
+# they survive restarts and upgrades, ensuring unattended access never loses its target device IDs.
 name: remotedesktop
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: remotedesktop
+      POSTGRES_USER: remotedesktop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rd_secure_postgres_pass}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remotedesktop -d remotedesktop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   rendezvous:
     build:
       context: ../..
@@ -22,10 +38,14 @@ services:
       Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:-127.0.0.1:5082}
       Rendezvous__RelaySharedKey: ${RELAY_SHARED_KEY:-}
       Rendezvous__ReflectorPort: 5081
+      Rendezvous__PostgresConnectionString: Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD:-rd_secure_postgres_pass}
     ports:
       - "5080:5080/tcp"   # signaling: clients connect here (WebSocket /ws, health /health)
       - "5081:5081/udp"   # address reflection: tells each side what the other sees
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       # The runtime image has no curl; this only checks that the port answers.
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5080' || exit 1"]
@@ -47,3 +67,6 @@ services:
     restart: unless-stopped
     depends_on:
       - rendezvous
+
+volumes:
+  postgres-data:

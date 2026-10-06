@@ -26,6 +26,8 @@
     <!-- Protocol -->
     <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
     <PackageVersion Include="Grpc.Tools" Version="2.84.0" />
+    <!-- Database -->
+    <PackageVersion Include="Npgsql" Version="9.0.3" />
     <!-- Installer: WiX v5 on purpose (v6+ requires OSMF for commercial use) -->
     <PackageVersion Include="WixToolset.Sdk" Version="5.0.2" />
     <!-- Tests -->
