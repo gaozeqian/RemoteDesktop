@@ -49,6 +49,18 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     public DesktopStatistics Statistics { get; private set; } = new(0, 0, 0, null);
 
+    /// <summary>Total number of frames decoded so far.</summary>
+    public long FrameNumber
+    {
+        get
+        {
+            lock (_frameLock)
+            {
+                return _frameNumber;
+            }
+        }
+    }
+
     /// <summary>Displays the host offered, for switching (M4).</summary>
     public IReadOnlyList<DisplayDescription> Displays { get; private set; } = [];
 

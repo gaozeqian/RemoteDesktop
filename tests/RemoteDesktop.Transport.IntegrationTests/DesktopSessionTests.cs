@@ -127,15 +127,10 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
         await using var controller = await TestDevice.StartAsync(server);
         await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
 
-        var pictures = 0;
-        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var viewer = await DesktopViewer.StartAsync(session.Context.Connection, codecs, 30, TimeProvider.System, NullLogger.Instance, Ct);
-        viewer.FrameReady += (_, _) => (Interlocked.Increment(ref pictures) == 1 ? first : second).TrySetResult();
-
-        await first.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        await WaitForAsync(() => viewer.FrameNumber >= 1, "the first frame");
         await viewer.RequestKeyFrameAsync(Ct);
-        await second.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await WaitForAsync(() => viewer.FrameNumber >= 2, "the key frame");
     }
 
     [Fact]
