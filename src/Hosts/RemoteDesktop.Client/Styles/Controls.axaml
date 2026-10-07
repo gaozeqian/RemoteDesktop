@@ -1,0 +1,178 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    The handful of building blocks the client repeats. Deliberately not a restyle of every Fluent control: text boxes,
+    combo boxes, check boxes, progress bars and scroll bars should keep following the theme on their own.
+
+    Style setters beat ControlTheme setters in Avalonia, so these win over Fluent's defaults for the same property.
+    Primary buttons keep Fluent's Classes="accent" instead of a custom fill: the theme already handles its hover,
+    pressed and disabled states, and the accent then follows the user's system accent colour.
+  -->
+
+  <!-- Surfaces -->
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
+    <Setter Property="Padding" Value="{DynamicResource RdCardPadding}" />
+  </Style>
+
+  <Style Selector="Border.inset">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceInsetBrush}" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
+    <Setter Property="Padding" Value="{DynamicResource RdPaddingMd}" />
+  </Style>
+
+  <Style Selector="Border.toolbar">
+    <Setter Property="Background" Value="{DynamicResource RdToolbarBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="{DynamicResource RdToolbarPadding}" />
+  </Style>
+
+  <Style Selector="Border.statusBar">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+    <Setter Property="Padding" Value="{DynamicResource RdStatusBarPadding}" />
+  </Style>
+
+  <!-- A hairline between groups of toolbar actions. -->
+  <Style Selector="Border.toolbarSeparator">
+    <Setter Property="Width" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="Margin" Value="2,4" />
+  </Style>
+
+  <!-- Banners: someone is on this machine, or something is wrong. -->
+  <Style Selector="Border.banner">
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
+    <Setter Property="Padding" Value="{DynamicResource RdPaddingMd}" />
+  </Style>
+
+  <Style Selector="Border.banner.warning">
+    <Setter Property="Background" Value="{DynamicResource RdWarningSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdWarningBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="Border.banner.danger">
+    <Setter Property="Background" Value="{DynamicResource RdDangerSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdDangerBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <!-- Text -->
+  <Style Selector="TextBlock.pageTitle">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontTitle}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.sectionHeader">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontSubtitle}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontCaption}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.caption">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontCaption}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextTertiaryBrush}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="TextBlock.danger">
+    <Setter Property="Foreground" Value="{DynamicResource RdDangerTextBrush}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="TextBlock.warning">
+    <Setter Property="Foreground" Value="{DynamicResource RdWarningTextBrush}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  </Style>
+
+  <!-- Buttons -->
+  <Style Selector="Button.feature">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontCaption}" />
+    <Setter Property="Padding" Value="10,5" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+
+  <!-- Ending a session is the one action a toolbar should not invite by accident. -->
+  <Style Selector="Button.danger">
+    <Setter Property="Foreground" Value="{DynamicResource RdDangerTextBrush}" />
+  </Style>
+
+  <Style Selector="Button.iconButton">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="6,3" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  </Style>
+
+  <!--
+    Navigation rail: a TabControl whose strip is docked left. Fluent already turns the strip vertical for
+    TabStripPlacement=Left and draws the selected-item pipe against the left edge, so this only has to give the
+    items the rail's shape and colours.
+  -->
+  <Style Selector="TabControl.navRail">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="TabControl.navRail > TabItem">
+    <Setter Property="MinWidth" Value="{DynamicResource RdRailWidth}" />
+    <Setter Property="Padding" Value="8,10" />
+    <Setter Property="Margin" Value="6,2" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="TabControl.navRail > TabItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="TabControl.navRail > TabItem:selected">
+    <Setter Property="Background" Value="{DynamicResource RdAccentSurfaceBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdAccentBrush}" />
+  </Style>
+
+  <!-- Device cards: a wrapping grid, so the whole card is one selectable row. -->
+  <Style Selector="ListBox.deviceGrid">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.deviceGrid > ListBoxItem">
+    <Setter Property="Padding" Value="14" />
+    <Setter Property="Margin" Value="0,0,12,12" />
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
+  </Style>
+
+  <Style Selector="ListBox.deviceGrid > ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="ListBox.deviceGrid > ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceAltBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdAccentBrush}" />
+  </Style>
+
+</Styles>

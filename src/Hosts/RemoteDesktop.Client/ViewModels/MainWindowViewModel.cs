@@ -196,6 +196,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>Re-reads the list from disk, for the refresh button next to it.</summary>
+    [RelayCommand]
+    private Task RefreshRecentDevicesAsync() => LoadRecentDevicesAsync();
+
     /// <summary>Returns whether the alias reached the disk, so the row can be put back when it did not.</summary>
     private async Task<bool> SaveDeviceAliasAsync(RecentDeviceItemViewModel item)
     {

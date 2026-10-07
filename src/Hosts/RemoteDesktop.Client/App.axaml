@@ -3,10 +3,15 @@
              x:Class="RemoteDesktop.Client.App"
              RequestedThemeVariant="Default">
   <Application.Resources>
-    <!-- Translucent so it reads as a raised card on both the light and dark variant. -->
-    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#1F808080" />
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://RemoteDesktop.Client/Styles/Tokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
   </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <!-- After FluentTheme on purpose: styles declared later win against the theme for the same property. -->
+    <StyleInclude Source="avares://RemoteDesktop.Client/Styles/Controls.axaml" />
   </Application.Styles>
 </Application>

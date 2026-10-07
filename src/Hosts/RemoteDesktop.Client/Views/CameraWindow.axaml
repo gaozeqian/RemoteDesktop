@@ -5,37 +5,47 @@
         x:DataType="vm:CameraWindowViewModel"
         Title="远程摄像头"
         Icon="/Assets/icon.ico"
-        Width="960" Height="640" MinWidth="520" MinHeight="380" Background="Black">
+        Width="960" Height="640" MinWidth="520" MinHeight="380"
+        Background="{DynamicResource RdVideoBackdropBrush}">
   <DockPanel>
-    <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,8">
-      <StackPanel Spacing="6">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <ComboBox ItemsSource="{Binding Cameras}" SelectedItem="{Binding SelectedCamera}" MinWidth="220" IsEnabled="{Binding !IsStreaming}">
+    <Border DockPanel.Dock="Top" Classes="toolbar">
+      <StackPanel Spacing="{DynamicResource RdSpaceSm}">
+        <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+          <ComboBox ItemsSource="{Binding Cameras}" SelectedItem="{Binding SelectedCamera}" MinWidth="220"
+                    IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:CameraChoice">
                 <TextBlock Text="{Binding Name}" />
               </DataTemplate>
             </ComboBox.ItemTemplate>
           </ComboBox>
-          <ComboBox ItemsSource="{Binding Modes}" SelectedItem="{Binding SelectedMode}" MinWidth="170" IsEnabled="{Binding !IsStreaming}">
+          <ComboBox ItemsSource="{Binding Modes}" SelectedItem="{Binding SelectedMode}" MinWidth="170"
+                    IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:CameraModeChoice">
                 <TextBlock Text="{Binding Label}" />
               </DataTemplate>
             </ComboBox.ItemTemplate>
           </ComboBox>
-          <Button Content="开始" Command="{Binding StartCommand}" Classes="accent" />
-          <Button Content="停止" Command="{Binding StopCommand}" />
-          <Button Content="{Binding RecordButtonText}" Command="{Binding ToggleRecordingCommand}" IsVisible="{Binding IsStreaming}" />
+          <Button Content="开始" Command="{Binding StartCommand}" Classes="accent" VerticalAlignment="Center" />
+          <Button Content="停止" Command="{Binding StopCommand}" VerticalAlignment="Center" />
+          <Button Content="{Binding RecordButtonText}" Command="{Binding ToggleRecordingCommand}"
+                  IsVisible="{Binding IsStreaming}" VerticalAlignment="Center" />
         </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="12">
-          <TextBlock Text="{Binding StatusText}" Foreground="#DDFFFFFF" FontSize="12" IsVisible="{Binding IsStreaming}" TextTrimming="CharacterEllipsis" />
-          <TextBlock Text="{Binding RecordingStatusMessage}" Foreground="#FFCC00" FontSize="12" TextTrimming="CharacterEllipsis"
-                     IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
-        <TextBlock Text="{Binding Message}" Foreground="OrangeRed" TextWrapping="Wrap" IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <TextBlock Text="{Binding RecordingStatusMessage}" Foreground="{DynamicResource RdWarningBrush}"
+                   FontSize="{DynamicResource RdFontCaption}" TextTrimming="CharacterEllipsis"
+                   IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <TextBlock Text="{Binding Message}" Classes="danger"
+                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </StackPanel>
     </Border>
+
+    <!-- Resolution, frame rate, bitrate, encoder and latency live at the bottom of the window. -->
+    <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding IsStreaming}">
+      <TextBlock Text="{Binding StatusText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+    </Border>
+
     <Image x:Name="Picture" Stretch="Uniform" />
   </DockPanel>
 </Window>

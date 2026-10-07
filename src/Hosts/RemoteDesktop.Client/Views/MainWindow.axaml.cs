@@ -1,4 +1,9 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.ViewModels;
 
@@ -6,7 +11,51 @@ namespace RemoteDesktop.Client.Views;
 
 public sealed partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        CopyDeviceCodeButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.LocalDeviceId);
+        CopyPasswordButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.TemporaryPassword);
+
+        // A card's feature buttons pass the card itself as their target, while the password box belongs to whichever
+        // card is selected. Selecting the card under the pointer on the way down keeps the two in step: the press
+        // selects the card, then the click (raised on release) runs the command against that same card.
+        DeviceList.AddHandler(PointerPressedEvent, OnDeviceListPointerPressed, RoutingStrategies.Tunnel);
+    }
+
+    private static void OnDeviceListPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        for (var visual = e.Source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is ListBoxItem item)
+            {
+                item.IsSelected = true;
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copies through the window's clipboard, not through the session's <c>IClipboard</c> port: that one mirrors the
+    /// clipboard to the peer, so reading the device code into it would ship the code to the controlled machine.
+    /// </summary>
+    private async Task CopyAsync(Func<MainWindowViewModel, string> select)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard)
+        {
+            return;
+        }
+
+        try
+        {
+            await clipboard.SetTextAsync(select(viewModel));
+        }
+        catch (Exception)
+        {
+            // Another process can hold the clipboard open; a copy that did not happen is not worth reporting twice.
+        }
+    }
 
     protected override void OnDataContextChanged(EventArgs e)
     {

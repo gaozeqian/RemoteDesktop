@@ -5,181 +5,311 @@
         x:DataType="vm:MainWindowViewModel"
         Title="Remote Desktop"
         Icon="/Assets/icon.ico"
-        Width="960" Height="640" MinWidth="860" MinHeight="560">
-  <Grid ColumnDefinitions="360,*" RowDefinitions="*,Auto" Margin="20">
-    <!-- This device (Left column) -->
-    <Border Grid.Column="0" Margin="0,0,10,0" Padding="18" CornerRadius="8"
-            Background="{StaticResource CardBackgroundBrush}">
-      <ScrollViewer>
-        <StackPanel Spacing="12">
-          <TextBlock Text="允许控制本设备" FontSize="18" FontWeight="SemiBold" />
-          <TextBlock Text="设备代码" Opacity="0.7" />
-          <SelectableTextBlock Text="{Binding LocalDeviceId}" FontSize="26" FontWeight="Bold" />
-          <TextBlock Text="临时密码" Opacity="0.7" />
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
-            <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
-          </StackPanel>
+        Background="{DynamicResource RdWindowBackgroundBrush}"
+        Width="1120" Height="720" MinWidth="1000" MinHeight="640">
+  <DockPanel>
 
-          <!-- 固定密码 (无人值守) -->
-          <TextBlock Text="固定密码（无人值守）" Opacity="0.7" />
-          <StackPanel Spacing="6">
-            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !IsEditingFixedPassword}">
-              <SelectableTextBlock Text="{Binding FixedPasswordStatus}" FontSize="14" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource SystemAccentColor}" />
-              <Button Content="设置" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding !HasFixedPassword}" />
-              <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding HasFixedPassword}" />
-              <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}" IsVisible="{Binding HasFixedPassword}" />
-            </StackPanel>
+    <!--
+      Alerts sit outside the page host on purpose: the TabControl only realises the selected page, so anything
+      inside a page would be invisible from the other two. Someone controlling this machine, and a client that
+      cannot reach the server at all, both have to be visible wherever the user happens to be.
+    -->
+    <StackPanel DockPanel.Dock="Top" Spacing="{DynamicResource RdSpaceSm}" Margin="16,16,16,0">
 
-            <!-- 密码编辑内嵌面板 -->
-            <Border Background="#15FFFFFF" CornerRadius="6" Padding="10" IsVisible="{Binding IsEditingFixedPassword}">
-              <StackPanel Spacing="8">
-                <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●" PlaceholderText="输入新固定密码（至少 6 位）" />
-                <TextBlock Text="{Binding FixedPasswordError}" Foreground="OrangeRed" FontSize="12"
-                           IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button Content="保存" Command="{Binding SaveFixedPasswordCommand}" />
-                  <Button Content="取消" Command="{Binding CancelFixedPasswordEditorCommand}" />
-                </StackPanel>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-
-          <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
-          <TextBlock Text="{Binding ServerHint}" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}"
-                     Foreground="OrangeRed" FontSize="12" TextWrapping="Wrap" />
-          <ItemsControl ItemsSource="{Binding IncomingSessions}" IsVisible="{Binding HasIncoming}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:HostSessionItem">
-                <StackPanel Spacing="6" Margin="0,4,0,0">
-                  <TextBlock Text="{Binding Description}" Foreground="{DynamicResource SystemAccentColor}" TextWrapping="Wrap" />
-                  <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}" Foreground="OrangeRed" FontWeight="SemiBold" />
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="关闭摄像头" Command="{Binding StopCameraCommand}" IsVisible="{Binding CameraActive}" />
-                    <Button Content="仅观看" Command="{Binding DowngradeCommand}" IsVisible="{Binding CanDowngrade}" />
-                    <Button Content="断开" Command="{Binding DisconnectCommand}" />
+      <!-- Who is on this machine right now; the person at the keyboard can cut them down or off (README "被控端的权限"). -->
+      <Border Classes="banner warning" IsVisible="{Binding HasIncoming}">
+        <StackPanel Spacing="{DynamicResource RdSpaceSm}">
+          <TextBlock Text="有人正在控制本设备" Classes="sectionHeader" Foreground="{DynamicResource RdWarningTextBrush}" />
+          <ScrollViewer MaxHeight="160" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding IncomingSessions}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:HostSessionItem">
+                  <StackPanel Spacing="{DynamicResource RdSpaceXs}" Margin="0,0,0,8">
+                    <TextBlock Text="{Binding Description}" Classes="warning" />
+                    <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}"
+                               Foreground="{DynamicResource RdDangerTextBrush}" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                      <Button Content="关闭摄像头" Command="{Binding StopCameraCommand}" IsVisible="{Binding CameraActive}" />
+                      <Button Content="仅观看" Command="{Binding DowngradeCommand}" IsVisible="{Binding CanDowngrade}" />
+                      <Button Content="断开" Command="{Binding DisconnectCommand}" />
+                    </StackPanel>
                   </StackPanel>
-                </StackPanel>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
         </StackPanel>
-      </ScrollViewer>
+      </Border>
+
+      <!-- The client keeps no log file, so this text is the only place a wrong server address can be diagnosed. -->
+      <Border Classes="banner danger" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}">
+        <TextBlock Text="{Binding ServerHint}" Classes="danger" />
+      </Border>
+    </StackPanel>
+
+    <!-- Status message and server state, unchanged in wording: the connection path and RTT are read from here. -->
+    <Border DockPanel.Dock="Bottom" Classes="statusBar">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceLg}">
+        <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" TextWrapping="Wrap" />
+        <TextBlock Grid.Column="1" Text="{Binding ServerStatus}" Classes="secondary"
+                   VerticalAlignment="Center" TextWrapping="NoWrap" />
+      </Grid>
     </Border>
 
-    <!-- Remote device & Device List (Right column) -->
-    <Border Grid.Column="1" Margin="10,0,0,0" Padding="18" CornerRadius="8"
-            Background="{StaticResource CardBackgroundBrush}">
-      <TabControl>
-        <!-- Tab 1: 设备列表 -->
-        <TabItem Header="设备列表">
-          <Grid RowDefinitions="*,Auto" Margin="0,12,0,0">
-            <!-- 列表区域 -->
-            <Grid Grid.Row="0">
-              <!-- 空列表提示 -->
-              <Border IsVisible="{Binding !HasRecentDevices}" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="20">
-                <StackPanel Spacing="8" HorizontalAlignment="Center">
-                  <TextBlock Text="暂无最近连接过的设备" FontSize="16" Opacity="0.6" HorizontalAlignment="Center" />
-                  <TextBlock Text="在“快速连接”中发起连接后将自动记录到设备列表" FontSize="12" Opacity="0.4" HorizontalAlignment="Center" />
-                </StackPanel>
-              </Border>
+    <!-- Left rail + pages. Fluent turns the strip vertical for TabStripPlacement=Left and draws the selection pipe. -->
+    <TabControl Classes="navRail" TabStripPlacement="Left" Margin="16" Padding="0">
 
-              <!-- 设备列表 -->
-              <ListBox ItemsSource="{Binding RecentDevices}" SelectedItem="{Binding SelectedRecentDevice}"
-                       IsVisible="{Binding HasRecentDevices}" Background="Transparent">
-                <ListBox.ItemTemplate>
-                  <DataTemplate x:DataType="vm:RecentDeviceItemViewModel">
-                    <Border Padding="10,8" Margin="0,2" CornerRadius="6" Background="#10FFFFFF">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <!-- 设备信息展示（非编辑态） -->
-                        <StackPanel Grid.Column="0" Spacing="4" IsVisible="{Binding !IsEditingAlias}">
-                          <TextBlock Text="{Binding DisplayTitle}" FontSize="15" FontWeight="SemiBold" />
-                          <TextBlock Text="{Binding LastConnectedText}" FontSize="12" Opacity="0.6" />
-                        </StackPanel>
+      <!-- ============================ 设备 ============================ -->
+      <TabItem AutomationProperties.Name="设备">
+        <TabItem.Header>
+          <StackPanel Spacing="{DynamicResource RdSpaceXs}" HorizontalAlignment="Center">
+            <TextBlock Text="🖥" FontSize="20" HorizontalAlignment="Center" />
+            <TextBlock Text="设备" FontSize="{DynamicResource RdFontCaption}" HorizontalAlignment="Center" />
+          </StackPanel>
+        </TabItem.Header>
 
-                        <!-- 编辑别名状态 -->
-                        <StackPanel Grid.Column="0" Spacing="4" Orientation="Horizontal" IsVisible="{Binding IsEditingAlias}">
-                          <TextBox Text="{Binding NewAlias}" PlaceholderText="设备别名/备注" MinWidth="160" />
-                          <Button Content="保存" Command="{Binding SaveAliasCommand}" />
-                          <Button Content="取消" Command="{Binding CancelEditAliasCommand}" />
-                        </StackPanel>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="{DynamicResource RdSpaceLg}" Margin="16,0,0,16">
 
-                        <!-- 列表项右侧快捷按钮 -->
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding !IsEditingAlias}">
-                          <Button Content="重命名" Command="{Binding StartEditAliasCommand}" FontSize="12" Padding="8,4" />
-                          <Button Content="删除" Command="{Binding RemoveCommand}" FontSize="12" Padding="8,4" />
-                        </StackPanel>
-                      </Grid>
-                    </Border>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-            </Grid>
+            <!-- 本设备 -->
+            <Border Classes="card" VerticalAlignment="Top">
+              <StackPanel Spacing="{DynamicResource RdSpaceMd}">
+                <TextBlock Text="允许控制本设备" Classes="sectionHeader" />
 
-            <!-- 选中设备的单独功能操作面板 -->
-            <Border Grid.Row="1" Margin="0,12,0,0" Padding="14" CornerRadius="8" Background="#18FFFFFF"
-                    IsVisible="{Binding SelectedRecentDevice, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <StackPanel Spacing="10">
-                <TextBlock Text="对选中设备单独使用功能" FontWeight="SemiBold" FontSize="14" Opacity="0.9" />
-                <Grid ColumnDefinitions="*,Auto" Margin="0,2">
-                  <TextBox Text="{Binding RemotePassword}" PlaceholderText="连接密码（若已记住可直接使用）" PasswordChar="●" Margin="0,0,8,0" />
-                  <CheckBox Grid.Column="1" IsChecked="{Binding RememberPassword}" Content="记住密码" VerticalAlignment="Center" />
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="{DynamicResource RdSpaceXl}">
+                  <StackPanel Spacing="{DynamicResource RdSpaceXs}">
+                    <TextBlock Text="设备代码" Classes="label" />
+                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                      <SelectableTextBlock Text="{Binding LocalDeviceId}"
+                                           FontSize="{DynamicResource RdFontDisplay}" FontWeight="Bold"
+                                           VerticalAlignment="Center" />
+                      <Button x:Name="CopyDeviceCodeButton" Content="复制" Classes="iconButton"
+                              ToolTip.Tip="复制设备代码" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </StackPanel>
+
+                  <!-- The password text is deliberately the element right after its label. -->
+                  <StackPanel Grid.Column="1" Spacing="{DynamicResource RdSpaceXs}">
+                    <TextBlock Text="临时密码" Classes="label" />
+                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                      <SelectableTextBlock Text="{Binding TemporaryPassword}"
+                                           FontSize="{DynamicResource RdFontTitle}"
+                                           VerticalAlignment="Center" />
+                      <Button x:Name="CopyPasswordButton" Content="复制" Classes="iconButton"
+                              ToolTip.Tip="复制临时密码" VerticalAlignment="Center" />
+                      <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </StackPanel>
                 </Grid>
 
-                <!-- 五大功能按钮：目标就是选中的这一行，必须显式传进去 -->
-                <WrapPanel Orientation="Horizontal">
-                  <Button Content="远程控制" Command="{Binding LaunchControlCommand}"
-                          CommandParameter="{Binding SelectedRecentDevice}"
-                          Classes="accent" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-                  <Button Content="观看模式" Command="{Binding LaunchWatchCommand}"
-                          CommandParameter="{Binding SelectedRecentDevice}"
-                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-                  <Button Content="文件传输" Command="{Binding LaunchFileTransferCommand}"
-                          CommandParameter="{Binding SelectedRecentDevice}"
-                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-                  <Button Content="终端" Command="{Binding LaunchTerminalCommand}"
-                          CommandParameter="{Binding SelectedRecentDevice}"
-                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-                  <Button Content="摄像头" Command="{Binding LaunchCameraCommand}"
-                          CommandParameter="{Binding SelectedRecentDevice}"
-                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-                </WrapPanel>
+                <TextBlock Classes="caption" Text="对方在客户端输入这串设备代码和临时密码即可连接本机。" />
+                <TextBlock Classes="caption" Text="{Binding HostDetail}"
+                           IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" />
               </StackPanel>
             </Border>
-          </Grid>
-        </TabItem>
 
-        <!-- Tab 2: 快速连接 -->
-        <TabItem Header="快速连接">
-          <StackPanel Spacing="14" Margin="0,12,0,0">
-            <TextBlock Text="输入伙伴设备代码与密码" FontSize="15" FontWeight="SemiBold" />
-            <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="伙伴设备代码 (如 123 456 789)" />
-            <TextBox Text="{Binding RemotePassword}" PlaceholderText="密码" PasswordChar="●" />
-            <CheckBox IsChecked="{Binding RememberPassword}" Content="记住该设备并保存密码" />
+            <!-- 最近连接 -->
+            <Border Classes="card" VerticalAlignment="Top">
+              <Grid RowDefinitions="Auto,Auto,*" RowSpacing="{DynamicResource RdSpaceMd}">
 
-            <TextBlock Text="选择发起的功能：" Opacity="0.8" Margin="0,6,0,0" />
-            <WrapPanel Orientation="Horizontal">
-              <!-- 这里不传 CommandParameter：目标就是上面输入的设备代码 -->
-              <Button Content="远程控制" Command="{Binding LaunchControlCommand}" Classes="accent" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-              <Button Content="观看模式" Command="{Binding LaunchWatchCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-              <Button Content="文件传输" Command="{Binding LaunchFileTransferCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-              <Button Content="终端" Command="{Binding LaunchTerminalCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-              <Button Content="摄像头" Command="{Binding LaunchCameraCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
-            </WrapPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="{DynamicResource RdSpaceSm}">
+                  <TextBlock Text="最近连接" Classes="sectionHeader" VerticalAlignment="Center" />
+                  <!-- Applies to the selected card; the card's own buttons pass themselves, so this only ever
+                       feeds the device that is selected when they are clicked. -->
+                  <TextBox Grid.Column="1" Text="{Binding RemotePassword}" PasswordChar="●"
+                           PlaceholderText="连接密码" MinWidth="170" VerticalAlignment="Center" />
+                  <CheckBox Grid.Column="2" IsChecked="{Binding RememberPassword}" Content="记住密码"
+                            VerticalAlignment="Center" />
+                  <Button Grid.Column="3" Content="刷新" Command="{Binding RefreshRecentDevicesCommand}"
+                          VerticalAlignment="Center" />
+                </Grid>
 
-            <Button Content="断开当前连接" Command="{Binding DisconnectCommand}" HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Center"
-                    IsVisible="{Binding IsConnected}" Margin="0,8,0,0" />
+                <!-- Empty state -->
+                <StackPanel Grid.Row="1" Spacing="{DynamicResource RdSpaceSm}" Margin="0,24"
+                            IsVisible="{Binding !HasRecentDevices}">
+                  <TextBlock Text="暂无最近连接过的设备" FontSize="{DynamicResource RdFontSubtitle}"
+                             Classes="secondary" HorizontalAlignment="Center" />
+                  <TextBlock Text="在“快速连接”中发起连接后将自动记录到设备列表" Classes="caption"
+                             HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Cards: one selectable row each, all five features one click away. -->
+                <ListBox Grid.Row="2" x:Name="DeviceList" Classes="deviceGrid"
+                         ItemsSource="{Binding RecentDevices}"
+                         SelectedItem="{Binding SelectedRecentDevice}"
+                         IsVisible="{Binding HasRecentDevices}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                  <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel Orientation="Horizontal" ItemWidth="420" />
+                    </ItemsPanelTemplate>
+                  </ListBox.ItemsPanel>
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:RecentDeviceItemViewModel">
+                      <StackPanel Spacing="{DynamicResource RdSpaceSm}">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold"
+                                     FontSize="{DynamicResource RdFontSubtitle}"
+                                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                     IsVisible="{Binding !IsEditingAlias}" />
+                          <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                      Spacing="{DynamicResource RdSpaceXs}" IsVisible="{Binding !IsEditingAlias}">
+                            <Button Content="重命名" Classes="iconButton" Command="{Binding StartEditAliasCommand}" />
+                            <Button Content="删除" Classes="iconButton" Command="{Binding RemoveCommand}" />
+                          </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="{Binding LastConnectedText}" Classes="caption"
+                                   IsVisible="{Binding !IsEditingAlias}" />
+
+                        <StackPanel Spacing="{DynamicResource RdSpaceSm}" IsVisible="{Binding IsEditingAlias}">
+                          <TextBox Text="{Binding NewAlias}" PlaceholderText="设备别名/备注" />
+                          <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceXs}">
+                            <Button Content="保存" Command="{Binding SaveAliasCommand}" />
+                            <Button Content="取消" Command="{Binding CancelEditAliasCommand}" />
+                          </StackPanel>
+                        </StackPanel>
+
+                        <!-- Each button passes its own card, never the selected row: the commands deliberately have
+                             no fallback to the typed code. -->
+                        <WrapPanel IsVisible="{Binding !IsEditingAlias}">
+                          <Button Content="远程控制" Classes="accent feature" Margin="0,0,6,0"
+                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).LaunchControlCommand}"
+                                  CommandParameter="{Binding}" />
+                          <Button Content="观看模式" Classes="feature" Margin="0,0,6,0"
+                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).LaunchWatchCommand}"
+                                  CommandParameter="{Binding}" />
+                          <Button Content="文件传输" Classes="feature" Margin="0,0,6,0"
+                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).LaunchFileTransferCommand}"
+                                  CommandParameter="{Binding}" />
+                          <Button Content="终端" Classes="feature" Margin="0,0,6,0"
+                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).LaunchTerminalCommand}"
+                                  CommandParameter="{Binding}" />
+                          <Button Content="摄像头" Classes="feature"
+                                  Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).LaunchCameraCommand}"
+                                  CommandParameter="{Binding}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Grid>
+            </Border>
           </StackPanel>
-        </TabItem>
-      </TabControl>
-    </Border>
+        </ScrollViewer>
+      </TabItem>
 
-    <!-- Bottom Status Bar -->
-    <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" Margin="0,16,0,0">
-      <TextBlock Text="{Binding StatusMessage}" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" />
-      <TextBlock Grid.Column="1" Text="{Binding ServerStatus}" Opacity="0.6" Margin="16,0,0,0" VerticalAlignment="Center" />
-    </Grid>
-  </Grid>
+      <!-- ============================ 快速连接 ============================ -->
+      <TabItem AutomationProperties.Name="快速连接">
+        <TabItem.Header>
+          <StackPanel Spacing="{DynamicResource RdSpaceXs}" HorizontalAlignment="Center">
+            <TextBlock Text="⚡" FontSize="20" HorizontalAlignment="Center" />
+            <TextBlock Text="快速连接" FontSize="{DynamicResource RdFontCaption}" HorizontalAlignment="Center" />
+          </StackPanel>
+        </TabItem.Header>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+          <Border Classes="card" MaxWidth="520" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16,0,0,16">
+            <StackPanel Spacing="{DynamicResource RdSpaceMd}">
+              <TextBlock Text="输入伙伴设备代码与密码" Classes="sectionHeader" />
+
+              <!-- The device code box stays first and the password box second: the UI Automation checks on this
+                   machine reach them by position on this page. -->
+              <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="伙伴设备代码 (如 123 456 789)" />
+              <TextBox Text="{Binding RemotePassword}" PasswordChar="●" PlaceholderText="密码" />
+              <CheckBox IsChecked="{Binding RememberPassword}" Content="记住该设备并保存密码" />
+
+              <TextBlock Text="选择发起的功能：" Classes="label" Margin="0,4,0,0" />
+              <!-- No CommandParameter here: the target is the code typed above, not any device list row. -->
+              <WrapPanel>
+                <Button Content="远程控制" Classes="accent feature" Margin="0,0,6,6"
+                        Command="{Binding LaunchControlCommand}" />
+                <Button Content="观看模式" Classes="feature" Margin="0,0,6,6"
+                        Command="{Binding LaunchWatchCommand}" />
+                <Button Content="文件传输" Classes="feature" Margin="0,0,6,6"
+                        Command="{Binding LaunchFileTransferCommand}" />
+                <Button Content="终端" Classes="feature" Margin="0,0,6,6"
+                        Command="{Binding LaunchTerminalCommand}" />
+                <Button Content="摄像头" Classes="feature" Margin="0,0,6,6"
+                        Command="{Binding LaunchCameraCommand}" />
+              </WrapPanel>
+
+              <Button Content="断开当前连接" Command="{Binding DisconnectCommand}" IsVisible="{Binding IsConnected}"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,8,0,0" />
+            </StackPanel>
+          </Border>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ============================ 设置 ============================ -->
+      <TabItem AutomationProperties.Name="设置">
+        <TabItem.Header>
+          <StackPanel Spacing="{DynamicResource RdSpaceXs}" HorizontalAlignment="Center">
+            <TextBlock Text="⚙" FontSize="20" HorizontalAlignment="Center" />
+            <TextBlock Text="设置" FontSize="{DynamicResource RdFontCaption}" HorizontalAlignment="Center" />
+          </StackPanel>
+        </TabItem.Header>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="{DynamicResource RdSpaceLg}" Margin="16,0,0,16" MaxWidth="720"
+                      HorizontalAlignment="Left" VerticalAlignment="Top">
+
+            <!-- 固定密码 (unattended access) -->
+            <Border Classes="card">
+              <StackPanel Spacing="{DynamicResource RdSpaceMd}">
+                <TextBlock Text="固定密码（无人值守）" Classes="sectionHeader" />
+                <TextBlock Classes="caption"
+                           Text="设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。" />
+
+                <StackPanel Spacing="{DynamicResource RdSpaceSm}">
+                  <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}"
+                              IsVisible="{Binding !IsEditingFixedPassword}">
+                    <TextBlock Text="{Binding FixedPasswordStatus}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource RdAccentBrush}" />
+                    <Button Content="设置" Command="{Binding OpenFixedPasswordEditorCommand}"
+                            IsVisible="{Binding !HasFixedPassword}" />
+                    <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}"
+                            IsVisible="{Binding HasFixedPassword}" />
+                    <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}"
+                            IsVisible="{Binding HasFixedPassword}" />
+                  </StackPanel>
+
+                  <Border Classes="inset" IsVisible="{Binding IsEditingFixedPassword}">
+                    <StackPanel Spacing="{DynamicResource RdSpaceSm}">
+                      <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●"
+                               PlaceholderText="输入新固定密码（至少 6 位）" />
+                      <TextBlock Text="{Binding FixedPasswordError}" Classes="danger"
+                                 IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                        <Button Content="保存" Command="{Binding SaveFixedPasswordCommand}" Classes="accent" />
+                        <Button Content="取消" Command="{Binding CancelFixedPasswordEditorCommand}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- 服务器与托管 -->
+            <Border Classes="card">
+              <StackPanel Spacing="{DynamicResource RdSpaceMd}">
+                <TextBlock Text="服务器与托管" Classes="sectionHeader" />
+                <StackPanel Spacing="{DynamicResource RdSpaceXs}">
+                  <TextBlock Text="连接状态" Classes="label" />
+                  <TextBlock Text="{Binding ServerStatus}" />
+                </StackPanel>
+                <StackPanel Spacing="{DynamicResource RdSpaceXs}"
+                            IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <TextBlock Text="被控端托管方式" Classes="label" />
+                  <TextBlock Text="{Binding HostDetail}" />
+                </StackPanel>
+                <TextBlock Classes="caption"
+                           Text="两台机器必须连同一台服务器。安装时用 RENDEZVOUSURI=ws://服务器地址:5080/ws 指定，或改 appsettings.json 里的 Transport:RendezvousUri 后重启服务（见 docs/deployment.md）。" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
 </Window>

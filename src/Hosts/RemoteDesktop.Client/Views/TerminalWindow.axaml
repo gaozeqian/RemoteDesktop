@@ -6,22 +6,25 @@
         x:DataType="vm:TerminalWindowViewModel"
         Title="远程终端"
         Icon="/Assets/icon.ico"
+        Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="1000" Height="640" MinWidth="480" MinHeight="300">
   <DockPanel>
-    <Border DockPanel.Dock="Top" Padding="8,6" Background="#202020">
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="Shell" Foreground="#DDFFFFFF" VerticalAlignment="Center" />
-        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" MinWidth="140" />
-        <Button Content="新建标签" Command="{Binding NewTabCommand}" />
-        <TextBlock Text="{Binding Message}" Foreground="OrangeRed" VerticalAlignment="Center" />
+    <Border DockPanel.Dock="Top" Classes="toolbar">
+      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+        <TextBlock Text="Shell" Classes="secondary" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" MinWidth="140"
+                  VerticalAlignment="Center" />
+        <Button Content="新建标签" Command="{Binding NewTabCommand}" VerticalAlignment="Center" />
+        <Border Classes="toolbarSeparator" />
+        <TextBlock Text="{Binding Message}" Classes="danger" VerticalAlignment="Center" />
       </StackPanel>
     </Border>
     <TabControl ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" Padding="0">
       <TabControl.ItemTemplate>
         <DataTemplate x:DataType="vm:TerminalTabViewModel">
-          <StackPanel Orientation="Horizontal" Spacing="8">
+          <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
             <TextBlock Text="{Binding Title}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
-            <Button Content="✕" Command="{Binding CloseCommand}" Padding="4,0" MinHeight="0" Background="Transparent" BorderThickness="0" />
+            <Button Content="✕" Command="{Binding CloseCommand}" Classes="iconButton" MinHeight="0" VerticalAlignment="Center" />
           </StackPanel>
         </DataTemplate>
       </TabControl.ItemTemplate>
