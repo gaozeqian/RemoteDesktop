@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVideoEncoderFactory>(new MediaFoundationH264EncoderFactory(hardware: true));
         services.AddSingleton<IVideoEncoderFactory>(new MediaFoundationH264EncoderFactory(hardware: false));
         services.AddSingleton<IVideoDecoderFactory, MediaFoundationH264DecoderFactory>();
+        services.AddSingleton<IVideoRecorderFactory, Recording.MfVideoRecorderFactory>();
         services.AddSingleton<ISystemKeepAwake, WindowsKeepAwake>();
         return services;
     }

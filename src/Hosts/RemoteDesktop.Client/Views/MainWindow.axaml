@@ -5,87 +5,181 @@
         x:DataType="vm:MainWindowViewModel"
         Title="Remote Desktop"
         Icon="/Assets/icon.ico"
-        Width="760" Height="500" MinWidth="640" MinHeight="460">
-  <Grid ColumnDefinitions="*,*" RowDefinitions="*,Auto" Margin="24">
-    <!-- This device -->
-    <Border Grid.Column="0" Margin="0,0,12,0" Padding="20" CornerRadius="8"
+        Width="960" Height="640" MinWidth="860" MinHeight="560">
+  <Grid ColumnDefinitions="360,*" RowDefinitions="*,Auto" Margin="20">
+    <!-- This device (Left column) -->
+    <Border Grid.Column="0" Margin="0,0,10,0" Padding="18" CornerRadius="8"
             Background="{StaticResource CardBackgroundBrush}">
-      <StackPanel Spacing="12">
-        <TextBlock Text="允许控制本设备" FontSize="18" FontWeight="SemiBold" />
-        <TextBlock Text="设备代码" Opacity="0.7" />
-        <SelectableTextBlock Text="{Binding LocalDeviceId}" FontSize="28" FontWeight="Bold" />
-        <TextBlock Text="临时密码" Opacity="0.7" />
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
-          <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
-        </StackPanel>
-
-        <!-- 固定密码 (无人值守) -->
-        <TextBlock Text="固定密码（无人值守）" Opacity="0.7" />
-        <StackPanel Spacing="6">
-          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !IsEditingFixedPassword}">
-            <SelectableTextBlock Text="{Binding FixedPasswordStatus}" FontSize="15" VerticalAlignment="Center"
-                                 Foreground="{DynamicResource SystemAccentColor}" />
-            <Button Content="设置" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding !HasFixedPassword}" />
-            <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding HasFixedPassword}" />
-            <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}" IsVisible="{Binding HasFixedPassword}" />
+      <ScrollViewer>
+        <StackPanel Spacing="12">
+          <TextBlock Text="允许控制本设备" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock Text="设备代码" Opacity="0.7" />
+          <SelectableTextBlock Text="{Binding LocalDeviceId}" FontSize="26" FontWeight="Bold" />
+          <TextBlock Text="临时密码" Opacity="0.7" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <SelectableTextBlock Text="{Binding TemporaryPassword}" FontSize="20" VerticalAlignment="Center" />
+            <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" />
           </StackPanel>
 
-          <!-- 密码编辑内嵌面板 -->
-          <Border Background="#15FFFFFF" CornerRadius="6" Padding="10" IsVisible="{Binding IsEditingFixedPassword}">
-            <StackPanel Spacing="8">
-              <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●" PlaceholderText="输入新固定密码（至少 6 位）" />
-              <TextBlock Text="{Binding FixedPasswordError}" Foreground="OrangeRed" FontSize="12"
-                         IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="保存" Command="{Binding SaveFixedPasswordCommand}" />
-                <Button Content="取消" Command="{Binding CancelFixedPasswordEditorCommand}" />
-              </StackPanel>
+          <!-- 固定密码 (无人值守) -->
+          <TextBlock Text="固定密码（无人值守）" Opacity="0.7" />
+          <StackPanel Spacing="6">
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !IsEditingFixedPassword}">
+              <SelectableTextBlock Text="{Binding FixedPasswordStatus}" FontSize="14" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource SystemAccentColor}" />
+              <Button Content="设置" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding !HasFixedPassword}" />
+              <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}" IsVisible="{Binding HasFixedPassword}" />
+              <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}" IsVisible="{Binding HasFixedPassword}" />
             </StackPanel>
-          </Border>
-        </StackPanel>
-        <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
-        <!-- No device code means no server: say so where the code would be, instead of leaving an empty field. -->
-        <TextBlock Text="{Binding ServerHint}" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}"
-                   Foreground="OrangeRed" FontSize="12" TextWrapping="Wrap" />
-        <ItemsControl ItemsSource="{Binding IncomingSessions}" IsVisible="{Binding HasIncoming}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:HostSessionItem">
-              <StackPanel Spacing="6" Margin="0,4,0,0">
-                <TextBlock Text="{Binding Description}" Foreground="{DynamicResource SystemAccentColor}" TextWrapping="Wrap" />
-                <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}" Foreground="OrangeRed" FontWeight="SemiBold" />
+
+            <!-- 密码编辑内嵌面板 -->
+            <Border Background="#15FFFFFF" CornerRadius="6" Padding="10" IsVisible="{Binding IsEditingFixedPassword}">
+              <StackPanel Spacing="8">
+                <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●" PlaceholderText="输入新固定密码（至少 6 位）" />
+                <TextBlock Text="{Binding FixedPasswordError}" Foreground="OrangeRed" FontSize="12"
+                           IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button Content="关闭摄像头" Command="{Binding StopCameraCommand}" IsVisible="{Binding CameraActive}" />
-                  <Button Content="仅观看" Command="{Binding DowngradeCommand}" IsVisible="{Binding CanDowngrade}" />
-                  <Button Content="断开" Command="{Binding DisconnectCommand}" />
+                  <Button Content="保存" Command="{Binding SaveFixedPasswordCommand}" />
+                  <Button Content="取消" Command="{Binding CancelFixedPasswordEditorCommand}" />
                 </StackPanel>
               </StackPanel>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <TextBlock Text="{Binding HostDetail}" IsVisible="{Binding HostDetail, Converter={x:Static ObjectConverters.IsNotNull}}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding ServerHint}" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}"
+                     Foreground="OrangeRed" FontSize="12" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding IncomingSessions}" IsVisible="{Binding HasIncoming}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:HostSessionItem">
+                <StackPanel Spacing="6" Margin="0,4,0,0">
+                  <TextBlock Text="{Binding Description}" Foreground="{DynamicResource SystemAccentColor}" TextWrapping="Wrap" />
+                  <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}" Foreground="OrangeRed" FontWeight="SemiBold" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="关闭摄像头" Command="{Binding StopCameraCommand}" IsVisible="{Binding CameraActive}" />
+                    <Button Content="仅观看" Command="{Binding DowngradeCommand}" IsVisible="{Binding CanDowngrade}" />
+                    <Button Content="断开" Command="{Binding DisconnectCommand}" />
+                  </StackPanel>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </ScrollViewer>
     </Border>
 
-    <!-- Remote device -->
-    <Border Grid.Column="1" Margin="12,0,0,0" Padding="20" CornerRadius="8"
+    <!-- Remote device & Device List (Right column) -->
+    <Border Grid.Column="1" Margin="10,0,0,0" Padding="18" CornerRadius="8"
             Background="{StaticResource CardBackgroundBrush}">
-      <StackPanel Spacing="12">
-        <TextBlock Text="远程控制设备" FontSize="18" FontWeight="SemiBold" />
-        <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="伙伴设备代码" />
-        <TextBox Text="{Binding RemotePassword}" PlaceholderText="密码" PasswordChar="●" />
-        <CheckBox IsChecked="{Binding IsWatchMode}" Content="观看模式（只看不控）" />
-        <Button Content="连接" Command="{Binding ConnectCommand}" HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Center" Classes="accent"
-                IsVisible="{Binding !IsConnected}" />
-        <Button Content="断开" Command="{Binding DisconnectCommand}" HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Center"
-                IsVisible="{Binding IsConnected}" />
-      </StackPanel>
+      <TabControl>
+        <!-- Tab 1: 设备列表 -->
+        <TabItem Header="设备列表">
+          <Grid RowDefinitions="*,Auto" Margin="0,12,0,0">
+            <!-- 列表区域 -->
+            <Grid Grid.Row="0">
+              <!-- 空列表提示 -->
+              <Border IsVisible="{Binding !HasRecentDevices}" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="20">
+                <StackPanel Spacing="8" HorizontalAlignment="Center">
+                  <TextBlock Text="暂无最近连接过的设备" FontSize="16" Opacity="0.6" HorizontalAlignment="Center" />
+                  <TextBlock Text="在“快速连接”中发起连接后将自动记录到设备列表" FontSize="12" Opacity="0.4" HorizontalAlignment="Center" />
+                </StackPanel>
+              </Border>
+
+              <!-- 设备列表 -->
+              <ListBox ItemsSource="{Binding RecentDevices}" SelectedItem="{Binding SelectedRecentDevice}"
+                       IsVisible="{Binding HasRecentDevices}" Background="Transparent">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RecentDeviceItemViewModel">
+                    <Border Padding="10,8" Margin="0,2" CornerRadius="6" Background="#10FFFFFF">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <!-- 设备信息展示（非编辑态） -->
+                        <StackPanel Grid.Column="0" Spacing="4" IsVisible="{Binding !IsEditingAlias}">
+                          <TextBlock Text="{Binding DisplayTitle}" FontSize="15" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding LastConnectedText}" FontSize="12" Opacity="0.6" />
+                        </StackPanel>
+
+                        <!-- 编辑别名状态 -->
+                        <StackPanel Grid.Column="0" Spacing="4" Orientation="Horizontal" IsVisible="{Binding IsEditingAlias}">
+                          <TextBox Text="{Binding NewAlias}" PlaceholderText="设备别名/备注" MinWidth="160" />
+                          <Button Content="保存" Command="{Binding SaveAliasCommand}" />
+                          <Button Content="取消" Command="{Binding CancelEditAliasCommand}" />
+                        </StackPanel>
+
+                        <!-- 列表项右侧快捷按钮 -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding !IsEditingAlias}">
+                          <Button Content="重命名" Command="{Binding StartEditAliasCommand}" FontSize="12" Padding="8,4" />
+                          <Button Content="删除" Command="{Binding RemoveCommand}" FontSize="12" Padding="8,4" />
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Grid>
+
+            <!-- 选中设备的单独功能操作面板 -->
+            <Border Grid.Row="1" Margin="0,12,0,0" Padding="14" CornerRadius="8" Background="#18FFFFFF"
+                    IsVisible="{Binding SelectedRecentDevice, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <StackPanel Spacing="10">
+                <TextBlock Text="对选中设备单独使用功能" FontWeight="SemiBold" FontSize="14" Opacity="0.9" />
+                <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                  <TextBox Text="{Binding RemotePassword}" PlaceholderText="连接密码（若已记住可直接使用）" PasswordChar="●" Margin="0,0,8,0" />
+                  <CheckBox Grid.Column="1" IsChecked="{Binding RememberPassword}" Content="记住密码" VerticalAlignment="Center" />
+                </Grid>
+
+                <!-- 五大功能按钮：目标就是选中的这一行，必须显式传进去 -->
+                <WrapPanel Orientation="Horizontal">
+                  <Button Content="远程控制" Command="{Binding LaunchControlCommand}"
+                          CommandParameter="{Binding SelectedRecentDevice}"
+                          Classes="accent" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+                  <Button Content="观看模式" Command="{Binding LaunchWatchCommand}"
+                          CommandParameter="{Binding SelectedRecentDevice}"
+                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+                  <Button Content="文件传输" Command="{Binding LaunchFileTransferCommand}"
+                          CommandParameter="{Binding SelectedRecentDevice}"
+                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+                  <Button Content="终端" Command="{Binding LaunchTerminalCommand}"
+                          CommandParameter="{Binding SelectedRecentDevice}"
+                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+                  <Button Content="摄像头" Command="{Binding LaunchCameraCommand}"
+                          CommandParameter="{Binding SelectedRecentDevice}"
+                          Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- Tab 2: 快速连接 -->
+        <TabItem Header="快速连接">
+          <StackPanel Spacing="14" Margin="0,12,0,0">
+            <TextBlock Text="输入伙伴设备代码与密码" FontSize="15" FontWeight="SemiBold" />
+            <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="伙伴设备代码 (如 123 456 789)" />
+            <TextBox Text="{Binding RemotePassword}" PlaceholderText="密码" PasswordChar="●" />
+            <CheckBox IsChecked="{Binding RememberPassword}" Content="记住该设备并保存密码" />
+
+            <TextBlock Text="选择发起的功能：" Opacity="0.8" Margin="0,6,0,0" />
+            <WrapPanel Orientation="Horizontal">
+              <!-- 这里不传 CommandParameter：目标就是上面输入的设备代码 -->
+              <Button Content="远程控制" Command="{Binding LaunchControlCommand}" Classes="accent" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+              <Button Content="观看模式" Command="{Binding LaunchWatchCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+              <Button Content="文件传输" Command="{Binding LaunchFileTransferCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+              <Button Content="终端" Command="{Binding LaunchTerminalCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+              <Button Content="摄像头" Command="{Binding LaunchCameraCommand}" Margin="0,0,8,6" MinWidth="85" HorizontalContentAlignment="Center" />
+            </WrapPanel>
+
+            <Button Content="断开当前连接" Command="{Binding DisconnectCommand}" HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    IsVisible="{Binding IsConnected}" Margin="0,8,0,0" />
+          </StackPanel>
+        </TabItem>
+      </TabControl>
     </Border>
 
+    <!-- Bottom Status Bar -->
     <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" Margin="0,16,0,0">
-      <TextBlock Text="{Binding StatusMessage}" Opacity="0.8" TextWrapping="Wrap" />
-      <TextBlock Grid.Column="1" Text="{Binding ServerStatus}" Opacity="0.6" Margin="16,0,0,0" />
+      <TextBlock Text="{Binding StatusMessage}" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="1" Text="{Binding ServerStatus}" Opacity="0.6" Margin="16,0,0,0" VerticalAlignment="Center" />
     </Grid>
   </Grid>
 </Window>

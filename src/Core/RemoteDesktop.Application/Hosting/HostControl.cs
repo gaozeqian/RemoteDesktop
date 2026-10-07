@@ -18,7 +18,6 @@ public sealed record HostSessionInfo(string Id, string Controller, string Mode, 
 /// <param name="ServerState">Offline, Connecting or Online.</param>
 /// <param name="AgentState">What the session agent is doing (service only), e.g. <c>Running (Secure)</c>.</param>
 /// <param name="IsService">True when the host runs in the background service rather than inside the UI.</param>
-/// <param name="CameraAllowed">The person at this computer let controllers use the camera (off until they say so).</param>
 /// <param name="HasFixedPassword">Whether a fixed password for unattended access has been configured.</param>
 /// <param name="RendezvousUri">The signaling server this device is configured to use, shown when it cannot be reached.</param>
 public sealed record HostStatus(
@@ -28,7 +27,6 @@ public sealed record HostStatus(
     IReadOnlyList<HostSessionInfo> Sessions,
     string? AgentState,
     bool IsService,
-    bool CameraAllowed = false,
     bool HasFixedPassword = false,
     string? RendezvousUri = null);
 
@@ -47,9 +45,6 @@ public interface IHostControl
 
     /// <summary>Ends a running session.</summary>
     Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken);
-
-    /// <summary>Lets controllers use this computer's camera, or not. Turning it off ends camera use in running sessions at once.</summary>
-    Task SetCameraAllowedAsync(bool allowed, CancellationToken cancellationToken);
 
     /// <summary>Stops one session's camera use, keeping the session.</summary>
     Task StopCameraAsync(string sessionId, CancellationToken cancellationToken);
@@ -88,7 +83,6 @@ public sealed class LocalHostControl(
             active,
             agentState,
             isService,
-            credentials.AllowedPermissions.HasFlag(Permissions.Camera),
             !string.IsNullOrEmpty(credentials.FixedPassword),
             rendezvousUri));
     }
@@ -115,20 +109,6 @@ public sealed class LocalHostControl(
         }
 
         return Task.CompletedTask;
-    }
-
-    public async Task SetCameraAllowedAsync(bool allowed, CancellationToken cancellationToken)
-    {
-        credentials.AllowedPermissions = HostPolicy.WithCamera(credentials.AllowedPermissions, allowed);
-        if (secrets is not null)
-        {
-            HostPolicy.SaveCameraAllowed(secrets, allowed);
-        }
-
-        if (!allowed)
-        {
-            await sessions.RevokeFromAllAsync(Permissions.Camera, cancellationToken).ConfigureAwait(false);
-        }
     }
 
     public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken)

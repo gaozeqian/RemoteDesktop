@@ -76,6 +76,18 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     public CameraDetails? Details { get; private set; }
 
+    /// <summary>Total number of frames decoded so far. Zero means the stream is up but no picture has arrived.</summary>
+    public long FrameNumber
+    {
+        get
+        {
+            lock (_frameLock)
+            {
+                return _frameNumber;
+            }
+        }
+    }
+
     public CameraStatistics Statistics { get; private set; } = new(0, 0, 0, null);
 
     /// <summary>Why the stream ended, when the host (not the user) ended it: the camera was unplugged, taken by another program, or access was withdrawn.</summary>

@@ -24,7 +24,6 @@ public class HostControlTests
         Assert.Equal("pw-1", status.TemporaryPassword);
         Assert.Equal([new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)], status.Sessions);
         Assert.False(status.HasFixedPassword);
-        Assert.True(status.CameraAllowed);
         Assert.True(status.IsService);
 
         await client.RotateTemporaryPasswordAsync(Ct);
@@ -77,7 +76,7 @@ public class HostControlTests
     }
 
     [Fact]
-    public async Task The_ui_can_allow_the_camera_and_stop_it_for_one_session()
+    public async Task The_ui_can_stop_the_camera_of_one_session()
     {
         var control = new FakeHostControl();
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
@@ -85,15 +84,9 @@ public class HostControlTests
         var server = Serve(pipeName, control, stop.Token);
         var client = new PipeHostControl(pipeName);
 
-        Assert.True((await client.GetStatusAsync(Ct)).CameraAllowed);
         await client.StopCameraAsync("session-3", Ct);
-        await client.SetCameraAllowedAsync(false, Ct);
 
         Assert.Equal(["session-3"], control.CameraStopped);
-        Assert.False((await client.GetStatusAsync(Ct)).CameraAllowed);
-
-        await client.SetCameraAllowedAsync(true, Ct);
-        Assert.True((await client.GetStatusAsync(Ct)).CameraAllowed);
 
         await stop.CancelAsync();
         await server;
@@ -179,7 +172,6 @@ public class HostControlTests
                 [new HostSessionInfo("abc", "987 654 321", "view", "direct", CameraActive: true)],
                 "Running (User)",
                 true,
-                CameraAllowed,
                 !string.IsNullOrEmpty(FixedPassword)));
 
         public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
@@ -200,15 +192,7 @@ public class HostControlTests
 
         public List<string> Disconnected { get; } = [];
 
-        public bool CameraAllowed { get; private set; } = true;
-
         public List<string> CameraStopped { get; } = [];
-
-        public Task SetCameraAllowedAsync(bool allowed, CancellationToken cancellationToken)
-        {
-            CameraAllowed = allowed;
-            return Task.CompletedTask;
-        }
 
         public Task StopCameraAsync(string sessionId, CancellationToken cancellationToken)
         {

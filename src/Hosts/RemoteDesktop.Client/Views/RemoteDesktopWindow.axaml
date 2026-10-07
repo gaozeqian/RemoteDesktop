@@ -9,7 +9,11 @@
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="#E0202020" Padding="12,6">
       <Grid ColumnDefinitions="*,Auto">
-        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#DDFFFFFF" FontSize="12" TextTrimming="CharacterEllipsis" />
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+          <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#DDFFFFFF" FontSize="12" TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="{Binding RecordingStatusMessage}" VerticalAlignment="Center" Foreground="#FFCC00" FontSize="12" TextTrimming="CharacterEllipsis"
+                     IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0">
           <ComboBox ItemsSource="{Binding Displays}" SelectedItem="{Binding SelectedDisplay}" IsVisible="{Binding ShowDisplayPicker}"
                     MinWidth="200" FontSize="12">
@@ -20,6 +24,7 @@
             </ComboBox.ItemTemplate>
           </ComboBox>
           <ToggleButton Content="静音" IsChecked="{Binding IsMuted, Mode=OneWay}" Command="{Binding ToggleMuteCommand}" IsVisible="{Binding HasAudio}" />
+          <Button Content="{Binding RecordButtonText}" Command="{Binding ToggleRecordingCommand}" />
           <Button Content="文件" Command="{Binding OpenFilesCommand}" IsVisible="{Binding CanTransferFiles}" />
           <Button Content="终端" Command="{Binding OpenTerminalCommand}" IsVisible="{Binding CanUseTerminal}" />
           <Button Content="摄像头" Command="{Binding OpenCameraCommand}" IsVisible="{Binding CanUseCamera}" />

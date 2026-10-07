@@ -1,12 +1,16 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Runtime.Versioning;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
+using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Protocol.Desktop;
 using RemoteDesktop.Transport;
 
@@ -21,6 +25,12 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     private readonly RemoteSession _session;
     private readonly AudioPlayback? _audio;
     private readonly DispatcherTimer _statusTimer;
+    private readonly DispatcherTimer _recordingTimer;
+    private readonly IVideoRecorderFactory? _recorderFactory;
+    private readonly ILogger _logger;
+    private IVideoRecorder? _recorder;
+    private byte[]? _recordingBuffer;
+    private string? _recordingFileName;
     private InputSender? _input;
     private ClipboardShare? _clipboard;
     private FileManagerViewModel? _files;
@@ -36,13 +46,25 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         InputSender? input,
         AudioPlayback? audio,
         ClipboardShare? clipboard,
-        Func<IPeerConnection, CameraWindowViewModel>? cameraFactory = null)
+        ILogger logger,
+        Func<IPeerConnection, CameraWindowViewModel>? cameraFactory = null,
+        IVideoRecorderFactory? recorderFactory = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(viewer);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _session = session;
+        _logger = logger;
         _cameraFactory = cameraFactory;
+        if (recorderFactory is not null)
+        {
+            _recorderFactory = recorderFactory;
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            _recorderFactory = new MfVideoRecorderFactory();
+        }
         CanUseCamera = session.Context.Grant.Allows(Permissions.Camera) && cameraFactory is not null;
         ShowCameraButton = CanUseCamera;
         Viewer = viewer;
@@ -58,7 +80,10 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => UpdateStatus());
         _statusTimer.Start();
 
+        _recordingTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => UpdateRecordingDuration());
+
         viewer.StreamInfoChanged += (_, _) => Dispatcher.UIThread.Post(UpdateDisplays);
+        viewer.FrameReady += (_, _) => OnFrameReady();
         viewer.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
         session.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
         session.GrantChanged += (_, _) => Dispatcher.UIThread.Post(() => _ = OnGrantChangedAsync());
@@ -113,6 +138,18 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
     [ObservableProperty]
     public partial bool ShowDisplayPicker { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsRecording { get; set; }
+
+    [ObservableProperty]
+    public partial string RecordingDurationText { get; set; } = "00:00";
+
+    [ObservableProperty]
+    public partial string RecordButtonText { get; set; } = "⏺ 录制屏幕";
+
+    [ObservableProperty]
+    public partial string? RecordingStatusMessage { get; set; }
 
     /// <summary>Raised once when the window should close.</summary>
     public event EventHandler? Closed;
@@ -221,6 +258,182 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     }
 
     [RelayCommand]
+    private async Task ToggleRecordingAsync()
+    {
+        if (IsRecording)
+        {
+            _recordingTimer.Stop();
+            var recorder = Interlocked.Exchange(ref _recorder, null);
+            try
+            {
+                if (recorder is not null)
+                {
+                    // Take the picture one last time, so the recording runs to the moment it was stopped rather than
+                    // to the last time the screen changed. The decode thread is already out of the way: the exchange
+                    // above is what it checks.
+                    FeedLatestFrame(recorder);
+                    var savedPath = await recorder.StopAsync();
+                    await recorder.DisposeAsync();
+                    RecordingStatusMessage = $"录制已保存: {savedPath}";
+                }
+            }
+            catch (Exception ex)
+            {
+                // Failing to finalize must not leave the button stuck on "recording", nor take the session down.
+                // The reason is kept: a generic sentence here is what makes this failure impossible to place.
+                LogRecordingStopFailed(_logger, ex, recorder?.Failure ?? VideoRecorderFailure.None);
+                RecordingStatusMessage = RecordingMessages.StopFailed(recorder?.Failure ?? VideoRecorderFailure.None, ex);
+            }
+            finally
+            {
+                IsRecording = false;
+                RecordButtonText = "⏺ 录制屏幕";
+            }
+
+            return;
+        }
+
+        // FrameNumber, not just StreamInfo: the host announces the stream before it sends a picture, and a recording
+        // started in that gap - or while the picture is still - would have nothing to write into it.
+        if (Viewer.StreamInfo is not { } info || Viewer.FrameNumber == 0)
+        {
+            RecordingStatusMessage = "尚未接收到画面，无法开始录制。";
+            return;
+        }
+
+        if (_recorderFactory is null)
+        {
+            RecordingStatusMessage = "当前系统环境不支持视频录制。";
+            return;
+        }
+
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RemoteDesktop");
+        var filePath = RecordingFile.NextPath(folder, "Screen");
+        var fileName = Path.GetFileName(filePath);
+
+        var newRecorder = _recorderFactory.Create();
+        try
+        {
+            newRecorder.Start(filePath, info.Width, info.Height, 30, 4000);
+        }
+        catch (Exception)
+        {
+            // Media Foundation fails in more ways than can be listed (no encoder, codec refused the size, disk
+            // refused the path). Report it: letting it escape an async command would end the process instead.
+            await newRecorder.DisposeAsync();
+            RecordingStatusMessage = $"无法开始录制（{fileName}）：系统编码器不可用或路径不可写。";
+            return;
+        }
+
+        // Taken before the recorder is published: a still screen would otherwise produce a recording with nothing in
+        // it at all, and this way the decoder's thread cannot be in the same buffer at the same time.
+        FeedLatestFrame(newRecorder);
+
+        _recorder = newRecorder;
+        _recordingFileName = fileName;
+        IsRecording = true;
+        RecordingDurationText = "00:00";
+        RecordButtonText = "⏹ 停止录制 (00:00)";
+        RecordingStatusMessage = $"正在录制: {fileName}";
+        _recordingTimer.Start();
+    }
+
+    private void UpdateRecordingDuration()
+    {
+        if (_recorder is not { IsRecording: true } recorder)
+        {
+            return;
+        }
+
+        var dur = recorder.Duration;
+        RecordingDurationText = dur.ToString(dur.TotalHours >= 1 ? @"hh\:mm\:ss" : @"mm\:ss", CultureInfo.InvariantCulture);
+        RecordButtonText = $"⏹ 停止录制 ({RecordingDurationText})";
+
+        if (RecordingMessages.Interrupted(recorder.Failure) is { } interrupted)
+        {
+            // The file has stopped growing: close it and say so, rather than leave a clock counting over it.
+            _recordingTimer.Stop();
+            if (Interlocked.CompareExchange(ref _recorder, null, recorder) == recorder)
+            {
+                _ = StopAfterFailureAsync(recorder, interrupted);
+            }
+
+            return;
+        }
+
+        RecordingStatusMessage = $"正在录制: {_recordingFileName} · {recorder.WrittenFrames} 帧";
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stopping the screen recording failed ({Failure}).")]
+    private static partial void LogRecordingStopFailed(ILogger logger, Exception ex, VideoRecorderFailure failure);
+
+    /// <summary>Closes a recording the encoder gave up on, and tells the user where it got to.</summary>
+    private async Task StopAfterFailureAsync(IVideoRecorder recorder, string interrupted)
+    {
+        var saved = false;
+        try
+        {
+            await recorder.StopAsync();
+            await recorder.DisposeAsync();
+            saved = true;
+        }
+        catch (Exception)
+        {
+            // The message below already says the recording ended early; there is nothing to add.
+        }
+        finally
+        {
+            IsRecording = false;
+            RecordButtonText = "⏺ 录制屏幕";
+        }
+
+        RecordingStatusMessage = saved ? $"{interrupted} 已保存到 {recorder.OutputFilePath}" : interrupted;
+    }
+
+    private void OnFrameReady()
+    {
+        // This runs on the decoder's thread while the stop button runs on the UI thread: take the recorder once and
+        // use that reference throughout, or a stop landing in the middle of the copy below dereferences null.
+        var recorder = _recorder;
+        if (!IsRecording || recorder is null)
+        {
+            return;
+        }
+
+        FeedLatestFrame(recorder);
+    }
+
+    /// <summary>
+    /// Copies what the window is showing right now into a recording. The host sends a frame only when the picture
+    /// changes, so this is what keeps a recording continuous: it is called when one starts, on every decoded frame,
+    /// and once more when one is stopped, which is where a still screen would otherwise lose the most.
+    /// </summary>
+    private void FeedLatestFrame(IVideoRecorder recorder)
+    {
+        if (Viewer.StreamInfo is not { } info)
+        {
+            return;
+        }
+
+        var rowBytes = info.Width * 4;
+        var requiredSize = rowBytes * info.Height;
+        // Held in a local: the decoder's thread and the UI thread can both be here, and the frame that gets recorded
+        // has to be the one that was copied into.
+        var buffer = _recordingBuffer;
+        if (buffer is null || buffer.Length != requiredSize)
+        {
+            buffer = new byte[requiredSize];
+            _recordingBuffer = buffer;
+        }
+
+        if (Viewer.CopyLatestFrame(buffer, rowBytes, info.Width, info.Height) >= 0)
+        {
+            // A recorder stopped meanwhile ignores the frame; it is never disposed while a frame is in flight.
+            recorder.RecordFrame(buffer, rowBytes, info.Width, info.Height);
+        }
+    }
+
+    [RelayCommand]
     private void ToggleMute()
     {
         IsMuted = !IsMuted;
@@ -245,6 +458,22 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     public async ValueTask DisposeAsync()
     {
         _statusTimer.Stop();
+        _recordingTimer.Stop();
+        if (_recorder is not null)
+        {
+            try
+            {
+                await _recorder.StopAsync();
+                await _recorder.DisposeAsync();
+            }
+            catch
+            {
+                // Ignore recording stop errors on forced shutdown
+            }
+
+            _recorder = null;
+        }
+
         await ReleaseFileManagerAsync();
         await ReleaseTerminalAsync();
         await ReleaseCameraAsync();

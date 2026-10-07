@@ -26,8 +26,13 @@
           </ComboBox>
           <Button Content="开始" Command="{Binding StartCommand}" Classes="accent" />
           <Button Content="停止" Command="{Binding StopCommand}" />
+          <Button Content="{Binding RecordButtonText}" Command="{Binding ToggleRecordingCommand}" IsVisible="{Binding IsStreaming}" />
         </StackPanel>
-        <TextBlock Text="{Binding StatusText}" Foreground="#DDFFFFFF" FontSize="12" IsVisible="{Binding IsStreaming}" TextTrimming="CharacterEllipsis" />
+        <StackPanel Orientation="Horizontal" Spacing="12">
+          <TextBlock Text="{Binding StatusText}" Foreground="#DDFFFFFF" FontSize="12" IsVisible="{Binding IsStreaming}" TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="{Binding RecordingStatusMessage}" Foreground="#FFCC00" FontSize="12" TextTrimming="CharacterEllipsis"
+                     IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
         <TextBlock Text="{Binding Message}" Foreground="OrangeRed" TextWrapping="Wrap" IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </StackPanel>
     </Border>

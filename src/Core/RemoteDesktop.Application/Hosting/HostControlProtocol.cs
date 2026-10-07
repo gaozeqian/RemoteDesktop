@@ -7,9 +7,9 @@ public sealed record HostControlRequest(string Command, string? Argument = null)
 
 /// <summary>
 /// Wire format of the UI ↔ service pipe: one JSON object per line, request then response. Commands are
-/// <see cref="StatusCommand"/> (answered with a <see cref="HostStatus"/>), <see cref="RotateCommand"/>, and
-/// <see cref="DowngradeCommand"/> / <see cref="DisconnectCommand"/> / <see cref="CameraStopCommand"/>, which name a session in the argument,
-/// and <see cref="CameraAllowCommand"/> (argument <c>1</c> or <c>0</c>).
+/// <see cref="StatusCommand"/> (answered with a <see cref="HostStatus"/>), <see cref="RotateCommand"/>,
+/// <see cref="FixedPasswordCommand"/>, and <see cref="DowngradeCommand"/> / <see cref="DisconnectCommand"/> /
+/// <see cref="CameraStopCommand"/>, which name a session in the argument.
 /// </summary>
 public static class HostControlProtocol
 {
@@ -18,7 +18,6 @@ public static class HostControlProtocol
     public const string RotateCommand = "rotate";
     public const string DowngradeCommand = "downgrade";
     public const string DisconnectCommand = "disconnect";
-    public const string CameraAllowCommand = "camera-allow";
     public const string CameraStopCommand = "camera-stop";
     public const string FixedPasswordCommand = "fixed-password";
 

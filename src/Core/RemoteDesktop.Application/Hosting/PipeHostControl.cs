@@ -34,9 +34,6 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     public async Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken) =>
         _ = await RequestAsync<HostControlRequest>(HostControlProtocol.DisconnectCommand, sessionId, cancellationToken).ConfigureAwait(false);
 
-    public async Task SetCameraAllowedAsync(bool allowed, CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.CameraAllowCommand, allowed ? "1" : "0", cancellationToken).ConfigureAwait(false);
-
     public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) =>
         _ = await RequestAsync<HostControlRequest>(HostControlProtocol.CameraStopCommand, sessionId, cancellationToken).ConfigureAwait(false);
 

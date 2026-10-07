@@ -59,7 +59,7 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         await Assert.ThrowsAsync<CameraException>(() => CameraViewer.ListCamerasAsync(pair.Session.Context.Connection, Ct));
 
         // Allowed later, a new session gets it.
-        pair.Host.Credentials.AllowedPermissions = HostPolicy.WithCamera(pair.Host.Credentials.AllowedPermissions, true);
+        pair.Host.Credentials.AllowedPermissions |= Permissions.Camera;
         await using var next = await pair.Controller.Controller.ConnectAsync(pair.Host.Id, pair.Host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
         Assert.True(next.Context.Grant.Allows(Permissions.Camera));
         Assert.NotEmpty(await CameraViewer.ListCamerasAsync(next.Context.Connection, Ct));
@@ -197,27 +197,6 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         Assert.True(pair.Session.Context.Grant.Allows(Permissions.ViewScreen)); // the session itself goes on
         await WaitUntilAsync(() => !pair.Source.Capturing);
         await WaitUntilAsync(() => !control.GetStatusAsync(Ct).GetAwaiter().GetResult().Sessions.Single().CameraActive);
-    }
-
-    [Fact]
-    public async Task Switching_the_camera_off_on_the_host_ends_it_in_every_session()
-    {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
-        var store = new MemorySecrets();
-        await using var pair = await Pair.StartAsync(server, allowCamera: true);
-        var control = new LocalHostControl(pair.Host.Rendezvous, pair.Host.Credentials, pair.Host.HostSessions, null, false, store);
-        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var viewer = await CameraViewer.StartAsync(pair.Session.Context.Connection, CreateCodecs(), "front", Vga, TimeProvider.System, NullLogger.Instance, Ct);
-        viewer.Closed += (_, _) => closed.TrySetResult();
-        Assert.True((await control.GetStatusAsync(Ct)).CameraAllowed);
-
-        await control.SetCameraAllowedAsync(false, Ct);
-
-        await closed.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct);
-        Assert.False((await control.GetStatusAsync(Ct)).CameraAllowed);
-
-        await control.SetCameraAllowedAsync(true, Ct);
-        Assert.True((await control.GetStatusAsync(Ct)).CameraAllowed);
     }
 
     [Fact]

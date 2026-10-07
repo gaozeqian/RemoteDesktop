@@ -3,8 +3,10 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Client.ViewModels;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Features.Desktop;
@@ -41,6 +43,7 @@ internal static class ClientHost
 
         var dataDirectory = builder.Configuration["DataDirectory"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RemoteDesktop");
+        CrashLog.Register(dataDirectory);
         var transport = builder.Configuration.GetSection("Transport").Get<TransportOptions>() ?? new TransportOptions();
 
         var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
@@ -50,6 +53,9 @@ internal static class ClientHost
         builder.Services
             .AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser)
             .AddRemoteDesktopMedia()
+            // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and
+            // gets its own list and remembered passwords) — see docs/device-list-storage.md.
+            .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
             .AddSingleton<MainWindowViewModel>();
 
         if (useService)
