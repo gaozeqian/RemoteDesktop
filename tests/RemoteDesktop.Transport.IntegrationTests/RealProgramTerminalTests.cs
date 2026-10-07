@@ -82,7 +82,7 @@ public sealed class RealProgramTerminalTests : IDisposable
         shell.Type($"\"{Path.Combine(GitBin, "vim.exe")}\" \"{file}\"");
         shell.Key(TerminalKey.Enter);
 
-        await shell.WaitUntilAsync(s => s.Emulator.IsAlternateScreen, "the alternate screen");
+        await shell.WaitUntilAsync(s => s.IsAlternateScreen(), "the alternate screen");
         await shell.WaitForAsync("note.txt");
         await shell.WaitUntilAsync(s => s.Screen().Split('\n').Count(l => l == "~") >= 20, "the empty-buffer markers down the left edge");
 
@@ -92,7 +92,7 @@ public sealed class RealProgramTerminalTests : IDisposable
         shell.Type(":wq");
         shell.Key(TerminalKey.Enter);
 
-        await shell.WaitUntilAsync(s => !s.Emulator.IsAlternateScreen, "the normal screen again");
+        await shell.WaitUntilAsync(s => !s.IsAlternateScreen(), "the normal screen again");
         await shell.WaitForAsync("before vim");
         Assert.Equal("hello from vim 你好", (await File.ReadAllTextAsync(file, Ct)).Trim());
     }
@@ -113,14 +113,14 @@ public sealed class RealProgramTerminalTests : IDisposable
         await shell.WaitForAsync("line number 40");
         shell.Control('f'); // scroll forward a page
         await shell.WaitUntilAsync(s => s.Screen().Split('\n')[0] == "line number 53", "the second page");
-        var rowBefore = shell.Emulator.CursorRow;
+        var rowBefore = shell.CursorRow();
         shell.Key(TerminalKey.Down);
-        await shell.WaitUntilAsync(s => s.Emulator.CursorRow == rowBefore + 1, "the cursor moving down");
+        await shell.WaitUntilAsync(s => s.CursorRow() == rowBefore + 1, "the cursor moving down");
 
 
         shell.Type(":q!");
         shell.Key(TerminalKey.Enter);
-        await shell.WaitUntilAsync(s => !s.Emulator.IsAlternateScreen, "leaving vim");
+        await shell.WaitUntilAsync(s => !s.IsAlternateScreen(), "leaving vim");
     }
 
     [Fact]
@@ -134,14 +134,14 @@ public sealed class RealProgramTerminalTests : IDisposable
         shell.Type($"\"{Path.Combine(GitBin, "less.exe")}\" \"{file}\"");
         shell.Key(TerminalKey.Enter);
 
-        await shell.WaitUntilAsync(s => s.Emulator.IsAlternateScreen, "the pager's screen");
+        await shell.WaitUntilAsync(s => s.IsAlternateScreen(), "the pager's screen");
         await shell.WaitForAsync("entry 001");
         shell.Key(TerminalKey.PageDown);
         await shell.WaitForAsync("entry 030");
         shell.Type("G");
         await shell.WaitForAsync("entry 300");
         shell.Type("q");
-        await shell.WaitUntilAsync(s => !s.Emulator.IsAlternateScreen, "leaving the pager");
+        await shell.WaitUntilAsync(s => !s.IsAlternateScreen(), "leaving the pager");
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public sealed class RealProgramTerminalTests : IDisposable
             }
         }, "the file being written");
         shell.Control('x');
-        await shell.WaitUntilAsync(s => !s.Emulator.IsAlternateScreen, "leaving nano");
+        await shell.WaitUntilAsync(s => !s.IsAlternateScreen(), "leaving nano");
     }
 
     /// <summary>A shell in a pseudoconsole whose output is drawn by an emulator, and whose input is encoded the way the UI does.</summary>
@@ -181,6 +181,7 @@ public sealed class RealProgramTerminalTests : IDisposable
     {
         private readonly IPtySession _pty;
         private readonly Task _reader;
+        private Exception? _readerFailure;
 
         private Shell(IPtySession pty, TerminalEmulator emulator)
         {
@@ -200,6 +201,10 @@ public sealed class RealProgramTerminalTests : IDisposable
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
+                    // Disposal ends the loop this way and is expected. Anything else means the screen is frozen
+                    // from here on, which is worth saying out loud: without this a stalled reader is
+                    // indistinguishable from a program that simply never did what the test was waiting for.
+                    _readerFailure = ex;
                 }
             });
         }
@@ -230,7 +235,7 @@ public sealed class RealProgramTerminalTests : IDisposable
 
         public void Type(string text) => Write(TerminalInput.EncodeText(text));
 
-        public void Key(TerminalKey key, TerminalModifiers modifiers = TerminalModifiers.None) => Write(TerminalInput.EncodeKey(key, modifiers, Emulator.ApplicationCursorKeys));
+        public void Key(TerminalKey key, TerminalModifiers modifiers = TerminalModifiers.None) => Write(TerminalInput.EncodeKey(key, modifiers, ApplicationCursorKeys()));
 
         public void Control(char character) => Write(TerminalInput.EncodeControl(character, TerminalModifiers.Control)!);
 
@@ -256,10 +261,47 @@ public sealed class RealProgramTerminalTests : IDisposable
             var deadline = DateTime.UtcNow.AddSeconds(45);
             while (!condition(this))
             {
-                Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}. The screen shows:\n{Screen()}");
+                Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.{Why()} The screen shows:\n{Screen()}");
                 await Task.Delay(50, Ct);
             }
         }
+
+        /// <summary>The cursor row, read the way <see cref="TerminalEmulator"/> requires: under its lock.</summary>
+        public int CursorRow()
+        {
+            lock (Emulator.SyncRoot)
+            {
+                return Emulator.CursorRow;
+            }
+        }
+
+        public bool IsAlternateScreen()
+        {
+            lock (Emulator.SyncRoot)
+            {
+                return Emulator.IsAlternateScreen;
+            }
+        }
+
+        public bool ApplicationCursorKeys()
+        {
+            lock (Emulator.SyncRoot)
+            {
+                return Emulator.ApplicationCursorKeys;
+            }
+        }
+
+        /// <summary>
+        /// What the emulator was doing when a wait ran out. A key the emulator encodes from its application cursor
+        /// key state ("vim ignored the arrow key") and output that stopped arriving ("vim's screen froze") look
+        /// identical in a screen dump, so the two have to be told apart here.
+        /// </summary>
+        private string Why() =>
+            _reader.IsCompleted
+                ? _readerFailure is null
+                    ? " The pseudoconsole had already stopped producing output, so the screen could not change again."
+                    : $" The pseudoconsole output reader stopped: {_readerFailure.Message}"
+                : $" It is still producing output (arrow keys are sent in {(ApplicationCursorKeys() ? "application" : "normal")} mode).";
 
         public async Task<int> ExitCodeAsync() => await _pty.WaitForExitAsync(Ct).WaitAsync(TimeSpan.FromSeconds(20), Ct);
 
