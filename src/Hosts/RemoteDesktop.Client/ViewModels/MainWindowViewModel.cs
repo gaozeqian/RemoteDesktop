@@ -19,6 +19,7 @@ using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Transport;
+using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Client.ViewModels;
 
@@ -31,8 +32,17 @@ public enum StandaloneFeature
     Camera,
 }
 
+/// <summary>One entry of the connection-mode chooser on the home page.</summary>
+public sealed record ConnectionMode(string Label, StandaloneFeature Feature);
+
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    /// <summary>How often the remembered devices are asked about. Well inside the server's per-device budget.</summary>
+    private static readonly TimeSpan PresenceInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>Ids per query, so a long list stays one or two messages rather than one big one.</summary>
+    private const int PresenceChunkSize = 32;
+
     private readonly IHostControl _hostControl;
     private readonly ControllerSessionService _controller;
     private readonly VideoCodecSelector _codecs;
@@ -43,8 +53,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ILoggerFactory _loggers;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly IRecentDevicesStore _recentDevicesStore;
+    private readonly IRendezvousClient _rendezvous;
     private readonly IVideoRecorderFactory? _recorderFactory;
     private readonly DispatcherTimer _statusTimer;
+    private readonly DispatcherTimer _presenceTimer;
+    private int _presenceInFlight;
     private RemoteSession? _session;
 
     public MainWindowViewModel(
@@ -57,8 +70,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IClipboard clipboard,
         ILoggerFactory loggers,
         IRecentDevicesStore recentDevicesStore,
+        IRendezvousClient rendezvous,
+        ClientEnvironment environment,
+        TransportOptions transport,
         IVideoRecorderFactory? recorderFactory = null)
     {
+        _rendezvous = rendezvous;
         _hostControl = hostControl;
         _controller = controller;
         _codecs = codecs;
@@ -78,9 +95,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _recorderFactory = new MfVideoRecorderFactory();
         }
 
+        SelectedConnectionMode = ConnectionModes[0];
+        DataDirectory = environment.DataDirectory;
+        ClientRendezvousUri = transport.RendezvousUri?.ToString() is { Length: > 0 } uri ? uri : "未配置";
+
         // The host side may live in another process (the background service), so its state is polled rather than observed.
         _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => _ = RefreshHostStatusAsync());
         _statusTimer.Start();
+
+        // Deliberately not the one-second host timer: asking 60 times a minute is six times the server's budget per
+        // device, and the server would throttle the client into a list that is permanently "unknown".
+        _presenceTimer = new DispatcherTimer(PresenceInterval, DispatcherPriority.Background, (_, _) => _ = RefreshPresenceAsync());
+        _presenceTimer.Start();
+        _rendezvous.StateChanged += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            if (_rendezvous.State == RendezvousState.Online)
+            {
+                // A server that has just come back may be a newer build than the one that did not answer.
+                IsPresenceUnavailable = false;
+                _ = RefreshPresenceAsync();
+            }
+        });
+
         _ = RefreshHostStatusAsync();
         _ = LoadRecentDevicesAsync();
     }
@@ -132,8 +168,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(LaunchControlCommand))]
     [NotifyCanExecuteChangedFor(nameof(LaunchWatchCommand))]
-    [NotifyCanExecuteChangedFor(nameof(DisconnectCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
     public partial bool IsConnected { get; set; }
+
+    /// <summary>Where this client keeps its state, shown on the 高级设置 page.</summary>
+    public string DataDirectory { get; }
+
+    /// <summary>The address the host side is actually registered with, when a background service owns it.</summary>
+    [ObservableProperty]
+    public partial string? HostRendezvousUri { get; set; }
+
+    public string ClientVersion { get; } = typeof(MainWindowViewModel).Assembly.GetName().Version?.ToString() ?? "未知";
+
+    /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
+    /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
+    public string ClientRendezvousUri { get; }
+
+    /// <summary>Whether the rail is showing the home page. Drives which page is realised, so the other two are not
+    /// in the automation tree at all.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHomePage))]
+    [NotifyPropertyChangedFor(nameof(IsDeviceListPage))]
+    [NotifyPropertyChangedFor(nameof(IsSettingsPage))]
+    public partial int SelectedPageIndex { get; set; }
+
+    public bool IsHomePage => SelectedPageIndex == 0;
+
+    public bool IsDeviceListPage => SelectedPageIndex == 1;
+
+    public bool IsSettingsPage => SelectedPageIndex == 2;
 
     [ObservableProperty]
     public partial string? StatusMessage { get; set; }
@@ -149,6 +212,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial bool HasRecentDevices { get; set; }
 
+    /// <summary>The server did not answer the last presence query, so every dot is showing "unknown".</summary>
+    [ObservableProperty]
+    public partial bool IsPresenceUnavailable { get; set; }
+
     /// <summary>Raised on the UI thread when a remote desktop window should be shown.</summary>
     public event EventHandler<RemoteDesktopViewModel>? RemoteDesktopOpened;
 
@@ -161,20 +228,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Raised on the UI thread when a standalone camera window should be shown.</summary>
     public event EventHandler<(RemoteSession Session, CameraWindowViewModel Camera)>? StandaloneCameraOpened;
 
-    partial void OnSelectedRecentDeviceChanged(RecentDeviceItemViewModel? value)
-    {
-        if (value is not null)
-        {
-            RemoteDeviceId = value.DeviceId;
-            // Always replaced, including when this device remembers no password: leaving the previous device's
-            // password in the box would send it to this one, and then save it under this one's code.
-            RemotePassword = value.SavedPassword ?? string.Empty;
-        }
-    }
-
+    /// <summary>
+    /// Rebuilds the list from disk. Anything the user typed into a row in this session is carried over: the rows are
+    /// recreated on every connect, and without this the detail panel would appear to forget a password that was just
+    /// entered, and the selection would point at an object no longer in the list.
+    /// </summary>
     public async Task LoadRecentDevicesAsync()
     {
         var entries = await _recentDevicesStore.GetAllAsync();
+
+        var edited = RecentDevices.ToDictionary(item => item.DeviceId, StringComparer.Ordinal);
+        var selectedId = SelectedRecentDevice?.DeviceId;
+
         RecentDevices.Clear();
         foreach (var entry in entries)
         {
@@ -186,19 +251,100 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // The password lives in the OS-protected secret store, not in the entry: read it back per device so it can
             // prefill the box, and so it is never part of anything that could be synced to an account later.
             item.SavedPassword = await _recentDevicesStore.GetPasswordAsync(entry.DeviceId);
+            if (edited.TryGetValue(entry.DeviceId, out var previous))
+            {
+                item.Password = previous.Password;
+                item.RememberPassword = previous.RememberPassword;
+                item.Presence = previous.Presence;
+            }
+            else
+            {
+                item.Password = item.SavedPassword ?? string.Empty;
+            }
+
             RecentDevices.Add(item);
         }
 
         HasRecentDevices = RecentDevices.Count > 0;
-        if (SelectedRecentDevice is null && RecentDevices.Count > 0)
-        {
-            SelectedRecentDevice = RecentDevices[0];
-        }
+        SelectedRecentDevice = RecentDevices.FirstOrDefault(item => string.Equals(item.DeviceId, selectedId, StringComparison.Ordinal))
+            ?? RecentDevices.FirstOrDefault();
+
+        _ = RefreshPresenceAsync();
     }
 
     /// <summary>Re-reads the list from disk, for the refresh button next to it.</summary>
     [RelayCommand]
     private Task RefreshRecentDevicesAsync() => LoadRecentDevicesAsync();
+
+    /// <summary>
+    /// Asks the server which remembered devices are online, and paints the answer onto the rows.
+    /// <para>
+    /// Every failure mode leaves the affected rows <see cref="DevicePresenceState.Unknown"/> rather than offline: an
+    /// older server ignores the message entirely, a throttled one says nothing, and the client cannot tell those from
+    /// a device that really is off. Only a sentence from the server is allowed to turn a dot grey.
+    /// </para>
+    /// </summary>
+    private async Task RefreshPresenceAsync()
+    {
+        if (Interlocked.Exchange(ref _presenceInFlight, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_rendezvous.State != RendezvousState.Online)
+            {
+                return;
+            }
+
+            var rows = new List<(RecentDeviceItemViewModel Item, DeviceId Id)>();
+            foreach (var item in RecentDevices)
+            {
+                if (DeviceId.TryParse(item.DeviceId, out var id))
+                {
+                    rows.Add((item, id));
+                }
+            }
+
+            if (rows.Count == 0)
+            {
+                return;
+            }
+
+            var unanswered = false;
+            foreach (var chunk in rows.Chunk(PresenceChunkSize))
+            {
+                var online = await _rendezvous.QueryPresenceAsync([.. chunk.Select(pair => pair.Id)], CancellationToken.None);
+                if (online is null)
+                {
+                    unanswered = true;
+                    foreach (var (item, _) in chunk)
+                    {
+                        item.Presence = DevicePresenceState.Unknown;
+                    }
+
+                    continue;
+                }
+
+                foreach (var (item, id) in chunk)
+                {
+                    item.Presence = online.Contains(id) ? DevicePresenceState.Online : DevicePresenceState.Offline;
+                }
+            }
+
+            IsPresenceUnavailable = unanswered;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException or PeerConnectException)
+        {
+            // A timer callback that throws has nowhere to report it, and this client keeps no log file.
+            LogPresencePollFailed(_logger, ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _presenceInFlight, 0);
+        }
+    }
 
     /// <summary>Returns whether the alias reached the disk, so the row can be put back when it did not.</summary>
     private async Task<bool> SaveDeviceAliasAsync(RecentDeviceItemViewModel item)
@@ -238,14 +384,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private async Task RemoveSelectedDeviceAsync()
+    /// <summary>
+    /// The five ways to reach a device, chosen on the home page before dialling a typed code.
+    /// </summary>
+    public IReadOnlyList<ConnectionMode> ConnectionModes { get; } =
+    [
+        new("远程控制", StandaloneFeature.Control),
+        new("观看模式", StandaloneFeature.Watch),
+        new("文件传输", StandaloneFeature.FileTransfer),
+        new("终端", StandaloneFeature.Terminal),
+        new("摄像头", StandaloneFeature.Camera),
+    ];
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
+    public partial ConnectionMode SelectedConnectionMode { get; set; }
+
+    /// <summary>Mirrors the per-feature rules: only a desktop session is blocked while one is already open.</summary>
+    private bool CanConnect() => SelectedConnectionMode.Feature switch
     {
-        if (SelectedRecentDevice is { } item)
-        {
-            await RemoveDeviceAsync(item);
-        }
-    }
+        StandaloneFeature.Control or StandaloneFeature.Watch => CanLaunchDesktop(),
+        _ => true,
+    };
+
+    /// <summary>
+    /// Dials the code typed on the home page. No device is passed, so the target is that box alone — the rule the
+    /// five per-device commands below rely on to mean the opposite.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanConnect))]
+    private Task ConnectAsync() => LaunchFeatureAsync(SelectedConnectionMode.Feature, targetDevice: null, CancellationToken.None);
 
     [RelayCommand]
     private void OpenFixedPasswordEditor()
@@ -311,8 +478,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     private bool CanLaunchDesktop() => !IsConnected;
 
-    // The device list passes the row the button belongs to, and the quick connect tab passes nothing so the target is
-    // the code in its own box. There is deliberately no fallback to the selected row: that would quietly send the
+    // The device list passes the row the button belongs to, and the home page passes nothing so the target is the
+    // code in its own box. There is deliberately no fallback to the selected row: that would quietly send the
     // typed code - and the typed password with it - to whichever device happened to be selected instead.
     [RelayCommand(CanExecute = nameof(CanLaunchDesktop))]
     private Task LaunchControlAsync(RecentDeviceItemViewModel? item) =>
@@ -336,10 +503,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public async Task LaunchFeatureAsync(StandaloneFeature feature, RecentDeviceItemViewModel? targetDevice = null, CancellationToken cancellationToken = default)
     {
+        // The code and the password are resolved the same way: a row's own fields, or the typed ones. Neither falls
+        // back to the other, so a click on one device's button can never spend another device's password.
         var deviceIdStr = targetDevice?.DeviceId ?? RemoteDeviceId;
-        var password = !string.IsNullOrEmpty(RemotePassword)
-            ? RemotePassword
-            : targetDevice?.SavedPassword ?? string.Empty;
+        var password = targetDevice is not null ? targetDevice.Password : RemotePassword;
 
         if (!DeviceId.TryParse(deviceIdStr, out var target))
         {
@@ -373,6 +540,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (PeerConnectException ex)
         {
+            if (ex.Failure == PeerConnectFailure.TargetOffline && targetDevice is not null)
+            {
+                // The server just said so outright: this row is offline, no need to wait for the next poll.
+                targetDevice.Presence = DevicePresenceState.Offline;
+            }
+
             StatusMessage = ex.Failure switch
             {
                 PeerConnectFailure.SignalingUnavailable => "未连接到服务器。",
@@ -495,7 +668,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try
         {
-            var savedPwd = RememberPassword ? password : null;
+            var savedPwd = (targetDevice?.RememberPassword ?? RememberPassword) ? password : null;
             await _recentDevicesStore.SaveOrUpdateAsync(target.ToDisplayString(), alias: targetDevice?.Alias, password: savedPwd, cancellationToken: cancellationToken);
             await LoadRecentDevicesAsync();
         }
@@ -556,17 +729,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private bool CanDisconnect() => IsConnected;
-
-    [RelayCommand(CanExecute = nameof(CanDisconnect))]
-    private async Task DisconnectAsync()
-    {
-        if (_session is { } session)
-        {
-            await session.DisposeAsync();
-        }
-    }
-
     private void OnSessionClosed(RemoteSession session)
     {
         if (_session != session)
@@ -612,6 +774,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SetIncoming([]);
             HostDetail = null;
             ServerHint = null;
+            HostRendezvousUri = null;
             return;
         }
 
@@ -634,6 +797,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? null
             : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
               + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。";
+        HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
         HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
         SetIncoming(status.Sessions);
     }
@@ -658,4 +822,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not write the recent devices list.")]
     private static partial void LogDeviceListWriteFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not ask the server which devices are online.")]
+    private static partial void LogPresencePollFailed(ILogger logger, Exception ex);
 }

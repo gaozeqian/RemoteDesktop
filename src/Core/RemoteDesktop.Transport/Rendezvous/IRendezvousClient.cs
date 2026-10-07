@@ -33,6 +33,17 @@ public interface IRendezvousClient
     /// <exception cref="PeerConnectException">Offline, target offline, rejected or timed out.</exception>
     Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Which of <paramref name="deviceIds"/> the server reports as online.
+    /// <para>
+    /// <c>null</c> means the server did not answer — an older server, a throttled query, a lost connection — and must
+    /// never be rendered as "offline": nothing is known about those devices. A device named in the answer was online
+    /// when it was asked; one that is absent is either offline or was never registered, and the server deliberately
+    /// does not distinguish the two.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlySet<DeviceId>?> QueryPresenceAsync(IReadOnlyList<DeviceId> deviceIds, CancellationToken cancellationToken);
+
     Task AcceptAsync(string requestId, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken);
 
     Task RejectAsync(string requestId, CancellationToken cancellationToken);

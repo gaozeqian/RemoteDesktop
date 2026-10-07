@@ -34,6 +34,8 @@ public static class RendezvousServer
         services.AddHostedService<PostgresSchemaInitializer>();
 
         services.AddSingleton<DevicePresence>();
+        services.AddSingleton<PresenceRateLimiter>();
+        services.AddSingleton<PresenceService>();
         services.AddSingleton<ConnectionBroker>();
         services.AddSingleton<SignalingEndpoint>();
         services.AddSingleton<AddressReflector>();

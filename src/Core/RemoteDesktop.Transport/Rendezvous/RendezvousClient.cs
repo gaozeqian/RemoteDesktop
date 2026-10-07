@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -18,10 +19,20 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Deliberately not <see cref="TransportOptions.SignalingTimeout"/>: that is a 25-second budget meant for a connect
+    /// a person is watching. This one is a background poll — an answer that takes longer is no answer.
+    /// </summary>
+    private static readonly TimeSpan PresenceTimeout = TimeSpan.FromSeconds(3);
+
     private readonly Channel<IncomingConnection> _incoming = Channel.CreateBounded<IncomingConnection>(
         new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest });
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<ConnectReady>> _pending = new(StringComparer.Ordinal);
+
+    // A second map rather than a shared one: a presence answer travels an entirely different path from a connect, and
+    // keeping it apart leaves the connect path exactly as it was.
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<PresenceResult>> _pendingPresence = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private ClientWebSocket? _socket;
 
@@ -147,6 +158,63 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         LogRegistered(logger, DeviceId.Value);
     }
 
+    public async Task<IReadOnlySet<DeviceId>?> QueryPresenceAsync(IReadOnlyList<DeviceId> deviceIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(deviceIds);
+
+        var online = new HashSet<DeviceId>();
+        if (deviceIds.Count == 0)
+        {
+            return online;
+        }
+
+        if (_socket is null)
+        {
+            return null;
+        }
+
+        var requestId = Guid.NewGuid().ToString("N");
+        var pending = new TaskCompletionSource<PresenceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingPresence[requestId] = pending;
+        try
+        {
+            var query = new PresenceQuery { RequestId = requestId };
+            query.DeviceIds.AddRange(deviceIds.Select(static id => (uint)id.Value));
+            await SendAsync(new ClientMessage { PresenceQuery = query }, cancellationToken).ConfigureAwait(false);
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(PresenceTimeout);
+            var result = await pending.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
+
+            foreach (var value in result.OnlineDeviceIds)
+            {
+                // Parsed rather than constructed: new DeviceId(int) throws on a value out of range, and this number was
+                // chosen by the server. A malicious server must not be able to take the transport thread down with it.
+                // Qualified: the property named DeviceId on this class hides the type of the same name here.
+                if (Domain.DeviceId.TryParse(value.ToString(CultureInfo.InvariantCulture), out var id))
+                {
+                    online.Add(id);
+                }
+            }
+
+            return online;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An older server ignores the message entirely and simply says nothing.
+            LogPresenceUnanswered(logger);
+            return null;
+        }
+        catch (PeerConnectException)
+        {
+            return null;
+        }
+        finally
+        {
+            _pendingPresence.TryRemove(requestId, out _);
+        }
+    }
+
     private async Task<IPEndPoint?> ResolveReflectorAsync(int port, CancellationToken cancellationToken)
     {
         var host = options.RendezvousUri.Host;
@@ -185,6 +253,13 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                     }
 
                     break;
+                case ServerMessage.BodyOneofCase.PresenceResult:
+                    if (_pendingPresence.TryGetValue(message.PresenceResult.RequestId, out var answered))
+                    {
+                        answered.TrySetResult(message.PresenceResult);
+                    }
+
+                    break;
                 default:
                     break;
             }
@@ -211,9 +286,17 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
     private void FailPending()
     {
+        var failure = new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Lost connection to the server.");
         foreach (var pending in _pending.Values)
         {
-            pending.TrySetException(new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Lost connection to the server."));
+            pending.TrySetException(failure);
+        }
+
+        // A question that was in flight when the socket dropped is never going to be answered; leaving it pending would
+        // hold the caller until its own timeout for no reason.
+        foreach (var presence in _pendingPresence.Values)
+        {
+            presence.TrySetException(failure);
         }
     }
 
@@ -241,4 +324,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Rendezvous connection lost: {Reason}.")]
     private static partial void LogConnectionLost(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "The server did not answer a presence query; device states are unknown.")]
+    private static partial void LogPresenceUnanswered(ILogger logger);
 }

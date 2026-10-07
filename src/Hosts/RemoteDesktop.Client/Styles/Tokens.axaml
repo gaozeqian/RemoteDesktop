@@ -5,9 +5,11 @@
     Design tokens for the client. Everything is prefixed "Rd" so no key can collide with the Fluent theme's own
     resources (BorderBrush, CardBackgroundFillColorDefaultBrush, ...) and quietly change a control template.
 
-    Brushes live in ThemeDictionaries and follow the system (App.axaml keeps RequestedThemeVariant="Default"), so
-    every reference to one must be {DynamicResource} — a {StaticResource} would freeze the variant it resolved
-    against and keep the old colour when the system theme changes. Metrics below are variant-independent.
+    The palette follows the ToDesk client: a white content area, a light grey sidebar, light grey cards holding the
+    device identity, and one blue used for the accent and the primary button. Brushes live in ThemeDictionaries and
+    follow the system (App.axaml keeps RequestedThemeVariant="Default"), so every reference to one must be
+    {DynamicResource} — a {StaticResource} would freeze the variant it resolved against and keep the old colour when
+    the system theme changes. Metrics below are variant-independent.
   -->
 
   <!-- Spacing scale -->
@@ -18,49 +20,53 @@
   <x:Double x:Key="RdSpaceXl">24</x:Double>
 
   <!-- Corner radii. These are CornerRadius, not Double: the property takes the type as-is, with no conversion. -->
-  <CornerRadius x:Key="RdRadiusMd">6</CornerRadius>
-  <CornerRadius x:Key="RdRadiusLg">8</CornerRadius>
+  <CornerRadius x:Key="RdRadiusSm">4</CornerRadius>
+  <CornerRadius x:Key="RdRadiusMd">8</CornerRadius>
+  <CornerRadius x:Key="RdRadiusLg">12</CornerRadius>
 
   <!-- Type scale. Body text sets no size at all, so it keeps Fluent's own default. -->
   <x:Double x:Key="RdFontCaption">12</x:Double>
   <x:Double x:Key="RdFontSubtitle">16</x:Double>
   <x:Double x:Key="RdFontTitle">18</x:Double>
-  <x:Double x:Key="RdFontDisplay">26</x:Double>
+  <x:Double x:Key="RdFontDisplay">22</x:Double>
 
   <!-- Padding takes Thickness, so the spacing scale above cannot be reused for it directly. -->
   <Thickness x:Key="RdPaddingMd">12</Thickness>
-  <Thickness x:Key="RdCardPadding">16</Thickness>
+  <Thickness x:Key="RdCardPadding">18,20</Thickness>
   <Thickness x:Key="RdToolbarPadding">14,8</Thickness>
-  <Thickness x:Key="RdStatusBarPadding">16,6</Thickness>
+  <Thickness x:Key="RdStatusBarPadding">16,7</Thickness>
 
-  <!-- Navigation rail width: wide enough for a two-to-four character label under its glyph. -->
-  <x:Double x:Key="RdRailWidth">92</x:Double>
+  <!-- The sidebar is wide enough for an icon beside its label, the way ToDesk's is. -->
+  <x:Double x:Key="RdRailWidth">200</x:Double>
 
   <ResourceDictionary.ThemeDictionaries>
 
     <ResourceDictionary x:Key="Light">
-      <!-- Surfaces -->
-      <SolidColorBrush x:Key="RdWindowBackgroundBrush" Color="#F4F5F7" />
-      <SolidColorBrush x:Key="RdSurfaceBrush" Color="#FFFFFF" />
-      <SolidColorBrush x:Key="RdSurfaceAltBrush" Color="#F0F1F5" />
-      <SolidColorBrush x:Key="RdSurfaceInsetBrush" Color="#EDEFF3" />
-      <SolidColorBrush x:Key="RdSurfaceHoverBrush" Color="#E9EBF0" />
-      <SolidColorBrush x:Key="RdToolbarBrush" Color="#FFFFFF" />
-      <SolidColorBrush x:Key="RdBorderBrush" Color="#E2E4EA" />
+      <!-- Surfaces: white content, grey sidebar, grey cards. -->
+      <SolidColorBrush x:Key="RdWindowBackgroundBrush" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="RdSurfaceBrush" Color="#F4F5F7" />
+      <SolidColorBrush x:Key="RdSurfaceAltBrush" Color="#F7F8FA" />
+      <SolidColorBrush x:Key="RdSurfaceInsetBrush" Color="#F0F1F4" />
+      <SolidColorBrush x:Key="RdSurfaceHoverBrush" Color="#EDEFF3" />
+      <SolidColorBrush x:Key="RdToolbarBrush" Color="#F7F8FA" />
+      <SolidColorBrush x:Key="RdBorderBrush" Color="#E8EAF0" />
 
       <!-- Text -->
-      <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#1B1B1F" />
-      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#565C69" />
-      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#868C99" />
+      <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#1A1D21" />
+      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#6B7280" />
+      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#9AA1AC" />
 
       <!-- Semantic -->
-      <SolidColorBrush x:Key="RdAccentBrush" Color="#0A66F0" />
-      <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#E7F0FE" />
+      <SolidColorBrush x:Key="RdAccentBrush" Color="#3B82F6" />
+      <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#E8F1FE" />
+      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#4A90F5" />
+      <SolidColorBrush x:Key="RdTextOnPrimaryBrush" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="RdSuccessBrush" Color="#22C55E" />
       <SolidColorBrush x:Key="RdDangerBrush" Color="#D93A2B" />
       <SolidColorBrush x:Key="RdDangerSurfaceBrush" Color="#FDECEA" />
       <SolidColorBrush x:Key="RdDangerTextBrush" Color="#A62A1C" />
       <SolidColorBrush x:Key="RdWarningBrush" Color="#C77700" />
-      <SolidColorBrush x:Key="RdWarningSurfaceBrush" Color="#FFF4E0" />
+      <SolidColorBrush x:Key="RdWarningSurfaceBrush" Color="#FFF6DC" />
       <SolidColorBrush x:Key="RdWarningTextBrush" Color="#8A5600" />
 
       <!-- Deliberately variant-independent: a video backdrop is black in both themes, and a terminal stays dark. -->
@@ -73,28 +79,31 @@
 
     <ResourceDictionary x:Key="Dark">
       <!-- Surfaces -->
-      <SolidColorBrush x:Key="RdWindowBackgroundBrush" Color="#17171A" />
-      <SolidColorBrush x:Key="RdSurfaceBrush" Color="#232329" />
-      <SolidColorBrush x:Key="RdSurfaceAltBrush" Color="#2B2B33" />
-      <SolidColorBrush x:Key="RdSurfaceInsetBrush" Color="#1D1D22" />
-      <SolidColorBrush x:Key="RdSurfaceHoverBrush" Color="#33333D" />
-      <SolidColorBrush x:Key="RdToolbarBrush" Color="#1F1F25" />
-      <SolidColorBrush x:Key="RdBorderBrush" Color="#3A3A44" />
+      <SolidColorBrush x:Key="RdWindowBackgroundBrush" Color="#1B1C20" />
+      <SolidColorBrush x:Key="RdSurfaceBrush" Color="#25262B" />
+      <SolidColorBrush x:Key="RdSurfaceAltBrush" Color="#16171A" />
+      <SolidColorBrush x:Key="RdSurfaceInsetBrush" Color="#202126" />
+      <SolidColorBrush x:Key="RdSurfaceHoverBrush" Color="#2A2B31" />
+      <SolidColorBrush x:Key="RdToolbarBrush" Color="#16171A" />
+      <SolidColorBrush x:Key="RdBorderBrush" Color="#32343A" />
 
       <!-- Text -->
-      <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#F2F2F5" />
-      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#B6BAC4" />
-      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#7E838F" />
+      <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#EDEEF1" />
+      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#A2A8B3" />
+      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#737984" />
 
       <!-- Semantic -->
-      <SolidColorBrush x:Key="RdAccentBrush" Color="#4C9AFF" />
-      <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#17293F" />
+      <SolidColorBrush x:Key="RdAccentBrush" Color="#6BA6F8" />
+      <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#1E2A3D" />
+      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#4A90F5" />
+      <SolidColorBrush x:Key="RdTextOnPrimaryBrush" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="RdSuccessBrush" Color="#34C759" />
       <SolidColorBrush x:Key="RdDangerBrush" Color="#FF6B5E" />
-      <SolidColorBrush x:Key="RdDangerSurfaceBrush" Color="#3A211F" />
+      <SolidColorBrush x:Key="RdDangerSurfaceBrush" Color="#3A2120" />
       <SolidColorBrush x:Key="RdDangerTextBrush" Color="#FF9E93" />
       <SolidColorBrush x:Key="RdWarningBrush" Color="#F0B429" />
-      <SolidColorBrush x:Key="RdWarningSurfaceBrush" Color="#3A2E16" />
-      <SolidColorBrush x:Key="RdWarningTextBrush" Color="#F3C462" />
+      <SolidColorBrush x:Key="RdWarningSurfaceBrush" Color="#3A2F17" />
+      <SolidColorBrush x:Key="RdWarningTextBrush" Color="#F0C674" />
 
       <SolidColorBrush x:Key="RdVideoBackdropBrush" Color="#000000" />
       <SolidColorBrush x:Key="RdTerminalBackgroundBrush" Color="#0C0C0C" />

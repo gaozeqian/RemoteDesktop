@@ -1,9 +1,5 @@
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Input.Platform;
-using Avalonia.Interactivity;
-using Avalonia.VisualTree;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.ViewModels;
 
@@ -17,23 +13,9 @@ public sealed partial class MainWindow : Window
 
         CopyDeviceCodeButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.LocalDeviceId);
         CopyPasswordButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.TemporaryPassword);
-
-        // A card's feature buttons pass the card itself as their target, while the password box belongs to whichever
-        // card is selected. Selecting the card under the pointer on the way down keeps the two in step: the press
-        // selects the card, then the click (raised on release) runs the command against that same card.
-        DeviceList.AddHandler(PointerPressedEvent, OnDeviceListPointerPressed, RoutingStrategies.Tunnel);
-    }
-
-    private static void OnDeviceListPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        for (var visual = e.Source as Visual; visual is not null; visual = visual.GetVisualParent())
-        {
-            if (visual is ListBoxItem item)
-            {
-                item.IsSelected = true;
-                return;
-            }
-        }
+        CopySelectedDeviceCodeButton.Click += async (_, _) =>
+            await CopyAsync(static viewModel => viewModel.SelectedRecentDevice?.FormattedId ?? string.Empty);
+        CopyDataDirectoryButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.DataDirectory);
     }
 
     /// <summary>

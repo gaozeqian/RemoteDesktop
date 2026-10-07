@@ -14,6 +14,7 @@ namespace RemoteDesktop.Server.Rendezvous;
 public sealed partial class SignalingEndpoint(
     IDeviceRegistry registry,
     DevicePresence presence,
+    PresenceService presenceQueries,
     ConnectionBroker broker,
     AddressReflector reflector,
     ILogger<SignalingEndpoint> logger)
@@ -49,6 +50,7 @@ public sealed partial class SignalingEndpoint(
             finally
             {
                 presence.Remove(session);
+                presenceQueries.Forget(session);
                 LogDisconnected(logger, session.DeviceId);
             }
         }
@@ -128,6 +130,9 @@ public sealed partial class SignalingEndpoint(
                     break;
                 case ClientMessage.BodyOneofCase.ConnectReject:
                     await broker.HandleRejectAsync(session, message.ConnectReject, cancellationToken).ConfigureAwait(false);
+                    break;
+                case ClientMessage.BodyOneofCase.PresenceQuery:
+                    await presenceQueries.HandleQueryAsync(session, message.PresenceQuery, cancellationToken).ConfigureAwait(false);
                     break;
                 default:
                     // Unknown or out-of-order message: ignore so newer clients keep working.

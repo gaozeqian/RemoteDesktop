@@ -84,4 +84,28 @@ public sealed class DevicePresence
             return _sessions.GetValueOrDefault(deviceId);
         }
     }
+
+    /// <summary>
+    /// The subset of <paramref name="deviceIds"/> that is online right now, in the order asked. Only ever a subset:
+    /// a code that was never registered and a code that is simply offline produce the same answer, so this cannot be
+    /// used to find out whether a device exists.
+    /// </summary>
+    public List<uint> FilterOnline(IReadOnlyList<uint> deviceIds)
+    {
+        ArgumentNullException.ThrowIfNull(deviceIds);
+
+        var online = new List<uint>(deviceIds.Count);
+        lock (_lock)
+        {
+            foreach (var id in deviceIds)
+            {
+                if (_sessions.ContainsKey(id))
+                {
+                    online.Add(id);
+                }
+            }
+        }
+
+        return online;
+    }
 }

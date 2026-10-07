@@ -22,6 +22,13 @@ public sealed class RendezvousOptions
     public string? PostgresConnectionString { get; set; }
 
     /// <summary>
+    /// Answer presence queries, which is how a client shows an online/offline dot beside each remembered device.
+    /// Turning it off is deliberately the same behaviour an older server has — clients show 未知 — so the capability
+    /// can be removed from a deployment without a protocol change. See docs/security.md.
+    /// </summary>
+    public bool PresenceEnabled { get; set; } = true;
+
+    /// <summary>
     /// Checks the settings the server cannot work without. Called when the options are first used (ValidateOnStart), so
     /// a misconfigured deployment stops at start-up with a sentence instead of failing later on the first connection.
     /// </summary>

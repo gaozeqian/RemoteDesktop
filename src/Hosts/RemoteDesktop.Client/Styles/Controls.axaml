@@ -2,19 +2,18 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!--
-    The handful of building blocks the client repeats. Deliberately not a restyle of every Fluent control: text boxes,
-    combo boxes, check boxes, progress bars and scroll bars should keep following the theme on their own.
+    The building blocks the client repeats, shaped after the ToDesk client: a grey sidebar whose selected row is a
+    full-width light-blue pill, white content on grey rounded cards, one blue used for the accent and the primary
+    button, and dot indicators for device state.
 
-    Style setters beat ControlTheme setters in Avalonia, so these win over Fluent's defaults for the same property.
-    Primary buttons keep Fluent's Classes="accent" instead of a custom fill: the theme already handles its hover,
-    pressed and disabled states, and the accent then follows the user's system accent colour.
+    Deliberately not a restyle of every Fluent control: text boxes, combo boxes, check boxes, progress bars and
+    scroll bars keep following the theme on their own. Style setters beat ControlTheme setters in Avalonia, so the
+    rules below win over Fluent's defaults for the same property.
   -->
 
   <!-- Surfaces -->
   <Style Selector="Border.card">
     <Setter Property="Background" Value="{DynamicResource RdSurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
-    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
     <Setter Property="Padding" Value="{DynamicResource RdCardPadding}" />
   </Style>
@@ -64,6 +63,29 @@
     <Setter Property="BorderThickness" Value="1" />
   </Style>
 
+  <!-- Device presence. Online is a filled green dot, offline a filled grey one, and unknown a hollow ring:
+       "the server did not answer" must not look like "the device is offline". -->
+  <Style Selector="Border.dot">
+    <Setter Property="Width" Value="8" />
+    <Setter Property="Height" Value="8" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.dot.online">
+    <Setter Property="Background" Value="{DynamicResource RdSuccessBrush}" />
+  </Style>
+
+  <Style Selector="Border.dot.offline">
+    <Setter Property="Background" Value="{DynamicResource RdTextTertiaryBrush}" />
+  </Style>
+
+  <Style Selector="Border.dot.unknown">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdTextTertiaryBrush}" />
+    <Setter Property="BorderThickness" Value="1.5" />
+  </Style>
+
   <!-- Text -->
   <Style Selector="TextBlock.pageTitle">
     <Setter Property="FontSize" Value="{DynamicResource RdFontTitle}" />
@@ -88,6 +110,10 @@
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
 
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  </Style>
+
   <Style Selector="TextBlock.danger">
     <Setter Property="Foreground" Value="{DynamicResource RdDangerTextBrush}" />
     <Setter Property="TextWrapping" Value="Wrap" />
@@ -98,81 +124,186 @@
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
 
-  <Style Selector="TextBlock.secondary">
-    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  <!-- The device code and the temporary password, read off the screen and typed somewhere else. -->
+  <Style Selector="TextBlock.display">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontDisplay}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.code">
+    <Setter Property="FontSize" Value="{DynamicResource RdFontTitle}" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextPrimaryBrush}" />
   </Style>
 
   <!-- Buttons -->
-  <Style Selector="Button.feature">
-    <Setter Property="FontSize" Value="{DynamicResource RdFontCaption}" />
-    <Setter Property="Padding" Value="10,5" />
+  <Style Selector="Button.primaryLarge">
+    <Setter Property="Background" Value="{DynamicResource RdPrimaryBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextOnPrimaryBrush}" />
+    <Setter Property="FontSize" Value="15" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Padding" Value="34,0" />
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
 
-  <!-- Ending a session is the one action a toolbar should not invite by accident. -->
-  <Style Selector="Button.danger">
-    <Setter Property="Foreground" Value="{DynamicResource RdDangerTextBrush}" />
+  <Style Selector="Button.feature">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="14,9" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.feature.primary">
+    <Setter Property="Background" Value="{DynamicResource RdPrimaryBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextOnPrimaryBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
   <Style Selector="Button.iconButton">
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="6,3" />
-    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextTertiaryBrush}" />
+  </Style>
+
+  <Style Selector="Button.danger">
+    <Setter Property="Foreground" Value="{DynamicResource RdDangerTextBrush}" />
   </Style>
 
   <!--
-    Navigation rail: a TabControl whose strip is docked left. Fluent already turns the strip vertical for
-    TabStripPlacement=Left and draws the selected-item pipe against the left edge, so this only has to give the
-    items the rail's shape and colours.
+    Sidebar: the navigation rail. A ListBox rather than a TabControl's strip because the rail also carries the
+    device identity block above the items and the version below them, and the strip can hold nothing but tabs.
+    The selected row is painted as a full-width light-blue pill with an accent label, as ToDesk's is.
   -->
-  <Style Selector="TabControl.navRail">
-    <Setter Property="Background" Value="{DynamicResource RdSurfaceBrush}" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="Padding" Value="0" />
-  </Style>
-
-  <Style Selector="TabControl.navRail > TabItem">
-    <Setter Property="MinWidth" Value="{DynamicResource RdRailWidth}" />
-    <Setter Property="Padding" Value="8,10" />
-    <Setter Property="Margin" Value="6,2" />
-    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
-    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
-    <Setter Property="HorizontalContentAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="TabControl.navRail > TabItem:pointerover /template/ Border#PART_LayoutRoot">
-    <Setter Property="Background" Value="{DynamicResource RdSurfaceHoverBrush}" />
-  </Style>
-
-  <Style Selector="TabControl.navRail > TabItem:selected">
-    <Setter Property="Background" Value="{DynamicResource RdAccentSurfaceBrush}" />
-    <Setter Property="Foreground" Value="{DynamicResource RdAccentBrush}" />
-  </Style>
-
-  <!-- Device cards: a wrapping grid, so the whole card is one selectable row. -->
-  <Style Selector="ListBox.deviceGrid">
+  <Style Selector="ListBox.navList">
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="0" />
   </Style>
 
-  <Style Selector="ListBox.deviceGrid > ListBoxItem">
-    <Setter Property="Padding" Value="14" />
-    <Setter Property="Margin" Value="0,0,12,12" />
-    <Setter Property="Background" Value="{DynamicResource RdSurfaceAltBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusLg}" />
+  <Style Selector="ListBox.navList > ListBoxItem">
+    <Setter Property="Padding" Value="0,11" />
+    <Setter Property="Margin" Value="10,2" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
   </Style>
 
-  <Style Selector="ListBox.deviceGrid > ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+  <Style Selector="ListBox.navList > ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource RdSurfaceHoverBrush}" />
   </Style>
 
-  <Style Selector="ListBox.deviceGrid > ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{DynamicResource RdSurfaceAltBrush}" />
+  <Style Selector="ListBox.navList > ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource RdAccentSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+
+  <Style Selector="ListBox.navList > ListBoxItem:selected">
+    <Setter Property="Foreground" Value="{DynamicResource RdAccentBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- The rail's icons come from the Windows icon font, so they inherit the item's foreground. -->
+  <Style Selector="TextBlock.navIcon">
+    <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+    <Setter Property="FontSize" Value="17" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- Inner pages: an ordinary tab strip with an underline under the selected tab. -->
+  <Style Selector="TabControl.innerTabs">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+  </Style>
+
+  <Style Selector="TabControl.innerTabs > TabItem">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="Padding" Value="14,10" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="FontWeight" Value="Normal" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextSecondaryBrush}" />
+  </Style>
+
+  <Style Selector="TabControl.innerTabs > TabItem:selected">
+    <Setter Property="Foreground" Value="{DynamicResource RdAccentBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- Device rows: a plain selectable row, the selected one lifted onto the content background. -->
+  <Style Selector="ListBox.deviceList">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.deviceList > ListBoxItem">
+    <Setter Property="Padding" Value="11,10" />
+    <Setter Property="Margin" Value="0,0,0,3" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RdRadiusMd}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="ListBox.deviceList > ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource RdSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="ListBox.deviceList > ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource RdWindowBackgroundBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource RdAccentBrush}" />
+  </Style>
+
+  <!--
+    The connection-mode chooser: one selectable row, with a ring in place of Fluent's row highlight, so it reads as
+    a radio group. The ring is a circle whose border fattened to 5px leaves the accent-coloured dot inside it.
+  -->
+  <Style Selector="ListBox.modeChooser">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.modeChooser > ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="0,0,24,0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Foreground" Value="{DynamicResource RdTextPrimaryBrush}" />
+  </Style>
+
+  <Style Selector="ListBox.modeChooser > ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+  <Style Selector="ListBox.modeChooser > ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+
+  <Style Selector="Border.radioRing">
+    <Setter Property="Width" Value="16" />
+    <Setter Property="Height" Value="16" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="BorderThickness" Value="1.5" />
+    <Setter Property="BorderBrush" Value="{DynamicResource RdTextTertiaryBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ListBox.modeChooser > ListBoxItem:selected Border.radioRing">
+    <Setter Property="BorderBrush" Value="{DynamicResource RdAccentBrush}" />
+    <Setter Property="BorderThickness" Value="5" />
   </Style>
 
 </Styles>

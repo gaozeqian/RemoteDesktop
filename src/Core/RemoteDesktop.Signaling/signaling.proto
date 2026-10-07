@@ -12,6 +12,7 @@ message ClientMessage {
     ConnectRequest connect_request = 2;
     ConnectAccept connect_accept = 3;
     ConnectReject connect_reject = 4;
+    PresenceQuery presence_query = 5;
   }
 }
 
@@ -22,6 +23,7 @@ message ServerMessage {
     IncomingConnection incoming_connection = 3;
     ConnectReady connect_ready = 4;
     ConnectFailed connect_failed = 5;
+    PresenceResult presence_result = 6;
   }
 }
 
@@ -99,4 +101,19 @@ enum FailureReason {
 message ConnectFailed {
   string request_id = 1;
   FailureReason reason = 2;
+}
+
+// Controller -> server. Asks which of these device codes are online right now. Unlike a ConnectRequest, the listed
+// devices are not told that anyone asked.
+message PresenceQuery {
+  string request_id = 1;
+  repeated uint32 device_ids = 2;
+}
+
+// Server -> controller. Only ever sent as a complete answer to one query, and only ever naming a subset of the ids
+// that were asked about: a server that does not answer (unknown message, throttled, disabled) says nothing at all,
+// which the client must render as unknown rather than offline.
+message PresenceResult {
+  string request_id = 1;
+  repeated uint32 online_device_ids = 2;
 }
