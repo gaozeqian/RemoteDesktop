@@ -40,10 +40,10 @@ public sealed partial class RemoteDesktopWindow : Window
         // Tunnel so Tab, arrows, Alt etc. reach the remote side instead of driving local focus or menus.
         AddHandler(KeyDownEvent, OnKey, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnKey, RoutingStrategies.Tunnel);
-        Screen.PointerMoved += OnPointerMoved;
-        Screen.PointerPressed += OnPointerPressed;
-        Screen.PointerReleased += OnPointerReleased;
-        Screen.PointerWheelChanged += OnPointerWheel;
+        InputGrid.PointerMoved += OnPointerMoved;
+        InputGrid.PointerPressed += OnPointerPressed;
+        InputGrid.PointerReleased += OnPointerReleased;
+        InputGrid.PointerWheelChanged += OnPointerWheel;
         Opened += (_, _) => Screen.Focus();
     }
 
@@ -226,7 +226,7 @@ public sealed partial class RemoteDesktopWindow : Window
     /// <summary>How the remote picture is placed in the control: a uniform scale, centered (letterboxed).</summary>
     private (double Scale, double OffsetX, double OffsetY) Layout(int width, int height)
     {
-        var bounds = Screen.Bounds.Size;
+        var bounds = InputGrid.Bounds.Size;
         var scale = Math.Min(bounds.Width / width, bounds.Height / height);
         return (scale, (bounds.Width - (width * scale)) / 2, (bounds.Height - (height * scale)) / 2);
     }
@@ -275,7 +275,7 @@ public sealed partial class RemoteDesktopWindow : Window
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (TryMap(e.GetPosition(Screen), out var displayId, out var x, out var y))
+        if (TryMap(e.GetPosition(InputGrid), out var displayId, out var x, out var y))
         {
             _viewModel!.SendInput(new PointerMoveEvent(displayId, x, y));
         }
@@ -284,21 +284,21 @@ public sealed partial class RemoteDesktopWindow : Window
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         Screen.Focus();
-        e.Pointer.Capture(Screen);
-        SendButton(e, e.GetCurrentPoint(Screen).Properties.PointerUpdateKind);
+        e.Pointer.Capture(InputGrid);
+        SendButton(e, e.GetCurrentPoint(InputGrid).Properties.PointerUpdateKind);
         e.Handled = true;
     }
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        SendButton(e, e.GetCurrentPoint(Screen).Properties.PointerUpdateKind);
+        SendButton(e, e.GetCurrentPoint(InputGrid).Properties.PointerUpdateKind);
         e.Pointer.Capture(null);
         e.Handled = true;
     }
 
     private void OnPointerWheel(object? sender, PointerWheelEventArgs e)
     {
-        if (TryMap(e.GetPosition(Screen), out var displayId, out var x, out var y))
+        if (TryMap(e.GetPosition(InputGrid), out var displayId, out var x, out var y))
         {
             // Avalonia reports notches; Windows expects multiples of WHEEL_DELTA (120).
             _viewModel!.SendInput(new PointerWheelEvent(displayId, x, y, (int)Math.Round(e.Delta.X * 120), (int)Math.Round(e.Delta.Y * 120)));
@@ -323,7 +323,7 @@ public sealed partial class RemoteDesktopWindow : Window
             _ => ((PointerButton?)null, false),
         };
 
-        if (button is { } pressed && TryMap(e.GetPosition(Screen), out var displayId, out var x, out var y))
+        if (button is { } pressed && TryMap(e.GetPosition(InputGrid), out var displayId, out var x, out var y))
         {
             _viewModel!.SendInput(new PointerButtonEvent(displayId, x, y, pressed, down));
         }

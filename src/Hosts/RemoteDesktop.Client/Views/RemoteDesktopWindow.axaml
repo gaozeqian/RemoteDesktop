@@ -53,7 +53,7 @@
     <!-- The screen is focusable so keyboard input goes to the remote desktop instead of moving focus around the window.
          The host's real pointer is drawn on the overlay above it. Screen and Overlay must stay siblings in this same
          Grid cell with identical bounds: the letterbox maths reads Screen.Bounds and positions the cursor on Overlay. -->
-    <Grid>
+    <Grid x:Name="InputGrid" Background="Transparent">
       <Image x:Name="Screen" Stretch="Uniform" Focusable="True" />
       <Canvas x:Name="Overlay" IsHitTestVisible="False" ClipToBounds="True">
         <Image x:Name="RemoteCursor" IsVisible="False" IsHitTestVisible="False" />
