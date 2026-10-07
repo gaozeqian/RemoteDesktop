@@ -26,9 +26,12 @@ public sealed class RealProgramTerminalTests : IDisposable
         await using var shell = await Shell.StartAsync("powershell", 100, 30);
         await shell.WaitForAsync("PS ");
 
-        shell.Type("Write-Output 'héllo 你好 ✓'");
+        // Accented Latin and CJK: multi-byte UTF-8 and cells that take two columns. No dingbat here on purpose: a
+        // character the host console cannot represent (U+2713 in a Western code page) comes back as a space, which
+        // says nothing about this side. The emulator's own handling of one is pinned in TerminalEmulatorTests.
+        shell.Type("Write-Output 'héllo 你好'");
         shell.Key(TerminalKey.Enter);
-        await shell.WaitForAsync("héllo 你好 ✓", occurrences: 2); // the command line and its output
+        await shell.WaitForAsync("héllo 你好", occurrences: 2); // the command line and its output
 
         shell.Type("1..3 | ForEach-Object { \"row$_\" }");
         shell.Key(TerminalKey.Enter);

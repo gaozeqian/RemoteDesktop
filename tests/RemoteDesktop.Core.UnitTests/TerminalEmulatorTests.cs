@@ -151,6 +151,19 @@ public sealed class TerminalEmulatorTests
     }
 
     [Fact]
+    public void A_dingbat_takes_one_cell_and_comes_back_out_of_the_screen()
+    {
+        // U+2713 is East Asian Width "ambiguous", so it is narrow here: one cell, and it survives the round trip
+        // through the screen. Pinned here rather than in the real-shell test, where whether the character survives
+        // at all depends on the host console's code page and not on anything this side does.
+        var t = Screen(columns: 20, rows: 3);
+        Feed(t, "héllo 你好 ✓");
+
+        Assert.Equal('✓', t.GetLine(t.ScrollbackCount)[11].Character);
+        Assert.Equal("héllo 你好 ✓", Row(t, 0));
+    }
+
+    [Fact]
     public void Utf8_and_escape_sequences_may_be_split_between_feeds()
     {
         var t = Screen();
