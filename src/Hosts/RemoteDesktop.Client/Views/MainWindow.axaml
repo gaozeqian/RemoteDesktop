@@ -379,7 +379,7 @@
                           <TextBlock Text="{Binding ServerAddressError}" Foreground="{DynamicResource RdErrorTextBrush}"
                                      IsVisible="{Binding ServerAddressError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
                           <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
-                            <Button Content="保存并重启服务" Command="{Binding SaveServerAddressCommand}" Classes="accent" />
+                            <Button Content="保存并重启生效" Command="{Binding SaveServerAddressCommand}" Classes="accent" />
                             <Button Content="取消" Command="{Binding CancelServerAddressEditorCommand}" />
                           </StackPanel>
                         </StackPanel>
@@ -387,7 +387,7 @@
                     </Grid>
 
                     <TextBlock Classes="caption"
-                               Text="两台机器必须连同一台服务器。修改被控端服务器地址将需要管理员权限 (UAC) 以更新本地配置并重启后台服务。" />
+                               Text="两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。" />
                   </StackPanel>
                 </Border>
               </TabItem>

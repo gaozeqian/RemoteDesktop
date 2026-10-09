@@ -480,6 +480,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             IsEditingServerAddress = false;
+
+            // Restart the client application so it picks up the new address for outbound connections.
+            var clientExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrEmpty(clientExe))
+            {
+                System.Diagnostics.Process.Start(clientExe);
+                Environment.Exit(0);
+            }
         }
         catch (Exception ex)
         {
