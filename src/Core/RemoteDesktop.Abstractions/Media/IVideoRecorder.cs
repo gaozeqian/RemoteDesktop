@@ -44,8 +44,8 @@ public interface IVideoRecorder : IAsyncDisposable
     void Start(string filePath, int width, int height, int frameRate = 30, int bitrateKbps = 4000);
 
     /// <summary>
-    /// Feeds one BGRA32 frame into the recorder. Frames are timed by the recorder itself, so the file's timeline is
-    /// its own and callers do not have to produce monotonic timestamps.
+    /// Feeds one BGRA32 frame into the recorder, top row first. Frames are timed by the recorder itself, so the file's
+    /// timeline is its own and callers do not have to produce monotonic timestamps.
     /// </summary>
     void RecordFrame(ReadOnlySpan<byte> bgraPixels, int stride, int width, int height);
 

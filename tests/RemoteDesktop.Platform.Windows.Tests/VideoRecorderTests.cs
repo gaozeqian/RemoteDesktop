@@ -1,5 +1,9 @@
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Platform.Windows.Camera;
+using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Platform.Windows.Recording;
+using SharpGen.Runtime;
+using Vortice.MediaFoundation;
 
 namespace RemoteDesktop.Platform.Windows.Tests;
 
@@ -85,6 +89,93 @@ public class VideoRecorderTests
                 try { File.Delete(tempPath); } catch { }
             }
         }
+    }
+
+    [Fact]
+    public async Task MfVideoRecorder_writes_the_picture_the_right_way_up()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        const int width = 320;
+        const int height = 240;
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+        var recorder = new MfVideoRecorder();
+        try
+        {
+            recorder.Start(tempPath, width, height, frameRate: 30, bitrateKbps: 2000);
+
+            // Red above blue, rows top-down exactly as the viewers hand them over. Media Foundation reads RGB32 in
+            // system memory bottom-up (the DIB convention), so a recorder that passes the rows straight through
+            // writes this picture upside down — which is invisible in the solid and noise frames the other tests use.
+            var frame = new byte[width * height * 4];
+            for (var y = 0; y < height; y++)
+            {
+                var red = y < height / 2;
+                for (var x = 0; x < width; x++)
+                {
+                    var p = ((y * width) + x) * 4;
+                    frame[p] = red ? (byte)0 : (byte)255;      // B
+                    frame[p + 2] = red ? (byte)255 : (byte)0;  // R
+                    frame[p + 3] = 255;                        // A
+                }
+            }
+
+            for (var i = 0; i < 5; i++)
+            {
+                recorder.RecordFrame(frame, width * 4, width, height);
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            await recorder.StopAsync();
+
+            var (top, bottom) = LumaOfTheFirstAndLastRows(tempPath, width, height);
+            // Red is ~76 in luma and blue ~29, so a flipped picture puts the two the other way round.
+            Assert.InRange(top, 60, 95);
+            Assert.InRange(bottom, 15, 45);
+        }
+        finally
+        {
+            await recorder.DisposeAsync();
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Reads the file's first picture back through Media Foundation and returns the luma of its top and bottom rows.</summary>
+    private static (double Top, double Bottom) LumaOfTheFirstAndLastRows(string path, int width, int height)
+    {
+        using var attributes = MediaFactory.MFCreateAttributes(1);
+        // Lets the reader insert the decoder and the colour converter: the file holds H.264, not NV12.
+        attributes.Set(SourceReaderAttributeKeys.EnableVideoProcessing, 1u).CheckError();
+        using var reader = MediaFactory.MFCreateSourceReaderFromURL(path, attributes);
+        using (var output = MfRuntime.CreateVideoType(MfGuids.VideoFormatNv12, width, height, 0))
+        {
+            reader.SetCurrentMediaType(MediaFoundationCameraSource.FirstVideoStream, output);
+        }
+
+        using var sample = reader.ReadSample(MediaFoundationCameraSource.FirstVideoStream, 0, out _, out var flags, out _);
+        Assert.False(flags.HasFlag(SourceReaderFlag.Error), "the recording could not be read back");
+        Assert.NotNull(sample);
+
+        // NV12 is top-down, and both its planes share one stride: the Y plane is height rows of it, the chroma
+        // another height / 2. Reading the top row first is what makes this a check on the picture's way up.
+        var pixels = MfRuntime.ToArray(sample);
+        var stride = pixels.Length / (height * 3 / 2);
+        Assert.True(stride >= width, $"the Y plane stride {stride} is narrower than the picture");
+        return (Average(pixels.AsSpan(0, width)), Average(pixels.AsSpan((height - 1) * stride, width)));
+    }
+
+    private static double Average(ReadOnlySpan<byte> row)
+    {
+        var sum = 0;
+        foreach (var value in row)
+        {
+            sum += value;
+        }
+
+        return (double)sum / row.Length;
     }
 
     [Fact]

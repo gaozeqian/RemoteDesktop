@@ -134,10 +134,12 @@ public sealed class MfVideoRecorder : IVideoRecorder
             return;
         }
 
+        // The rows go in bottom-up: Media Foundation reads RGB32 in system memory with the DIB convention, so a
+        // top-down frame handed over as-is comes out of the file upside down.
         var buffer = new byte[totalBytes];
         for (var y = 0; y < height; y++)
         {
-            bgraPixels.Slice(y * stride, rowBytes).CopyTo(buffer.AsSpan(y * rowBytes, rowBytes));
+            bgraPixels.Slice(y * stride, rowBytes).CopyTo(buffer.AsSpan((height - 1 - y) * rowBytes, rowBytes));
         }
 
         var ticks = _clock.Elapsed.Ticks;
