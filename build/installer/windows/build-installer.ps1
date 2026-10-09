@@ -167,6 +167,7 @@ function Find-SigningCertificate {
         foreach ($certificate in Get-ChildItem $store) {
             if (-not $certificate.HasPrivateKey) { continue }
             if ($certificate.NotAfter -lt (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) { continue }
+            if (-not $certificate.EnhancedKeyUsageList) { continue }
             if ($certificate.EnhancedKeyUsageList.ObjectId -notcontains '1.3.6.1.5.5.7.3.3') { continue }
             $candidates += $certificate
         }
@@ -407,7 +408,7 @@ if (-not $KeepSymbols) {
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and
 # not just the installer: SmartScreen and antivirus look at the executables a user actually runs. Only our files are
 # touched - the .NET runtime and Microsoft's libraries next to them already carry Microsoft's signature.
-$signing = Find-SigningCertificate -Wanted $SignCertificate -Product 'RemoteDesktop'
+$signing = if ($SkipSigning) { @{ Chosen = $null; Candidates = @() } } else { Find-SigningCertificate -Wanted $SignCertificate -Product 'RemoteDesktop' }
 $resolvedSigner = if ($SkipSigning) { $null } else { Resolve-SigningTool }
 
 # A tool needs credentials: a certificate in a store, or certificate files for osslsigncode. Which one it is is
