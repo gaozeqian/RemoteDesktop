@@ -358,13 +358,13 @@
                       <TextBlock Text="本机连接状态" Classes="label" />
                       <TextBlock Grid.Column="1" Text="{Binding ServerStatus}" TextWrapping="Wrap" />
 
-                      <TextBlock Grid.Row="1" Text="被控端托管方式" Classes="label" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding HostDetail}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="1" Text="被控端托管方式" Classes="label" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding HostDetail}" TextWrapping="Wrap" VerticalAlignment="Center" />
 
-                      <TextBlock Grid.Row="2" Text="客户端信令服务器" Classes="label" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ClientRendezvousUri}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="2" Text="客户端信令服务器" Classes="label" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ClientRendezvousUri}" TextWrapping="Wrap" VerticalAlignment="Center" />
 
-                      <TextBlock Grid.Row="3" Text="被控端信令服务器" Classes="label"
+                      <TextBlock Grid.Row="3" Text="被控端信令服务器" Classes="label" VerticalAlignment="Top" Margin="0,8,0,0"
                                  IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}" />
                       <StackPanel Grid.Row="3" Grid.Column="1" Spacing="{DynamicResource RdSpaceSm}"
                                   IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}">
@@ -399,15 +399,15 @@
 
                     <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto"
                           ColumnSpacing="{DynamicResource RdSpaceLg}" RowSpacing="{DynamicResource RdSpaceSm}">
-                      <TextBlock Text="数据目录" Classes="label" />
+                      <TextBlock Text="数据目录" Classes="label" VerticalAlignment="Center" />
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
                         <SelectableTextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" VerticalAlignment="Center" />
                         <Button x:Name="CopyDataDirectoryButton" Content="复制" Classes="iconButton"
                                 ToolTip.Tip="复制数据目录" VerticalAlignment="Center" />
                       </StackPanel>
 
-                      <TextBlock Grid.Row="1" Text="客户端版本" Classes="label" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClientVersion}" />
+                      <TextBlock Grid.Row="1" Text="客户端版本" Classes="label" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClientVersion}" VerticalAlignment="Center" />
                     </Grid>
 
                     <TextBlock Classes="caption"
