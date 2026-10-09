@@ -112,7 +112,8 @@
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="56">
                   <StackPanel Spacing="{DynamicResource RdSpaceXs}">
                     <TextBlock Text="设备代码" Classes="label" />
-                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                    <!-- 设定固定高度，使之与右边包含三个元素的堆叠栏等高 -->
+                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" MinHeight="32">
                       <SelectableTextBlock Text="{Binding LocalDeviceId}" Classes="display" VerticalAlignment="Center" />
                       <Button x:Name="CopyDeviceCodeButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制设备代码"
                               VerticalAlignment="Center" />
@@ -122,7 +123,7 @@
                   <!-- The password text is deliberately the element right after its label. -->
                   <StackPanel Grid.Column="1" Spacing="{DynamicResource RdSpaceXs}">
                     <TextBlock Text="临时密码" Classes="label" />
-                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                    <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" MinHeight="32">
                       <SelectableTextBlock Text="{Binding TemporaryPassword}" Classes="code" VerticalAlignment="Center" />
                       <Button x:Name="CopyPasswordButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制临时密码"
                               VerticalAlignment="Center" />
