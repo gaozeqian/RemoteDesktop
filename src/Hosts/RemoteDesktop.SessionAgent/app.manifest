@@ -4,10 +4,12 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- uiAccess="true" allows the agent to inject input into elevated windows (like Task Manager)
-             despite running as a standard user. It requires the executable to be code-signed and
-             installed in a secure location (e.g. Program Files). -->
-        <requestedExecutionLevel level="asInvoker" uiAccess="true" />
+        <!-- No UIAccess here: this is the manifest of a development build, and Windows refuses to start an image that
+             asks for UIAccess unless it is signed with a certificate the machine trusts and installed somewhere a
+             standard user cannot write (Program Files). From bin\Debug that means the agent does not start at all
+             ("a referral was returned from the server", or error 740). The packaged build carries
+             app.uiaccess.manifest instead - see the project file. -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

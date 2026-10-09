@@ -449,8 +449,14 @@ try {
     # framework-dependent agent would look for the .NET runtime on the target machine).
     foreach ($project in 'RemoteDesktop.HostService', 'RemoteDesktop.SessionAgent', 'RemoteDesktop.Client') {
         Write-Host "  $project"
+
+        # Only the agent, and only here: this is the build that ends up signed in Program Files, which is what UIAccess
+        # requires. A development build keeps the manifest without it and still starts (see the project file).
+        $properties = @()
+        if ($project -eq 'RemoteDesktop.SessionAgent') { $properties += '-p:UiAccessAgent=true' }
+
         dotnet publish "src\Hosts\$project" -c $Configuration -r win-x64 --self-contained true -p:PublishReadyToRun=true `
-            -o $PublishDirectory -nologo -v quiet
+            -o $PublishDirectory -nologo -v quiet @properties
         if ($LASTEXITCODE -ne 0) { throw "Publishing $project failed." }
     }
 }
@@ -462,6 +468,15 @@ foreach ($expected in 'RemoteDesktop.Client.exe', 'RemoteDesktop.HostService.exe
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
+}
+
+# The agent asks for UIAccess, and only this build does: Windows refuses to start such an image unless it is signed and
+# installed in a secure location, so a development build carries the manifest without it. Published without
+# -p:UiAccessAgent the feature would silently be missing from every installation, and nothing in the package would look
+# wrong - hence the check on the file itself (the manifest travels inside the executable as plain XML).
+$agentManifest = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $PublishDirectory 'RemoteDesktop.SessionAgent.exe')))
+if ($agentManifest -notmatch 'uiAccess="true"') {
+    throw 'The published agent does not ask for UIAccess; it would not be able to drive elevated windows (see the SessionAgent project file).'
 }
 
 # The address this installation talks to. It is stored in the settings file the installer ships (which an upgrade never
