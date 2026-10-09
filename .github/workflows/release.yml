@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    # 权限配置：允许向 Releases 写入文件
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # 可选：如果你需要使用真正的代码签名，而不是自签/跳过，
+      # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
+      # 下面演示了如何从 Secrets 获取 PFX 证书并解码：
+      - name: Decode Code Signing Certificate (Optional)
+        if: env.PFX_BASE64 != ''
+        env:
+          PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+        run: |
+          $pfxBytes = [System.Convert]::FromBase64String($env:PFX_BASE64)
+          [System.IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\sign.pfx", $pfxBytes)
+
+      # 运行构建脚本打包 MSI
+      - name: Build MSI Installer
+        shell: pwsh
+        env:
+          # 以下变量可以在 GitHub 仓库的 Settings -> Secrets/Variables 中配置
+          # 默认为公开的测试服务器地址，或者干脆留空让用户在 msiexec 时自己指定
+          DEFAULT_SERVER: ${{ vars.DEFAULT_RENDEZVOUS_URI || 'ws://127.0.0.1:5080/ws' }}
+          PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
+        run: |
+          # 如果有配置证书，则传入证书路径；否则传入 -SkipSigning
+          $signArgs = @()
+          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+              $signArgs += "-CertificateFile", "$env:GITHUB_WORKSPACE\sign.pfx", "-CertificatePassword", "$env:PFX_PASSWORD"
+          } else {
+              $signArgs += "-SkipSigning"
+          }
+
+          # 执行你优秀的打包脚本
+          .\build\installer\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER @signArgs
+
+      # 将打好的 MSI 文件提取出来
+      - name: Rename Artifact for Release
+        shell: pwsh
+        run: |
+          # 脚本产物在 artifacts/ 目录下，获取刚刚打出的 .msi
+          $msiFile = Get-ChildItem -Path artifacts/*.msi | Select-Object -First 1
+          # 根据 GitHub Tag (例如 v1.0.0) 重命名文件，使其更加专业
+          $newName = "RemoteDesktop-Windows-x64-$($env:GITHUB_REF_NAME).msi"
+          Rename-Item -Path $msiFile.FullName -NewName $newName
+          Write-Output "MSI_PATH=artifacts/$newName" >> $env:GITHUB_ENV
+
+      # 上传至 GitHub Release
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.MSI_PATH }}
+          generate_release_notes: true

@@ -125,7 +125,42 @@ netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in actio
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
 ```
 
-## 三、部署客户端 / 被控端（MSI）
+## 三、自动化发布到 GitHub Releases
+
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动构建、打包并发布 MSI。
+
+### 1. 准备代码签名证书 (可选)
+
+如果您希望发布出去的 MSI 不被 Windows SmartScreen 拦截，请在 GitHub 仓库中配置证书 Secrets：
+
+1. 导出您的代码签名证书为 PKCS#12 格式 (`.pfx`)。
+2. 在本地使用 PowerShell 将其转为 Base64：
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")) | Set-Clipboard
+   ```
+3. 在您的 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** 中添加：
+   *   `CODE_SIGN_CERT_BASE64` = 刚刚复制的 Base64 字符串
+   *   `CODE_SIGN_CERT_PASSWORD` = 您的证书密码
+
+*(如果不配置这些 Secrets，流水线会自动跳过签名步骤并正常打包)*
+
+### 2. 配置默认服务器地址
+
+在 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **Variables** 标签页下，新建一个变量：
+*   `DEFAULT_RENDEZVOUS_URI` = `ws://您的公网服务器:5080/ws`
+
+*(如果不配置，默认会编入 `ws://127.0.0.1:5080/ws`)*
+
+### 3. 触发自动发布
+
+在本地完成开发后：
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现 `RemoteDesktop-Windows-x64-v1.0.0.msi`！
+
+## 四、部署客户端 / 被控端（MSI）
 
 ### 1. 构建安装包时带上你的服务器地址
 
