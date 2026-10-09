@@ -60,10 +60,18 @@
         <File Id="AppSettingsFile" Source="$(var.SourceRoot)\appsettings.json" KeyPath="yes" />
       </Component>
 
-      <!-- If a public certificate was exported during the build (for UIAccess testing), install it into the machine Root store -->
+      <?ifdef var.TrustedRootCertificate ?>
+      <!-- The certificate this build signed with, when it is self-signed: the machine that installs this has to trust it
+           before a UIAccess agent signed with it can start, and this is what puts it in the machine's trusted root store.
+           A certificate from an authority is not here at all - its chain is trusted already. build-installer.ps1 decides
+           that and passes -p:TrustedRootCertificate, which is what compiles this component (a build without a
+           self-signed certificate has neither the component nor the binary it refers to). -->
       <Component Id="TrustedRootCert" Guid="e5d4e5f6-b7b8-4c9d-8e0f-1a2b3c4d5e6f">
-        <!-- We use a dummy registry key as KeyPath because Certificates don't act as a valid KeyPath by themselves. -->
+        <!-- A certificate is not a key path; the machine-wide registry value is, and it also has to be the one that
+             makes the component per-machine, like the certificate store it writes to. -->
         <RegistryValue Root="HKLM" Key="Software\RemoteDesktop" Name="TrustedRootCertInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <!-- Request="no" is what makes this install the certificate from the package instead of asking an authority for
+             one. Overwrite keeps a reinstall from failing on a certificate that is already there. -->
         <iis:Certificate Id="RootCertificate"
                          Name="RemoteDesktop.Trust"
                          Request="no"
@@ -72,10 +80,13 @@
                          Overwrite="yes"
                          BinaryRef="CertBinary" />
       </Component>
+      <?endif?>
 
     </DirectoryRef>
 
-    <Binary Id="CertBinary" SourceFile="$(var.SourceRoot)\RemoteDesktop-TrustedRoot.cer" />
+    <?ifdef var.TrustedRootCertificate ?>
+    <Binary Id="CertBinary" SourceFile="$(var.SourceRoot)\$(var.TrustedRootCertificate)" />
+    <?endif?>
 
     <!--
       The steps that need elevated rights go through the service executable, which the installer has just put in place.

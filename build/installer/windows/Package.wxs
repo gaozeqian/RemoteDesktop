@@ -48,7 +48,10 @@
       <ComponentRef Id="Settings" />
       <!-- Start menu shortcut (per-user, so it only goes for the user who uninstalls). -->
       <ComponentRef Id="StartMenuShortcut" />
+      <!-- Only in a build that signed with a self-signed certificate (see Components.wxs). -->
+      <?ifdef var.TrustedRootCertificate ?>
       <ComponentRef Id="TrustedRootCert" />
+      <?endif?>
       <!-- Everything else: the runtime, libraries and native dependencies. -->
       <ComponentGroupRef Id="Payload" />
     </Feature>

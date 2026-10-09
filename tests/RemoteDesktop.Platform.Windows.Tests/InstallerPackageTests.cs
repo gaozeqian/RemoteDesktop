@@ -75,7 +75,42 @@ public sealed class InstallerPackageTests
         // --- firewall and the start menu shortcut ----------------------------------------------------------------
         Assert.Single(package.Rows("SELECT `Name` FROM `Wix5FirewallException`", 1));
         Assert.Single(package.Rows("SELECT `Name` FROM `Shortcut`", 1));
-        Assert.Single(package.Rows("SELECT `Root` FROM `Registry`", 1)); // the shortcut's per-user key path
+
+        // Registry values are the key paths of the two components that have no file of their own to be keyed by: the
+        // per-user shortcut (1 = HKCU), and - in a build that signed with a self-signed certificate - the copy of that
+        // certificate the machine keeps (2 = HKLM), which is checked with the certificate itself below.
+        var registry = package.Rows("SELECT `Root`, `Name` FROM `Registry`", 2);
+        Assert.Single(registry, row => row[0] == "1" && row[1] == "StartMenuShortcut");
+
+        // --- the signing certificate, in a package that was built with a self-signed one -------------------------
+        // build-installer.ps1 exports the public half of a self-signed signing certificate and passes
+        // -p:TrustedRootCertificate, which is the only thing that compiles this component in; at install time the IIS
+        // extension's action adds it to the machine's trusted roots. That is what lets a UIAccess agent signed with it
+        // start without a prompt, and it is why an installation does not need the certificate put in place by hand.
+        //
+        // The pieces travel together or not at all - which is what this checks, because each of them alone is a
+        // silently broken package: a certificate row whose binary is empty installs something that is not a
+        // certificate as a trusted root (an unsigned build used to bake in an empty placeholder exactly like that),
+        // and a certificate in a component with no key path is one that nothing removes again.
+        var certificates = package.Rows("SELECT `Component_`, `StoreLocation`, `StoreName`, `Binary_` FROM `Wix4Certificate`", 4);
+        var trustedRoot = registry.Where(row => row[1] == "TrustedRootCertInstalled").ToList();
+        if (certificates.Count == 0)
+        {
+            Assert.Empty(trustedRoot);
+        }
+        else
+        {
+            var certificate = Assert.Single(certificates);
+            Assert.Equal("TrustedRootCert", certificate[0]);
+            Assert.Equal("2", certificate[1]); // the local machine, not the user who installs
+            Assert.Equal("Root", certificate[2]); // and its trusted root store
+            Assert.Single(trustedRoot);
+
+            var binary = package.Rows($"SELECT `Data` FROM `Binary` WHERE `Name` = '{certificate[3]}'", 1);
+            Assert.True(
+                int.Parse(Assert.Single(binary)[0], CultureInfo.InvariantCulture) >= 100,
+                "The root certificate in the package is empty.");
+        }
 
         // --- the custom actions that set the machine up and clean it up ------------------------------------------
         var actions = package.Rows("SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`", 4);

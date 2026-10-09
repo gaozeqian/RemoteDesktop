@@ -23,6 +23,11 @@
 .NOTES
   A signed installer is what keeps SmartScreen and enterprise policy from blocking the install. Without -SignCertificate
   the MSI is built but unsigned, which is fine for testing on your own machines.
+
+  A build that signs with a *self-signed* certificate also puts that certificate's public half into the installer, which
+  adds it to the trusted roots of the machine it is installed on. That is what a UIAccess agent needs to start without a
+  prompt, and it is why the certificate does not have to be installed there by hand first. A certificate from an
+  authority is left alone: it is trusted through its chain, and adding a leaf to the root store would be a downgrade.
 #>
 [CmdletBinding()]
 param(
@@ -39,17 +44,18 @@ param(
 
     # Code-signing certificate to use (thumbprint, or the subject of one). Left empty, a suitable certificate is looked
     # for in this user's and the machine's store, and signing is skipped when there is none; -SkipSigning turns it off
-    # even when one is there. Store certificates are used by signtool and by PowerShell.
+    # even when one is there. Store certificates are used by signtool and by PowerShell. Ignored when -CertificateFile
+    # is given: files are the more specific instruction.
     [string]$SignCertificate = '',
 
     # Which signing tool to use: auto, signtool, osslsigncode or powershell. "auto" picks the one that needs the least
-    # configuration (signtool or PowerShell with a store certificate, osslsigncode when certificate files are given).
+    # configuration (signtool if it is installed, otherwise PowerShell - both on Windows, with a store certificate or a
+    # PKCS#12 file; osslsigncode is what is left for a PEM certificate with its own key file).
     [ValidateSet('auto', 'signtool', 'osslsigncode', 'powershell')]
     [string]$SigningTool = 'auto',
 
-    # osslsigncode credentials: a PKCS#12 file (.pfx/.p12, with -CertificatePassword) or a PEM certificate together
-    # with -PrivateKeyFile. osslsigncode is the only tool here that runs off Windows, and the only one that signs MSI
-    # files without the Windows SDK.
+    # Signing credentials as files: a PKCS#12 (.pfx/.p12, with -CertificatePassword) that every tool here can use, or a
+    # PEM certificate together with -PrivateKeyFile, which only osslsigncode takes.
     [string]$CertificateFile = '',
     [string]$CertificatePassword = '',
     [string]$PrivateKeyFile = '',
@@ -83,6 +89,13 @@ if (-not $PublishDirectory) { $PublishDirectory = Join-Path $installerDirectory 
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $installerDirectory 'artifacts' }
 
 $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..')
+
+# Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
+# it, a typo) is worth a plain sentence now, not a cryptographic error five minutes into the build.
+foreach ($name in 'CertificateFile', 'PrivateKeyFile') {
+    $path = Get-Variable -Name $name -ValueOnly
+    if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The signing file -$name '$path' does not exist." }
+}
 
 function Get-ProductVersion {
     $props = [xml](Get-Content (Join-Path $repoRoot 'Directory.Build.props'))
@@ -193,14 +206,72 @@ function Find-SigningCertificate {
     return @{ Chosen = $null; Candidates = $candidates }
 }
 
+# The certificate (with its private key) inside a PKCS#12 file. Through the constructor, and with a null password rather
+# than an empty one: an X509Certificate2 is immutable on .NET (PowerShell 6 and later), so loading a file with a separate
+# Import call - which is how this reads on Windows PowerShell 5.1 - is refused there with "X509Certificate is immutable
+# on this platform".
+function Read-PfxCertificate {
+    param([string]$Path, [string]$Password)
+
+    $secret = if ($Password) { $Password } else { $env:RD_SIGNING_PASSWORD }
+    if (-not $secret) { $secret = $null }
+
+    return [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        $Path, $secret, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+}
+
+# Writes the public half of the certificate this build signs with next to the publish output, and returns its file name
+# - the installer then puts it into the machine's trusted root store, which is what lets a UIAccess agent signed with a
+# self-signed certificate start without a prompt.
+#
+# Only a self-signed certificate is exported, and nothing is exported when the build did not sign at all:
+#   * a certificate from a certificate authority is trusted through its chain already, and putting a leaf into the
+#     machine's root store would make that one key - not the authority - the root of everything the machine trusts,
+#     which is both unnecessary and a way to lose the authority's rotation;
+#   * a certificate that signed nothing has no business in a trusted root store. That also keeps an empty placeholder
+#     out of the package, which would otherwise try to install "nothing" as a root certificate.
+function Export-TrustedRootCertificate {
+    param([object]$Certificate, [string]$Destination)
+
+    # signtool and PowerShell are handed the certificate; osslsigncode is handed files and keeps it to itself, so what
+    # signed this build is asked of a file it has just signed - one answer that covers every tool.
+    $certificate = $Certificate
+    if (-not $certificate) {
+        $signed = Get-ChildItem $Destination -Recurse -Include 'RemoteDesktop*.exe' | Select-Object -First 1
+        if ($signed) { $certificate = (Get-AuthenticodeSignature $signed.FullName).SignerCertificate }
+    }
+
+    if (-not $certificate) {
+        Write-Warning 'The certificate this build signed with could not be read back from a signed file; the installer carries no root certificate.'
+        return $null
+    }
+
+    if ($certificate.Subject -ne $certificate.Issuer) {
+        Write-Host "The signing certificate is issued by '$($certificate.Issuer)', not by itself; it is trusted through that authority already, so the installer adds no root certificate."
+        return $null
+    }
+
+    $name = 'RemoteDesktop-TrustedRoot.cer'
+    $path = Join-Path $Destination $name
+    [System.IO.File]::WriteAllBytes($path, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+    Write-Host "The signing certificate is self-signed; the installer will add its public half ($name) to the trusted roots of the machine it is installed on."
+    return $name
+}
+
 # Signing needs a tool. signtool comes with the Windows SDK, which not every build machine has; Windows itself can
 # sign Authenticode just as well through PowerShell, so that is used when signtool is missing. Anything that cannot
 # sign reports what to install instead of failing halfway through a release build.
 function Resolve-SigningTool {
-    # Credentials decide which tools can do the job: signtool and PowerShell work with a certificate in a store,
-    # osslsigncode works with certificate files (a PKCS#12 or a PEM certificate with its key).
+    # Credentials decide which tools can do the job: all three work with a PKCS#12 file, signtool and PowerShell also
+    # with a certificate in a store, and a PEM certificate with its separate key file is something only osslsigncode
+    # takes. Without either credential there is nothing to sign with, whatever the tools are.
+    #
+    # -CertificateFile is the more specific instruction, so it wins over a certificate found in a store: whoever passes
+    # files means those files to sign, not whichever certificate this machine happens to have.
     $haveFiles = -not [string]::IsNullOrEmpty($CertificateFile)
-    $haveStore = $null -ne $signing.Chosen
+    $havePfx = $haveFiles -and $CertificateFile -match '\.p(12|fx)$'
+    $haveStore = -not $haveFiles -and $null -ne $signing.Chosen
+    $haveCredentials = $haveStore -or $havePfx
 
     $tools = [ordered]@{}
     foreach ($name in 'signtool', 'osslsigncode') {
@@ -218,27 +289,44 @@ function Resolve-SigningTool {
 
     if ($SigningTool -eq 'signtool') {
         if (-not $tools['signtool']) { throw 'signtool.exe was not found. Install the Windows SDK (Signing Tools), or use -SigningTool osslsigncode.' }
-        return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool'] }
+        if (-not $haveCredentials) { throw 'signtool signs with a certificate in a store (-SignCertificate <thumbprint>) or with a PKCS#12 file (-CertificateFile <pfx> [-CertificatePassword <pw>]). A PEM certificate with a separate key file needs -SigningTool osslsigncode.' }
+        return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool']; Certificate = (Get-SigningCertificate) }
     }
 
     if ($SigningTool -eq 'osslsigncode') {
         if (-not $tools['osslsigncode']) { throw 'osslsigncode was not found. Install it (winget install MichalTrojnara.osslsigncode, apt install osslsigncode, brew install osslsigncode), or leave -SigningTool on auto.' }
         if (-not $haveFiles) { throw 'osslsigncode signs with files: pass -CertificateFile <pfx|pem> [-CertificatePassword <pw>], or -CertificateFile <pem> -PrivateKeyFile <key>.' }
-        return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode'] }
+        # No Certificate: osslsigncode is handed files and reads them itself. The property is set (to nothing) on every
+        # tool all the same - reading a property that is not there at all is an error under Set-StrictMode.
+        return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode']; Certificate = $null }
     }
 
     if ($SigningTool -eq 'powershell') {
-        if (-not $powershell -or -not $haveStore) { throw 'PowerShell signing needs a code-signing certificate in a store; give one with -SignCertificate, or use certificate files with osslsigncode.' }
-        return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell }
+        if (-not $powershell) { throw 'PowerShell signs Authenticode on Windows only; use -SigningTool osslsigncode here.' }
+        if (-not $haveCredentials) { throw 'PowerShell signing needs a code-signing certificate in a store (-SignCertificate) or a PKCS#12 file (-CertificateFile <pfx> [-CertificatePassword <pw>]). A PEM certificate with a separate key file needs -SigningTool osslsigncode.' }
+        return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) }
     }
 
-    # Automatic: whatever needs the least configuration. signtool and PowerShell use the certificate that is already
-    # in a store; osslsigncode is the only option for certificate files (and the only one that runs off Windows).
-    if ($tools['signtool'] -and $haveStore) { return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool'] } }
-    if ($tools['osslsigncode'] -and $haveFiles) { return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode'] } }
-    if ($powershell -and $haveStore) { return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell } }
+    # Automatic: apart from osslsigncode, the tools only need what the build already has. A certificate in a store goes
+    # to signtool when it is installed, as before. A PKCS#12 file goes to PowerShell even then, because PowerShell is
+    # part of Windows: the build does not depend on the Windows SDK being installed (or on signtool's folder being on
+    # the PATH, which is what a CI runner decides), and the password stays in this process instead of on a command line
+    # that every other process on the machine can read. osslsigncode is what is left for a PEM certificate with its own
+    # key file, and the only one that runs off Windows.
+    if ($havePfx -and $powershell) { return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) } }
+    if ($tools['signtool'] -and $haveCredentials) { return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool']; Certificate = (Get-SigningCertificate) } }
+    if ($powershell -and $haveCredentials) { return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) } }
+    if ($tools['osslsigncode'] -and $haveFiles) { return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode']; Certificate = $null } }
 
     return $null
+}
+
+# The certificate the build signs with: the one inside the PKCS#12 file when files were given, otherwise the one found
+# in a store. Read once, when the tool is chosen, and not once per file: signing several hundred files must not
+# re-open the file for each of them.
+function Get-SigningCertificate {
+    if ($CertificateFile) { return Read-PfxCertificate -Path $CertificateFile -Password $CertificatePassword }
+    return $signing.Chosen
 }
 
 # The message for "the signature is fine, this machine just does not trust the certificate yet" - which is what a
@@ -256,6 +344,7 @@ in place - nothing about the build is wrong.
 
 On every machine that should accept this software, once, as an administrator:
   pwsh -File build/signing/Install-TrustedCertificate.ps1 -CertificatePath <the .cer file>
+$(if ($selfSigned) { 'A machine that installs this package does not need that step: it puts this certificate into its trusted roots itself. Copying the binaries without the installer is what needs it.' })
 
 For machines you do not control, only a certificate from a certificate authority helps: they have no reason to trust
 yours, and Windows keeps warning about an unknown publisher. See build/signing/README.md.
@@ -308,7 +397,19 @@ function Invoke-Signing {
     }
 
     if ($Tool.Kind -eq 'signtool') {
-        $arguments = @('sign', '/sha1', $Certificate.Thumbprint, '/fd', 'sha256')
+        $arguments = @('sign', '/fd', 'sha256')
+        if ($CertificateFile) {
+            # A PKCS#12 file. signtool takes the password as an argument, where every other process on this machine can
+            # read it: a passwordless build certificate, RD_SIGNING_PASSWORD in the environment, or a certificate in a
+            # store (signtool then takes only the thumbprint) keeps it out of sight.
+            $arguments += @('/f', $CertificateFile)
+            $secret = if ($CertificatePassword) { $CertificatePassword } else { $env:RD_SIGNING_PASSWORD }
+            if ($secret) { $arguments += @('/p', $secret) }
+        }
+        else {
+            $arguments += @('/sha1', $Certificate.Thumbprint)
+        }
+
         if ($TimestampServer) { $arguments += @('/tr', $TimestampServer, '/td', 'sha256') }
         $arguments += @('/d', 'RemoteDesktop', $File)
 
@@ -317,8 +418,10 @@ function Invoke-Signing {
         return
     }
 
-    # PowerShell's own Authenticode signing: no SDK needed, the certificate has to be in a store it can read.
-    $parameters = @{ FilePath = $File; Certificate = $Certificate; HashAlgorithm = 'SHA256' }
+    # PowerShell's own Authenticode signing: no SDK needed, and with a PKCS#12 file no certificate store either. The
+    # password stays inside this process, unlike with the tools that take it as an argument.
+    $credentials = if ($Tool.Certificate) { $Tool.Certificate } else { $Certificate }
+    $parameters = @{ FilePath = $File; Certificate = $credentials; HashAlgorithm = 'SHA256' }
     if ($TimestampServer) { $parameters.TimestampServer = $TimestampServer }
 
     $result = Set-AuthenticodeSignature @parameters
@@ -411,30 +514,24 @@ if (-not $KeepSymbols) {
 $signing = if ($SkipSigning) { @{ Chosen = $null; Candidates = @() } } else { Find-SigningCertificate -Wanted $SignCertificate -Product 'RemoteDesktop' }
 $resolvedSigner = if ($SkipSigning) { $null } else { Resolve-SigningTool }
 
-# A tool needs credentials: a certificate in a store, or certificate files for osslsigncode. Which one it is is
-# decided by the tool, so both are carried along and passed on to Invoke-Signing.
+# Signing is what the certificate is for; which tool does it and where its credentials come from is decided in
+# Resolve-SigningTool, so the certificate it settled on is what everything else here uses.
 $signer = $resolvedSigner
+$signingCertificate = if ($signer) { $signer.Certificate } else { $null }
+$trustedRootCertificate = $null
 if ($signer) {
     $own = Get-ChildItem $PublishDirectory -Recurse -Include 'RemoteDesktop*.exe', 'RemoteDesktop*.dll'
     Write-Host "Signing $($own.Count) product file(s) before packaging..."
     foreach ($file in $own) {
-        Invoke-Signing -Tool $signer -Certificate $signing.Chosen -File $file.FullName
+        # Discarded: the per-file result of Set-AuthenticodeSignature is a row of the same table for every file, and a
+        # build that signs 287 of them does not need it printed 287 times.
+        [void](Invoke-Signing -Tool $signer -Certificate $signingCertificate -File $file.FullName)
     }
 
-    if ($CertificateFile) {
-        # Export the public key (.cer) to install it into the target machine's Root store
-        # This makes self-signed UIAccess agents trusted by the target machine.
-        Write-Host "Exporting public certificate to bake into the MSI..."
-        $cerPath = Join-Path $PublishDirectory 'RemoteDesktop-TrustedRoot.cer'
-        # The CertificateFile is already a PKCS#12 (.pfx); we extract just the public cert.
-        $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
-        $certObj.Import($CertificateFile, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
-        [System.IO.File]::WriteAllBytes($cerPath, $certObj.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-    }
-} else {
-    # Even if we skip signing, we must produce a dummy cer file so WiX won't fail the build
-    $cerPath = Join-Path $PublishDirectory 'RemoteDesktop-TrustedRoot.cer'
-    New-Item -Path $cerPath -ItemType File -Force | Out-Null
+    # Nothing comes of this when the build did not sign, or signed with a certificate from an authority: see the
+    # function for why. It is the file's presence that decides whether the installer carries the component at all.
+    $trustedRootCertificate = Export-TrustedRootCertificate -Certificate $signingCertificate -Destination $PublishDirectory
+    if ($trustedRootCertificate) { Write-Host "  $trustedRootCertificate" }
 }
 
 New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWritten + 'RemoteDesktop-TrustedRoot.cer')
@@ -442,9 +539,16 @@ New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWr
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Installer.wixproj') -c $Configuration -nologo -v minimal `
-    -p:ProductVersion=$version -p:SourceRoot=$PublishDirectory -p:DefaultRendezvousUri=$defaultRendezvousUri `
-    -p:OutputPath=$OutputDirectory
+# -p:TrustedRootCertificate is what compiles the component that installs the certificate; without it neither the
+# component nor the binary it needs exists in the package (Components.wxs).
+$wixArguments = @(
+    "-p:ProductVersion=$version"
+    "-p:SourceRoot=$PublishDirectory"
+    "-p:DefaultRendezvousUri=$defaultRendezvousUri"
+)
+if ($trustedRootCertificate) { $wixArguments += "-p:TrustedRootCertificate=$trustedRootCertificate" }
+
+dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 
 $package = Get-ChildItem $OutputDirectory -Filter *.msi | Select-Object -First 1
@@ -461,17 +565,17 @@ if (-not $SkipSigning) {
             $signing.Candidates | Sort-Object NotAfter -Descending | ForEach-Object { Write-Host "  $($_.Thumbprint)  $($_.Subject)" }
         }
         elseif ($CertificateFile) {
-            Write-Warning 'Certificate files were given, but no tool that can use them was found. Install osslsigncode, or use a store certificate with signtool or PowerShell.'
+            Write-Warning "Certificate files were given, but no tool that can use them was found. A PKCS#12 file works with signtool or PowerShell (both on Windows); a PEM certificate with a separate key file needs osslsigncode."
         }
         else {
             Write-Host 'No code-signing certificate and no tool to sign with; the package stays unsigned.'
             Write-Host '  In a store:  build\signing\New-SigningCertificate.ps1 for a test certificate, or import the one you bought.'
-            Write-Host '  As files:    -SigningTool osslsigncode -CertificateFile <pfx|pem>'
+            Write-Host '  As files:    -CertificateFile <pfx> -CertificatePassword <pw>'
         }
     }
     else {
         Write-Host "Signing with $($resolvedSigner.Kind)..."
-        [void](Invoke-Signing -Tool $resolvedSigner -Certificate $signing.Chosen -File $package.FullName)
+        [void](Invoke-Signing -Tool $resolvedSigner -Certificate $signingCertificate -File $package.FullName)
 
         if (-not $SkipSignatureVerification) {
             # Verification answers two different questions, and only one of them is a build failure:
@@ -509,14 +613,14 @@ if (-not $SkipSigning) {
                         throw "The signature of $($package.Name) could not be verified:`n$output"
                     }
 
-                    Write-Warning (Get-UntrustedCertificateAdvice -Certificate $signing.Chosen -Package $package)
+                    Write-Warning (Get-UntrustedCertificateAdvice -Certificate $signingCertificate -Package $package)
                 }
             }
             else {
                 $check = Get-AuthenticodeSignature $package.FullName
                 if ($check.Status -ne 'Valid') {
                     if ($check.Status -in 'UnknownError', 'NotTrusted') {
-                        Write-Warning (Get-UntrustedCertificateAdvice -Certificate $signing.Chosen -Package $package)
+                        Write-Warning (Get-UntrustedCertificateAdvice -Certificate $signingCertificate -Package $package)
                     }
                     else {
                         throw "The signature of $($package.Name) could not be verified: $($check.Status) $($check.StatusMessage)"

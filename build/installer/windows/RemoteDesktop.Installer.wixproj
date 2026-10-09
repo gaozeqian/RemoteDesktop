@@ -16,6 +16,10 @@
     <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
     <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>
     <DefineConstants>ProductVersion=$(ProductVersion);SourceRoot=$(SourceRoot);DefaultRendezvousUri=$(DefaultRendezvousUri)</DefineConstants>
+    <!-- The public half of the signing certificate, and only when the build signed with a self-signed one: its presence
+         is what compiles the component that installs it into the machine's trusted root store. Built by hand, without
+         it, the package simply has no certificate in it (see Components.wxs). -->
+    <DefineConstants Condition="'$(TrustedRootCertificate)' != ''">$(DefineConstants);TrustedRootCertificate=$(TrustedRootCertificate)</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
