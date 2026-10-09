@@ -8,10 +8,17 @@ on:
 jobs:
   build-and-release:
     runs-on: windows-latest
-    
+
     # 权限配置：允许向 Releases 写入文件
     permissions:
       contents: write
+
+    # 证书 Secrets 放在 job 级别：GitHub 文档给的做法是"把 Secret 放进 env，再在 step 的 if 里用 env.X 判断"
+    # （Secret 不能直接写进 if），而这里必须是 job 级别的 env 才有保证——step 自己那份 env 能否被它自己的 if
+    # 读到并没有说明。下面解码证书的那一步就靠它判断有没有配置证书。
+    env:
+      PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+      PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
 
     steps:
       - name: Checkout Code
@@ -27,8 +34,6 @@ jobs:
       # 下面演示了如何从 Secrets 获取 PFX 证书并解码：
       - name: Decode Code Signing Certificate (Optional)
         if: env.PFX_BASE64 != ''
-        env:
-          PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
         run: |
           $pfxBytes = [System.Convert]::FromBase64String($env:PFX_BASE64)
           [System.IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\sign.pfx", $pfxBytes)
@@ -40,8 +45,6 @@ jobs:
           # 以下变量可以在 GitHub 仓库的 Settings -> Secrets/Variables 中配置
           # 默认为公开的测试服务器地址，或者干脆留空让用户在 msiexec 时自己指定
           DEFAULT_SERVER: ${{ vars.DEFAULT_RENDEZVOUS_URI || 'ws://127.0.0.1:5080/ws' }}
-          PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
         run: |
           # 如果有配置证书，则传入证书路径；否则传入 -SkipSigning
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
