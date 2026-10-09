@@ -366,12 +366,28 @@
 
                       <TextBlock Grid.Row="3" Text="被控端信令服务器" Classes="label"
                                  IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding HostRendezvousUri}" TextWrapping="Wrap"
-                                 IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      <StackPanel Grid.Row="3" Grid.Column="1" Spacing="{DynamicResource RdSpaceSm}"
+                                  IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        
+                        <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" IsVisible="{Binding !IsEditingServerAddress}">
+                          <TextBlock Text="{Binding HostRendezvousUri}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                          <Button Content="修改" Command="{Binding OpenServerAddressEditorCommand}" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="{DynamicResource RdSpaceSm}" IsVisible="{Binding IsEditingServerAddress}">
+                          <TextBox Text="{Binding NewServerAddress}" PlaceholderText="ws://服务器地址:5080/ws" MaxWidth="300" HorizontalAlignment="Left" />
+                          <TextBlock Text="{Binding ServerAddressError}" Foreground="{DynamicResource RdErrorTextBrush}"
+                                     IsVisible="{Binding ServerAddressError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
+                          <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                            <Button Content="保存并重启服务" Command="{Binding SaveServerAddressCommand}" Classes="accent" />
+                            <Button Content="取消" Command="{Binding CancelServerAddressEditorCommand}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </StackPanel>
                     </Grid>
 
                     <TextBlock Classes="caption"
-                               Text="两台机器必须连同一台服务器。安装时用 RENDEZVOUSURI=ws://服务器地址:5080/ws 指定，或改 appsettings.json 里的 Transport:RendezvousUri 后重启服务（见 docs/deployment.md）。这台客户端没有可修改的设置。" />
+                               Text="两台机器必须连同一台服务器。修改被控端服务器地址将需要管理员权限 (UAC) 以更新本地配置并重启后台服务。" />
                   </StackPanel>
                 </Border>
               </TabItem>

@@ -178,6 +178,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? HostRendezvousUri { get; set; }
 
+    [ObservableProperty]
+    public partial bool IsEditingServerAddress { get; set; }
+
+    [ObservableProperty]
+    public partial string? NewServerAddress { get; set; }
+
+    [ObservableProperty]
+    public partial string? ServerAddressError { get; set; }
+
     public string ClientVersion { get; } = typeof(MainWindowViewModel).Assembly.GetName().Version?.ToString() ?? "未知";
 
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
@@ -413,6 +422,70 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanConnect))]
     private Task ConnectAsync() => LaunchFeatureAsync(SelectedConnectionMode.Feature, targetDevice: null, CancellationToken.None);
+
+    [RelayCommand]
+    private void OpenServerAddressEditor()
+    {
+        NewServerAddress = HostRendezvousUri;
+        ServerAddressError = null;
+        IsEditingServerAddress = true;
+    }
+
+    [RelayCommand]
+    private void CancelServerAddressEditor()
+    {
+        NewServerAddress = string.Empty;
+        ServerAddressError = null;
+        IsEditingServerAddress = false;
+    }
+
+    [RelayCommand]
+    private async Task SaveServerAddressAsync()
+    {
+        var uri = NewServerAddress?.Trim();
+        if (string.IsNullOrEmpty(uri) || (!uri.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) && !uri.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)))
+        {
+            ServerAddressError = "地址必须以 ws:// 或 wss:// 开头";
+            return;
+        }
+
+        try
+        {
+            var exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe");
+            if (!System.IO.File.Exists(exePath))
+            {
+                ServerAddressError = "找不到后台服务程序，可能客户端未作为服务安装。";
+                return;
+            }
+
+            // Execute elevated process to configure and restart the service
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -WindowStyle Hidden -Command \"& '{exePath}' --configure-system --rendezvous '{uri}'; if ($LASTEXITCODE -eq 0) {{ Restart-Service RemoteDesktopHost }}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+            };
+
+            using var process = System.Diagnostics.Process.Start(startInfo);
+            if (process != null)
+            {
+                await process.WaitForExitAsync();
+                if (process.ExitCode != 0)
+                {
+                    ServerAddressError = "由于权限拒绝或配置失败，无法修改信令服务器地址。";
+                    return;
+                }
+            }
+
+            IsEditingServerAddress = false;
+        }
+        catch (Exception ex)
+        {
+            ServerAddressError = $"无法应用配置：{ex.Message}";
+        }
+    }
 
     [RelayCommand]
     private void OpenFixedPasswordEditor()
