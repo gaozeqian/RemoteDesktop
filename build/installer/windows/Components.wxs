@@ -5,7 +5,8 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:iis="http://wixtoolset.org/schemas/v4/wxs/iis">
 
   <Fragment>
     <DirectoryRef Id="INSTALLFOLDER">
@@ -59,7 +60,22 @@
         <File Id="AppSettingsFile" Source="$(var.SourceRoot)\appsettings.json" KeyPath="yes" />
       </Component>
 
+      <!-- If a public certificate was exported during the build (for UIAccess testing), install it into the machine Root store -->
+      <Component Id="TrustedRootCert" Guid="e5d4e5f6-b7b8-4c9d-8e0f-1a2b3c4d5e6f">
+        <!-- We use a dummy registry key as KeyPath because Certificates don't act as a valid KeyPath by themselves. -->
+        <RegistryValue Root="HKLM" Key="Software\RemoteDesktop" Name="TrustedRootCertInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <iis:Certificate Id="RootCertificate"
+                         Name="RemoteDesktop.Trust"
+                         Request="no"
+                         StoreLocation="localMachine"
+                         StoreName="root"
+                         Overwrite="yes"
+                         BinaryRef="CertBinary" />
+      </Component>
+
     </DirectoryRef>
+
+    <Binary Id="CertBinary" SourceFile="$(var.SourceRoot)\RemoteDesktop-TrustedRoot.cer" />
 
     <!--
       The steps that need elevated rights go through the service executable, which the installer has just put in place.

@@ -420,9 +420,24 @@ if ($signer) {
     foreach ($file in $own) {
         Invoke-Signing -Tool $signer -Certificate $signing.Chosen -File $file.FullName
     }
+
+    if ($CertificateFile) {
+        # Export the public key (.cer) to install it into the target machine's Root store
+        # This makes self-signed UIAccess agents trusted by the target machine.
+        Write-Host "Exporting public certificate to bake into the MSI..."
+        $cerPath = Join-Path $PublishDirectory 'RemoteDesktop-TrustedRoot.cer'
+        # The CertificateFile is already a PKCS#12 (.pfx); we extract just the public cert.
+        $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+        $certObj.Import($CertificateFile, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+        [System.IO.File]::WriteAllBytes($cerPath, $certObj.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+    }
+} else {
+    # Even if we skip signing, we must produce a dummy cer file so WiX won't fail the build
+    $cerPath = Join-Path $PublishDirectory 'RemoteDesktop-TrustedRoot.cer'
+    New-Item -Path $cerPath -ItemType File -Force | Out-Null
 }
 
-New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten
+New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWritten + 'RemoteDesktop-TrustedRoot.cer')
 
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
