@@ -2,6 +2,7 @@
   <PropertyGroup>
     <!-- No console window: the agent runs invisibly in the interactive session. -->
     <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
