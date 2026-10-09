@@ -129,9 +129,11 @@ curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正�
 
 项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动构建、打包并发布 MSI。
 
-### 1. 准备代码签名证书 (可选)
+### 1. 准备代码签名证书 (非常重要)
 
-如果您希望发布出去的 MSI 不被 Windows SmartScreen 拦截，请在 GitHub 仓库中配置证书 Secrets：
+为了突破 Windows 的 UIPI 限制（例如远程操作任务管理器时不卡鼠标），本程序的 `SessionAgent` 开启了 `UIAccess` 权限。这意味着发布出去的 MSI 及可执行文件 **必须被有效签名** 才能获得 Windows 安全中心放行，否则在 UAC 或高权限窗口下将无法注入鼠标键盘。
+
+请在 GitHub 仓库中配置证书 Secrets（如果没有商业证书，也可使用自签名代码证书测试）：
 
 1. 导出您的代码签名证书为 PKCS#12 格式 (`.pfx`)。
 2. 在本地使用 PowerShell 将其转为 Base64：
