@@ -54,6 +54,14 @@ internal sealed class PreparedLaunch(DesktopKind desktop, uint sessionId, nint p
 /// which no user process may even look at. Run as an ordinary user (development), it just starts the agent as that
 /// user, which covers the user desktop only.
 /// </summary>
+/// <remarks>
+/// The agent asks for UIAccess in its manifest, and that decides how it has to be started: the CreateProcess family
+/// cannot *grant* UIAccess. An image whose manifest asks for it fails with ERROR_ELEVATION_REQUIRED (740) unless the
+/// token it is created with already carries the flag - only the shell grants it, through the Application Information
+/// service and only inside an interactive session, which is no use to a service in session 0. So the service puts the
+/// flag on the duplicated token itself (<see cref="EnableUIAccess"/>, which LocalSystem may do), and the development
+/// path goes through the shell.
+/// </remarks>
 [SupportedOSPlatform("windows")]
 internal static partial class SessionProcessLauncher
 {
@@ -115,6 +123,13 @@ internal static partial class SessionProcessLauncher
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
 
+            // Before anything is started with this token: without the flag the agent cannot be created at all, because
+            // its manifest asks for UIAccess and CreateProcessAsUser does not grant that (see the remarks on the class).
+            if (!EnableUIAccess(primary))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
             if (!CreateEnvironmentBlock(out environment, primary, false))
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -152,10 +167,12 @@ internal static partial class SessionProcessLauncher
         var directory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory;
         if (launch.PrimaryToken == 0)
         {
+            // Through the shell rather than CreateProcess, for the reason the class remarks give: the shell is what can
+            // grant the UIAccess the agent asks for. It only ever knows about the session it runs in, which is exactly
+            // what this development path wants - the session the person running the host is sitting at.
             return Process.Start(new ProcessStartInfo(executable, arguments)
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
+                UseShellExecute = true,
                 WorkingDirectory = directory,
             }) ?? throw new AgentUnavailableException("The agent process could not be started.");
         }
@@ -193,6 +210,14 @@ internal static partial class SessionProcessLauncher
         {
             DestroyEnvironmentBlock(launch.Environment);
         }
+    }
+
+    /// <summary>Puts the UIAccess flag on a token, which is what lets the agent be started at all (see the class remarks).</summary>
+    /// <remarks>Requires SeTcbPrivilege, which the LocalSystem the service runs as holds.</remarks>
+    private static bool EnableUIAccess(nint token)
+    {
+        var enabled = 1;
+        return SetTokenInformation(token, TokenUIAccess, in enabled, sizeof(int));
     }
 
     private static nint OpenWinlogonToken(uint sessionId)
@@ -257,6 +282,13 @@ internal static partial class SessionProcessLauncher
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint handle);
+
+    // TokenUIAccess from TOKEN_INFORMATION_CLASS; SetTokenInformation takes a BOOL for it.
+    private const int TokenUIAccess = 26;
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetTokenInformation(nint token, int tokenInformationClass, in int tokenInformation, int tokenInformationLength);
 
     // lpCommandLine must be writable memory, hence raw pointers for the strings.
     [LibraryImport("advapi32.dll", EntryPoint = "CreateProcessAsUserW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
