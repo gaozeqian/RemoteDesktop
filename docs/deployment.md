@@ -146,6 +146,12 @@ curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正�
 
 *(如果不配置这些 Secrets，流水线会自动跳过签名步骤并正常打包)*
 
+配置好之后，流水线用这个 `.pfx` 给客户端的 exe/dll 和 MSI 签名（Windows 自带的方式，不需要额外装工具）。
+如果这张证书是**自签名**的，构建还会把它的公开部分一起打进 MSI：安装时安装程序会把它装进目标机器的
+"受信任的根证书颁发机构"，卸载时移除——UIAccess 要求签名链能被本机信任，这一步让装好的机器立刻满足这个条件，
+不需要再手工 `certutil -addstore`。CA 签发的证书不会被这样做（它的链本来就受信任）。详见
+[build/signing/README.md](../build/signing/README.md)。
+
 ### 2. 配置默认服务器地址
 
 在 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **Variables** 标签页下，新建一个变量：

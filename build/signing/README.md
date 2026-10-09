@@ -30,12 +30,25 @@
 
 | 工具 | 凭证 | 平台 | 说明 |
 |---|---|---|---|
-| `signtool` | 证书存储里的证书（`-SignCertificate` 或自动查找） | Windows | Windows SDK 的 "Signing Tools"，最常用；支持硬件令牌与云 HSM |
-| `powershell` | 证书存储里的证书 | Windows | 内置的 `Set-AuthenticodeSignature`，**不需要装 Windows SDK** |
+| `signtool` | 证书存储里的证书（`-SignCertificate` 或自动查找）或 PKCS#12 文件 | Windows | Windows SDK 的 "Signing Tools"，最常用；支持硬件令牌与云 HSM |
+| `powershell` | 证书存储里的证书，或 PKCS#12 文件 | Windows | 内置的 `Set-AuthenticodeSignature`，**不需要装 Windows SDK** |
 | `osslsigncode` | **证书文件**：`-CertificateFile <pfx>`（+`-CertificatePassword`）或 `-CertificateFile <crt.pem> -PrivateKeyFile <key.pem>` | Windows / Linux / macOS | 开源跨平台，**能签 MSI**，适合 Linux CI 或没有 Windows SDK 的机器 |
 
-`auto` 的选择顺序：存储里有可用证书就用 signtool，否则给了证书文件且装了 osslsigncode 就用它，
-否则用 PowerShell（Windows 自带）；都没有就跳过并说明缺什么。
+`auto` 的选择顺序：
+
+1. 给了 PKCS#12（`-CertificateFile <pfx>`）→ **PowerShell**。它是 Windows 自带的，不依赖机器上装没装
+   Windows SDK、也不依赖 `signtool` 在不在 PATH 里；密码留在进程内部，不进入命令行（进程列表里谁都看得到）。
+2. 否则存储里有可用证书 → `signtool`；没有 signtool 就用 PowerShell。
+3. 只有 PEM 证书 + 私钥文件（`-CertificateFile <crt.pem> -PrivateKeyFile <key.pem>`）→ `osslsigncode`。
+
+`-CertificateFile` 比存储里的证书更明确：两个都给时，用文件签。都没有就跳过并说明缺什么。
+
+CI 上最常见的用法（证书以 Base64 放在 Secrets 里，解码成 .pfx 再传给脚本）：
+
+```powershell
+.\build\installer\windows\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws `
+    -CertificateFile .\sign.pfx -CertificatePassword $env:PFX_PASSWORD
+```
 
 ### 用 osslsigncode 签名
 
@@ -47,12 +60,17 @@ brew install osslsigncode
 ```
 
 ```powershell
-# PKCS#12（.pfx/.p12）——密码也可以放在环境变量 RD_SIGNING_PASSWORD 里，避免进入命令历史
+# PKCS#12（.pfx/.p12）：-SingingTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
+pwsh -File build/installer/windows/build-installer.ps1 `
+    -RendezvousUri ws://<服务器>:5080/ws `
+    -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
+
+# 指定 osslsigncode 也可以（Linux/macOS 上只有它），密码也可以放在环境变量 RD_SIGNING_PASSWORD 里
 pwsh -File build/installer/windows/build-installer.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
-# PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）
+# PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）——这一种只有 osslsigncode 支持
 pwsh -File build/installer/windows/build-installer.ps1 `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.crt.pem -PrivateKeyFile C:\keys\codesign.key.pem
 ```
@@ -96,6 +114,7 @@ pwsh -File build/signing/New-SigningCertificate.ps1 -Years 5
 pwsh -File build/installer/windows/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
+#    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要
 pwsh -File build/signing/Install-TrustedCertificate.ps1 -CertificatePath build/signing/certificates/RemoteDesktop.cer
 
 # 撤销：先取消信任，再从证书存储里删掉
@@ -109,6 +128,20 @@ pwsh -File build/signing/New-SigningCertificate.ps1 -RemoveFromStore
 - **证书是否被本机信任**：自签名证书在装过 cer 之前一定"链到不受信任的根"。这只是**警告**，并打印出上面第 3 步的命令。构建不会因此失败。
 
 （`-SkipSignatureVerification` 仍然可用，含义是"这一整步都别做"，一般不需要。）
+
+### 用安装包装的机器不用手工装 cer
+
+构建时如果签名用的是**自签名**证书，脚本会把它的公开部分（`.cer`）一起放进 MSI：安装时由安装程序把它写进
+**本机的"受信任的根证书颁发机构"**，卸载时移除。所以上面第 3 步只对"手工拷贝程序去跑"的机器还有意义。
+
+这一步是给 UIAccess 用的：会话代理要以 UIAccess 权限启动，Windows 要求它的签名能连到一条**本机信任**的证书链，
+而自签名证书在没被信任之前连不上。安装包自己把根装好，就不必让人先手工 `certutil -addstore` 再安装。
+
+CA 签发的证书**不会**被这样做：它的链本来就受信任，把一张终端证书塞进根存储反而是降级——那样一来这台机器信任的根
+就是这把签名密钥，而不是那家 CA，CA 轮换或吊销都影响不到它。
+
+（包里的证书来自构建时用的那张，签发者为自己的证书才带；`InstallerPackageTests` 会检查这三件事同时出现或同时
+不出现：证书行、它的二进制内容、以及负责卸载时清掉它的注册表键路径。）
 
 **它买到什么、买不到什么**
 
