@@ -3,6 +3,18 @@
 跨平台远程桌面软件（类 ToDesk）：远程控制、观看模式、文件传输、远程终端、远程摄像头。
 后端 .NET 10，前端 Avalonia 12。第一阶段仅支持 Windows，macOS / Linux 在后续阶段通过新增平台项目接入。
 
+## 📚 项目文档
+
+为了保证软件的可维护性与团队协作，请参阅以下专属文档：
+- **[📘 文档中心 (Docs Index)](docs/README.md)**：所有技术文档的入口。
+  - **[部署与运维文档 (Deployment)](docs/deployment.md)**
+  - **[系统架构设计 (Architecture)](docs/architecture.md)**
+  - **[网络通信协议 (Protocol)](docs/protocol.md)**
+  - **[安全机制说明 (Security)](docs/security.md)**
+  - **[设备列表存储设计 (Storage)](docs/device-list-storage.md)**
+- **[🤝 贡献指南 (Contributing)](CONTRIBUTING.md)**：包含代码提交流程、环境要求与架构依赖规则。
+- **[📜 更新日志 (Changelog)](CHANGELOG.md)**：记录各里程碑的新增特性与修复。
+
 ## 构建与测试
 
 ```
@@ -161,7 +173,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 ## 代码结构
 
-
+详细的系统架构与分层规则设计，请参见 **[系统架构设计文档](docs/architecture.md)**。
 
 依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`。
 `Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.ArchitectureTests` 强制检查。

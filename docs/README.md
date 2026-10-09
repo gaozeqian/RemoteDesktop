@@ -1,0 +1,23 @@
+# Remote Desktop 文档中心
+
+欢迎来到项目文档中心。这里详细记录了 RemoteDesktop 的架构设计、通信协议、安全机制以及部署指南。
+
+## 📖 目录 (Table of Contents)
+
+### 1. 核心设计 (Design & Architecture)
+* [**系统架构设计 (architecture.md)**](architecture.md)
+  * 领域驱动设计 (DDD)、Clean Architecture 依赖流向、组件指责与进程模型。
+* [**网络通信协议规范 (protocol.md)**](protocol.md)
+  * 信令层 (WebSocket) 与 传输层 (QUIC) 交互流程，多路复用帧结构。
+* [**安全机制说明 (security.md)**](security.md)
+  * 端到端加密 (E2EE)、密码证明防重放攻击、权限隔离与降级。
+
+### 2. 部署与运维 (Ops)
+* [**部署指南 (deployment.md)**](deployment.md)
+  * Rendezvous / Relay 服务端的部署要求、网络端口开放及客户端直连说明。
+* [**设备列表与存储 (device-list-storage.md)**](device-list-storage.md)
+  * 客户端本地存储结构及账号系统同步升级预留接口。
+
+### 3. 开发指引
+* 请参阅根目录下的 [`CONTRIBUTING.md`](../CONTRIBUTING.md) 了解代码提交、环境搭建与架构测试规范。
+* 项目历史与版本迭代请参考 [`CHANGELOG.md`](../CHANGELOG.md)。
