@@ -54,12 +54,12 @@ jobs:
       - name: Rename Artifact for Release
         shell: pwsh
         run: |
-          # 脚本产物在 artifacts/ 目录下，获取刚刚打出的 .msi
-          $msiFile = Get-ChildItem -Path artifacts/*.msi | Select-Object -First 1
+          # 脚本产物在 build/installer/windows/artifacts/ 目录下，获取刚刚打出的 .msi
+          $msiFile = Get-ChildItem -Path build/installer/windows/artifacts/*.msi | Select-Object -First 1
           # 根据 GitHub Tag (例如 v1.0.0) 重命名文件，使其更加专业
           $newName = "RemoteDesktop-Windows-x64-$($env:GITHUB_REF_NAME).msi"
           Rename-Item -Path $msiFile.FullName -NewName $newName
-          Write-Output "MSI_PATH=artifacts/$newName" >> $env:GITHUB_ENV
+          Write-Output "MSI_PATH=build/installer/windows/artifacts/$newName" >> $env:GITHUB_ENV
 
       # 上传至 GitHub Release
       - name: Create Release and Upload Asset
