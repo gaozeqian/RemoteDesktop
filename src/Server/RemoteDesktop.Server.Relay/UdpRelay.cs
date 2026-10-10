@@ -13,6 +13,12 @@ namespace RemoteDesktop.Server.Relay;
 /// <remarks>A single receive loop owns all state, so no locking is needed.</remarks>
 public sealed partial class UdpRelay : IDisposable
 {
+    /// <summary>
+    /// Ceiling on sessions held at once. A pairing is a few hundred bytes and lives until it goes idle, and every
+    /// device that registers can mint tickets, so without a ceiling the table is something to fill on purpose.
+    /// </summary>
+    private const int MaxSessions = 10_000;
+
     private readonly Socket _socket;
     private readonly byte[] _key;
     private readonly TimeSpan _idleTimeout;
@@ -72,9 +78,14 @@ public sealed partial class UdpRelay : IDisposable
         {
             if (type == UdpControlPacketType.RelayBind)
             {
-                if (TryBind(body, from))
+                var result = TryBind(body, from, out var cookie);
+                if (result == BindResult.Bound)
                 {
                     await SendAsync(UdpControlPacket.Create(UdpControlPacketType.RelayBindAck, []), from, cancellationToken).ConfigureAwait(false);
+                }
+                else if (result == BindResult.Challenge)
+                {
+                    await SendAsync(UdpControlPacket.Create(UdpControlPacketType.RelayBindChallenge, cookie), from, cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -89,23 +100,46 @@ public sealed partial class UdpRelay : IDisposable
         }
     }
 
-    private bool TryBind(ReadOnlySpan<byte> body, IPEndPoint from)
+    private BindResult TryBind(ReadOnlySpan<byte> body, IPEndPoint from, out byte[] cookie)
     {
-        if (body.Length < 1 || !Enum.IsDefined((RelayRole)body[0]))
+        cookie = [];
+        if (!UdpControlPacket.TryParseRelayBind(body, out var roleByte, out var presented, out var ticketBytes)
+            || !Enum.IsDefined((RelayRole)roleByte))
         {
-            return false;
+            return BindResult.Ignored;
         }
 
-        var role = (RelayRole)body[0];
-        var ticket = RelayTicket.Validate(body[1..], _key, _time.GetUtcNow());
+        var role = (RelayRole)roleByte;
+        var now = _time.GetUtcNow();
+        var ticket = RelayTicket.Validate(ticketBytes, _key, now);
         if (ticket is null)
         {
             LogRejectedBind(_logger, from);
-            return false;
+            return BindResult.Ignored;
+        }
+
+        // A bind without a token gets one sent back to the address it came from. Only an address that really receives
+        // there can finish the bind, which is what stops a ticket holder from aiming the relay at somebody else.
+        if (IsEmpty(presented))
+        {
+            cookie = RelayCookie.Compute(_key, ticketBytes, roleByte, from, now);
+            return BindResult.Challenge;
+        }
+
+        if (!RelayCookie.Verify(presented, _key, ticketBytes, roleByte, from, now))
+        {
+            LogRejectedCookie(_logger, from);
+            return BindResult.Ignored;
         }
 
         if (!_pairings.TryGetValue(ticket.SessionId, out var pairing))
         {
+            if (_pairings.Count >= MaxSessions)
+            {
+                LogTooManySessions(_logger, _pairings.Count);
+                return BindResult.Ignored;
+            }
+
             pairing = new Pairing(ticket.SessionId);
             _pairings.Add(ticket.SessionId, pairing);
         }
@@ -114,17 +148,20 @@ public sealed partial class UdpRelay : IDisposable
         var current = role == RelayRole.Controller ? pairing.Controller : pairing.Host;
         if (from.Equals(current))
         {
-            return true;
+            return BindResult.Bound;
         }
 
-        // An endpoint can serve only one session; a rebind (new port) replaces the previous endpoint.
+        // An endpoint can serve only one session; a rebind (new port) replaces the previous endpoint. Worth a line:
+        // with the ticket in hand this is the ordinary case of a client coming back on a new port, and without it,
+        // it is somebody taking a session away from the peer that had it.
         if (_routes.ContainsKey(from) || IsBoundElsewhere(from, pairing))
         {
-            return false;
+            return BindResult.Ignored;
         }
 
         if (current is not null)
         {
+            LogRebind(_logger, pairing.SessionId, role, current, from);
             Unroute(pairing);
         }
 
@@ -145,7 +182,21 @@ public sealed partial class UdpRelay : IDisposable
             LogPaired(_logger, pairing.SessionId, pairing.Controller, pairing.Host);
         }
 
-        return true;
+        return BindResult.Bound;
+    }
+
+    private static bool IsEmpty(ReadOnlySpan<byte> cookie) => !cookie.ContainsAnyExcept((byte)0);
+
+    private enum BindResult
+    {
+        /// <summary>Nothing to answer: the bind was not usable and no ack may be sent for it.</summary>
+        Ignored,
+
+        /// <summary>Bound; the sender gets an ack.</summary>
+        Bound,
+
+        /// <summary>Answer with the token in <c>cookie</c> and wait for the same bind to come back carrying it.</summary>
+        Challenge,
     }
 
     private bool IsBoundElsewhere(IPEndPoint endPoint, Pairing except) =>
@@ -193,6 +244,15 @@ public sealed partial class UdpRelay : IDisposable
     }
 
     public void Dispose() => _socket.Dispose();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: the token did not match this address.")]
+    private static partial void LogRejectedCookie(ILogger logger, IPEndPoint endPoint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a relay session: {Sessions} are already open.")]
+    private static partial void LogTooManySessions(ILogger logger, int sessions);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId}: {Role} moved from {Previous} to {Current}.")]
+    private static partial void LogRebind(ILogger logger, Guid sessionId, RelayRole role, IPEndPoint previous, IPEndPoint current);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: invalid or expired ticket.")]
     private static partial void LogRejectedBind(ILogger logger, IPEndPoint endPoint);

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using RemoteDesktop.Application.Security;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 
@@ -30,6 +31,34 @@ public class PasswordProofTests
         Assert.False(PasswordProof.Verify(proof, "secret", Nonce, HostFp, "CC33")); // replay by another controller
     }
 
+    /// <summary>
+    /// The work factor is a security parameter rather than a tuning knob: it is what stands between a captured proof
+    /// and the password behind it. Lowering it should be a deliberate act with the remarks on
+    /// <see cref="PasswordProof"/> in front of you, not an edit that slips through with a performance change.
+    /// </summary>
+    /// <summary>
+    /// What is shown on the machine is read out loud and typed by hand, so it is short by nature — and what stands
+    /// between a captured proof and the machine is exactly how short. Twelve characters of a 33-character alphabet
+    /// is around 2^60, which is out of reach of the hardware somebody would rent for it; the eight it used to be was
+    /// not. Shortening it again should be a deliberate act.
+    /// </summary>
+    [Fact]
+    public void What_is_shown_on_the_machine_is_long_enough_to_be_worth_something()
+    {
+        var password = TemporaryPasswordGenerator.Generate();
+
+        Assert.Equal(TemporaryPasswordGenerator.DefaultLength, password.Length);
+        Assert.True(password.Length >= 12, $"The temporary password is down to {password.Length} characters; see TemporaryPasswordGenerator.");
+    }
+
+    [Fact]
+    public void Turning_the_password_into_a_key_costs_something()
+    {
+        Assert.True(
+            PasswordProof.KeyDerivationIterations >= 600_000,
+            $"The key derivation was lowered to {PasswordProof.KeyDerivationIterations} rounds; see the remarks on PasswordProof before changing it.");
+    }
+
     [Fact]
     public void Host_credentials_accept_temporary_and_fixed_password()
     {
@@ -41,6 +70,37 @@ public class PasswordProofTests
         var old = credentials.TemporaryPassword;
         credentials.RotateTemporaryPassword();
         Assert.False(credentials.Verify(PasswordProof.Compute(old, Nonce, HostFp, ControllerFp), Nonce, HostFp, ControllerFp));
+    }
+
+    /// <summary>
+    /// The temporary password is the one somebody may have read over a shoulder or into a chat window, so it stops
+    /// being the password on its own. Nobody has to be at the machine for that to happen: the interface asking for
+    /// the status is enough, and so is a controller trying its luck.
+    /// </summary>
+    [Fact]
+    public void A_temporary_password_stops_working_once_it_is_old_enough()
+    {
+        var time = new ManualTime();
+        var credentials = new HostCredentials(time);
+        var shown = credentials.TemporaryPassword;
+
+        time.Advance(HostCredentials.TemporaryPasswordLifetime - TimeSpan.FromMinutes(1));
+        Assert.True(credentials.Verify(PasswordProof.Compute(shown, Nonce, HostFp, ControllerFp), Nonce, HostFp, ControllerFp));
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        Assert.NotEqual(shown, credentials.TemporaryPassword);
+        Assert.False(credentials.Verify(PasswordProof.Compute(shown, Nonce, HostFp, ControllerFp), Nonce, HostFp, ControllerFp));
+    }
+
+    [Fact]
+    public void A_fixed_password_does_not_expire()
+    {
+        var time = new ManualTime();
+        var credentials = new HostCredentials(time) { FixedPassword = "unattended-password" };
+
+        time.Advance(TimeSpan.FromDays(30));
+
+        Assert.True(credentials.Verify(PasswordProof.Compute("unattended-password", Nonce, HostFp, ControllerFp), Nonce, HostFp, ControllerFp));
     }
 }
 
@@ -79,12 +139,4 @@ public class AuthAttemptLimiterTests
         Assert.True(limiter.IsBlocked(new DeviceId(999_999_999)));
     }
 
-    private sealed class ManualTime : TimeProvider
-    {
-        private DateTimeOffset _now = new(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
 }

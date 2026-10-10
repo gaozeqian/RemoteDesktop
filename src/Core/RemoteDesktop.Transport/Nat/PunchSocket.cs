@@ -55,24 +55,48 @@ public sealed class PunchSocket : IDisposable
                 id.SequenceEqual(transactionId))
             {
                 observed = endPoint;
-                return true;
+                return [];
             }
 
-            return false;
+            return null;
         }, cancellationToken).ConfigureAwait(false);
 
-        return answered ? observed : null;
+        return answered is null ? null : observed;
     }
 
-    /// <summary>Binds this port to a relay session. Returns <c>false</c> when the relay did not acknowledge.</summary>
-    public Task<bool> BindRelayAsync(IPEndPoint relay, ReadOnlySpan<byte> ticket, RelayRole role, TimeSpan timeout, CancellationToken cancellationToken)
-    {
-        var body = new byte[1 + ticket.Length];
-        body[0] = (byte)role;
-        ticket.CopyTo(body.AsSpan(1));
-        var request = UdpControlPacket.Create(UdpControlPacketType.RelayBind, body);
+    /// <summary>
+    /// Binds this port to a relay session. Returns <c>false</c> when the relay did not acknowledge.
+    /// </summary>
+    /// <remarks>
+    /// Two steps: the relay answers a bind that carries no token with one, sent to the address the bind came from,
+    /// and the bind only takes effect when it comes back carrying it. That is what keeps the relay from being aimed
+    /// at an address that never asked for it — and it costs one round trip on the relay path only.
+    /// </remarks>
+    public Task<bool> BindRelayAsync(IPEndPoint relay, ReadOnlySpan<byte> ticket, RelayRole role, TimeSpan timeout, CancellationToken cancellationToken) =>
+        // The ticket is copied here because it has to outlive an await, which a span cannot do.
+        BindRelayCoreAsync(relay, ticket.ToArray(), role, timeout, cancellationToken);
 
-        return RequestAsync(request, relay, timeout, (type, _) => type == UdpControlPacketType.RelayBindAck, cancellationToken);
+    private async Task<bool> BindRelayCoreAsync(IPEndPoint relay, byte[] ticket, RelayRole role, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var roleByte = (byte)role;
+        var challenge = await RequestAsync(
+            UdpControlPacket.CreateRelayBind(roleByte, [], ticket),
+            relay,
+            timeout,
+            (type, body) => type == UdpControlPacketType.RelayBindChallenge ? body.ToArray() : null,
+            cancellationToken).ConfigureAwait(false);
+
+        if (challenge is null || challenge.Length != UdpControlPacket.RelayBindCookieSize)
+        {
+            return false;
+        }
+
+        return await RequestAsync(
+            UdpControlPacket.CreateRelayBind(roleByte, challenge, ticket),
+            relay,
+            timeout,
+            (type, _) => type == UdpControlPacketType.RelayBindAck ? [] : null,
+            cancellationToken).ConfigureAwait(false) is not null;
     }
 
     /// <summary>Sends a few punch packets to each target so our NAT accepts the peer's packets on this port.</summary>
@@ -93,9 +117,14 @@ public sealed class PunchSocket : IDisposable
 
     public void Dispose() => _socket.Dispose();
 
-    private delegate bool ResponseFilter(UdpControlPacketType type, ReadOnlySpan<byte> body);
+    /// <summary>
+    /// Decides whether a packet is the answer being waited for, and what to carry back from it:
+    /// <c>null</c> when it is not the answer, an empty array when it is but there is nothing to carry.
+    /// </summary>
+    private delegate byte[]? ResponseFilter(UdpControlPacketType type, ReadOnlySpan<byte> body);
 
-    private async Task<bool> RequestAsync(byte[] request, IPEndPoint target, TimeSpan timeout, ResponseFilter filter, CancellationToken cancellationToken)
+    /// <returns>The body of the matching response, or <c>null</c> when the deadline passed without one.</returns>
+    private async Task<byte[]?> RequestAsync(byte[] request, IPEndPoint target, TimeSpan timeout, ResponseFilter filter, CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
@@ -115,11 +144,13 @@ public sealed class PunchSocket : IDisposable
                     while (true)
                     {
                         var received = await _socket.ReceiveFromAsync(buffer, SocketFlags.None, any, attempt.Token).ConfigureAwait(false);
+                        // Everything that touches the span stays inside this one expression: a span cannot be held
+                        // across the await that starts the next round of the loop.
                         if (received.RemoteEndPoint.Equals(target) &&
                             UdpControlPacket.TryParse(buffer.AsSpan(0, received.ReceivedBytes), out var type, out var body) &&
-                            filter(type, body))
+                            filter(type, body) is { } answer)
                         {
-                            return true;
+                            return answer;
                         }
                     }
                 }
@@ -131,7 +162,7 @@ public sealed class PunchSocket : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return false;
+            return null;
         }
     }
 

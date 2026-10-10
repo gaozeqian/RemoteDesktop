@@ -51,13 +51,13 @@ public sealed partial class PostgresDeviceRegistry : IDeviceRegistry
         }
     }
 
-    public async Task<uint> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)
+    public async Task<DeviceRegistration> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
 
         if (_cache.TryGetValue(fingerprint, out var cachedId))
         {
-            return cachedId;
+            return new DeviceRegistration(cachedId, Created: false);
         }
 
         // 1. Check if the device is already in the database
@@ -75,7 +75,7 @@ public sealed partial class PostgresDeviceRegistry : IDeviceRegistry
 
                 // Update last seen in the background
                 _ = UpdateLastSeenAsync(fingerprint);
-                return existingId;
+                return new DeviceRegistration(existingId, Created: false);
             }
         }
 
@@ -103,9 +103,12 @@ public sealed partial class PostgresDeviceRegistry : IDeviceRegistry
                 var result = await insertCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
                 var finalId = (uint)(long)result!;
 
+                // The upsert returns our own id only when it inserted: an existing row answers with its id instead,
+                // which is how a reconnecting device is told apart from a new one without a second query.
+                var created = finalId == allocatedId;
                 _cache[fingerprint] = finalId;
                 LogAllocated(_logger, finalId, fingerprint);
-                return finalId;
+                return new DeviceRegistration(finalId, created);
             }
             catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
             {

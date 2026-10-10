@@ -75,7 +75,11 @@ param(
 
     # Ship the symbol files too (they are about a third of the payload): useful for stack traces from other machines,
     # not needed for a normal installation.
-    [switch]$KeepSymbols
+    [switch]$KeepSymbols,
+
+    # Build even though License.txt still has 【placeholders】 in it. For a test build that nobody will be handed;
+    # a build meant to be published should have the real details in the license instead.
+    [switch]$AllowDraftLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -515,6 +519,24 @@ connected to if the signaling server runs there. For anything else, build again 
 }
 
 $version = Get-ProductVersion
+
+# The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
+# document that says "insert your company name here" to whoever installs the product, so the build stops instead.
+# Fill in build/installer/windows/License.txt (or pass -AllowDraftLicense for a build that is not going anywhere).
+$licensePath = Join-Path $installerDirectory 'License.txt'
+$placeholders = Select-String -Path $licensePath -Pattern '【[^】]+】' -AllMatches |
+    ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
+if ($placeholders -and -not $AllowDraftLicense) {
+    throw @"
+The license text still has placeholders in it: $($placeholders -join ', ')
+Edit $licensePath and put your own details in their place, or pass -AllowDraftLicense to build anyway
+(for a test build that will not be handed to anybody).
+"@
+}
+if ($placeholders) {
+    Write-Warning "The license text still has placeholders ($($placeholders -join ', ')); this build should not be published."
+}
+
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.
 Write-Host 'Generating the license RTF...'
 & (Join-Path $installerDirectory 'New-LicenseRtf.ps1') | ForEach-Object { Write-Host "  $_" }

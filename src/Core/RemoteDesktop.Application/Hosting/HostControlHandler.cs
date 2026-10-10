@@ -46,8 +46,18 @@ public static partial class HostControlHandler
                     await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
                     break;
                 case HostControlProtocol.FixedPasswordCommand:
-                    await control.SetFixedPasswordAsync(request.Argument, timeout.Token).ConfigureAwait(false);
-                    await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        await control.SetFixedPasswordAsync(request.Argument, timeout.Token).ConfigureAwait(false);
+                        await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        // The rule is the service's, not the window's; the answer carries the reason back.
+                        LogRefusedFixedPassword(logger, ex.Message);
+                        await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("error", ex.Message), timeout.Token).ConfigureAwait(false);
+                    }
+
                     break;
                 default:
                     LogUnknownCommand(logger, request?.Command);
@@ -62,4 +72,7 @@ public static partial class HostControlHandler
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Unknown host control command '{Command}'.")]
     private static partial void LogUnknownCommand(ILogger logger, string? command);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a fixed password: {Reason}")]
+    private static partial void LogRefusedFixedPassword(ILogger logger, string reason);
 }

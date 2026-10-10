@@ -49,7 +49,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 测性能请用 Release 构建（`-c Release`），Debug 构建的颜色转换慢约 10 倍。
 `--Transport:ForceRelay true` 强制走中继，`--Transport:RendezvousUri ws://<服务器>:5080/ws` 连接其他服务器。
 跨机器测试时需要放通服务器的 TCP 5080、UDP 5081（地址反射）和 UDP 5082（中继），并把 Rendezvous 的
-`Rendezvous:RelayEndpoint` 配置为客户端可达的中继公网地址。生产环境必须为两个服务配置新的 `RelaySharedKey`。
+`Rendezvous:RelayEndpoint` 配置为客户端可达的中继公网地址。生产环境必须为两个服务配置新的 `RelaySharedKey`，
+并且**信令要走 `wss://`**（做法见 [docs/deployment.md](docs/deployment.md) 的"生产环境：信令必须走 TLS"）。
 
 ## 无人值守模式
 
@@ -75,6 +76,7 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
   "文件已存在时"可选覆盖、跳过或保留两者（重命名为 `名称 (1).扩展名`）。
 - 传输列表里每项可暂停、继续、取消；失败的可以重试。最多同时传 3 个，其余排队。暂停、网络中断、关闭窗口都不会丢进度（取消才会丢弃）。
 - **断点续传与校验**：没传完的文件以 `<目标名>.<大小>-<修改时间>.rdpart` 保存在目标文件夹，下次从已有长度继续（大小或修改时间变了就不会误续）。
+  被控端会把这些残片记在一份清单里（`partial-files.log`），**超过 7 天没人回来续传的自动删掉**——否则对方每放弃一次尝试就在你的文件夹里留一个文件。
   传完后比较整个文件的 xxHash64，一致才改成目标名并设置修改时间，所以目标名下永远不会出现写了一半的文件；
   校验不一致时丢弃临时文件并自动从头重传一次。取消会删除临时文件。
 - **安全**：文件操作由 Agent 以登录用户的身份执行，从不以 SYSTEM 执行；被控端只有登录界面 / UAC 可用时一律拒绝。

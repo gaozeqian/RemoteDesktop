@@ -38,6 +38,34 @@ public class FixedPasswordPolicyTests
         Assert.Null(FixedPasswordPolicy.Load(store));
     }
 
+    /// <summary>
+    /// The rule is the service's, not the window's: the fixed password is what makes this machine reachable with
+    /// nobody in front of it, and the setting arrives over a pipe that any process on this machine can open.
+    /// </summary>
+    /// <remarks>An empty value is not too short, it is "clear the setting"; the test above covers that.</remarks>
+    [Theory]
+    [InlineData("a")]
+    [InlineData("12345")]
+    public void A_fixed_password_below_the_minimum_is_refused(string password)
+    {
+        var store = new MemorySecrets();
+
+        Assert.False(FixedPasswordPolicy.IsAcceptable(password));
+        Assert.Throws<ArgumentException>(() => FixedPasswordPolicy.Save(store, password));
+        Assert.Null(FixedPasswordPolicy.Load(store));
+    }
+
+    [Fact]
+    public void The_shortest_password_that_is_allowed_is_the_documented_one()
+    {
+        var store = new MemorySecrets();
+        var shortest = new string('a', FixedPasswordPolicy.MinimumLength);
+
+        FixedPasswordPolicy.Save(store, shortest);
+
+        Assert.Equal(shortest, FixedPasswordPolicy.Load(store));
+    }
+
     private sealed class MemorySecrets : ISecretStore
     {
         private readonly Dictionary<string, byte[]> _data = [];

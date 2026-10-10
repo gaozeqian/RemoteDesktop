@@ -27,12 +27,15 @@ public sealed class TestDevice : IAsyncDisposable
 
     public HostSessionService HostSessions => _host.Services.GetRequiredService<HostSessionService>();
 
-    public static async Task<TestDevice> StartAsync(ServerFixture server, bool forceRelay = false, params IFeatureModule[] modules)
+    public static Task<TestDevice> StartAsync(ServerFixture server, bool forceRelay = false, params IFeatureModule[] modules) =>
+        StartAsync(server.RendezvousUri, forceRelay, modules);
+
+    public static async Task<TestDevice> StartAsync(Uri rendezvousUri, bool forceRelay = false, params IFeatureModule[] modules)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Services
             .AddSingleton<ISecretStore, InMemorySecretStore>()
-            .AddQuicTransport(new TransportOptions { RendezvousUri = server.RendezvousUri, ForceRelay = forceRelay })
+            .AddQuicTransport(new TransportOptions { RendezvousUri = rendezvousUri, ForceRelay = forceRelay })
             .AddRemoteDesktopApplication();
         foreach (var module in modules)
         {

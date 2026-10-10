@@ -9,7 +9,18 @@ namespace RemoteDesktop.Application.Sessions;
 /// </summary>
 public static class FixedPasswordPolicy
 {
+    /// <summary>How short a fixed password may be. The window that asks for one shows the same number.</summary>
+    public const int MinimumLength = 6;
+
     private const string FixedPasswordSecret = "credentials.fixed-password";
+
+    /// <summary>
+    /// Whether this password may be stored. The rule is enforced here rather than only in the window that collects
+    /// it: the service accepts the setting over a pipe, so anything that can reach the service could otherwise leave
+    /// a one-character password on a machine that is meant to be reachable without anybody present.
+    /// </summary>
+    public static bool IsAcceptable(string? password) =>
+        password is not null && password.Trim().Length >= MinimumLength;
 
     /// <summary>Loads the stored fixed password, or <c>null</c> if not set or cannot be read.</summary>
     public static string? Load(ISecretStore store)
@@ -33,16 +44,21 @@ public static class FixedPasswordPolicy
     }
 
     /// <summary>Saves or clears the fixed password in the store.</summary>
+    /// <exception cref="ArgumentException">The password is too short to be one.</exception>
     public static void Save(ISecretStore store, string? password)
     {
         ArgumentNullException.ThrowIfNull(store);
         if (string.IsNullOrWhiteSpace(password))
         {
             store.Delete(FixedPasswordSecret);
+            return;
         }
-        else
+
+        if (!IsAcceptable(password))
         {
-            store.Save(FixedPasswordSecret, Encoding.UTF8.GetBytes(password.Trim()));
+            throw new ArgumentException($"A fixed password must be at least {MinimumLength} characters.", nameof(password));
         }
+
+        store.Save(FixedPasswordSecret, Encoding.UTF8.GetBytes(password.Trim()));
     }
 }

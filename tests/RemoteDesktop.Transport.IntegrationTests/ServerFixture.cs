@@ -27,22 +27,16 @@ public sealed class ServerFixture : IAsyncLifetime
         Relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), key, TimeSpan.FromMinutes(2), TimeProvider.System, NullLogger<UdpRelay>.Instance);
         _relayLoop = Relay.RunAsync(_stop.Token);
 
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseKestrel(options => options.Listen(IPAddress.Loopback, 0));
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Rendezvous:ReflectorPort"] = "0",
-            ["Rendezvous:RelayEndpoint"] = Relay.LocalEndPoint.ToString(),
-            ["Rendezvous:RelaySharedKey"] = Convert.ToBase64String(key),
-        });
-        builder.Services.AddRendezvous(builder.Configuration);
-
-        _rendezvous = builder.Build();
-        _rendezvous.MapRendezvous();
-        await _rendezvous.StartAsync();
-
-        var address = new Uri(_rendezvous.Urls.First());
-        RendezvousUri = new Uri($"ws://127.0.0.1:{address.Port}{RendezvousServer.SignalingPath}");
+        // The address limits are sized for a real site and every test device here is a new identity from loopback,
+        // so the shared fixture lifts them out of the way: the limits themselves have their own tests, with servers
+        // of their own (RendezvousLimitTests).
+        _rendezvous = await TestRendezvous.StartAsync(
+            ("Rendezvous:RelayEndpoint", Relay.LocalEndPoint.ToString()),
+            ("Rendezvous:RelaySharedKey", Convert.ToBase64String(key)),
+            ("Rendezvous:RegistrationBurst", "1000000"),
+            ("Rendezvous:MaxConnectionsPerAddress", "100000"),
+            ("Rendezvous:MaxConnections", "100000"));
+        RendezvousUri = TestRendezvous.SignalingUri(_rendezvous);
     }
 
     public async ValueTask DisposeAsync()

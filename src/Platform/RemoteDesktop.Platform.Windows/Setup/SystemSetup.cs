@@ -86,12 +86,48 @@ public sealed class SystemSetup(SystemSetupLocations locations)
         }
     }
 
+    /// <summary>
+    /// Parses the one address shape this product supports: <c>ws://host[:port][/path]</c>, or the same wrapped in TLS
+    /// as <c>wss://</c>. The elevated setup step and the client both come through here, so an address the client lets
+    /// through is never one the service refuses, and the two can not drift apart.
+    /// </summary>
+    /// <remarks>
+    /// The host is held to what a DNS name or an IP literal can contain. That is stricter than <see cref="Uri"/>
+    /// needs to be: the value is typed by hand into a box whose content ends up in a process running as
+    /// administrator, and a "host" carrying quotes or semicolons is somebody's fragment of something else.
+    /// </remarks>
+    public static bool TryParseRendezvousUri(string? address, out Uri parsed)
+    {
+        parsed = null!;
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out var candidate)
+            || candidate.Scheme is not ("ws" or "wss")
+            || candidate.Host.Length == 0)
+        {
+            return false;
+        }
+
+        // The brackets around an IPv6 literal are not part of the address grammar this check is about.
+        if (candidate.HostNameType != UriHostNameType.IPv6
+            && !candidate.Host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-'))
+        {
+            return false;
+        }
+
+        parsed = candidate;
+        return true;
+    }
+
     /// <summary>Sets <c>Transport:RendezvousUri</c> in the appsettings.json of an install directory.</summary>
     /// <exception cref="ArgumentException">The address is not a ws:// or wss:// URI.</exception>
     public static void SetRendezvousUri(string installDirectory, string uri)
     {
         ArgumentException.ThrowIfNullOrEmpty(installDirectory);
-        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("ws" or "wss") || string.IsNullOrEmpty(parsed.Host))
+        if (!TryParseRendezvousUri(uri, out var parsed))
         {
             throw new ArgumentException("The rendezvous server must be given as ws://host:port/ws or wss://host/ws.", nameof(uri));
         }

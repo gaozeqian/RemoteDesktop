@@ -32,6 +32,10 @@ public sealed partial class HostSessionService(
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
 
+    /// <summary>How many controllers may be in a session at once. Well past what a person connecting from a
+    /// phone and a laptop needs, and low enough that opening sessions in a loop cannot spend the machine.</summary>
+    private const int MaxSessions = 16;
+
     private readonly ConcurrentDictionary<SessionId, HostedSession> _hosted = [];
 
     public IReadOnlyCollection<SessionContext> ActiveSessions => [.. _hosted.Values.Select(h => h.Context)];
@@ -94,6 +98,15 @@ public sealed partial class HostSessionService(
 
                 if (session is null)
                 {
+                    return;
+                }
+
+                // Every session holds its own channels and buffers, and each of those costs this machine memory for
+                // as long as it lives. A password is all it takes to get this far, so without a ceiling one
+                // controller — or somebody who was given the password — can open sessions until the machine gives up.
+                if (_hosted.Count >= MaxSessions)
+                {
+                    LogTooManySessions(logger, connection.RemoteDevice, _hosted.Count);
                     return;
                 }
 
@@ -371,6 +384,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Controller}: {InFlight} other connections are still in their handshake ({Refused} refused so far).")]
     private static partial void LogTooManyHandshakes(ILogger logger, DeviceId controller, int inFlight, long refused);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Controller}: {Active} sessions are already running.")]
+    private static partial void LogTooManySessions(ILogger logger, DeviceId controller, int active);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: refused {Channel} channel ({Result}).")]
     private static partial void LogChannelRefused(ILogger logger, SessionId sessionId, ChannelType channel, DispatchResult result);

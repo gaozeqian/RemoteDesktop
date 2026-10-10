@@ -36,7 +36,9 @@
           </StackPanel>
         </StackPanel>
 
-        <TextBlock DockPanel.Dock="Bottom" Text="Remote Desktop 0.1.0" Classes="caption" Margin="18,0,18,14" />
+        <!-- The version comes from the assembly, not from this file: a number written here is a number that goes
+             stale the first time somebody forgets it, and support asks people what version they are running. -->
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding ClientVersionLabel}" Classes="caption" Margin="18,0,18,14" />
 
         <ListBox x:Name="NavList" Classes="navList" SelectedIndex="{Binding SelectedPageIndex}">
           <ListBoxItem AutomationProperties.Name="主页">

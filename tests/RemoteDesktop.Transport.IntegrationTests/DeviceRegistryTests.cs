@@ -12,11 +12,27 @@ public class DeviceRegistryTests
         var registry = new InMemoryDeviceRegistry();
         const string fingerprint = "test-cert-sha256-fingerprint-123456";
 
-        var id1 = await registry.GetOrAllocateAsync(fingerprint, Ct);
-        var id2 = await registry.GetOrAllocateAsync(fingerprint, Ct);
+        var first = await registry.GetOrAllocateAsync(fingerprint, Ct);
+        var second = await registry.GetOrAllocateAsync(fingerprint, Ct);
 
-        Assert.Equal(id1, id2);
-        Assert.InRange(id1, 100_000_000u, 999_999_999u);
+        Assert.Equal(first.DeviceId, second.DeviceId);
+        Assert.InRange(first.DeviceId, 100_000_000u, 999_999_999u);
+    }
+
+    /// <summary>
+    /// The one thing the server cannot work out on its own: a device coming back is not a new device, and only the
+    /// second call can say so.
+    /// </summary>
+    [Fact]
+    public async Task The_call_that_allocates_the_id_is_the_only_one_that_says_it_created_it()
+    {
+        var registry = new InMemoryDeviceRegistry();
+
+        var first = await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        var again = await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+
+        Assert.True(first.Created);
+        Assert.False(again.Created);
     }
 
     [Fact]
@@ -27,6 +43,7 @@ public class DeviceRegistryTests
         var idA = await registry.GetOrAllocateAsync("fingerprint-A", Ct);
         var idB = await registry.GetOrAllocateAsync("fingerprint-B", Ct);
 
-        Assert.NotEqual(idA, idB);
+        Assert.NotEqual(idA.DeviceId, idB.DeviceId);
+        Assert.True(idB.Created);
     }
 }

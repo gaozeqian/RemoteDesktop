@@ -135,6 +135,38 @@ public sealed class SystemSetupTests : IDisposable
     public void An_address_that_is_not_a_websocket_url_is_refused(string uri) =>
         Assert.Throws<ArgumentException>(() => SystemSetup.SetRendezvousUri(_folder, uri));
 
+    [Theory]
+    [InlineData("ws://rd.example.com:5080/ws")]
+    [InlineData("wss://rd.example.com/ws")]
+    [InlineData("ws://192.168.1.10:5080/ws")]
+    [InlineData("ws://[::1]:5080/ws")]
+    [InlineData("ws://localhost:5080/ws")]
+    [InlineData("wss://rd.example.com/rd/ws")] // a reverse proxy that keeps a path prefix
+    [InlineData("  ws://rd.example.com:5080/ws  ")] // pasted with the spaces around it
+    [InlineData("WS://rd.example.com:5080/ws")] // the scheme is not case sensitive
+    public void An_address_of_the_shape_the_product_supports_is_parsed(string address)
+    {
+        Assert.True(SystemSetup.TryParseRendezvousUri(address, out var parsed));
+        Assert.True(parsed.Scheme is "ws" or "wss");
+        Assert.NotEmpty(parsed.Host);
+    }
+
+    /// <summary>
+    /// The address is typed into a box whose content ends up in a process running as administrator, so a value that
+    /// is really a piece of a command line has to die here — and not only on the way to a shell that no longer exists.
+    /// </summary>
+    [Theory]
+    [InlineData("ws://x'; Start-Process calc; #")]
+    [InlineData("ws://x';Start-Process calc;#")]
+    [InlineData("ws://host;calc/ws")] // a URI the parser accepts; the host rule is what refuses it
+    [InlineData("ws://host_name/ws")] // ditto — an underscore is fine for Uri, not for a host name
+    [InlineData("ws://a`;calc")]
+    [InlineData("ws://a$(calc)")]
+    [InlineData("ws://a\" -Command calc")]
+    [InlineData("ws://a&calc")]
+    public void An_address_that_could_be_read_as_something_else_is_refused(string address) =>
+        Assert.False(SystemSetup.TryParseRendezvousUri(address, out _));
+
     [Fact]
     public void The_data_folder_is_removed_only_when_it_is_really_the_data_folder()
     {

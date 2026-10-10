@@ -51,7 +51,8 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
     "RelayEndpoint": "你的服务器公网地址:5082",   // 必须写客户端能连到的地址，不能是 0.0.0.0 或 127.0.0.1
     "RelaySharedKey": "<和 Relay 相同的长随机串>", // 生产环境必须换掉开发默认值（appsettings.Development.json 里是明文的开发密钥）
     "RelayTicketLifetime": "00:02:00",
-    "ConnectTimeout": "00:00:20"
+    "ConnectTimeout": "00:00:20",
+    "MetricsEnabled": false                     // 打开后在 /metrics 暴露 Prometheus 指标；默认关闭，用法见"健康检查"一节
   }
 }
 ```
@@ -71,7 +72,86 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
 密钥用一条命令生成：`openssl rand -base64 48`。**两边必须一致**；不一致时中继会拒绝所有票据，
 而客户端只会看到"连不上"（被控端日志里会有中继相关的失败）。
 
-### 3. 作为服务运行
+### 3. 生产环境：信令必须走 TLS
+
+`ws://` 是开发用的默认值，公网上不要用：设备代码、你的公网地址、谁在连谁，以及**中继票据**都在明文里
+（票据是一张 2 分钟有效的凭据，在途被拿走就能抢用你的中继带宽）。两种做法任选一种。
+
+**做法 A：服务器自己上 TLS**（有公网 IP 和证书文件时最省事）。改 `appsettings.json`：
+
+```jsonc
+{
+  "Urls": "https://0.0.0.0:5080",
+  "Kestrel": {
+    "Certificates": {
+      "Default": { "Path": "/etc/rd/signaling.pfx", "Password": "<pfx 口令>" }
+    }
+  }
+}
+```
+
+证书用 PEM 时给 `Path` 指证书、再加一个 `KeyPath` 指私钥。客户端地址改成 `wss://你的域名:5080/ws`。
+**证书里的域名要和客户端填的地址一致**：客户端走系统信任链校验，没有对信令服务器做指纹固定。
+这条路径有集成测试（`tests/RemoteDesktop.Transport.IntegrationTests/TlsSignalingTests.cs`），
+用的是和上面完全相同的两个设置项。
+
+**做法 B：前面放反向代理**（Docker 部署，或想用 Let's Encrypt 自动续期）。Caddy：
+
+```
+rd.example.com {
+    reverse_proxy /ws* 127.0.0.1:5080
+    reverse_proxy /health 127.0.0.1:5080
+}
+```
+
+nginx：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name rd.example.com;
+    ssl_certificate     /etc/letsencrypt/live/rd.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/rd.example.com/privkey.pem;
+
+    location /ws {
+        proxy_pass http://127.0.0.1:5080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;   # 信令是长连接，默认 60 秒会把设备反复踢下线
+    }
+
+    location /health { proxy_pass http://127.0.0.1:5080; }
+}
+```
+
+代理后面要告诉服务器**谁才是真客户端**，否则按来源地址的限流会把整个代理看成一台机器：
+
+```jsonc
+"Rendezvous": { "TrustedProxies": ["172.16.0.0/12"] }   // 你的代理地址或网段
+```
+
+`X-Forwarded-For` 谁都能写，所以只有这里列出的地址发来的才被采信（不配就只信本机回环）。同时记得把
+5080 从公网关上，只让代理能连它。
+
+> UDP 5081（地址反射）和 5082（中继）不走这个代理，仍然是明文 UDP：中继只转发 QUIC 密文，看不到内容；
+> 反射服务只回一句"你从哪来"。凭据（中继票据）走的是信令，已经在上面的 TLS 里了。
+
+### 4. 公网上的限额
+
+默认值按"公网上的自建服务"选的，除非你的规模和它差很远，否则不用动。被限流的事件以 Warning 写进日志，
+**带来源地址**——这是服务器唯一把地址写下来的地方，专门为了让你能看出有人在滥用。
+
+| 设置 | 默认 | 管什么 |
+|---|---|---|
+| `Rendezvous:MaxConnections` | 4096 | 同时服务多少台设备；超出的在 WebSocket 升级前就被拒，不占内存 |
+| `Rendezvous:MaxConnectionsPerAddress` | 64 | 一个来源地址最多占多少条连接 |
+| `Rendezvous:RegistrationBurst` / `RegistrationRefill` | 8 / 30 秒 | 一个来源地址注册设备的速度。注册就是领一个身份，而"每设备"的限额都以身份计数，所以这条最要紧 |
+| `Rendezvous:ConnectRequestBurst` / `ConnectRequestRefill` | 10 / 3 秒 | 一台设备发起连接请求的速度（防止拿它去轰炸别人的弹窗） |
+| `Rendezvous:MaxPendingRequestsPerDevice` | 8 | 一台设备同时挂起的连接请求数 |
+| `Rendezvous:MaxPendingRequests` | 4096 | 全服务器同时挂起的连接请求数 |
+
+### 5. 作为服务运行
 
 以**管理员** PowerShell 执行（两个可执行文件都能直接作为 Windows 服务运行，同一份文件也能当控制台程序跑）：
 
@@ -88,7 +168,7 @@ sc.exe start RemoteDesktopRelay
 - 想同时看控制台输出，就以控制台方式运行（`.\RemoteDesktop.Server.Rendezvous.exe`），日志打到标准输出。
 - Linux 用 systemd 单元调用同样的可执行文件即可（`Restart=always`）；服务生命周期那一层在非 Windows 上是空操作。
 
-### 4. 用 Docker 部署（Linux 服务器首选）
+### 6. 用 Docker 部署（Linux 服务器首选）
 
 仓库里已经准备好两个镜像和一份 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10 运行时（不装 SDK）：
 
@@ -111,7 +191,7 @@ docker compose up -d --build
   即使服务重启、升级或重建容器，所有被控端的设备代码永久固定不变，完全保障无人值守长效可用。
   如果本地开发不需要 PostgreSQL，留空 `Rendezvous:PostgresConnectionString` 会自动回退为纯内存模式。
 
-### 5. 防火墙
+### 7. 防火墙
 
 ```
 netsh advfirewall firewall add rule name="RemoteDesktop Rendezvous" dir=in action=allow protocol=TCP localport=5080
@@ -119,10 +199,27 @@ netsh advfirewall firewall add rule name="RemoteDesktop Reflect"    dir=in actio
 netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in action=allow protocol=UDP localport=5082
 ```
 
-### 6. 健康检查
+### 8. 健康检查
 
 ```
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
+```
+
+**监控指标（可选，默认关闭）**：把 `Rendezvous:MetricsEnabled` 设为 `true` 后，服务器会额外挂载 `/metrics`，
+按 Prometheus 文本格式（`text/plain; version=0.0.4`，指标名都以 `remotedesktop_` 开头）给出：当前连接数、
+在线设备数（瞬时值），以及注册、连接请求、在线状态查询各自被接受和被限流的次数（`*_total`，只增不减，适合
+`rate()` 出图）。
+
+默认关闭，而且关闭时这个路径**根本没有挂载**，访问返回 404：这些数字本身就说明了这台服务器上现在有多少台
+设备、拒绝了多少请求，公网上谁都能读到，是运营者自己的信息，所以打开是一个有意的动作。打开后应当配一个只有
+自己的监控能到的入口，例如不动 `Urls`、让 Prometheus 从本机或内网抓 `http://127.0.0.1:5080/metrics`
+（反向代理只转发 `/ws` 和 `/health` 时，`/metrics` 自然到不了公网），或者用防火墙只放行监控的来源地址：
+
+```yaml
+scrape_configs:
+  - job_name: remotedesktop
+    static_configs:
+      - targets: ["127.0.0.1:5080"]
 ```
 
 ## 三、自动化发布到 GitHub Releases
@@ -209,7 +306,11 @@ msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDeskto
 3. **改了配置要重启服务**：`Restart-Service RemoteDesktopHost`（配置只在启动时读一次）。
 4. **看日志**：`C:\ProgramData\RemoteDesktop\logs\service-<日期>.log`。
    `Rendezvous connection lost: Unable to connect to the remote server` 就是在说"连不上信令服务器"。
-5. 服务起来了吗：`Get-Service RemoteDesktopHost`。
+5. **服务根本没起来**（`Get-Service RemoteDesktopHost` 显示已停止，或者客户端说"无法联系后台服务"）：
+   先看同目录下的 `startup-error.log` —— 配置读不出来时，服务会在启动前把原因写在这里并以退出码 3 结束，
+   而不是留下一个没人看得懂的崩溃。客户端对应的文件是 `%AppData%\RemoteDesktop\crash.log`，
+   同时会在屏幕上弹一个说明原因的对话框。
+6. 服务起来了吗：`Get-Service RemoteDesktopHost`。
 
 ### 4. 升级与卸载
 
@@ -268,7 +369,7 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 完整说明（怎么买证书、有哪些替代方案、怎么检查签名）见 [`build/signing/README.md`](../build/signing/README.md)；
 本地测试签名用 `build/signing/New-SigningCertificate.ps1` 生成证书、`build/signing/Install-TrustedCertificate.ps1` 让机器信任它。
 
-## 四、运行期注意事项
+## 五、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
 - **临时密码**可以随时刷新；**固定密码**适合无人值守，由 DPAPI 强加密持久化存储，无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。
@@ -277,11 +378,13 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 - **日志**：服务器是标准输出（服务方式运行时进 Windows 事件日志或用 `--console` 重定向）；被控端在
   `%ProgramData%\RemoteDesktop\logs`；客户端没有文件日志，问题看界面提示。
 
-## 五、故障速查
+## 六、故障速查
 
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
-| 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见上面第三节第 3 条 |
+| 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
+| 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
+| 日志里成片 "Throttled ... from {地址}" | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |
 | 两台机器都有代码，但连接超时 | 双方都连到服务器了，但打洞和中继都不通 | 检查 `RelayEndpoint` 是否为客户端可达地址、UDP 5081/5082 是否放通；先试 `--Transport:ForceRelay true` 判断是不是打洞问题 |
 | 连接提示"密码错误" | 密码过期（临时密码刷新过）或被限流 | 在被控端界面刷新密码重试；同一控制端 5 分钟内失败 5 次会被锁 5 分钟 |
 | 能看到画面但键盘鼠标没反应 | 会话是"观看模式" | 连接时不要勾"观看模式"；被控端也可以把会话降级为仅观看 |

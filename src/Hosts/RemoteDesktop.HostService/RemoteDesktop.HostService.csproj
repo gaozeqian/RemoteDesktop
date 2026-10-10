@@ -14,6 +14,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
     <PackageReference Include="Serilog.Extensions.Hosting" />
     <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
   </ItemGroup>
   <!-- The service starts the agent from its own folder (see AgentGatewayOptions.ExecutablePath), so a plain build puts
        the agent's build output next to it. Publishing is a separate matter: the installer publishes each executable

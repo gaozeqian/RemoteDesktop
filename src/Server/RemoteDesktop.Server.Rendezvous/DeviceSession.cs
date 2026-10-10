@@ -85,6 +85,18 @@ public sealed class DevicePresence
         }
     }
 
+    /// <summary>Devices online right now (for metrics and tests).</summary>
+    public int Count
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _sessions.Count;
+            }
+        }
+    }
+
     /// <summary>
     /// The subset of <paramref name="deviceIds"/> that is online right now, in the order asked. Only ever a subset:
     /// a code that was never registered and a code that is simply offline produce the same answer, so this cannot be

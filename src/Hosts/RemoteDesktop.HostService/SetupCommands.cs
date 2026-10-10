@@ -1,18 +1,24 @@
+using System.ComponentModel;
 using System.Runtime.Versioning;
+using System.ServiceProcess;
 using RemoteDesktop.Platform.Windows.Setup;
 
 namespace RemoteDesktop.HostService;
 
 /// <summary>
 /// The installer's hooks into the service executable, run instead of the service when the command line asks for them:
-/// <c>--configure-system [--rendezvous URI]</c> after the files are copied and <c>--cleanup-system [--keep-data]</c> before
-/// they are removed. They run elevated, so they do only what is listed here and report failure through the exit code.
+/// <c>--configure-system [--rendezvous URI] [--restart-service]</c> after the files are copied and
+/// <c>--cleanup-system [--keep-data]</c> before they are removed. They run elevated, so they do only what is listed
+/// here and report failure through the exit code.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class SetupCommands
 {
     public const int Success = 0;
     public const int InvalidArguments = 2;
+
+    /// <summary>The name the service is installed under; the installer registers it and the client restarts it.</summary>
+    public const string ServiceName = "RemoteDesktopHost";
 
     /// <returns><c>true</c> when the command line was a setup command (then <paramref name="exitCode"/> is the result and the service must not start).</returns>
     public static bool TryRun(string[] args, string installDirectory, string dataDirectory, TextWriter output, out int exitCode)
@@ -76,7 +82,39 @@ internal static class SetupCommands
             output.WriteLine($"Could not allow Ctrl+Alt+Del from the service: {ex.Message}");
         }
 
+        // Asked for by the client after the address changed: a running service reads its settings once, at start-up.
+        if (Array.IndexOf(args, "--restart-service") >= 0)
+        {
+            RestartService(output);
+        }
+
         return Success;
+    }
+
+    /// <summary>
+    /// Restarts the installed service so it picks up the settings that were just written. Failing here does not fail
+    /// the step: the address is already on disk and the service uses it the next time it starts.
+    /// </summary>
+    private static void RestartService(TextWriter output)
+    {
+        try
+        {
+            using var service = new ServiceController(ServiceName);
+            if (service.Status is not ServiceControllerStatus.Stopped)
+            {
+                service.Stop();
+                service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+            }
+
+            service.Start();
+            service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+            output.WriteLine($"{ServiceName} restarted.");
+        }
+        // WaitForStatus has a TimeoutException of its own in this namespace; the one it throws is that one.
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or System.ServiceProcess.TimeoutException or UnauthorizedAccessException)
+        {
+            output.WriteLine($"Could not restart {ServiceName}: {ex.Message}");
+        }
     }
 
     // Removal always goes on: a leftover setting is better than an uninstall that cannot finish.

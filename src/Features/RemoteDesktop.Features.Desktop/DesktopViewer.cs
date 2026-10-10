@@ -285,11 +285,21 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private static bool IsValidCursor(CursorShapeUpdate shape) =>
         shape.Width is > 0 and <= 512 && shape.Height is > 0 and <= 512 && shape.Bgra.Length == shape.Width * shape.Height * 4;
 
+    /// <summary>
+    /// The largest stream this will set up buffers for. Every stream info allocates four bytes per pixel, and the
+    /// size is whatever the peer says it is, so "the host is trusted to be well-formed" does not cover this: a host
+    /// that is not really a host, or one that is confused, would otherwise have this window allocate a gigabyte on
+    /// request, over and over. 8K UHD is the largest display there is, so nothing real is refused.
+    /// </summary>
+    private const int MaxDimension = 8192;
+
+    private const long MaxPixels = 7680L * 4320;
+
     private void OnStreamInfo(VideoStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > 16384 || height > 16384)
+        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
         {
             throw new InvalidDataException($"Invalid stream size {width}x{height}.");
         }

@@ -26,7 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp =>
         {
             var store = sp.GetService<ISecretStore>();
-            return new HostCredentials
+            return new HostCredentials(sp.GetRequiredService<TimeProvider>())
             {
                 AllowedPermissions = store is not null ? HostPolicy.Load(store) : HostPolicy.Default,
                 FixedPassword = store is not null ? FixedPasswordPolicy.Load(store) : null,

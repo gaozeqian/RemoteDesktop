@@ -19,7 +19,14 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
     {
         EnsureDirectory();
         var protectedBytes = ProtectedData.Protect(secret.ToArray(), Entropy, scope);
-        File.WriteAllBytes(GetPath(name), protectedBytes);
+        var path = GetPath(name);
+
+        // Written beside the file and moved into place, because a write that stops halfway leaves a file that can no
+        // longer be unprotected — and for the device identity that means a machine that silently comes back as a
+        // different device, with a different code, that nobody can connect to any more.
+        var temporary = path + ".tmp";
+        File.WriteAllBytes(temporary, protectedBytes);
+        File.Move(temporary, path, overwrite: true);
     }
 
     public byte[]? Load(string name)

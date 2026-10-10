@@ -18,7 +18,8 @@ namespace RemoteDesktop.Features.FileTransfer;
 public sealed partial class FileTransferModule(
     IUserContextGuard guard,
     FileAccessPolicy policy,
-    ILogger<FileTransferModule> logger) : IFeatureModule
+    ILogger<FileTransferModule> logger,
+    PartialFileLedger? ledger = null) : IFeatureModule
 {
     private const int MaxRequestBytes = 64 * 1024;
 
@@ -174,10 +175,17 @@ public sealed partial class FileTransferModule(
         }
 
         var partial = PartialFile.PathFor(finalPath, size, modified);
+
+        // Written down before the first byte is received: a process that is killed halfway through has already left
+        // the record, which is the only way this file is ever found again if nobody comes back for it.
+        ledger?.Record(partial);
+
         var offset = File.Exists(partial) ? new FileInfo(partial).Length : 0;
         if (offset > size)
         {
+            // A partial of something else entirely (the file shrank since). Not worth keeping, so not worth tracking.
             File.Delete(partial);
+            ledger?.Forget(partial);
             offset = 0;
         }
 
@@ -203,12 +211,14 @@ public sealed partial class FileTransferModule(
             {
                 // The partial file cannot be trusted, including whatever it held before this attempt.
                 File.Delete(partial);
+                ledger?.Forget(partial);
                 await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = new FileStatus { Error = FileError.HashMismatch, Message = "The file arrived damaged." } } }, cancellationToken).ConfigureAwait(false);
                 LogTransferFailed(logger, session.Id, "upload", finalPath, "hash mismatch");
                 return;
             }
 
             Finalize(partial, ref finalPath, overwrite, modified);
+            ledger?.Forget(partial); // the file has a name now; there is nothing left to finish
             await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = Ok(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
             LogTransferDone(logger, session.Id, "upload", finalPath);
         }

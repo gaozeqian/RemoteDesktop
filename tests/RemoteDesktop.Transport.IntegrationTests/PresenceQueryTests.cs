@@ -111,13 +111,4 @@ public class PresenceRateLimiterTests
 
     private static DeviceSession Session(uint deviceId) =>
         new(deviceId, "fingerprint", WebSocket.CreateFromStream(Stream.Null, isServer: true, subProtocol: null, keepAliveInterval: TimeSpan.Zero));
-
-    private sealed class FakeTimeProvider : TimeProvider
-    {
-        private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
 }

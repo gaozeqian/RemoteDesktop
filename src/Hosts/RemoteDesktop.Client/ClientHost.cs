@@ -44,7 +44,20 @@ internal static class ClientHost
         var dataDirectory = builder.Configuration["DataDirectory"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RemoteDesktop");
         CrashLog.Register(dataDirectory);
-        var transport = builder.Configuration.GetSection("Transport").Get<TransportOptions>() ?? new TransportOptions();
+
+        // Read before anything is built: a mistyped address used to end in an exception nobody saw, because a windowed
+        // program that dies while starting up has nowhere to say why. The reason goes to the crash log and to the
+        // message box the entry point shows.
+        var reportPath = Path.Combine(dataDirectory, "crash.log");
+        var transport = StartupSettings.TryReadTransport(
+            () => builder.Configuration.GetSection("Transport").Get<TransportOptions>() ?? new TransportOptions(),
+            reportPath,
+            out var settingsError);
+        if (transport is null)
+        {
+            throw new StartupFailure(settingsError, reportPath);
+        }
+
 
         var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
         var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
@@ -74,7 +87,7 @@ internal static class ClientHost
                 .AddQuicTransport(transport)
                 .AddRemoteDesktopApplication()
                 .AddDesktopFeature()
-                .AddFileTransferFeature()
+                .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
                 .AddTerminalFeature()
                 .AddCameraFeature()
                 .AddLocalHostControl(isService: false);

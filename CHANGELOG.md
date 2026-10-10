@@ -2,15 +2,47 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased] - 里程碑 (M8 & 持续优化)
+## [Unreleased] - 公网发布准备
+
+### Security
+- [Client] **修复提权命令注入**：修改服务器地址不再经过 PowerShell，改为把参数作为独立 argv 交给服务程序
+  （`HostServiceSetup`），地址先经严格解析。此前一个伪装成服务器地址的字符串能以管理员权限执行。
+- [Protocol] **密码证明改用 PBKDF2 派生密钥**（60 万轮，nonce 作盐），**临时密码从 8 位加长到 12 位**
+  （约 2^40 → 2^60）。两者合起来让"拿到证明后离线猜口令"从几天变成不现实；这仍不是 PAKE，
+  固定密码仍需要它，见 `docs/security.md`。协议主版本随之升到 2，新旧版本会明确报"版本不兼容"。
+- [Server] **注册与连接请求限流、连接配额**：单地址注册速度、单设备连接请求速度、挂起请求上限、
+  同时连接数与单地址连接数（超出的在 WebSocket 升级前拒绝）。身份是这台服务器上所有限额的计量单位，
+  所以注册限流是让其余限额真正有效的那一条。
+- [Server] **中继绑定需要令牌**：中继先向来源地址发一个与票据、角色、地址、时间窗绑定的令牌，带回来才生效。
+  这堵住了"拿票据把中继指向别人地址"的隐藏来源发包路径；另加中继会话数上限与角色迁移日志。
+- [Server] **`X-Forwarded-For` 支持**（`Rendezvous:TrustedProxies`）：反向代理后按真实客户端地址限流，
+  不配则只信本机回环。
+- [Host] **固定密码下限由服务端强制**（此前只在界面上检查），**同时会话数上限 16**，
+  **临时密码 30 分钟后自动更换**（固定密码不过期）。
+- [Platform] 密钥文件改为原子写入：写坏不再让设备静默变成"另一台设备"。
+- [Host] **配置读不出来时说明原因**：服务把原因写进 `logs\startup-error.log` 并以退出码 3 结束（此前是启动前的
+  未处理异常——服务"就是不在了"，事件日志里只有运行时的一条记录）；客户端写进 `crash.log` 并弹出对话框，
+  不再是一个不声不响没启动的程序。
+- [Host] **文件传输残片会自动清理**：被控端把未完成的 `.rdpart` 记进清单，启动时删掉超过 7 天没人续传的。
+- [Transport] 流尺寸上限收紧到 8K（此前 16384×16384 可让控制端单次分配 1 GiB）；
+  信令给的设备号不合法时不再产生无人观察的异常。
 
 ### Added
+- [Server] **`/metrics`**（Prometheus 文本格式，默认关闭，`Rendezvous:MetricsEnabled`）。
+- [Server] `/health` 现在真的检查数据库（配置了 PostgreSQL 时）。
+- [Build] 打包脚本在许可文本仍含占位符时**拒绝出包**（`-AllowDraftLicense` 可显式跳过）。
+- [Docs] `THIRD-PARTY-NOTICES.md` 与生成脚本 `build/Generate-ThirdPartyNotices.ps1`。
+- [CI] 依赖漏洞审计（含传递依赖）、Dependabot、发布前跑测试、未配置服务器地址则拒绝发布。
 - [Docs] 新增系统架构设计文档 (`docs/architecture.md`)。
 - [Docs] 新增网络通信协议规范文档 (`docs/protocol.md`)。
 - [Docs] 新增文档中心索引与贡献指南 (`CONTRIBUTING.md`)。
+- [Docs] 部署文档新增"生产环境：信令必须走 TLS"（自带证书或反向代理两种做法）与"公网上的限额"两节。
 - [Installer] 引入基于 WiX v5 的 Windows 安装包打包脚本。
 
 ### Changed
+- [Build] Docker Compose 不再内置数据库口令（未设置即拒绝启动），加资源上限与 `no-new-privileges`。
+- [Build] 安装包摘要不再声称"中英双语界面"（界面目前只有中文）。
+- [Client] 侧栏版本号改为读程序集版本，不再硬编码在界面文件里。
 - [Repo] 优化项目文档组织结构，统一采用 Kebab-case 命名并提供全局导航。
 
 ### Fixed

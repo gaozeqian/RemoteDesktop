@@ -12,7 +12,9 @@
            UpgradeCode="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30"
            Scope="perMachine" Compressed="yes" InstallerVersion="500">
 
-    <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese and English UI." />
+    <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
+         somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
+    <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese UI." />
 
     <!-- Same-version installs upgrade in place, which is what rebuilding 0.1.0 while testing needs. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"

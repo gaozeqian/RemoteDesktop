@@ -14,7 +14,21 @@ internal static class Program
             return 1;
         }
 
-        using var host = ClientHost.Build(args);
+        IHost host;
+        try
+        {
+            host = ClientHost.Build(args);
+        }
+        catch (StartupFailure failure)
+        {
+            // Nothing has been created yet, so a window is not available: the system's own message box is.
+            UserMessage.Show(
+                $"{failure.Message}{Environment.NewLine}{Environment.NewLine}详情见：{failure.ReportPath}",
+                "Remote Desktop 无法启动");
+            return 1;
+        }
+
+        using var _ = host;
         host.Start();
         try
         {

@@ -3,7 +3,7 @@
 #   cd build/docker
 #   export RELAY_SHARED_KEY="$(openssl rand -base64 48)"       # PowerShell: $env:RELAY_SHARED_KEY = ...
 #   export RELAY_PUBLIC_ENDPOINT="rd.example.com:5082"         # the address clients will be told to relay through
-#   export POSTGRES_PASSWORD="$(openssl rand -base64 24)"      # optional: custom database password
+#   export POSTGRES_PASSWORD="$(openssl rand -base64 24)"      # required: there is no default password
 #   docker compose up -d --build
 #
 # Device codes are stored persistently in PostgreSQL (volume postgres-data):
@@ -17,7 +17,8 @@ services:
     environment:
       POSTGRES_DB: remotedesktop
       POSTGRES_USER: remotedesktop
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rd_secure_postgres_pass}
+      # Required, with no default: a database password that is written down in the repository is not a password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, for example: export POSTGRES_PASSWORD="$(openssl rand -base64 24)"}
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -38,7 +39,7 @@ services:
       Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:-127.0.0.1:5082}
       Rendezvous__RelaySharedKey: ${RELAY_SHARED_KEY:-}
       Rendezvous__ReflectorPort: 5081
-      Rendezvous__PostgresConnectionString: Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD:-rd_secure_postgres_pass}
+      Rendezvous__PostgresConnectionString: Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}
     ports:
       - "5080:5080/tcp"   # signaling: clients connect here (WebSocket /ws, health /health)
       - "5081:5081/udp"   # address reflection: tells each side what the other sees
@@ -47,12 +48,20 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      # The runtime image has no curl; this only checks that the port answers.
+      # A liveness probe: the runtime image has no curl, so this only checks that the port answers. Whether the
+      # service can actually do its work — the database included — is what /health reports, for your own monitoring.
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5080' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+    # The image already runs as a non-root user; this takes away the ways back up from it.
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   relay:
     build:
@@ -67,6 +76,12 @@ services:
     restart: unless-stopped
     depends_on:
       - rendezvous
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 volumes:
   postgres-data:

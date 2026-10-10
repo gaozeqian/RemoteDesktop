@@ -10,6 +10,7 @@ using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
+using RemoteDesktop.Client.Setup;
 using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Camera;
@@ -18,6 +19,7 @@ using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows.Recording;
+using RemoteDesktop.Platform.Windows.Setup;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -188,6 +190,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public partial string? ServerAddressError { get; set; }
 
     public string ClientVersion { get; } = typeof(MainWindowViewModel).Assembly.GetName().Version?.ToString() ?? "未知";
+
+    /// <summary>The sidebar's version line, built from <see cref="ClientVersion"/> so the two cannot disagree.</summary>
+    public string ClientVersionLabel => $"Remote Desktop {ClientVersion}";
 
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
     /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
@@ -442,10 +447,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveServerAddressAsync()
     {
-        var uri = NewServerAddress?.Trim();
-        if (string.IsNullOrEmpty(uri) || (!uri.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) && !uri.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)))
+        // There is no installed service to reconfigure anywhere but Windows. The guard is also what tells the platform
+        // analyzer that the Windows-only parsing below is reached on Windows only.
+        if (!OperatingSystem.IsWindows())
         {
-            ServerAddressError = "地址必须以 ws:// 或 wss:// 开头";
+            ServerAddressError = "只有 Windows 版本可以修改被控端的服务器地址";
+            return;
+        }
+
+        // Parsed here, before anything is started as administrator, and by the same rule the service applies when it
+        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt.
+        if (!SystemSetup.TryParseRendezvousUri(NewServerAddress, out var rendezvous))
+        {
+            ServerAddressError = "地址要写成 ws://主机:端口/ws 或 wss://主机/ws";
             return;
         }
 
@@ -458,15 +472,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 return;
             }
 
-            // Execute elevated process to configure and restart the service
-            var startInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -WindowStyle Hidden -Command \"& '{exePath}' --configure-system --rendezvous '{uri}'; if ($LASTEXITCODE -eq 0) {{ Restart-Service RemoteDesktopHost }}\"",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
-            };
+            // The service executable is asked directly, as administrator, to write the address and restart itself.
+            var startInfo = HostServiceSetup.BuildStartInfo(exePath, rendezvous);
 
             using var process = System.Diagnostics.Process.Start(startInfo);
             if (process != null)

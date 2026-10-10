@@ -16,6 +16,16 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      # The build reports what is wrong with the packages a project references directly; this walks the whole graph,
+      # including everything those packages drag in. A known-vulnerable dependency fails the build.
+      - name: Audit packages for known vulnerabilities
+        shell: pwsh
+        run: |
+          $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+          $report
+          if ($report -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found; the report is above."
+          }
       - name: Test
         run: dotnet test RemoteDesktop.slnx --no-build -c Release --logger "trx" --logger "console;verbosity=normal" --results-directory TestResults
       - name: Upload Test Results

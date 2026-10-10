@@ -1,0 +1,35 @@
+# Keeps the dependencies and the pipeline's own actions current. A remote-desktop server is exposed to the internet,
+# so a package with a published vulnerability is a release blocker rather than a chore — this is what surfaces them,
+# and CI fails the build when one is in the graph.
+version: 2
+
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # These families are versioned together; one pull request instead of one per package.
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      serilog:
+        patterns:
+          - "Serilog*"
+      avalonia:
+        patterns:
+          - "Avalonia*"
+      vortice:
+        patterns:
+          - "Vortice*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /build/docker
+    schedule:
+      interval: weekly

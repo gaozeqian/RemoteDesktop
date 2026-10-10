@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace RemoteDesktop.Server.Rendezvous;
 
 /// <summary>
@@ -18,66 +16,21 @@ public sealed class PresenceRateLimiter(TimeProvider time)
 
     private static readonly TimeSpan RefillInterval = TimeSpan.FromSeconds(6);
 
-    private readonly ConcurrentDictionary<uint, Bucket> _buckets = [];
+    private readonly KeyedTokenBucket<DeviceSession> _buckets = new(Burst, RefillInterval, time);
 
     public bool TryAcquire(DeviceSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-
-        var now = time.GetUtcNow();
-
-        // A reconnect installs a new session, and the budget does not carry over to it: the old session's bucket is
-        // replaced rather than inherited, or a client that reconnects could never ask again.
-        var bucket = _buckets.AddOrUpdate(
-            session.DeviceId,
-            _ => new Bucket(session, Burst, now),
-            (_, existing) => ReferenceEquals(existing.Session, session) ? existing : new Bucket(session, Burst, now));
-
-        return bucket.TryTake(now);
+        return _buckets.TryTake(session);
     }
 
     /// <summary>
-    /// Drops a device's bucket when it disconnects. The stored session is compared first: a device that reconnects
-    /// installs a new session and aborts the old one, and that old one's cleanup must not wipe the new one's budget.
+    /// Drops a device's bucket when it disconnects. The bucket is keyed by the session rather than by the device id,
+    /// so a device that reconnects has already been given a fresh one and this cleanup cannot wipe that new budget.
     /// </summary>
     public void Forget(DeviceSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-
-        if (_buckets.TryGetValue(session.DeviceId, out var bucket) && ReferenceEquals(bucket.Session, session))
-        {
-            _buckets.TryRemove(new KeyValuePair<uint, Bucket>(session.DeviceId, bucket));
-        }
-    }
-
-    private sealed class Bucket(DeviceSession session, int tokens, DateTimeOffset now)
-    {
-        private readonly Lock _lock = new();
-        private int _tokens = tokens;
-        private DateTimeOffset _refilledAt = now;
-
-        public DeviceSession Session { get; } = session;
-
-        public bool TryTake(DateTimeOffset now)
-        {
-            lock (_lock)
-            {
-                var elapsed = now - _refilledAt;
-                if (elapsed >= RefillInterval)
-                {
-                    var earned = (int)(elapsed / RefillInterval);
-                    _tokens = Math.Min(Burst, _tokens + earned);
-                    _refilledAt += earned * RefillInterval;
-                }
-
-                if (_tokens == 0)
-                {
-                    return false;
-                }
-
-                _tokens--;
-                return true;
-            }
-        }
+        _buckets.Forget(session);
     }
 }

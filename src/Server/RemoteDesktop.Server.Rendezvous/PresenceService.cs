@@ -16,7 +16,7 @@ namespace RemoteDesktop.Server.Rendezvous;
 /// ids left out, which is a lie the server made up;</item>
 /// <item>throttled, malformed and unsupported queries are all answered with silence, and the client renders silence
 /// as unknown;</item>
-/// <item>the only telemetry the rendezvous server has is a log, so a client that scrapes leaves a warning behind.
+/// <item>the only telemetry that names a client is a log, so a client that scrapes leaves a warning behind.
 /// </item>
 /// </list>
 /// </remarks>
@@ -24,6 +24,7 @@ public sealed partial class PresenceService(
     DevicePresence presence,
     PresenceRateLimiter limiter,
     IOptions<RendezvousOptions> options,
+    ServerMetrics metrics,
     ILogger<PresenceService> logger)
 {
     /// <summary>One query may name at most this many devices. Over the cap it is dropped, never truncated.</summary>
@@ -41,6 +42,7 @@ public sealed partial class PresenceService(
 
         if (!limiter.TryAcquire(requester))
         {
+            metrics.PresenceQueryThrottled();
             LogThrottled(logger, requester.DeviceId, query.DeviceIds.Count);
             return;
         }

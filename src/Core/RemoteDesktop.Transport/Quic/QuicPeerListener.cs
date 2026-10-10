@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Quic;
 using System.Runtime.Versioning;
@@ -51,9 +52,14 @@ public sealed partial class QuicPeerListener(
 
     private async Task HandleAsync(IncomingConnection incoming, CancellationToken cancellationToken)
     {
-        var controller = new DeviceId((int)incoming.ControllerDeviceId);
+        // The id is parsed inside the try: this runs as a task nobody awaits, and a request carrying a device id that
+        // is not one — which is to say, a request from a signaling server that is not ours — must be dropped quietly
+        // rather than becoming an exception nothing is left to observe.
+        DeviceId? controller = null;
         try
         {
+            var device = new DeviceId((int)incoming.ControllerDeviceId);
+            controller = device;
             var (port, candidates, relay) = await PreparePortAsync(incoming, cancellationToken).ConfigureAwait(false);
 
             var listener = await QuicListener.ListenAsync(
@@ -74,15 +80,15 @@ public sealed partial class QuicPeerListener(
                 var connection = await AcceptControllerAsync(listener, cancellationToken).ConfigureAwait(false);
                 if (connection is null)
                 {
-                    LogAcceptTimedOut(logger, controller);
+                    LogAcceptTimedOut(logger, device);
                     return;
                 }
 
                 // The listener is disposed when this block ends; the accepted connection lives on.
                 var path = relay is not null && connection.RemoteEndPoint.Equals(relay) ? ConnectionPath.Relayed : ConnectionPath.Direct;
-                LogAccepted(logger, controller, path, connection.RemoteEndPoint);
+                LogAccepted(logger, device, path, connection.RemoteEndPoint);
                 await _accepted.Writer.WriteAsync(
-                    new QuicPeerConnection(connection, controller, path, identity.Fingerprint, incoming.ControllerFingerprint),
+                    new QuicPeerConnection(connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint),
                     cancellationToken).ConfigureAwait(false);
             }
         }
@@ -93,7 +99,7 @@ public sealed partial class QuicPeerListener(
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogHandleFailed(logger, controller, ex);
+            LogHandleFailed(logger, controller?.ToString() ?? incoming.ControllerDeviceId.ToString(CultureInfo.InvariantCulture), ex);
         }
     }
 
@@ -154,7 +160,7 @@ public sealed partial class QuicPeerListener(
     private static partial void LogAcceptTimedOut(ILogger logger, DeviceId device);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Incoming connection from {Device} failed.")]
-    private static partial void LogHandleFailed(ILogger logger, DeviceId device, Exception exception);
+    private static partial void LogHandleFailed(ILogger logger, string device, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Rejected QUIC handshake: {Reason}.")]
     private static partial void LogRejectedHandshake(ILogger logger, string reason);

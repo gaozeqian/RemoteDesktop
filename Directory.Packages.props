@@ -14,6 +14,8 @@
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+    <!-- The setup command restarts the installed service (ServiceController) -->
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.12" />
     <!-- Windows platform: DXGI capture, Media Foundation codecs -->
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />

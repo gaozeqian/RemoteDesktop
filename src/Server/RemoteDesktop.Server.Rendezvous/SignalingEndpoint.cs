@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -17,6 +18,9 @@ public sealed partial class SignalingEndpoint(
     PresenceService presenceQueries,
     ConnectionBroker broker,
     AddressReflector reflector,
+    ConnectionQuota quota,
+    KeyedTokenBucket<IPAddress> registrationBudget,
+    ServerMetrics metrics,
     ILogger<SignalingEndpoint> logger)
 {
     private static readonly TimeSpan RegisterTimeout = TimeSpan.FromSeconds(10);
@@ -31,36 +35,53 @@ public sealed partial class SignalingEndpoint(
             return;
         }
 
-        using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-        var cancellationToken = context.RequestAborted;
+        // Refused before the upgrade: the socket is never turned into the server's to keep.
+        var address = context.Connection.RemoteIpAddress;
+        if (!quota.TryOpen(address))
+        {
+            metrics.ConnectionRefused();
+            LogOverQuota(logger, address?.ToString() ?? "unknown", quota.Open);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return;
+        }
+
         try
         {
-            using var session = await RegisterAsync(socket, cancellationToken).ConfigureAwait(false);
-            if (session is null)
-            {
-                await CloseAsync(socket, WebSocketCloseStatus.PolicyViolation, "registration failed").ConfigureAwait(false);
-                return;
-            }
-
-            presence.Add(session);
+            using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            var cancellationToken = context.RequestAborted;
             try
             {
-                await ServeAsync(socket, session, cancellationToken).ConfigureAwait(false);
+                using var session = await RegisterAsync(socket, address, cancellationToken).ConfigureAwait(false);
+                if (session is null)
+                {
+                    await CloseAsync(socket, WebSocketCloseStatus.PolicyViolation, "registration failed").ConfigureAwait(false);
+                    return;
+                }
+
+                presence.Add(session);
+                try
+                {
+                    await ServeAsync(socket, session, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    presence.Remove(session);
+                    presenceQueries.Forget(session);
+                    LogDisconnected(logger, session.DeviceId);
+                }
             }
-            finally
+            catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or InvalidDataException)
             {
-                presence.Remove(session);
-                presenceQueries.Forget(session);
-                LogDisconnected(logger, session.DeviceId);
+                // Client went away or sent garbage; nothing to clean up beyond presence.
             }
         }
-        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or InvalidDataException)
+        finally
         {
-            // Client went away or sent garbage; nothing to clean up beyond presence.
+            quota.Close(address);
         }
     }
 
-    private async Task<DeviceSession?> RegisterAsync(WebSocket socket, CancellationToken cancellationToken)
+    private async Task<DeviceSession?> RegisterAsync(WebSocket socket, IPAddress? address, CancellationToken cancellationToken)
     {
         var nonce = RandomNumberGenerator.GetBytes(32);
         await WebSocketMessaging.SendAsync(
@@ -76,19 +97,40 @@ public sealed partial class SignalingEndpoint(
             return null;
         }
 
-        var fingerprint = VerifyRegistration(message.Register, nonce);
-        if (fingerprint is null)
+        // Before the certificate is checked and before the registry is written to: a registration costs this server an
+        // identity, and identities are the unit every other budget here is counted in.
+        if (address is not null && !registrationBudget.TryTake(address))
         {
+            metrics.RegistrationRefused();
+            LogThrottledRegistration(logger, address.ToString());
             return null;
         }
 
-        var deviceId = await registry.GetOrAllocateAsync(fingerprint, cancellationToken).ConfigureAwait(false);
-        var session = new DeviceSession(deviceId, fingerprint, socket);
+        var fingerprint = VerifyRegistration(message.Register, nonce);
+        if (fingerprint is null)
+        {
+            // Worth a line of its own: a run of these is what somebody guessing at keys looks like from here.
+            LogRefusedRegistration(logger, address?.ToString() ?? "unknown");
+            return null;
+        }
+
+        var registration = await registry.GetOrAllocateAsync(fingerprint, cancellationToken).ConfigureAwait(false);
+        // Counted once the identity exists, which is the point this server has spent something on the device, whether
+        // the identity is new or one the registry already had.
+        metrics.Registered();
+        if (!registration.Created && address is not null)
+        {
+            // A known device coming back after a dropped connection, a sleep or a server restart. It proved its key,
+            // and it is not what the budget is there to slow down, so the token goes back.
+            registrationBudget.Refund(address);
+        }
+
+        var session = new DeviceSession(registration.DeviceId, fingerprint, socket);
         await session.SendAsync(
-            new ServerMessage { Registered = new Registered { DeviceId = deviceId, ReflectorPort = (uint)reflector.Port } },
+            new ServerMessage { Registered = new Registered { DeviceId = registration.DeviceId, ReflectorPort = (uint)reflector.Port } },
             cancellationToken).ConfigureAwait(false);
 
-        LogRegistered(logger, deviceId);
+        LogRegistered(logger, registration.DeviceId);
         return session;
     }
 
@@ -154,4 +196,15 @@ public sealed partial class SignalingEndpoint(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Device {DeviceId} disconnected.")]
     private static partial void LogDisconnected(ILogger logger, uint deviceId);
+
+    // The three refusals below carry the caller's address: they are the only place this server writes one down, and
+    // they are exactly the lines an operator needs when somebody is abusing the server. See docs/security.md.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Address}: {Open} are already being served.")]
+    private static partial void LogOverQuota(ILogger logger, string address, int open);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Throttled registrations from {Address}.")]
+    private static partial void LogThrottledRegistration(ILogger logger, string address);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a registration from {Address}: the certificate proof did not verify.")]
+    private static partial void LogRefusedRegistration(ILogger logger, string address);
 }

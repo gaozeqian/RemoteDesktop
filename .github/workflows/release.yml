@@ -29,6 +29,22 @@ jobs:
         with:
           global-json-file: global.json
 
+      # A release is the one build nobody gets to re-check before it is public, so it runs the tests itself rather
+      # than trusting that CI passed on some earlier commit.
+      - name: Restore, build and test
+        run: |
+          dotnet restore RemoteDesktop.slnx
+          dotnet build RemoteDesktop.slnx --no-restore -c Release
+          dotnet test RemoteDesktop.slnx --no-build -c Release
+
+      # The address is baked into the installer. Without one, the release would be a client that cannot connect to
+      # anything — worth failing over, since the artifact outlives the mistake.
+      - name: Check that a server address is configured
+        if: vars.DEFAULT_RENDEZVOUS_URI == ''
+        shell: pwsh
+        run: |
+          throw "Set the repository variable DEFAULT_RENDEZVOUS_URI (Settings -> Secrets and variables -> Actions -> Variables), for example wss://rd.example.com:5080/ws."
+
       # 可选：如果你需要使用真正的代码签名，而不是自签/跳过，
       # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
       # 下面演示了如何从 Secrets 获取 PFX 证书并解码：

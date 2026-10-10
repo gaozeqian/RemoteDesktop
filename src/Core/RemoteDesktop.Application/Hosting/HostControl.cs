@@ -119,9 +119,15 @@ public sealed class LocalHostControl(
         }
     }
 
+    /// <exception cref="ArgumentException">The password is too short to be one; nothing is changed.</exception>
     public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
     {
         var normalized = string.IsNullOrWhiteSpace(password) ? null : password.Trim();
+        if (normalized is not null && !FixedPasswordPolicy.IsAcceptable(normalized))
+        {
+            throw new ArgumentException($"A fixed password must be at least {FixedPasswordPolicy.MinimumLength} characters.", nameof(password));
+        }
+
         credentials.FixedPassword = normalized;
         if (secrets is not null)
         {

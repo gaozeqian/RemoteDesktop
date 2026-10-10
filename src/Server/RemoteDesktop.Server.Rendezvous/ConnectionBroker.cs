@@ -15,18 +15,28 @@ public sealed partial class ConnectionBroker
 {
     private readonly ConcurrentDictionary<string, PendingRequest> _pending = new(StringComparer.Ordinal);
     private readonly DevicePresence _presence;
+    private readonly KeyedTokenBucket<uint> _connectBudget;
     private readonly RendezvousOptions _options;
+    private readonly ServerMetrics _metrics;
     private readonly TimeProvider _time;
     private readonly ILogger<ConnectionBroker> _logger;
     private readonly byte[]? _relayKey;
     private readonly PeerEndpoint? _relayEndpoint;
 
-    public ConnectionBroker(DevicePresence presence, IOptions<RendezvousOptions> options, TimeProvider time, ILogger<ConnectionBroker> logger)
+    public ConnectionBroker(
+        DevicePresence presence,
+        KeyedTokenBucket<uint> connectBudget,
+        IOptions<RendezvousOptions> options,
+        ServerMetrics metrics,
+        TimeProvider time,
+        ILogger<ConnectionBroker> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         _presence = presence;
+        _connectBudget = connectBudget;
         _options = options.Value;
+        _metrics = metrics;
         _time = time;
         _logger = logger;
         if (!string.IsNullOrEmpty(_options.RelayEndpoint))
@@ -46,6 +56,16 @@ public sealed partial class ConnectionBroker
         ArgumentNullException.ThrowIfNull(controller);
         ArgumentNullException.ThrowIfNull(request);
 
+        // Counted before anything else: a device asking in a loop is what a stream of connection popups on somebody
+        // else's machine looks like from here, and every accepted request also mints a relay ticket.
+        if (!_connectBudget.TryTake(controller.DeviceId))
+        {
+            _metrics.ConnectRequestThrottled();
+            LogThrottledConnectRequest(_logger, controller.DeviceId);
+            await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var host = _presence.Find(request.TargetDeviceId);
         if (host is null || host == controller || string.IsNullOrEmpty(request.RequestId))
         {
@@ -53,14 +73,25 @@ public sealed partial class ConnectionBroker
             return;
         }
 
-        var relay = CreateRelayInfo();
-        var pending = new PendingRequest(controller, host.DeviceId, relay);
-        if (!_pending.TryAdd(request.RequestId, pending))
+        if (_pending.Count >= _options.MaxPendingRequests || PendingFor(controller.DeviceId) >= _options.MaxPendingRequestsPerDevice)
         {
+            _metrics.ConnectRequestRefused();
+            LogTooManyPendingRequests(_logger, controller.DeviceId, _pending.Count);
             await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
             return;
         }
 
+        var relay = CreateRelayInfo();
+        var pending = new PendingRequest(controller, host.DeviceId, relay);
+        if (!_pending.TryAdd(request.RequestId, pending))
+        {
+            // The same request id is already waiting: a refusal this request id gets instead of a second entry.
+            _metrics.ConnectRequestRefused();
+            await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        _metrics.ConnectRequestAccepted();
         LogConnectRequested(_logger, request.RequestId, controller.DeviceId, host.DeviceId);
         _ = ExpireAsync(request.RequestId, pending);
 
@@ -121,6 +152,25 @@ public sealed partial class ConnectionBroker
         }
     }
 
+    /// <summary>
+    /// Counts by walking the table instead of keeping a counter beside it: the table is capped, the requests that get
+    /// this far are rate limited, and a number that cannot drift out of step with the table is worth more than the
+    /// microseconds the walk costs.
+    /// </summary>
+    private int PendingFor(uint deviceId)
+    {
+        var count = 0;
+        foreach (var (_, pending) in _pending)
+        {
+            if (pending.Controller.DeviceId == deviceId)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     private RelayInfo? CreateRelayInfo()
     {
         if (_relayKey is null)
@@ -139,6 +189,12 @@ public sealed partial class ConnectionBroker
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connect request {RequestId}: {Controller} -> {Host}.")]
     private static partial void LogConnectRequested(ILogger logger, string requestId, uint controller, uint host);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Throttled connect requests from device {DeviceId}.")]
+    private static partial void LogThrottledConnectRequest(ILogger logger, uint deviceId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connect request from device {DeviceId}: {Pending} requests are already waiting.")]
+    private static partial void LogTooManyPendingRequests(ILogger logger, uint deviceId, int pending);
 
     private sealed record PendingRequest(DeviceSession Controller, uint HostDeviceId, RelayInfo? Relay);
 }

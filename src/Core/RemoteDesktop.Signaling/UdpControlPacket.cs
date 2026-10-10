@@ -19,6 +19,12 @@ public enum UdpControlPacketType : byte
 
     /// <summary>Opens the NAT mapping towards a peer; the content is ignored.</summary>
     Punch = 5,
+
+    /// <summary>
+    /// Relay answers a bind that carried no token with a token, and the client binds again with it. Receiving the
+    /// token is what proves the bind really comes from the address it claims — the point of the exchange.
+    /// </summary>
+    RelayBindChallenge = 6,
 }
 
 /// <summary>
@@ -34,6 +40,36 @@ public static class UdpControlPacket
     private const int HeaderSize = 4;
 
     public const int TransactionIdSize = 12;
+
+    /// <summary>Size of the token in a <see cref="UdpControlPacketType.RelayBindChallenge"/> and of the field it
+    /// occupies in a bind. See <c>RelayCookie</c> for what it is made of.</summary>
+    public const int RelayBindCookieSize = 16;
+
+    /// <summary>Body of a bind: <c>[role u8][token 16][ticket]</c>, the token zero-filled on the first attempt.</summary>
+    public static byte[] CreateRelayBind(byte role, ReadOnlySpan<byte> cookie, ReadOnlySpan<byte> ticket)
+    {
+        var body = new byte[1 + RelayBindCookieSize + ticket.Length];
+        body[0] = role;
+        cookie[..Math.Min(cookie.Length, RelayBindCookieSize)].CopyTo(body.AsSpan(1));
+        ticket.CopyTo(body.AsSpan(1 + RelayBindCookieSize));
+        return Create(UdpControlPacketType.RelayBind, body);
+    }
+
+    public static bool TryParseRelayBind(ReadOnlySpan<byte> body, out byte role, out ReadOnlySpan<byte> cookie, out ReadOnlySpan<byte> ticket)
+    {
+        role = 0;
+        cookie = default;
+        ticket = default;
+        if (body.Length < 1 + RelayBindCookieSize)
+        {
+            return false;
+        }
+
+        role = body[0];
+        cookie = body.Slice(1, RelayBindCookieSize);
+        ticket = body[(1 + RelayBindCookieSize)..];
+        return true;
+    }
 
     public static bool TryParse(ReadOnlySpan<byte> packet, out UdpControlPacketType type, out ReadOnlySpan<byte> body)
     {
