@@ -6,7 +6,17 @@
         Title="Remote Desktop"
         Icon="/Assets/icon.ico"
         Background="{DynamicResource RdWindowBackgroundBrush}"
-        Width="1040" Height="700" MinWidth="900" MinHeight="600">
+        Width="860" Height="560" MinWidth="860" MinHeight="560">
+
+  <!--
+    The size above is the smallest one that still shows every page whole, measured on a running client with a real
+    device code and temporary password on screen. 主页 begins to scroll below ~525 high; 设备列表 is what sets the
+    width — under ~840 its action buttons wrap to a third row and push the offline caption past the bottom edge, and
+    that page, unlike the other two, has no ScrollViewer to fall back on. The slack over both numbers absorbs a
+    longer status message or a wider password. MinWidth/MinHeight repeat them: no size below this one shows the
+    content, so there is nothing to gain by letting the window be dragged smaller.
+  -->
+
   <Grid ColumnDefinitions="200,*">
 
     <!-- ============================ 侧栏 ============================ -->
