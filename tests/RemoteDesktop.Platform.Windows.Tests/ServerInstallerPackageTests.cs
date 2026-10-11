@@ -50,7 +50,7 @@ public sealed class ServerInstallerPackageTests
         // --- the two programs, each with the runtime that comes with it -------------------------------------------
         var files = package.Rows("SELECT `File`, `FileName` FROM `File`", 2);
         var names = files.Select(row => row[1].Split('|')[^1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "appsettings.json" })
+        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "appsettings.json", "configure-server.ps1", "如何配置.txt" })
         {
             Assert.Contains(expected, names);
         }

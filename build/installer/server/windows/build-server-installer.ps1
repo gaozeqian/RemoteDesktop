@@ -562,6 +562,13 @@ if (-not (Test-Path -LiteralPath $licenseRtf)) { throw "The license RTF was not 
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
+# The two files that make an installation maintainable rather than only installable: a script that writes the settings
+# the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
+# servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
+foreach ($extra in 'configure-server.ps1', '如何配置.txt') {
+    Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
+}
+
 # Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
 # which is what leaves out both copies of it: the publish output has one in each server folder.
 $handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'appsettings.json')
