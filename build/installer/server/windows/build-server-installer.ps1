@@ -614,10 +614,23 @@ foreach ($name in $handWritten) {
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
+# The custom actions the settings page needs: asking for a certificate file, and finding out whether a database
+# answers. A separate net48 project (msiexec hosts the .NET Framework runtime, so a custom action assembly has to be
+# one it can load), built here because it is installer plumbing rather than part of the product's solution.
+Write-Host 'Building the installer custom actions...'
+dotnet build (Join-Path $installerDirectory 'CustomActions\RemoteDesktop.Server.Installer.CustomActions.csproj') -c $Configuration --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'The installer custom actions failed to build.' }
+
+# The packaging step turns the assembly into a single DLL that carries its dependencies and the DTF runtime with it;
+# that one is what goes into the package, not the plain assembly next to it.
+$customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
+if (-not (Test-Path -LiteralPath $customActions)) { throw "The custom actions were not packaged into $customActions." }
+
 $wixArguments = @(
     "-p:ProductVersion=$version"
     "-p:SourceRoot=$PublishDirectory"
     "-p:DefaultRendezvousUrl=$defaultRendezvousUrl"
+    "-p:CustomActionsPath=$customActions"
 )
 
 dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Server.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory

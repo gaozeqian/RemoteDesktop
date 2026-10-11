@@ -259,6 +259,13 @@
       </Component>
     </DirectoryRef>
 
+    <!-- The custom actions the settings page calls, packed into one DLL by the build (net48: msiexec hosts the .NET
+         Framework runtime, so this is the only kind of assembly it can load). They are immediate actions, which is the
+         whole point — they run inside msiexec, where the properties the page wrote are readable and a property they
+         set is what the page shows next. -->
+    <Binary Id="PageActions" SourceFile="$(var.CustomActionsPath)" />
+    <CustomAction Id="BrowseForCertificate" BinaryRef="PageActions" DllEntry="BrowseForCertificate" Execute="immediate" Return="ignore" />
+
     <UI>
 
     <Dialog Id="ServerSettingsDlg" Width="370" Height="340" Title="[ProductName] 安装向导">
@@ -298,7 +305,12 @@
       <!-- Two lines, one field each: on one line the password box came out about thirty pixels wide, which is not a
            field anybody can type a password into. -->
       <Control Id="TlsPathLabel" Type="Text" X="34" Y="212" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
-      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="224" Width="316" Height="16" Property="TLSCERTIFICATEPATH" Text="[TLSCERTIFICATEPATH]" />
+      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="224" Width="240" Height="16" Property="TLSCERTIFICATEPATH" Text="[TLSCERTIFICATEPATH]" />
+      <!-- Windows Installer's own browse dialog picks folders, not files, so this button runs our own action, which
+           puts the chosen path straight into the property the page shows. -->
+      <Control Id="TlsBrowseButton" Type="PushButton" X="278" Y="224" Width="72" Height="16" Text="浏览…">
+        <Publish Event="DoAction" Value="BrowseForCertificate" />
+      </Control>
       <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="244" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
       <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="256" Width="316" Height="16" Password="yes" Property="TLSCERTIFICATEPASSWORD" />
       <Control Id="TlsNote" Type="Text" X="20" Y="278" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
