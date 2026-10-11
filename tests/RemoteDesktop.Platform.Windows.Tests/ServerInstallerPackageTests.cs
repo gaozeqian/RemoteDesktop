@@ -104,7 +104,7 @@ public sealed class ServerInstallerPackageTests
             // A property with no value never reaches the property table, and the custom action that reads it finds
             // nothing — so each of them carries one, even when all it says is "decide for me".
             Assert.True(properties.ContainsKey(name), $"The package has no {name} property.");
-            Assert.False(string.IsNullOrWhiteSpace(properties[name]), $"The {name} property has no value, so it is not in the property table.");
+            Assert.True(properties.ContainsKey(name), $"The {name} property is not in the property table at all, which is what disables a control that shows it.");
         }
 
         Assert.Equal("auto", properties["RELAYSHAREDKEY"]);

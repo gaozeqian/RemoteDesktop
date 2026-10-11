@@ -261,20 +261,22 @@
 
     <UI>
 
-    <Dialog Id="ServerSettingsDlg" Width="370" Height="270" Title="[ProductName] 安装向导">
+    <Dialog Id="ServerSettingsDlg" Width="370" Height="340" Title="[ProductName] 安装向导">
       <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器设置" />
       <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下三项都可以留空，装完也能改（见安装目录下的 configure-server.ps1）。" />
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
-      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="304" Width="370" Height="0" />
 
-      <!-- The database: optional, but leaving it out is the single most consequential default in this package. -->
-      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（留空 = 不使用数据库）" />
+      <!-- The database: optional, but leaving it out is the single most consequential default in this package.
+           The box shows the property's value, which is the sentinel "auto" — the label says so rather than leaving
+           somebody to wonder whether they are meant to type the word. -->
+      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（留空或 auto = 不使用数据库）。例：Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." />
       <Control Id="PostgresEdit" Type="Edit" X="20" Y="64" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" Text="[POSTGRESCONNECTIONSTRING]" />
-      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="留空时设备代码只存在内存里，信令服务一重启就全变，无人值守的机器会失联。" />
+      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="不使用数据库时设备代码只存在内存里，信令服务一重启就全变，无人值守的机器会失联。" />
 
       <!-- Where clients are told to reach the relay. "auto" picks this machine's first non-loopback address, which on
            a machine with a VPN is the VPN's. -->
-      <Control Id="RelayLabel" Type="Text" X="20" Y="100" Width="330" Height="12" NoPrefix="yes" Text="中继公网地址（让客户端去哪里找中继）" />
+      <Control Id="RelayLabel" Type="Text" X="20" Y="100" Width="330" Height="12" NoPrefix="yes" Text="中继公网地址（让客户端去哪里找中继）。例：203.0.113.10:5082" />
       <Control Id="RelayEdit" Type="Edit" X="20" Y="112" Width="330" Height="16" Property="RELAYPUBLICENDPOINT" Text="[RELAYPUBLICENDPOINT]" />
       <Control Id="RelayNote" Type="Text" X="20" Y="130" Width="330" Height="12" NoPrefix="yes" Text="auto = 本机第一个非回环地址（有 VPN 或虚拟网卡时会选错）；中继在另一台机器上时填那台的 IP:端口。" />
 
@@ -286,18 +288,22 @@
         <RadioButtonGroup Property="TLSCHOICE">
           <RadioButton Value="none" X="4" Y="2" Width="322" Height="13" Text="不启用：明文 http，设备代码与中继票据在途中可被读取" />
           <RadioButton Value="generate" X="4" Y="17" Width="322" Height="13" Text="自动生成一张自签名证书并启用 https（推荐）" />
-          <RadioButton Value="file" X="4" Y="32" Width="322" Height="13" Text="使用已有的证书文件：" />
+          <RadioButton Value="file" X="4" Y="32" Width="322" Height="13" Text="使用已有的证书文件" />
         </RadioButtonGroup>
       </Control>
-      <Control Id="TlsPathEdit" Type="Edit" X="150" Y="190" Width="130" Height="15" Property="TLSCERTIFICATEPATH" Text="[TLSCERTIFICATEPATH]" />
-      <Control Id="TlsNote" Type="Text" X="20" Y="208" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
-      <Control Id="TlsPasswordLabel" Type="Text" X="286" Y="190" Width="28" Height="15" NoPrefix="yes" Text="口令" />
-      <Control Id="TlsPasswordEdit" Type="Edit" X="314" Y="190" Width="36" Height="15" Password="yes" Property="TLSCERTIFICATEPASSWORD" Text="[TLSCERTIFICATEPASSWORD]" />
 
-      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+      <!-- Two lines, one field each: on one line the password box came out about thirty pixels wide, which is not a
+           field anybody can type a password into. -->
+      <Control Id="TlsPathLabel" Type="Text" X="34" Y="212" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
+      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="224" Width="316" Height="16" Property="TLSCERTIFICATEPATH" Text="[TLSCERTIFICATEPATH]" />
+      <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="244" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
+      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="256" Width="316" Height="16" Password="yes" Property="TLSCERTIFICATEPASSWORD" Text="[TLSCERTIFICATEPASSWORD]" />
+      <Control Id="TlsNote" Type="Text" X="20" Y="278" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
+
+      <Control Id="Back" Type="PushButton" X="180" Y="313" Width="56" Height="17" Text="!(loc.WixUIBack)">
         <Publish Event="NewDialog" Value="InstallDirDlg" />
       </Control>
-      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+      <Control Id="Next" Type="PushButton" X="236" Y="313" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
         <!-- The radio decides the property the deferred action reads; the "file" choice leaves whatever was typed in
              the path box alone. "no" maps to the value the installer's own default uses, which the configuration step
              reads as "no certificate". -->
@@ -305,7 +311,7 @@
         <Publish Event="SetProperty" Value="generate" Order="2" Condition="TLSCHOICE = &quot;generate&quot;" />
         <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="3" Condition="1" />
       </Control>
-      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+      <Control Id="Cancel" Type="PushButton" X="304" Y="313" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
         <Publish Event="SpawnDialog" Value="CancelDlg" />
       </Control>
     </Dialog>

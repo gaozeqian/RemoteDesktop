@@ -122,7 +122,7 @@ public static class ServerSetup
             else
             {
                 certificates["Path"] = options.TlsCertificatePath;
-                certificates["Password"] = options.TlsCertificatePassword ?? string.Empty;
+                certificates["Password"] = IsAuto(options.TlsCertificatePassword) ? string.Empty : options.TlsCertificatePassword!;
                 notes.Add($"Signaling is served over TLS with {options.TlsCertificatePath}.");
             }
         }

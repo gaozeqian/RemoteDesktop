@@ -95,7 +95,7 @@
          file. Left unset it reaches the server as an empty argument, which is exactly how the server reads "no
          password" - no word is needed for that, and none would do. Secure, like the rest, so the deferred action -
          which runs as the system - is where it is needed. -->
-    <Property Id="TLSCERTIFICATEPASSWORD" Secure="yes" />
+    <Property Id="TLSCERTIFICATEPASSWORD" Value="auto" Secure="yes" />
 
     <!--
       The four arguments both configuration command lines carry - the address, the relay endpoint, the key and the
