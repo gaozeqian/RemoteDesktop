@@ -78,6 +78,22 @@ public sealed class PunchSocket : IDisposable
 
     private async Task<bool> BindRelayCoreAsync(IPEndPoint relay, byte[] ticket, RelayRole role, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        // Two round trips over UDP, on the path that is what is left when nothing else worked — and one lost packet
+        // used to end the connection right there. The retry costs a second timeout in a case that has already failed;
+        // what it buys is not turning "the relay did not answer once" into "this device cannot be reached".
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (await TryBindRelayOnceAsync(relay, ticket, role, timeout, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> TryBindRelayOnceAsync(IPEndPoint relay, byte[] ticket, RelayRole role, TimeSpan timeout, CancellationToken cancellationToken)
+    {
         var roleByte = (byte)role;
         var challenge = await RequestAsync(
             UdpControlPacket.CreateRelayBind(roleByte, [], ticket),

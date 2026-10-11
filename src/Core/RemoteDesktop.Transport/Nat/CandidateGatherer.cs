@@ -22,6 +22,22 @@ public static class CandidateGatherer
             candidates.Add(reflexive);
         }
 
+        // Loopback goes last, and unconditionally — never left out because the reflector did not answer.
+        //
+        // Two devices on one machine can only be reached by each other over loopback when the machine's own
+        // addresses are not usable: on a CI runner (a firewall profile that drops inbound UDP, a virtual adapter with
+        // no route) the interface addresses are exactly that, and the reflective endpoint is only known if the
+        // reflector answered within its timeout. A peer that gets no usable candidate falls through to the relay,
+        // and if that fails too the connection is simply impossible — on the same machine.
+        //
+        // The cost for a genuinely remote peer is one attempt against an address that is not listening, at the end of
+        // the list: a closed loopback port answers (or refuses) immediately rather than waiting out the timeout.
+        var loopback = new IPEndPoint(IPAddress.Loopback, port);
+        if (!candidates.Contains(loopback))
+        {
+            candidates.Add(loopback);
+        }
+
         return candidates;
     }
 

@@ -33,6 +33,7 @@ public sealed partial class QuicPeerConnector(
         }
 
         var punch = PunchSocket.Bind();
+        var attempts = new List<string>();
         try
         {
             var reflexive = rendezvous.ReflectorEndPoint is { } reflector
@@ -53,7 +54,7 @@ public sealed partial class QuicPeerConnector(
                 punch.Dispose();
                 foreach (var candidate in hostCandidates)
                 {
-                    var direct = await TryConnectAsync(candidate, port, ready.HostFingerprint, options.DirectAttemptTimeout, cancellationToken)
+                    var direct = await TryConnectAsync(candidate, port, ready.HostFingerprint, options.DirectAttemptTimeout, "direct", attempts, cancellationToken)
                         .ConfigureAwait(false);
                     if (direct is not null)
                     {
@@ -62,15 +63,29 @@ public sealed partial class QuicPeerConnector(
                     }
                 }
             }
+            else
+            {
+                attempts.Add(options.ForceRelay
+                    ? "direct attempts were skipped (the relay was forced)"
+                    : "the device offered no direct candidate");
+            }
 
-            var relayed = await TryRelayAsync(ready, cancellationToken).ConfigureAwait(false);
+            var relayed = await TryRelayAsync(ready, attempts, cancellationToken).ConfigureAwait(false);
             if (relayed is not null)
             {
                 LogConnected(logger, remote, ConnectionPath.Relayed, relayed.RemoteEndPoint);
                 return new QuicPeerConnection(relayed, remote, ConnectionPath.Relayed, identity.Fingerprint, ready.HostFingerprint);
             }
 
-            throw new PeerConnectException(PeerConnectFailure.NoPath, "No network path to the remote device worked.");
+            // Everything that was tried, in the message. A connection that fails on somebody's machine is otherwise
+            // unanswerable: this sentence is what the log has to work with, and "no path worked" on its own says
+            // nothing about whether the candidates were wrong, the reflector was silent or the relay never answered.
+            var seen = reflexive is null
+                ? "the reflector did not report a public endpoint"
+                : $"the reflector saw us at {reflexive}";
+            throw new PeerConnectException(
+                PeerConnectFailure.NoPath,
+                $"No network path to the remote device worked ({seen}). Tried: {string.Join("; ", attempts)}.");
         }
         finally
         {
@@ -78,10 +93,11 @@ public sealed partial class QuicPeerConnector(
         }
     }
 
-    private async Task<QuicConnection?> TryRelayAsync(ConnectReady ready, CancellationToken cancellationToken)
+    private async Task<QuicConnection?> TryRelayAsync(ConnectReady ready, List<string> attempts, CancellationToken cancellationToken)
     {
         if (ready.Relay is null || !IPAddress.TryParse(ready.Relay.Endpoint?.Address, out var address))
         {
+            attempts.Add("the server offered no relay");
             return null;
         }
 
@@ -93,16 +109,17 @@ public sealed partial class QuicPeerConnector(
                     .ConfigureAwait(false))
             {
                 LogRelayUnavailable(logger, relay);
+                attempts.Add($"relay {relay} did not acknowledge the bind");
                 return null;
             }
 
             port = socket.Port;
         }
 
-        return await TryConnectAsync(relay, port, ready.HostFingerprint, options.RelayAttemptTimeout, cancellationToken).ConfigureAwait(false);
+        return await TryConnectAsync(relay, port, ready.HostFingerprint, options.RelayAttemptTimeout, "relay", attempts, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<QuicConnection?> TryConnectAsync(IPEndPoint remote, int localPort, string expectedFingerprint, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<QuicConnection?> TryConnectAsync(IPEndPoint remote, int localPort, string expectedFingerprint, TimeSpan timeout, string kind, List<string> attempts, CancellationToken cancellationToken)
     {
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         attempt.CancelAfter(timeout);
@@ -114,10 +131,12 @@ public sealed partial class QuicPeerConnector(
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             LogAttemptFailed(logger, remote, "timeout");
+            attempts.Add($"{kind} {remote} did not answer within {timeout.TotalSeconds:0.#}s");
         }
         catch (Exception ex) when (ex is QuicException or AuthenticationException or System.Net.Sockets.SocketException)
         {
             LogAttemptFailed(logger, remote, ex.Message);
+            attempts.Add($"{kind} {remote}: {ex.Message}");
         }
 
         return null;
@@ -126,7 +145,9 @@ public sealed partial class QuicPeerConnector(
     [LoggerMessage(Level = LogLevel.Information, Message = "Connected to {Device} ({Path}) via {EndPoint}.")]
     private static partial void LogConnected(ILogger logger, DeviceId device, ConnectionPath path, IPEndPoint endPoint);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Connection attempt to {EndPoint} failed: {Reason}.")]
+    // Information, not Debug: a candidate that did not answer is the first thing anybody debugging "it will not
+    // connect" needs, and the number of these lines is the number of candidates — a handful.
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connection attempt to {EndPoint} failed: {Reason}.")]
     private static partial void LogAttemptFailed(ILogger logger, IPEndPoint endPoint, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Relay {EndPoint} did not acknowledge the bind.")]
