@@ -32,6 +32,10 @@
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <!-- Installer: WiX v5 on purpose (v6+ requires OSMF for commercial use) -->
     <PackageVersion Include="WixToolset.Sdk" Version="5.0.2" />
+    <!-- Reads streams out of a built .msi. The tests use it for the custom action DLL inside the package: the
+         automation API cannot hand back binary (it returns a string, which stops at the first zero byte), and the
+         installer's own DLL starts with "MZ", 0x90, 0x00. Same version as the custom action project. -->
+    <PackageVersion Include="WixToolset.Dtf.WindowsInstaller" Version="5.0.2" />
     <!-- Tests -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />

@@ -623,7 +623,10 @@ if ($LASTEXITCODE -ne 0) { throw 'The installer custom actions failed to build.'
 
 # The packaging step turns the assembly into a single DLL that carries its dependencies and the DTF runtime with it;
 # that one is what goes into the package, not the plain assembly next to it.
-$customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
+# "x64" in the path is part of the path on purpose: the project sets Platform=x64 so that SfxCA packs the 64-bit native
+# host stub, and that is what satisfies the x64 package below. Packed with the x86 stub instead, msiexec cannot load the
+# action at all and it fails without a word in the log, so the folder spelling out the bitness is worth keeping.
+$customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\x64\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
 if (-not (Test-Path -LiteralPath $customActions)) { throw "The custom actions were not packaged into $customActions." }
 
 $wixArguments = @(
