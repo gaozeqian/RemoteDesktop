@@ -270,9 +270,9 @@
       <!-- The database: optional, but leaving it out is the single most consequential default in this package.
            The box shows the property's value, which is the sentinel "auto" — the label says so rather than leaving
            somebody to wonder whether they are meant to type the word. -->
-      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（留空或 auto = 不使用数据库）。例：Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." />
+      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（留空或 auto 表示不用数据库）" />
       <Control Id="PostgresEdit" Type="Edit" X="20" Y="64" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" Text="[POSTGRESCONNECTIONSTRING]" />
-      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="不使用数据库时设备代码只存在内存里，信令服务一重启就全变，无人值守的机器会失联。" />
+      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="24" NoPrefix="yes" Text="例：Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=... 不使用数据库时设备代码只存在内存里，信令服务一重启就全变。" />
 
       <!-- Where clients are told to reach the relay. "auto" picks this machine's first non-loopback address, which on
            a machine with a VPN is the VPN's. -->
@@ -297,7 +297,7 @@
       <Control Id="TlsPathLabel" Type="Text" X="34" Y="212" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
       <Control Id="TlsPathEdit" Type="Edit" X="34" Y="224" Width="316" Height="16" Property="TLSCERTIFICATEPATH" Text="[TLSCERTIFICATEPATH]" />
       <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="244" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
-      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="256" Width="316" Height="16" Password="yes" Property="TLSCERTIFICATEPASSWORD" Text="[TLSCERTIFICATEPASSWORD]" />
+      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="256" Width="316" Height="16" Password="yes" Property="TLSCERTIFICATEPASSWORD" />
       <Control Id="TlsNote" Type="Text" X="20" Y="278" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
 
       <Control Id="Back" Type="PushButton" X="180" Y="313" Width="56" Height="17" Text="!(loc.WixUIBack)">
