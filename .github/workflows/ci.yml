@@ -27,10 +27,36 @@ jobs:
             throw "Vulnerable packages found; the report is above."
           }
       - name: Test
+        shell: pwsh
         # Microsoft.Testing.Platform 模式（global.json 里的 test.runner）：--logger 是 VSTest 的东西，
         # 在这个模式下会被忽略或拒绝；TRX 由 MTP 的扩展写出来，路径还是 TestResults/*.trx，下面那步照旧解析。
         # 注意 --nologo 在这里不能用：它会被转发给测试程序，测试程序以退出码 5 拒绝整次运行。
-        run: dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+        #
+        # 失败自动重跑一次。集成测试要跑真实进程、真实 PTY、真实 UDP 打洞和真实 Media Foundation 编码器，
+        # 而 runner 又慢又抢：同一提交常常这次红一个测试、下次红另一个（2026-10-11 三个不同的测试各红过一次），
+        # 重跑基本都过。代价必须写明——真实存在的偶发 bug 也会被这一次重试掩盖，所以第一次失败会打成 GitHub 警告
+        # 并列出失败的测试名，重试的结果才写进 TestResults 给汇总表用；两次都失败则照样判红。
+        run: |
+          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($file in Get-ChildItem TestResults/*.trx -ErrorAction SilentlyContinue) {
+              [xml]$xml = Get-Content $file.FullName
+              $xml.TestRun.Results.UnitTestResult |
+                  Where-Object { $_.outcome -eq 'Failed' } |
+                  ForEach-Object { $failed.Add($_.testName) }
+          }
+
+          $names = if ($failed.Count) { $failed -join '; ' } else { '(no TRX recorded a failure)' }
+          Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
+          Write-Host "Failed on the first attempt: $names"
+
+          Remove-Item TestResults -Recurse -Force -ErrorAction SilentlyContinue
+          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
+          }
       - name: Upload Test Results
         uses: actions/upload-artifact@v7
         if: always()
