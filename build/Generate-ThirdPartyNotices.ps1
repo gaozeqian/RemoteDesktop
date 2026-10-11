@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Writes THIRD-PARTY-NOTICES.md: the open source packages that end up inside the shipped product, with their licenses.
 

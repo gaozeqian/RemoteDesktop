@@ -1,4 +1,4 @@
-Param(
+﻿Param(
     [string]$OutputDir = "src/Hosts/RemoteDesktop.Client/Assets"
 )
 

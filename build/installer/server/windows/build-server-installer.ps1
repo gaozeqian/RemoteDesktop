@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds the Windows installer (MSI) for the RemoteDesktop servers.
 
@@ -117,6 +117,24 @@ $licenseRtf = Join-Path $sharedDirectory 'License.rtf'
 foreach ($name in 'CertificateFile', 'PrivateKeyFile') {
     $path = Get-Variable -Name $name -ValueOnly
     if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The certificate -$name '$path' does not exist." }
+}
+
+# The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
+# document that says "insert your company name here" to whoever installs the product, so the build stops instead.
+# Fill in build/installer/License.txt (or pass -AllowDraftLicense for a build that is not going anywhere).
+# Checked here for the same reason as the certificate paths above: a release that is going to stop should stop in the
+# first second, not after the servers have been published.
+$placeholders = Select-String -Path $licenseText -Pattern '【[^】]+】' -AllMatches |
+    ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
+if ($placeholders -and -not $AllowDraftLicense) {
+    throw @"
+The license text still has placeholders in it: $($placeholders -join ', ')
+Edit $licenseText and put your own details in their place, or pass -AllowDraftLicense to build anyway
+(for a test build that will not be handed to anybody).
+"@
+}
+if ($placeholders) {
+    Write-Warning "The license text still has placeholders ($($placeholders -join ', ')); this build should not be published."
 }
 
 function Get-ProductVersion {
@@ -533,22 +551,6 @@ signaling will not start:
 }
 
 $version = Get-ProductVersion
-
-# The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
-# document that says "insert your company name here" to whoever installs the product, so the build stops instead.
-# Fill in build/installer/License.txt (or pass -AllowDraftLicense for a build that is not going anywhere).
-$placeholders = Select-String -Path $licenseText -Pattern '【[^】]+】' -AllMatches |
-    ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
-if ($placeholders -and -not $AllowDraftLicense) {
-    throw @"
-The license text still has placeholders in it: $($placeholders -join ', ')
-Edit $licenseText and put your own details in their place, or pass -AllowDraftLicense to build anyway
-(for a test build that will not be handed to anybody).
-"@
-}
-if ($placeholders) {
-    Write-Warning "The license text still has placeholders ($($placeholders -join ', ')); this build should not be published."
-}
 
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.
 # Same text as the client installer's, so the two packages agree; generated next to this script, which is where this

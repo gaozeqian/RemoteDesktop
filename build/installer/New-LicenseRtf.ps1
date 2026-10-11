@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Turns the license text of the installer into the RTF that WiX and the MSI license page expect.
 

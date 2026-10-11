@@ -37,13 +37,36 @@ jobs:
           dotnet build RemoteDesktop.slnx --no-restore -c Release
           dotnet test RemoteDesktop.slnx --no-build -c Release
 
-      # The address is baked into the installer. Without one, the release would be a client that cannot connect to
-      # anything — worth failing over, since the artifact outlives the mistake.
-      - name: Check that a server address is configured
-        if: vars.DEFAULT_RENDEZVOUS_URI == ''
+      # 客户端安装包要不要内置服务器地址，由仓库变量 DEFAULT_RENDEZVOUS_URI 决定
+      # （Settings -> Secrets and variables -> Actions -> Variables）。
+      #
+      # 没配置不是错误，而是选中了"不内置"：本软件公网和内网都要用，服务器地址往往是部署时才定的，一个装在
+      # 用户机器上的包内置谁的地址都不对。这样的包默认连它自己那台机器，连不上时客户端界面会直说"未连接服务器
+      # （地址）"并告诉用户去哪儿改，所以不会变成"看着正常、就是连不上"。这里的说明会写进 Release。
+      - name: Decide the server address and the release note
         shell: pwsh
         run: |
-          throw "Set the repository variable DEFAULT_RENDEZVOUS_URI (Settings -> Secrets and variables -> Actions -> Variables), for example wss://rd.example.com:5080/ws."
+          $address = "${{ vars.DEFAULT_RENDEZVOUS_URI }}"
+          if ($address) {
+              Write-Host "The client installer will point at $address."
+              "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
+              $note = "客户端安装包已内置信令服务器地址 ``$address``：装完直接可用。"
+          } else {
+              Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
+
+              # PowerShell 的 here-string 要求结束符顶格，而 YAML 的 run: | 块里每一行都必须缩进——两者不能共存，
+              # 所以这里用数组拼（而不是 @"..."@）。
+              $note = @(
+                  '> [!IMPORTANT]'
+                  '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
+                  '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
+                  '> 部署步骤见 [docs/deployment.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/deployment.md)。'
+              ) -join "`n"
+          }
+
+          # 有地址就写清是哪一个，没有就提醒要自己填——两种都是一个句子，所以这个文件总是存在。
+          # GitHub 会把它放在自动生成的 release notes 前面。
+          Set-Content -Path release-body.md -Value $note -Encoding utf8
 
       # 可选：如果你需要使用真正的代码签名，而不是自签/跳过，
       # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
@@ -54,35 +77,63 @@ jobs:
           $pfxBytes = [System.Convert]::FromBase64String($env:PFX_BASE64)
           [System.IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\sign.pfx", $pfxBytes)
 
-      # 运行构建脚本打包 MSI
+      # 运行构建脚本打包 MSI（客户端 / 被控端）。服务器地址由上一步决定：有就内置，没有就不传
+      # -RendezvousUri（脚本保留项目里的默认值，并在日志里给出警告）。
       - name: Build MSI Installer
         shell: pwsh
-        env:
-          # 以下变量可以在 GitHub 仓库的 Settings -> Secrets/Variables 中配置
-          # 默认为公开的测试服务器地址，或者干脆留空让用户在 msiexec 时自己指定
-          DEFAULT_SERVER: ${{ vars.DEFAULT_RENDEZVOUS_URI || 'ws://127.0.0.1:5080/ws' }}
         run: |
+          $arguments = @('-Configuration', 'Release')
+          if ($env:DEFAULT_SERVER) { $arguments += @('-RendezvousUri', $env:DEFAULT_SERVER) }
+
           # 如果有配置证书，则传入证书路径；否则传入 -SkipSigning
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
-              .\build\installer\client\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
+              .\build\installer\client\windows\build-installer.ps1 @arguments -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
           } else {
-              .\build\installer\client\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -SkipSigning
+              .\build\installer\client\windows\build-installer.ps1 @arguments -SkipSigning
           }
 
-      # 将打好的 MSI 文件提取出来
-      - name: Rename Artifact for Release
+      # 服务端（信令 + 中继）的安装包。和上面那个用同一套签名参数、同一个版本号，但是两个各自独立安装的包：
+      # 一台机器可以只做被控端、只做服务器，或者两个都做。
+      - name: Build Server MSI Installer
         shell: pwsh
         run: |
-          # 脚本产物在 build/installer/windows/artifacts/ 目录下，获取刚刚打出的 .msi
-          $msiFile = Get-ChildItem -Path build/installer/windows/artifacts/*.msi | Select-Object -First 1
-          # 根据 GitHub Tag (例如 v1.0.0) 重命名文件，使其更加专业
-          $newName = "RemoteDesktop-Windows-x64-$($env:GITHUB_REF_NAME).msi"
-          Rename-Item -Path $msiFile.FullName -NewName $newName
-          Write-Output "MSI_PATH=build/installer/windows/artifacts/$newName" >> $env:GITHUB_ENV
+          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
+          } else {
+              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -SkipSigning
+          }
 
-      # 上传至 GitHub Release
-      - name: Create Release and Upload Asset
+      # 将打好的两个 MSI 提取出来
+      - name: Rename Artifacts for Release
+        shell: pwsh
+        run: |
+          # 两个包分别在 build/installer/<角色>/windows/artifacts/ 下，各取最新打出的那个 .msi
+          $clientFolder = 'build/installer/client/windows/artifacts'
+          $serverFolder = 'build/installer/server/windows/artifacts'
+          $client = Get-ChildItem -Path $clientFolder/*.msi -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $server = Get-ChildItem -Path $serverFolder/*.msi -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+          # 少一个就什么都别发：只发出客户端、悄悄少了服务端，是发完才会被发现的那种错。
+          if (-not $client) { throw "No client installer in $clientFolder." }
+          if (-not $server) { throw "No server installer in $serverFolder." }
+
+          # 根据 GitHub Tag (例如 v1.0.0) 重命名文件，使其更加专业
+          $clientName = "RemoteDesktop-Windows-x64-$($env:GITHUB_REF_NAME).msi"
+          $serverName = "RemoteDesktop-Server-Windows-x64-$($env:GITHUB_REF_NAME).msi"
+          Rename-Item -Path $client.FullName -NewName $clientName
+          Rename-Item -Path $server.FullName -NewName $serverName
+          Write-Output "CLIENT_MSI=build/installer/client/windows/artifacts/$clientName" >> $env:GITHUB_ENV
+          Write-Output "SERVER_MSI=build/installer/server/windows/artifacts/$serverName" >> $env:GITHUB_ENV
+
+      # 上传至 GitHub Release：一个版本一个 Release，两个包都放在里面（装的机器不同，版本是同一个）。
+      # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
+      - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.MSI_PATH }}
+          body_path: release-body.md
+          files: |
+            ${{ env.CLIENT_MSI }}
+            ${{ env.SERVER_MSI }}
           generate_release_notes: true

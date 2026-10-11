@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Creates a certificate for the signaling server and exports it for the server and for the machines that trust it.
 

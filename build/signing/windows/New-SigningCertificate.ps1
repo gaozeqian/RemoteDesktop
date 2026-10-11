@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Creates a self-signed code-signing certificate for this product and exports it for signing and for trusting.
 

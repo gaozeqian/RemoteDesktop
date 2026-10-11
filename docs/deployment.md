@@ -41,7 +41,7 @@ pwsh -File build/installer/server/windows/build-server-installer.ps1
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
 
 ```powershell
-msiexec /i RemoteDesktop.Server-0.1.0.0-x64.msi /qn `
+msiexec /i RemoteDesktop.Server-0.2.0.0-x64.msi /qn `
   RENDEZVOUSURL="https://0.0.0.0:5080" `
   RELAYPUBLICENDPOINT="203.0.113.10:5082" `
   POSTGRESCONNECTIONSTRING="Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." `
@@ -295,7 +295,24 @@ scrape_configs:
 
 ## 三、自动化发布到 GitHub Releases
 
-项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动构建、打包并发布 MSI。
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**两个**安装包放进同一个 Release：
+
+| 产物 | 装的是什么 |
+|---|---|
+| `RemoteDesktop-Windows-x64-<tag>.msi` | 客户端 / 被控端 |
+| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | 服务端（信令 + 中继） |
+
+两个包版本号相同，但各自独立安装、互不影响：一台机器可以只做被控端、只做服务器，或者两个都做。
+
+发布前要准备好下面这些。**没有哪一件是必填的**，但流水线会根据你配了什么调整产物，并把结果写在 Release 说明
+最前面：
+
+- **服务器地址**（可选）：配了 `DEFAULT_RENDEZVOUS_URI`，客户端安装包就内置这个地址，下载的人装完直接可用；
+  不配就是"不内置"，见"配置默认服务器地址"那一节。
+- **代码签名证书**（可选，但强烈建议）：不配置也能出包（流水线跳过签名），但没签名的包在目标机器上过不了
+  UIAccess，见"准备代码签名证书"那一节。
+- **许可文本**：`build/installer/License.txt` 已经是填好的正式文本，不需要动。只有里面重新出现【方括号】占位符时
+  打包脚本才会拒绝出包——那道闸门是留给"换个人/换主体来发布"的，构建日志会列出是哪几处。
 
 ### 1. 准备代码签名证书 (非常重要)
 
@@ -320,12 +337,22 @@ scrape_configs:
 不需要再手工 `certutil -addstore`。CA 签发的证书不会被这样做（它的链本来就受信任）。详见
 [build/signing/README.md](../build/signing/README.md)。
 
-### 2. 配置默认服务器地址
+### 2. 配置默认服务器地址（可选）
 
 在 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **Variables** 标签页下，新建一个变量：
-*   `DEFAULT_RENDEZVOUS_URI` = `ws://您的公网服务器:5080/ws`
+*   `DEFAULT_RENDEZVOUS_URI` = `wss://您的域名:5080/ws`
 
-*(如果不配置，默认会编入 `ws://127.0.0.1:5080/ws`)*
+配了：这个地址会被编进客户端安装包，下载的人装完就能连上你的服务器，不用自己填。
+
+**不配也完全可以发布**：出的包不内置地址（客户端默认连本机），装完后在客户端里用「修改服务器地址」填自己的
+服务器就行——它会同时写给客户端和被控端服务，并重启两边。客户端连不上时界面会直接显示"○ 未连接服务器
+（当前地址）"以及去哪儿改，所以不是一个不声不响的坏包。
+
+本软件公网和内网都要用，服务器地址往往是**部署的时候**才定的，所以"不内置"是正常选择，不是漏配。
+两种情况下 Release 说明的最前面都会写清楚这一版是哪种。
+
+地址用 `wss://` 就要求服务器自己有 TLS 证书（见第 4 节）；局域网里用自签证书时，构建客户端安装包加
+`-ServerCertificate` 把服务器证书的公钥打进包并装进受信任根，就不用每台机器手工导入。
 
 ### 3. 触发自动发布
 
@@ -334,7 +361,10 @@ scrape_configs:
 git tag v1.0.0
 git push origin v1.0.0
 ```
-GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现 `RemoteDesktop-Windows-x64-v1.0.0.msi`！
+GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现
+`RemoteDesktop-Windows-x64-v1.0.0.msi` 和 `RemoteDesktop-Server-Windows-x64-v1.0.0.msi`。
+
+服务器地址是**编进包里的**，所以同一个 Tag 用不同地址出包没有意义：要换地址就出新的 Tag。
 
 ## 四、部署客户端 / 被控端（MSI）
 
@@ -350,13 +380,13 @@ pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws:
 
 ```powershell
 # 图形界面（推荐给一般用户）
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi
 
 # 静默安装，指定服务器地址
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 
 # 静默安装到别的目录
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
 安装完成后：
@@ -387,13 +417,13 @@ msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDeskto
 
 ```powershell
 # 升级（保留设备身份、日志和服务器地址；服务器地址以安装包里的为准）
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn
 
 # 卸载（保留设备身份和日志，重装后设备代码不变）
-msiexec /x RemoteDesktop-0.1.0.0-x64.msi /qn
+msiexec /x RemoteDesktop-0.2.0.0-x64.msi /qn
 
 # 卸载并删除设备身份与日志（这台机器下次安装会得到新的设备代码）
-msiexec /x RemoteDesktop-0.1.0.0-x64.msi /qn REMOVEDATA=1
+msiexec /x RemoteDesktop-0.2.0.0-x64.msi /qn REMOVEDATA=1
 ```
 
 **升级前最好先退出客户端**。安装包会把残留的 `RemoteDesktop.Client.exe` 和 `RemoteDesktop.SessionAgent.exe` 关掉，
@@ -402,14 +432,14 @@ msiexec /x RemoteDesktop-0.1.0.0-x64.msi /qn REMOVEDATA=1
 
 ```powershell
 Get-Process RemoteDesktop.Client -ErrorAction SilentlyContinue | Stop-Process
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi
 ```
 
 服务不用担心：安装包会先停服务，服务停止时会结束它启动的 Agent（实测 2 秒内退出）。
 出问题时用日志装：
 
 ```powershell
-msiexec /i RemoteDesktop-0.1.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
+msiexec /i RemoteDesktop-0.2.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 ```
 
 安装失败时 Windows 也会在"应用程序"事件日志里记下来（来源 `MsiInstaller`，含具体错误码和失败的那一步）。

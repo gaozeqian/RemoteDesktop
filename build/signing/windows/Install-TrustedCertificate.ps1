@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Makes a machine trust code signed with your own certificate.
 

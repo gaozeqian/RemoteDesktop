@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds the Windows installer (MSI) for RemoteDesktop.
 
@@ -109,6 +109,25 @@ $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..\..')
 foreach ($name in 'CertificateFile', 'PrivateKeyFile', 'ServerCertificate') {
     $path = Get-Variable -Name $name -ValueOnly
     if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The certificate -$name '$path' does not exist." }
+}
+
+# The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
+# document that says "insert your company name here" to whoever installs the product, so the build stops instead.
+# Fill in build/installer/License.txt (shared by every package) or pass -AllowDraftLicense for a build that is not going anywhere.
+# Checked here for the same reason as the certificate paths: a release that is going to stop should stop in the first
+# second, not after five minutes of publishing.
+$licensePath = Join-Path $installerDirectory '..\..\License.txt'
+$placeholders = Select-String -Path $licensePath -Pattern '【[^】]+】' -AllMatches |
+    ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
+if ($placeholders -and -not $AllowDraftLicense) {
+    throw @"
+The license text still has placeholders in it: $($placeholders -join ', ')
+Edit $licensePath and put your own details in their place, or pass -AllowDraftLicense to build anyway
+(for a test build that will not be handed to anybody).
+"@
+}
+if ($placeholders) {
+    Write-Warning "The license text still has placeholders ($($placeholders -join ', ')); this build should not be published."
 }
 
 function Get-ProductVersion {
@@ -529,23 +548,6 @@ connected to if the signaling server runs there. For anything else, build again 
 }
 
 $version = Get-ProductVersion
-
-# The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
-# document that says "insert your company name here" to whoever installs the product, so the build stops instead.
-# Fill in build/installer/License.txt (shared by every package) or pass -AllowDraftLicense for a build that is not going anywhere.
-$licensePath = Join-Path $installerDirectory '..\..\License.txt'
-$placeholders = Select-String -Path $licensePath -Pattern '【[^】]+】' -AllMatches |
-    ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
-if ($placeholders -and -not $AllowDraftLicense) {
-    throw @"
-The license text still has placeholders in it: $($placeholders -join ', ')
-Edit $licensePath and put your own details in their place, or pass -AllowDraftLicense to build anyway
-(for a test build that will not be handed to anybody).
-"@
-}
-if ($placeholders) {
-    Write-Warning "The license text still has placeholders ($($placeholders -join ', ')); this build should not be published."
-}
 
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.
 Write-Host 'Generating the license RTF...'

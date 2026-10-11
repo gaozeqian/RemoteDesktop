@@ -16,7 +16,7 @@
          somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
     <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese UI." />
 
-    <!-- Same-version installs upgrade in place, which is what rebuilding 0.1.0 while testing needs. -->
+    <!-- Same-version installs upgrade in place, which is what rebuilding the same version while testing needs. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   Schedule="afterInstallInitialize"
                   DowngradeErrorMessage="A newer version of RemoteDesktop is already installed." />
