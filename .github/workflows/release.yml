@@ -64,9 +64,9 @@ jobs:
         run: |
           # 如果有配置证书，则传入证书路径；否则传入 -SkipSigning
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
-              .\build\installer\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
+              .\build\installer\client\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
           } else {
-              .\build\installer\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -SkipSigning
+              .\build\installer\client\windows\build-installer.ps1 -Configuration Release -RendezvousUri $env:DEFAULT_SERVER -SkipSigning
           }
 
       # 将打好的 MSI 文件提取出来

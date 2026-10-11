@@ -10,7 +10,7 @@
 
 .EXAMPLE
   dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
-  .\build\service\install-service.ps1 -SourceDirectory artifacts\host
+  .\build\service\windows\install-service.ps1 -SourceDirectory artifacts\host
 
 .NOTES
   The service connects to the rendezvous server configured in appsettings.json ("Transport:RendezvousUri") next to the

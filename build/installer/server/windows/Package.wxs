@@ -2,7 +2,7 @@
 <!--
   One installer for the two server programs: the rendezvous server (signaling) and the relay. They go side by side
   into one folder, each in a subfolder of its own, because each is a self-contained application with its own runtime.
-  This is the server side of the product; the client installer (build/installer/windows) is a separate package with a
+  This is the server side of the product; the client installer (build/installer/client/windows) is a separate package with a
   separate UpgradeCode, so a machine can be both a server and a client.
   Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
 -->
@@ -138,11 +138,11 @@
     <util:CloseApplication Id="CloseRelay" Target="RemoteDesktop.Server.Relay.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
 
-    <!-- Welcome, license, folder, progress, finish. The license is the product's, shared with the client installer:
-         build-server-installer.ps1 turns build/installer/windows/License.txt into License.rtf next to this file
-         while building, so the two packages cannot show different agreements. -->
+    <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package:
+         build/installer/License.txt is turned into one RTF next to it while this builds, and both packages point at
+         that one file, so they cannot show different agreements. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
-    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    <WixVariable Id="WixUILicenseRtf" Value="..\..\License.rtf" />
 
   </Package>
 </Wix>

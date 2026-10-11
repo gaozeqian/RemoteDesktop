@@ -38,9 +38,9 @@
 
   <Target Name="RequireGeneratedFiles" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(MSBuildProjectDirectory)\Files.generated.wxs')"
-           Text="Files.generated.wxs is missing. Run build\installer\windows\build-installer.ps1, which publishes the applications and generates the file list from the publish output." />
+           Text="Files.generated.wxs is missing. Run build\installer\client\windows\build-installer.ps1, which publishes the applications and generates the file list from the publish output." />
     <Error Condition="'$(SourceRoot)' == ''"
-           Text="SourceRoot is not set. Run build\installer\windows\build-installer.ps1 -SourceDirectory &lt;publish folder&gt;." />
+           Text="SourceRoot is not set. Run build\installer\client\windows\build-installer.ps1 -SourceDirectory &lt;publish folder&gt;." />
   </Target>
 
 </Project>

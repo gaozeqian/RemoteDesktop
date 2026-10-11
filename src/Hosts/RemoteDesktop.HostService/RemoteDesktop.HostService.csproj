@@ -18,7 +18,7 @@
   </ItemGroup>
   <!-- The service starts the agent from its own folder (see AgentGatewayOptions.ExecutablePath), so a plain build puts
        the agent's build output next to it. Publishing is a separate matter: the installer publishes each executable
-       self-contained into one folder (see build/installer/windows/build-installer.ps1), because a framework-dependent
+       self-contained into one folder (see build/installer/client/windows/build-installer.ps1), because a framework-dependent
        agent copied into a self-contained folder would look for the .NET runtime on the target machine. -->
   <Target Name="CopySessionAgent" AfterTargets="Build">
     <ItemGroup>

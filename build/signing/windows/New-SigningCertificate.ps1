@@ -89,12 +89,12 @@ Write-Host "  signing file: $pfxPath"
 Write-Host "  trust file:   $cerPath"
 Write-Host ''
 Write-Host 'Sign a build with the certificate that is now in this user''s store:'
-Write-Host '  pwsh -File build/installer/windows/build-installer.ps1 -RendezvousUri ws://<server>:5080/ws'
+Write-Host '  pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws://<server>:5080/ws'
 Write-Host 'Or with the .pfx (also works on another machine, or off Windows):'
 Write-Host "  ... -SigningTool osslsigncode -CertificateFile `"$pfxPath`" [-CertificatePassword <pw>]"
 Write-Host ''
 Write-Host 'On the machines that should trust builds signed with it, as an administrator:'
-Write-Host "  pwsh -File build/signing/Install-TrustedCertificate.ps1 -CertificatePath `"$cerPath`""
+Write-Host "  pwsh -File build/signing/windows/Install-TrustedCertificate.ps1 -CertificatePath `"$cerPath`""
 Write-Host ''
 if ([string]::IsNullOrEmpty($plain)) {
     Write-Warning 'The .pfx has no password: keep it somewhere only you can read.'

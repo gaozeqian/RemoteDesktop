@@ -137,7 +137,7 @@ Write-Host '  "Urls": "https://0.0.0.0:5080",'
 Write-Host "  `"Kestrel`": { `"Certificates`": { `"Default`": { `"Path`": `"$pfxPath`", `"Password`": `<the password>` } } }"
 Write-Host ''
 Write-Host 'Build the installer that makes client machines trust it:'
-Write-Host "  pwsh -File build/installer/windows/build-installer.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
+Write-Host "  pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
 Write-Host ''
 Write-Host 'Machines that already have the software can be given the certificate without reinstalling, as an administrator:'
 Write-Host "  Import-Certificate -FilePath `"$cerPath`" -CertStoreLocation Cert:\LocalMachine\Root"

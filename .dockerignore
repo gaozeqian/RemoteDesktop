@@ -3,5 +3,7 @@
 **/obj/
 **/artifacts/
 .git/
-build/installer/windows/_none_
+# The installers build Windows packages out of the same sources; nothing in the container needs them.
+build/installer/
+build/signing/
 *.log

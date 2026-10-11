@@ -34,8 +34,8 @@
 它只做 Windows；Linux 用手工发布或 Docker。
 
 ```powershell
-pwsh -File build/installer/server/build-server-installer.ps1
-# 产物：build/installer/server/artifacts/RemoteDesktop.Server-<版本>-x64.msi
+pwsh -File build/installer/server/windows/build-server-installer.ps1
+# 产物：build/installer/server/windows/artifacts/RemoteDesktop.Server-<版本>-x64.msi
 ```
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
@@ -194,7 +194,7 @@ server {
 #    产物：rd.lan.pfx（放服务器，含私钥）+ rd.lan.cer（给客户端机器）
 # 2. 服务器端按"做法 A"配置：Urls 改 https，Kestrel 指向那个 .pfx。
 # 3. 客户端：打包时带上证书的公钥，之后装这个包的机器就信任它。
-.\build\installer\windows\build-installer.ps1 -RendezvousUri wss://rd.lan:5080/ws `
+.\build\installer\client\windows\build-installer.ps1 -RendezvousUri wss://rd.lan:5080/ws `
     -ServerCertificate build\signing\certificates\rd.lan.cer
 ```
 
@@ -341,7 +341,7 @@ GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Release
 ### 1. 构建安装包时带上你的服务器地址
 
 ```
-pwsh -File build/installer/windows/build-installer.ps1 -RendezvousUri ws://192.168.1.10:5080/ws
+pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws://192.168.1.10:5080/ws
 ```
 
 不加 `-RendezvousUri` 时用的是开发默认值 `ws://127.0.0.1:5080/ws`，脚本会给出警告：**这样装出来的机器只能被服务器所在的机器连**。
@@ -419,7 +419,7 @@ msiexec /i RemoteDesktop-0.1.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 ### 5. 签名
 
 ```
-pwsh -File build/installer/windows/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
 ```
 
 脚本会自动在当前用户和本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名并验证，
@@ -438,7 +438,7 @@ Authenticode 签名（**不需要 Windows SDK**）；也可以用开源跨平台
 Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-CertificatePassword <密码>] [-PrivateKeyFile <key.pem>]`。
 自签名证书在装过它 `.cer` 的机器之前只会得到一条"不受信任的根"的**警告**，构建不会失败。
 完整说明（怎么买证书、有哪些替代方案、怎么检查签名）见 [`build/signing/README.md`](../build/signing/README.md)；
-本地测试签名用 `build/signing/New-SigningCertificate.ps1` 生成证书、`build/signing/Install-TrustedCertificate.ps1` 让机器信任它。
+本地测试签名用 `build/signing/windows/New-SigningCertificate.ps1` 生成证书、`build/signing/windows/Install-TrustedCertificate.ps1` 让机器信任它。
 
 ## 五、运行期注意事项
 

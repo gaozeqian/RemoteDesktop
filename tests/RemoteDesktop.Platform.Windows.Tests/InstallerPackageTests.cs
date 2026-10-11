@@ -13,7 +13,7 @@ namespace RemoteDesktop.Platform.Windows.Tests;
 /// built that way looks fine, builds without warnings, and quietly does nothing on the custom-action side. ICE
 /// validation does not catch it either, because nothing in the database is inconsistent - things are simply absent.
 /// <para>
-/// The test skips unless an installer has been built (build\installer\windows\build-installer.ps1), or unless the path
+/// The test skips unless an installer has been built (build\installer\client\windows\build-installer.ps1), or unless the path
 /// is given in RD_INSTALLER_MSI.
 /// </para>
 /// </remarks>
@@ -42,7 +42,7 @@ public sealed class InstallerPackageTests
             directory = directory.Parent;
         }
 
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "windows", "artifacts");
+        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "client", "windows", "artifacts");
         return artifacts is null || !Directory.Exists(artifacts)
             ? null
             : Directory.GetFiles(artifacts, "*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();

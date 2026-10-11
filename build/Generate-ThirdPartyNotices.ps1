@@ -41,10 +41,28 @@ foreach ($project in $shipped) {
 
 Write-Host "Found $($packages.Count) packages."
 
+# Where NuGet keeps the packages, asked of the SDK rather than assembled from $env:USERPROFILE: that variable does not
+# exist outside Windows, and the SDK's answer also follows NUGET_PACKAGES, which CI sets to put the cache elsewhere.
+# The key is not translated, so this reads the same in any locale.
+function Get-PackagesDirectory {
+    $line = & dotnet nuget locals global-packages --list 2>$null |
+        Select-String -Pattern '^global-packages:\s*(.+)$' |
+        Select-Object -First 1
+    if ($LASTEXITCODE -eq 0 -and $line) {
+        return $line.Matches[0].Groups[1].Value.Trim()
+    }
+
+    # What the SDK itself falls back to when nothing is configured.
+    return Join-Path ([Environment]::GetFolderPath('UserProfile')) '.nuget/packages'
+}
+
+$packagesDirectory = Get-PackagesDirectory
+Write-Host "Packages are read from $packagesDirectory."
+
 $rows = foreach ($entry in $packages.GetEnumerator() | Sort-Object Name) {
     $id = $entry.Key
     $version = $entry.Value
-    $nuspec = Join-Path $env:USERPROFILE ".nuget/packages/$($id.ToLowerInvariant())/$version/$($id.ToLowerInvariant()).nuspec"
+    $nuspec = Join-Path $packagesDirectory "$($id.ToLowerInvariant())/$version/$($id.ToLowerInvariant()).nuspec"
 
     $license = 'see the package'
     $url = "https://www.nuget.org/packages/$id"

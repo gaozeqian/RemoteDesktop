@@ -427,9 +427,12 @@ FodyWeavers.xsd
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
 
-# Generated from the publish output by the installer build scripts (never edit or commit).
-build/installer/windows/Files.generated.wxs
-build/installer/server/Files.generated.wxs
+# Generated from the publish output by the installer build scripts (never edit or commit). One per package; when a
+# package for another platform arrives it follows the same shape, so add its line here with it.
+build/installer/client/windows/Files.generated.wxs
+build/installer/server/windows/Files.generated.wxs
 
-# Private keys and exported certificates never belong in the repository.
+# Private keys and exported certificates never belong in the repository. Written next to the script that made them,
+# so the pattern covers the folder and every platform folder under it.
 build/signing/certificates/
+build/signing/*/certificates/

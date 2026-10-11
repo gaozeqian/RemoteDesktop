@@ -25,7 +25,7 @@ dotnet test RemoteDesktop.slnx
 安装包（Windows MSI，需要 .NET SDK 与网络还原 WiX 包）：
 
 ```
-pwsh -File build/installer/windows/build-installer.ps1
+pwsh -File build/installer/client/windows/build-installer.ps1
 ```
 
 ## 本地运行（单机两个客户端互连）
@@ -125,8 +125,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 ```
 # 管理员 PowerShell
 dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
-.\build\service\install-service.ps1 -SourceDirectory artifacts\host -RendezvousUri ws://<服务器>:5080/ws
-.\build\service\uninstall-service.ps1
+.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\host -RendezvousUri ws://<服务器>:5080/ws
+.\build\service\windows\uninstall-service.ps1
 ```
 
 日志在 `%ProgramData%\RemoteDesktop\logs`（`service-*.log`、`agent-*.log`），设备身份在同目录的 `secrets`（仅 SYSTEM、管理员可访问）。
@@ -140,15 +140,15 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 ```
 # 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
 # 正式发布请带上自己服务器的地址（不带就用内置的 127.0.0.1，装到别的机器上连不上）
-.\build\installer\windows\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+.\build\installer\client\windows\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
-.\build\installer\windows\build-installer.ps1 -SignCertificate <证书指纹或 CN 名称>
+.\build\installer\client\windows\build-installer.ps1 -SignCertificate <证书指纹或 CN 名称>
 ```
 
 脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名（见下）→
 **不安装就直接检查包内容**（`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
-自定义操作和属性，缺什么就报错）。产物在 `build/installer/windows/artifacts/`，约 49 MB。
+自定义操作和属性，缺什么就报错）。产物在 `build/installer/client/windows/artifacts/`，约 49 MB。
 
 - 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒自动重启；
   连续三次之后不再自动重启，稳定运行一天后重新计数），
@@ -162,18 +162,18 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
   `msiexec /x RemoteDesktop-0.1.0.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
 - **签名是自动的**：脚本在本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名、加时间戳并验证；
   没有证书就跳过并提示，也可以用 `-SignCertificate <指纹或 CN>` 指定、`-SkipSigning` 明确跳过。
-- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示 `build/installer/windows/License.txt`
+- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示 `build/installer/License.txt`
   里的专有 EULA，构建时由 `New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
   **发布前先把 License.txt 里方括号的占位符（公司名称、联系方式、司法管辖区）换成你自己的正式信息。**
 - `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
 - **部署见 [docs/deployment.md](docs/deployment.md)**：服务器（含 Docker：`build/docker/`）、客户端/被控端、排错。
 - **签名见 [build/signing/README.md](build/signing/README.md)**：自动签名、不需要 Windows SDK、证书怎么选。
 - 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持，风险见方案）。
-  改动 `build/installer/windows` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
+  改动 `build/installer/client/windows` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
   自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——上面那个包内容检查就是为了这个。
 
 **服务端**（信令 + 中继）有自己的安装包，装的是另一套东西，和这个包互不影响：
-`build/installer/server/build-server-installer.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
+`build/installer/server/windows/build-server-installer.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
 把两个服务器注册成服务、开好防火墙、写好配置。见 [docs/deployment.md](docs/deployment.md) 的"最省事的一条路"。
 
 安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/security.md](docs/security.md)。

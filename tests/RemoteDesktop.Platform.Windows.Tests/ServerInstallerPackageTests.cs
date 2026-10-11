@@ -32,7 +32,7 @@ public sealed class ServerInstallerPackageTests
             directory = directory.Parent;
         }
 
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "server", "artifacts");
+        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "server", "windows", "artifacts");
         return artifacts is null || !Directory.Exists(artifacts)
             ? null
             : Directory.GetFiles(artifacts, "*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
