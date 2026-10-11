@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A .NET Framework class library on purpose, and the only one in this repository: Windows Installer hosts the .NET
+    Framework runtime inside msiexec, so a custom action assembly has to be something that runtime can load. The DTF
+    packages themselves are netstandard2.0, which a net48 project can reference — the dependency goes one way only,
+    so net10 code cannot be referenced from here (and Npgsql 9 does not support net48 at all, which is why the check
+    this project runs is a TCP reachability test rather than the full one the server does at start-up).
+
+    Not in RemoteDesktop.slnx: this is installer plumbing, not product code, and the solution's projects are all
+    net10. It is built by build-server-installer.ps1 alongside the package.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Dtf.WindowsInstaller" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>
