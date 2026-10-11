@@ -31,6 +31,9 @@
 - [Server] **`/metrics`**（Prometheus 文本格式，默认关闭，`Rendezvous:MetricsEnabled`）。
 - [Server] `/health` 现在真的检查数据库（配置了 PostgreSQL 时）。
 - [Build] 打包脚本在许可文本仍含占位符时**拒绝出包**（`-AllowDraftLicense` 可显式跳过）。
+- [Build] **内网 TLS 的证书路子**：`build/signing/New-ServerCertificate.ps1` 生成服务器证书（名字与地址都进
+  SAN），`build-installer.ps1 -ServerCertificate` 把它的公钥部分打进安装包并装进受信任根，于是内网也能跑
+  `wss://` 而不需要公网 CA。已装好的机器可用 `Import-Certificate` 单独补。
 - [Docs] `THIRD-PARTY-NOTICES.md` 与生成脚本 `build/Generate-ThirdPartyNotices.ps1`。
 - [CI] 依赖漏洞审计（含传递依赖）、Dependabot、发布前跑测试、未配置服务器地址则拒绝发布。
 - [Docs] 新增系统架构设计文档 (`docs/architecture.md`)。
@@ -43,6 +46,8 @@
 - [Build] Docker Compose 不再内置数据库口令（未设置即拒绝启动），加资源上限与 `no-new-privileges`。
 - [Build] 安装包摘要不再声称"中英双语界面"（界面目前只有中文）。
 - [Client] 侧栏版本号改为读程序集版本，不再硬编码在界面文件里。
+- [Client] "数据与诊断"新增**本机控制端代码**：这台机器连出去时用的身份（和主页显示的被控端代码不是同一个），
+  别人控制本机时他那边的会话里显示的就是它，用来回答"谁在连我"。
 - [Repo] 优化项目文档组织结构，统一采用 Kebab-case 命名并提供全局导航。
 
 ### Fixed

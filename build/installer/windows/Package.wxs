@@ -54,6 +54,10 @@
       <?ifdef var.TrustedRootCertificate ?>
       <ComponentRef Id="TrustedRootCert" />
       <?endif?>
+      <!-- Only in a build that was given the signaling server's certificate (see Components.wxs). -->
+      <?ifdef var.TrustedServerCertificate ?>
+      <ComponentRef Id="TrustedServerCert" />
+      <?endif?>
       <!-- Everything else: the runtime, libraries and native dependencies. -->
       <ComponentGroupRef Id="Payload" />
     </Feature>

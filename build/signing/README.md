@@ -143,6 +143,23 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 （包里的证书来自构建时用的那张，签发者为自己的证书才带；`InstallerPackageTests` 会检查这三件事同时出现或同时
 不出现：证书行、它的二进制内容、以及负责卸载时清掉它的注册表键路径。）
 
+### 同一套机制，给信令服务器的证书用
+
+`-ServerCertificate <证书文件>` 会把**信令服务器用的那张证书**的公钥部分一起打进安装包，装到哪台机器，
+哪台机器就信任它。这是给"服务器地址没有公网 CA 会签发证书"的部署准备的（内网、车间、没有域名的机器）：
+配上 TLS 之后客户端不会再报证书错误。`build-installer.ps1` 把它作为 `-p:TrustedServerCertificate` 传给 WiX，
+`Components.wxs` 里对应的是第二个条件组件，和上面那一个互不影响。
+
+生成服务器证书用 `New-ServerCertificate.ps1`（列上客户端会用的所有名字和地址）：
+
+```powershell
+# rd.lan.pfx 给服务器（含私钥），rd.lan.cer 给客户端
+.\build\signing\New-ServerCertificate.ps1 -DnsName rd.lan -IpAddress 192.168.1.10
+```
+
+完整的部署步骤见 [docs/deployment.md](../../docs/deployment.md) 的"生产环境：信令必须走 TLS"。
+同样是那句话：把自签证书装进受信任根，等于持有它私钥的人能在这些机器上冒充任何服务器，私钥不要外传。
+
 **它买到什么、买不到什么**
 
 | | 自签名 | CA 签发（OV/EV）或云签名 |

@@ -22,6 +22,9 @@ public sealed class InstallerPackageTests
 {
     private const string FileTableQuery = "SELECT `File`, `FileName` FROM `File`";
 
+    /// <summary>The components that carry a certificate into a machine's trusted roots, in the order they are described above.</summary>
+    private static readonly string[] CertificateComponents = ["TrustedRootCert", "TrustedServerCert"];
+
     private static readonly string? Msi = FindInstaller();
 
     private static string? FindInstaller()
@@ -82,34 +85,49 @@ public sealed class InstallerPackageTests
         var registry = package.Rows("SELECT `Root`, `Name` FROM `Registry`", 2);
         Assert.Single(registry, row => row[0] == "1" && row[1] == "StartMenuShortcut");
 
-        // --- the signing certificate, in a package that was built with a self-signed one -------------------------
-        // build-installer.ps1 exports the public half of a self-signed signing certificate and passes
-        // -p:TrustedRootCertificate, which is the only thing that compiles this component in; at install time the IIS
-        // extension's action adds it to the machine's trusted roots. That is what lets a UIAccess agent signed with it
-        // start without a prompt, and it is why an installation does not need the certificate put in place by hand.
+        // --- the certificates that go into a machine's trusted roots ----------------------------------------------
+        // Two can be in a package, and either, both or neither may be: the certificate the build signed with, when it
+        // is self-signed (build-installer.ps1 passes -p:TrustedRootCertificate, which is the only thing that compiles
+        // that component in; it is what lets a UIAccess agent signed with it start without a prompt), and the
+        // signaling server's, when the build was given one with -ServerCertificate (what makes wss:// work against a
+        // server no authority issued a certificate for). At install time the IIS extension's action adds each to the
+        // machine's trusted roots.
         //
         // The pieces travel together or not at all - which is what this checks, because each of them alone is a
         // silently broken package: a certificate row whose binary is empty installs something that is not a
         // certificate as a trusted root (an unsigned build used to bake in an empty placeholder exactly like that),
         // and a certificate in a component with no key path is one that nothing removes again.
         var certificates = package.Rows("SELECT `Component_`, `StoreLocation`, `StoreName`, `Binary_` FROM `Wix4Certificate`", 4);
-        var trustedRoot = registry.Where(row => row[1] == "TrustedRootCertInstalled").ToList();
-        if (certificates.Count == 0)
+        var trustedRoots = registry.Where(row => row[1].EndsWith("CertInstalled", StringComparison.Ordinal)).ToList();
+        // How many certificates the build meant to put in, passed by build-installer.ps1 along with the path to the
+        // package. Without it this only checks that a certificate's pieces agree with each other, which a package
+        // that quietly lost the whole component passes too - the component and its key path are simply both absent.
+        // With it, "the build asked for one and the package has none" fails here instead of on somebody's machine.
+        var expectedCertificates = Environment.GetEnvironmentVariable("RD_EXPECTED_CERTIFICATES");
+        if (!string.IsNullOrEmpty(expectedCertificates))
         {
-            Assert.Empty(trustedRoot);
+            Assert.Equal(int.Parse(expectedCertificates, CultureInfo.InvariantCulture), certificates.Count);
         }
-        else
+
+        foreach (var component in CertificateComponents)
         {
-            var certificate = Assert.Single(certificates);
-            Assert.Equal("TrustedRootCert", certificate[0]);
+            // The component and its key path are there together: a certificate in a component with no key path is one
+            // that nothing removes again.
+            Assert.Equal(
+                certificates.Any(row => row[0] == component),
+                trustedRoots.Any(row => row[1] == $"{component}Installed"));
+        }
+
+        foreach (var certificate in certificates)
+        {
+            Assert.Contains(certificate[0], CertificateComponents);
             Assert.Equal("2", certificate[1]); // the local machine, not the user who installs
             Assert.Equal("Root", certificate[2]); // and its trusted root store
-            Assert.Single(trustedRoot);
 
             var binary = package.Rows($"SELECT `Data` FROM `Binary` WHERE `Name` = '{certificate[3]}'", 1);
             Assert.True(
                 int.Parse(Assert.Single(binary)[0], CultureInfo.InvariantCulture) >= 100,
-                "The root certificate in the package is empty.");
+                $"The certificate in {certificate[0]} is empty.");
         }
 
         // --- the custom actions that set the machine up and clean it up ------------------------------------------

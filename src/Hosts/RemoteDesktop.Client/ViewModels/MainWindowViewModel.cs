@@ -109,8 +109,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // device, and the server would throttle the client into a list that is permanently "unknown".
         _presenceTimer = new DispatcherTimer(PresenceInterval, DispatcherPriority.Background, (_, _) => _ = RefreshPresenceAsync());
         _presenceTimer.Start();
+        UpdateClientDeviceId();
         _rendezvous.StateChanged += (_, _) => Dispatcher.UIThread.Post(() =>
         {
+            // The code the server gave this window arrives with the registration, so it changes exactly when the
+            // connection state does.
+            UpdateClientDeviceId();
             if (_rendezvous.State == RendezvousState.Online)
             {
                 // A server that has just come back may be a newer build than the one that did not answer.
@@ -125,6 +129,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string LocalDeviceId { get; set; } = "--- --- ---";
+
+    /// <summary>
+    /// The code this window registers under when it connects out to somebody else — which is not the code on the home
+    /// page. Those are two identities: the background service owns "being controlled" and shows its code, while the
+    /// window has one of its own for the connections it makes. A device that is being controlled lists *this* code
+    /// beside the session, so it is the one to compare against when somebody asks who is connected to their machine.
+    /// </summary>
+    [ObservableProperty]
+    public partial string ClientDeviceId { get; set; } = "未连接服务器";
 
     [ObservableProperty]
     public partial string ServerStatus { get; set; } = string.Empty;
@@ -889,6 +902,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
         SetIncoming(status.Sessions);
     }
+
+    private void UpdateClientDeviceId() =>
+        ClientDeviceId = _rendezvous.DeviceId is { } id ? id.ToDisplayString() : "未连接服务器";
 
     // The list is rebuilt only when it really changed, so buttons do not flicker under the mouse once a second.
     private void SetIncoming(IReadOnlyList<HostSessionInfo> sessions)

@@ -16,6 +16,7 @@ public sealed partial class MainWindow : Window
         CopySelectedDeviceCodeButton.Click += async (_, _) =>
             await CopyAsync(static viewModel => viewModel.SelectedRecentDevice?.FormattedId ?? string.Empty);
         CopyDataDirectoryButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.DataDirectory);
+        CopyClientDeviceIdButton.Click += async (_, _) => await CopyAsync(static viewModel => viewModel.ClientDeviceId);
     }
 
     /// <summary>

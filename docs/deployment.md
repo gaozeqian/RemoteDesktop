@@ -137,6 +137,29 @@ server {
 > UDP 5081（地址反射）和 5082（中继）不走这个代理，仍然是明文 UDP：中继只转发 QUIC 密文，看不到内容；
 > 反射服务只回一句"你从哪来"。凭据（中继票据）走的是信令，已经在上面的 TLS 里了。
 
+**内网也一样，而且不需要公网 CA。** 局域网上的明文信令同样会被同网段的人读到（设备代码、谁在连谁）和改动，
+区别只是"谁能站到这条线上"。用一张自己签的证书就能开 TLS：
+
+```powershell
+# 1. 给服务器生成证书。把客户端会用到的名字和地址都列上——客户端会拿它去对地址，对不上就报证书错误。
+.\build\signing\New-ServerCertificate.ps1 -DnsName rd.lan -IpAddress 192.168.1.10
+#    产物：rd.lan.pfx（放服务器，含私钥）+ rd.lan.cer（给客户端机器）
+# 2. 服务器端按"做法 A"配置：Urls 改 https，Kestrel 指向那个 .pfx。
+# 3. 客户端：打包时带上证书的公钥，之后装这个包的机器就信任它。
+.\build\installer\windows\build-installer.ps1 -RendezvousUri wss://rd.lan:5080/ws `
+    -ServerCertificate build\signing\certificates\rd.lan.cer
+```
+
+`-ServerCertificate` 把证书的公钥部分放进安装包，安装时装进那台机器的"受信任的根证书颁发机构"——和自签名
+代码签名证书走的是同一条路（`Components.wxs` 里的两个条件组件）。已经装好软件的机器不重装也能补上，管理员执行：
+
+```powershell
+Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+> 把一张自签证书装进受信任根，等于**持有它私钥的人可以在那些机器上冒充任何服务器**。私钥（.pfx）只放在
+> 服务器上，别外传；证书换新时，客户端机器要跟着换。
+
 ### 4. 公网上的限额
 
 默认值按"公网上的自建服务"选的，除非你的规模和它差很远，否则不用动。被限流的事件以 Warning 写进日志，
@@ -384,6 +407,7 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
+| 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
 | 日志里成片 "Throttled ... from {地址}" | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |
 | 两台机器都有代码，但连接超时 | 双方都连到服务器了，但打洞和中继都不通 | 检查 `RelayEndpoint` 是否为客户端可达地址、UDP 5081/5082 是否放通；先试 `--Transport:ForceRelay true` 判断是不是打洞问题 |
 | 连接提示"密码错误" | 密码过期（临时密码刷新过）或被限流 | 在被控端界面刷新密码重试；同一控制端 5 分钟内失败 5 次会被锁 5 分钟 |

@@ -82,10 +82,32 @@
       </Component>
       <?endif?>
 
+      <?ifdef var.TrustedServerCertificate ?>
+      <!-- The certificate the signaling server serves TLS with, when it is one this deployment made for itself (an
+           internal address no public authority would issue for). Machines have to trust it before wss:// works, and
+           this is what puts it in their trusted root store. A server certificate from a public authority is not here
+           at all - its chain is trusted already. build-installer.ps1 decides that from -ServerCertificate, which is
+           what compiles this component. -->
+      <Component Id="TrustedServerCert" Guid="f6e5d4c3-b2a1-4f0e-9d8c-7b6a5c4d3e2f">
+        <RegistryValue Root="HKLM" Key="Software\RemoteDesktop" Name="TrustedServerCertInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <iis:Certificate Id="ServerCertificate"
+                         Name="RemoteDesktop.Signaling"
+                         Request="no"
+                         StoreLocation="localMachine"
+                         StoreName="root"
+                         Overwrite="yes"
+                         BinaryRef="ServerCertBinary" />
+      </Component>
+      <?endif?>
+
     </DirectoryRef>
 
     <?ifdef var.TrustedRootCertificate ?>
     <Binary Id="CertBinary" SourceFile="$(var.SourceRoot)\$(var.TrustedRootCertificate)" />
+    <?endif?>
+
+    <?ifdef var.TrustedServerCertificate ?>
+    <Binary Id="ServerCertBinary" SourceFile="$(var.SourceRoot)\$(var.TrustedServerCertificate)" />
     <?endif?>
 
     <!--

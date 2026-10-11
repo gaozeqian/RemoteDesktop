@@ -28,6 +28,10 @@
   adds it to the trusted roots of the machine it is installed on. That is what a UIAccess agent needs to start without a
   prompt, and it is why the certificate does not have to be installed there by hand first. A certificate from an
   authority is left alone: it is trusted through its chain, and adding a leaf to the root store would be a downgrade.
+
+  -ServerCertificate does the same thing for the *signaling server's* certificate, which is what a deployment on a
+  network no authority issues certificates for needs: every machine that runs this installer then trusts that server's
+  TLS, so wss:// works without a certificate error. Make one with build/signing/New-ServerCertificate.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -61,6 +65,12 @@ param(
     [string]$PrivateKeyFile = '',
 
     [switch]$SkipSigning,
+
+    # The certificate the signaling server serves TLS with, as a .cer or .pfx (only the public part is used). It is
+    # installed into the trusted roots of every machine that runs this installer, which is what makes wss:// work
+    # against a server whose address no public authority would issue a certificate for. Made by
+    # build/signing/New-ServerCertificate.ps1; leave empty when the server uses a certificate from an authority.
+    [string]$ServerCertificate = '',
 
     # Timestamp server for signing; an empty value signs without a timestamp (not recommended: the signature then
     # expires together with the certificate).
@@ -96,9 +106,9 @@ $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..')
 
 # Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
 # it, a typo) is worth a plain sentence now, not a cryptographic error five minutes into the build.
-foreach ($name in 'CertificateFile', 'PrivateKeyFile') {
+foreach ($name in 'CertificateFile', 'PrivateKeyFile', 'ServerCertificate') {
     $path = Get-Variable -Name $name -ValueOnly
-    if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The signing file -$name '$path' does not exist." }
+    if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The certificate -$name '$path' does not exist." }
 }
 
 function Get-ProductVersion {
@@ -579,7 +589,30 @@ if ($signer) {
     if ($trustedRootCertificate) { Write-Host "  $trustedRootCertificate" }
 }
 
-New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWritten + 'RemoteDesktop-TrustedRoot.cer')
+# The signaling server's certificate, when one was handed in: the installer puts its public part into the trusted root
+# store of every machine that runs it, which is what makes wss:// work against a server this deployment made a
+# certificate for itself. A .pfx is accepted and reduced to its public part - only the certificate travels, never a key.
+$trustedServerCertificate = ''
+if ($ServerCertificate) {
+    $trustedServerCertificate = 'RemoteDesktop-Signaling.cer'
+    $destination = Join-Path $PublishDirectory $trustedServerCertificate
+
+    if ([System.IO.Path]::GetExtension($ServerCertificate) -in '.pfx', '.p12') {
+        $fromPfx = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Resolve-Path -LiteralPath $ServerCertificate).Path, $CertificatePassword)
+        Export-Certificate -Cert $fromPfx -FilePath $destination -Type CERT | Out-Null
+        $fromPfx.Dispose()
+    }
+    else {
+        Copy-Item -LiteralPath $ServerCertificate -Destination $destination -Force
+    }
+
+    $installed = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path -LiteralPath $destination).Path)
+    Write-Host "  server certificate to trust: $($installed.Subject) ($($installed.Thumbprint))"
+    $installed.Dispose()
+}
+
+New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWritten + 'RemoteDesktop-TrustedRoot.cer', 'RemoteDesktop-Signaling.cer')
 
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -592,6 +625,7 @@ $wixArguments = @(
     "-p:DefaultRendezvousUri=$defaultRendezvousUri"
 )
 if ($trustedRootCertificate) { $wixArguments += "-p:TrustedRootCertificate=$trustedRootCertificate" }
+if ($trustedServerCertificate) { $wixArguments += "-p:TrustedServerCertificate=$trustedServerCertificate" }
 
 dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
@@ -681,8 +715,17 @@ if (-not $SkipSigning) {
 # drops some content without a word (see verify notes in that test), so building is not proof.
 Write-Host 'Checking the package...'
 $env:RD_INSTALLER_MSI = $package.FullName
+
+# What this build meant to put in, so that a component WiX dropped without a word is caught here rather than on a
+# machine that installs it: the certificates it was given, and the difference between that and what the package has.
+$expectedCertificates = 0
+if ($trustedRootCertificate) { $expectedCertificates++ }
+if ($trustedServerCertificate) { $expectedCertificates++ }
+$env:RD_EXPECTED_CERTIFICATES = "$expectedCertificates"
+
 dotnet test (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter 'FullyQualifiedName~InstallerPackageTests' --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
 Remove-Item Env:\RD_INSTALLER_MSI
+Remove-Item Env:\RD_EXPECTED_CERTIFICATES
 
 Write-Host 'Done. Install with: msiexec /i <msi> (or RENDEZVOUSURI=ws://... to set the server now).'

@@ -410,7 +410,7 @@
                   <StackPanel Spacing="{DynamicResource RdSpaceMd}">
                     <TextBlock Text="数据与诊断" Classes="sectionHeader" />
 
-                    <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto"
+                    <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto"
                           ColumnSpacing="{DynamicResource RdSpaceLg}" RowSpacing="{DynamicResource RdSpaceSm}">
                       <TextBlock Text="数据目录" Classes="label" VerticalAlignment="Center" />
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
@@ -421,10 +421,20 @@
 
                       <TextBlock Grid.Row="1" Text="客户端版本" Classes="label" VerticalAlignment="Center" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClientVersion}" VerticalAlignment="Center" />
+
+                      <TextBlock Grid.Row="2" Text="本机控制端代码" Classes="label" VerticalAlignment="Center" />
+                      <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                        <SelectableTextBlock Text="{Binding ClientDeviceId}" Classes="code" VerticalAlignment="Center" />
+                        <Button x:Name="CopyClientDeviceIdButton" Content="复制" Classes="iconButton"
+                                ToolTip.Tip="复制本机控制端代码" VerticalAlignment="Center" />
+                      </StackPanel>
                     </Grid>
 
                     <TextBlock Classes="caption"
                                Text="设备身份、记住的密码和最近连接列表都在这个目录里。客户端没有文件日志，只在崩溃时写 crash.log——平时的问题看界面提示。" />
+
+                    <TextBlock Classes="caption" TextWrapping="Wrap"
+                               Text="「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。" />
                   </StackPanel>
                 </Border>
               </TabItem>
