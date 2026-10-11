@@ -135,7 +135,7 @@ jobs:
       # 上传至 GitHub Release：一个版本一个 Release，两个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
       - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: release-body.md
           files: |
