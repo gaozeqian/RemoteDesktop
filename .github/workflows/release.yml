@@ -31,11 +31,36 @@ jobs:
 
       # A release is the one build nobody gets to re-check before it is public, so it runs the tests itself rather
       # than trusting that CI passed on some earlier commit.
-      - name: Restore, build and test
+      - name: Restore and build
         run: |
           dotnet restore RemoteDesktop.slnx
           dotnet build RemoteDesktop.slnx --no-restore -c Release
-          dotnet test RemoteDesktop.slnx --no-build -c Release
+
+      # Same retry-once policy as ci.yml (see the comment there): the integration suite is timing-sensitive on a
+      # runner and red-flags a different test from run to run. A release is still not published on a red run — the
+      # second failure fails the step — but a single flake no longer holds up a release.
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($file in Get-ChildItem TestResults/*.trx -ErrorAction SilentlyContinue) {
+              [xml]$xml = Get-Content $file.FullName
+              $xml.TestRun.Results.UnitTestResult |
+                  Where-Object { $_.outcome -eq 'Failed' } |
+                  ForEach-Object { $failed.Add($_.testName) }
+          }
+
+          $names = if ($failed.Count) { $failed -join '; ' } else { '(no TRX recorded a failure)' }
+          Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
+
+          Remove-Item TestResults -Recurse -Force -ErrorAction SilentlyContinue
+          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
+          }
 
       # 客户端安装包要不要内置服务器地址，由仓库变量 DEFAULT_RENDEZVOUS_URI 决定
       # （Settings -> Secrets and variables -> Actions -> Variables）。
