@@ -123,6 +123,11 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />
     </StandardDirectory>
+    <!-- Somewhere to point "where do I change this" at. The shortcut goes to the page in the installation folder rather
+         than to a URL: this repository is private, and whoever runs the server may never have seen it. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ServerShortcutFolder" Name="Remote Desktop Server" />
+    </StandardDirectory>
 
     <Feature Id="Main" Title="Remote Desktop Server" Level="1" AllowAbsent="no">
       <!-- The signaling server and the relay, one folder each. -->
@@ -133,6 +138,7 @@
       <!-- The settings each server reads at start-up, which an upgrade must not put back to their built-in defaults. -->
       <ComponentRef Id="RendezvousSettings" />
       <ComponentRef Id="RelaySettings" />
+      <ComponentRef Id="ServerShortcut" />
       <!-- Everything else: the runtime, libraries and the settings templates' neighbours. -->
       <ComponentGroupRef Id="Payload" />
     </Feature>

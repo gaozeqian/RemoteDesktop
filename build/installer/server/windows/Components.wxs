@@ -71,7 +71,7 @@
 
       <!-- The other half of the shared key; see the comment on the signaling server's settings above. -->
       <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102" NeverOverwrite="yes">
-        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
+>        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
       </Component>
 
     </DirectoryRef>
@@ -242,6 +242,23 @@
          It goes through WixUI_InstallDir's sequence rather than replacing it: the standard dialogs stay, this one is
          wired in after the install folder has been chosen.
          ========================================================================================================== -->
+    <!-- ==========================================================================================================
+         The start menu entry: "how do I change this", pointed at the page that answers it.
+
+         Keyed by a registry value under HKCU because a shortcut is per-user data even when the program is installed
+         for everybody (ICE43/ICE57) — the same shape the client package uses for its own shortcut.
+         ========================================================================================================== -->
+    <DirectoryRef Id="ServerShortcutFolder">
+      <Component Id="ServerShortcut" Guid="d17b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d">
+        <Shortcut Id="HowToConfigureLink" Name="服务器配置说明"
+                  Description="How to change the database, relay address and TLS settings of these servers"
+                  Target="[INSTALLFOLDER]如何配置.txt" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\RemoteDesktop\Server" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <!-- Windows Installer only removes folders it is told about. -->
+        <RemoveFolder Id="RemoveServerShortcutFolder" Directory="ServerShortcutFolder" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
     <UI>
 
     <Dialog Id="ServerSettingsDlg" Width="370" Height="270" Title="[ProductName] 安装向导">

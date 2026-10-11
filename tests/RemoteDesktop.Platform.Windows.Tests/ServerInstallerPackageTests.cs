@@ -142,6 +142,29 @@ public sealed class ServerInstallerPackageTests
 
         Assert.True(pageControls.Any(row => row[1] == "TLSCHOICE"), "The settings page has no TLS choice.");
 
+        // Nothing on that page may sit outside it. The coordinates were chosen by hand, and a control that falls off the
+        // page is invisible rather than broken — the kind of mistake nobody notices until a reader asks where the
+        // certificate path went.
+        var bounds = package.Rows("SELECT `Width`, `Height` FROM `Dialog` WHERE `Dialog` = 'ServerSettingsDlg'", 2);
+        var (pageWidth, pageHeight) = (int.Parse(bounds[0][0], CultureInfo.InvariantCulture), int.Parse(bounds[0][1], CultureInfo.InvariantCulture));
+        foreach (var control in pageControls)
+        {
+            var position = package.Rows($"SELECT `X`, `Y`, `Width`, `Height` FROM `Control` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control` = '{control[0]}'", 4);
+            if (position.Count == 0 || position[0].Any(value => !int.TryParse(value, out _)))
+            {
+                continue; // the dialog's own bookkeeping rows (First, Default, Cancel) have no coordinates
+            }
+
+            var (x, y, width, height) = (int.Parse(position[0][0], CultureInfo.InvariantCulture), int.Parse(position[0][1], CultureInfo.InvariantCulture), int.Parse(position[0][2], CultureInfo.InvariantCulture), int.Parse(position[0][3], CultureInfo.InvariantCulture));
+            Assert.True(x + width <= pageWidth && y + height <= pageHeight, $"{control[0]} sits outside the page: {x},{y} {width}x{height} in {pageWidth}x{pageHeight}.");
+        }
+
+        // The start menu entry, pointed at the page in the installation folder rather than at a URL: the repository is
+        // private, so a link to it would not help whoever runs the server.
+        var shortcuts = package.Rows("SELECT `Name`, `Target` FROM `Shortcut`", 2);
+        var howTo = Assert.Single(shortcuts, row => row[0] == "服务器配置说明");
+        Assert.Contains("如何配置.txt", howTo[1], StringComparison.Ordinal);
+
         // --- the step that gives both servers the same key ------------------------------------------------------
         var actions = package.Rows("SELECT `Action` FROM `CustomAction`", 1).Select(row => row[0]).ToList();
         Assert.Contains(actions, action => action.Contains("Configure", StringComparison.OrdinalIgnoreCase));
