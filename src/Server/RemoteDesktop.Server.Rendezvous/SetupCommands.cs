@@ -22,12 +22,27 @@ public static class SetupCommands
 
     private const string Command = "--configure-system";
 
+    /// <summary>
+    /// Checks a value the settings page asks for, without changing anything:
+    /// <c>--check database &lt;connection string&gt;</c> or <c>--check relay &lt;host:port&gt;</c>. The page's test
+    /// buttons run it, and it exists because a typo in either setting is otherwise only discovered by a server that
+    /// will not start.
+    /// </summary>
+    private const string CheckCommand = "--check";
+
+    public const int CheckFailed = 3;
+
     /// <returns><c>true</c> when the command line was this command (then <paramref name="exitCode"/> is the result and no server must start).</returns>
     public static bool TryRun(string[] args, string defaultInstallDirectory, TextWriter output, out int exitCode)
     {
         ArgumentNullException.ThrowIfNull(args);
 
         exitCode = Success;
+        if (args.Length > 0 && args[0] == CheckCommand)
+        {
+            return TryCheck(args, output, out exitCode);
+        }
+
         if (args.Length == 0 || args[0] != Command)
         {
             return false;
@@ -71,6 +86,30 @@ public static class SetupCommands
     /// so without this an installation whose settings could not be written looks like one that went fine until a
     /// service does not start.
     /// </summary>
+    /// <summary>
+    /// <c>--check database &lt;connection string&gt;</c> and <c>--check relay &lt;host:port&gt;</c>: report, change nothing.
+    /// </summary>
+    private static bool TryCheck(string[] args, TextWriter output, out int exitCode)
+    {
+        exitCode = InvalidArguments;
+        if (args.Length < 3)
+        {
+            output.WriteLine("Usage: --check database <connection string> | --check relay <host:port>");
+            return true;
+        }
+
+        var (ok, message) = args[1] switch
+        {
+            "database" => ServerChecks.Database(args[2]),
+            "relay" => ServerChecks.Relay(args[2]),
+            _ => (false, $"Unknown check '{args[1]}': use 'database' or 'relay'."),
+        };
+
+        output.WriteLine(message);
+        exitCode = ok ? Success : CheckFailed;
+        return true;
+    }
+
     private static void Write(string installDirectory, IEnumerable<string> lines, TextWriter output)
     {
         try
