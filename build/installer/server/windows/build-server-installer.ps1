@@ -704,7 +704,9 @@ if (-not $SkipSigning) {
 Write-Host 'Checking the package...'
 $env:RD_SERVER_INSTALLER_MSI = $package.FullName
 
-dotnet test (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter 'FullyQualifiedName~ServerInstallerPackageTests' --nologo -v quiet
+# 完全限定类名，和客户端脚本同样的原因（见那里的注释）：--filter-class 不认通配形式的"精确匹配"，
+# 而 --nologo 在新的 dotnet test 下会让测试程序以退出码 5 拒绝整次运行。
+dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter-class RemoteDesktop.Platform.Windows.Tests.ServerInstallerPackageTests -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
 Remove-Item Env:\RD_SERVER_INSTALLER_MSI
 
