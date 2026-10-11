@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Passed by build-server-installer.ps1: -p:ProductVersion=0.2.1 -p:SourceRoot=<publish folder>
+    <!-- Passed by build-server-installer.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder>
          [-p:DefaultRendezvousUrl=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <!-- What the signaling server listens on: the address baked into the installed Rendezvous\appsettings.json (read

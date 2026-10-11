@@ -154,12 +154,12 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
   连续三次之后不再自动重启，稳定运行一天后重新计数），
   加一条**只针对该程序**的入站 UDP 防火墙规则（打洞需要；没有它连接会退回中继），加开始菜单快捷方式。
 - 安装时把服务器地址写进 `appsettings.json`；这个文件在升级时**不会被覆盖**，所以就地改过的地址会保留。
-  静默安装可以覆盖：`msiexec /i RemoteDesktop-0.2.1.0-x64.msi /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
+  静默安装可以覆盖：`msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
 - 安装时会打开"服务可以发送 Ctrl+Alt+Del"的策略位（`SoftwareSASGeneration` 的第 0 位，只加这一位，
   并记住是我们加的）；卸载时只把自己加的那一位去掉。另外还会写入设备身份和日志所在的目录。
 - **升级**：同版本号重装按升级处理（开发期刷版本号方便），升级不会清掉设备身份和日志。
 - **卸载**：默认保留 `%ProgramData%\RemoteDesktop`（设备身份 + 日志，重装后设备代码不变）；
-  `msiexec /x RemoteDesktop-0.2.1.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
+  `msiexec /x RemoteDesktop-0.3.0.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
 - **签名是自动的**：脚本在本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名、加时间戳并验证；
   没有证书就跳过并提示，也可以用 `-SignCertificate <指纹或 CN>` 指定、`-SkipSigning` 明确跳过。
 - 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示 `build/installer/License.txt`
