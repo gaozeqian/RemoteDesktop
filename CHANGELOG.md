@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Fixed
+- [Transport] **同一台机器上的两台设备现在有一条可靠的路**：候选地址里**无条件**加上回环地址（排在最后）。
+  此前回环只会在反射器答上来、且它报回来的恰好就是回环时才出现；于是"网卡地址不可用"（CI runner 上防火墙
+  挡入站 UDP、虚拟网卡没有路由）叠加"反射器超时"，就只剩中继一条路——中继再失败就彻底连不上。2026-10-11 的
+  发布流水线正是这么红的：一个只做连接的测试报了 `No network path to the remote device worked.`，
+  本地连跑 30 次都复现不出来。
+  已用实验证实（把网卡地址换成不可达、两端都不采用反射结果、中继也指向不可达）：关掉这条修复时 8 个测试
+  失败 7 个，打开后 6 个通过——剩下 2 个是强制走中继的，实验里它们本来就该失败。
+- [Transport] **连不上时说明试过什么**：`PeerConnectException` 的消息现在带上反射器是否答复、每个候选地址的
+  失败原因（超时秒数或具体错误），以及中继是否被提供/是否认领了绑定。例如
+  `No network path ... (the reflector did not report a public endpoint). Tried: direct 192.0.2.1:62572 did not
+  answer within 2s; relay 192.0.2.9:5082 did not acknowledge the bind.`
+  此前只有一句"没有可用的路径"，线上或 CI 里出现时无从判断是候选错了、反射器没答还是中继没理。
+  单次候选尝试的日志同时从 Debug 提到 Information（连不上的第一手材料），界面不受影响——客户端按
+  `Failure` 枚举显示自己的中文句子，不显示这句话。
+- [Transport] 中继绑定（两步 UDP 握手，所有直连都失败后的最后一条路）失败后会**重试一次**：过去丢一个包
+  就等于这条路不存在。重试只在已经失败的路径上多花一次超时。
+
 ### Changed
 - [Build] **测试运行方式迁到 Microsoft.Testing.Platform**（`global.json` 里加 `test.runner`）：xunit.v3 4.x 带来的
   MTP 在 .NET 10 SDK 上**不再支持 VSTest 目标**，不迁的话 `dotnet test` 直接报错（那正是两个 xunit 依赖 PR
