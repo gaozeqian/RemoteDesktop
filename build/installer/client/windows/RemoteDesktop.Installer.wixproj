@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Passed by build-installer.ps1: -p:ProductVersion=0.2.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
+    <!-- Passed by build-installer.ps1: -p:ProductVersion=0.2.1 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
     <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>

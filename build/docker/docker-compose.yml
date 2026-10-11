@@ -32,7 +32,7 @@ services:
     build:
       context: ../..
       dockerfile: build/docker/Dockerfile.rendezvous
-    image: remotedesktop/rendezvous:0.2.0
+    image: remotedesktop/rendezvous:0.2.1
     environment:
       # The address handed to clients for relayed connections. It must be reachable by the clients, so 127.0.0.1
       # only works when everything runs on the same machine.
@@ -67,7 +67,7 @@ services:
     build:
       context: ../..
       dockerfile: build/docker/Dockerfile.relay
-    image: remotedesktop/relay:0.2.0
+    image: remotedesktop/relay:0.2.1
     environment:
       Relay__Port: 5082
       Relay__SharedKey: ${RELAY_SHARED_KEY:-}

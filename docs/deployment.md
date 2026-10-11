@@ -41,7 +41,7 @@ pwsh -File build/installer/server/windows/build-server-installer.ps1
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
 
 ```powershell
-msiexec /i RemoteDesktop.Server-0.2.0.0-x64.msi /qn `
+msiexec /i RemoteDesktop.Server-0.2.1.0-x64.msi /qn `
   RENDEZVOUSURL="https://0.0.0.0:5080" `
   RELAYPUBLICENDPOINT="203.0.113.10:5082" `
   POSTGRESCONNECTIONSTRING="Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." `
@@ -380,13 +380,13 @@ pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws:
 
 ```powershell
 # 图形界面（推荐给一般用户）
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi
 
 # 静默安装，指定服务器地址
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 
 # 静默安装到别的目录
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
 安装完成后：
@@ -417,13 +417,13 @@ msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDeskto
 
 ```powershell
 # 升级（保留设备身份、日志和服务器地址；服务器地址以安装包里的为准）
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi /qn
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi /qn
 
 # 卸载（保留设备身份和日志，重装后设备代码不变）
-msiexec /x RemoteDesktop-0.2.0.0-x64.msi /qn
+msiexec /x RemoteDesktop-0.2.1.0-x64.msi /qn
 
 # 卸载并删除设备身份与日志（这台机器下次安装会得到新的设备代码）
-msiexec /x RemoteDesktop-0.2.0.0-x64.msi /qn REMOVEDATA=1
+msiexec /x RemoteDesktop-0.2.1.0-x64.msi /qn REMOVEDATA=1
 ```
 
 **升级前最好先退出客户端**。安装包会把残留的 `RemoteDesktop.Client.exe` 和 `RemoteDesktop.SessionAgent.exe` 关掉，
@@ -432,14 +432,14 @@ msiexec /x RemoteDesktop-0.2.0.0-x64.msi /qn REMOVEDATA=1
 
 ```powershell
 Get-Process RemoteDesktop.Client -ErrorAction SilentlyContinue | Stop-Process
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi
 ```
 
 服务不用担心：安装包会先停服务，服务停止时会结束它启动的 Agent（实测 2 秒内退出）。
 出问题时用日志装：
 
 ```powershell
-msiexec /i RemoteDesktop-0.2.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
+msiexec /i RemoteDesktop-0.2.1.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 ```
 
 安装失败时 Windows 也会在"应用程序"事件日志里记下来（来源 `MsiInstaller`，含具体错误码和失败的那一步）。
