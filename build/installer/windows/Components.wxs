@@ -39,6 +39,17 @@
         <!-- Started when installed, stopped on uninstall and on upgrades, so the executable is never in use. -->
         <ServiceControl Id="HostServiceControl" Name="RemoteDesktopHost" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
 
+        <!-- A service that dies on a machine nobody is sitting at stays dead until somebody notices, which is the
+             one thing a remote-access product cannot afford. Windows restarts it three times, five seconds apart;
+             after the third failure it stays down until it has run for a day without failing, which is the same
+             promise the manual installation makes with "sc.exe failure". -->
+        <util:ServiceConfig ServiceName="RemoteDesktopHost"
+                            FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="5"
+                            ResetPeriodInDays="1" />
+
         <!-- Inbound UDP for peer connections: without the rule Windows silently drops the hole-punched packets, so
              every connection would fall back to the relay. A failure to add it must not fail the installation
              (the software works relayed), hence IgnoreFailure. -->

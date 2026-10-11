@@ -1,0 +1,11 @@
+<Project>
+
+  <!--
+    Deliberately empty. The repository's Directory.Build.props sets TargetFramework net10.0, the C# analyzers and
+    central package management, none of which apply to a WiX project; central package management in particular makes
+    the restore fail outright, because the WiX extension packages here carry their versions inline. MSBuild only
+    imports the nearest file, so this one blocks that import - exactly as the client installer's copy of this file
+    does next door.
+  -->
+
+</Project>

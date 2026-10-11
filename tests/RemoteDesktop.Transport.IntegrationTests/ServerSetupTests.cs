@@ -1,0 +1,294 @@
+using System.Net;
+using Microsoft.Extensions.Configuration;
+using RemoteDesktop.Server.Relay;
+using RemoteDesktop.Server.Rendezvous;
+using RemoteDesktop.Server.Shared;
+
+namespace RemoteDesktop.Transport.IntegrationTests;
+
+/// <summary>
+/// What the server installer writes into the two settings files. The point of checking it here rather than by
+/// installing is the contract: the files have to be readable by the servers' own option types, and a value that
+/// would stop a server from starting has to be refused while somebody is still watching the installation.
+/// </summary>
+public sealed class ServerSetupTests : IDisposable
+{
+    private readonly string _folder = Directory.CreateTempSubdirectory("rd-serversetup-").FullName;
+
+    public void Dispose() => Directory.Delete(_folder, recursive: true);
+
+    [Fact]
+    public void Both_settings_files_are_written_and_the_servers_can_read_them()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            RelayPublicEndpoint = "203.0.113.10:5082",
+            RelaySharedKey = Convert.ToBase64String(new byte[48]),
+            PostgresConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x",
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        Assert.NotEmpty(notes);
+
+        // Read back through the types the servers bind, which is what makes this a contract and not a JSON diff.
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        rendezvous.Validate(); // refuses a key that is too short, or a relay address that is not host:port
+        Assert.Equal("203.0.113.10:5082", rendezvous.RelayEndpoint);
+        Assert.Equal("Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x", rendezvous.PostgresConnectionString);
+
+        var relay = Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName);
+        Assert.Equal(5082, relay.Port);
+        Assert.Equal(rendezvous.RelaySharedKey, relay.SharedKey); // one key, both servers
+
+        var urls = Configuration(ServerSetup.RendezvousFolder)["Urls"];
+        Assert.Equal("https://0.0.0.0:5443", urls);
+    }
+
+    [Fact]
+    public void A_key_is_generated_once_and_kept_afterwards()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var first = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).RelaySharedKey;
+
+        // An upgrade runs the same step again: rotating the key would cut off a relay on another machine that was
+        // given the one printed when it was installed.
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+        var second = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).RelaySharedKey;
+
+        Assert.Equal(first, second);
+        Assert.True(Convert.FromBase64String(first).Length >= 32);
+    }
+
+    /// <summary>
+    /// The key is meant to be carried to a relay on another machine, and the notes say so. A base64 key is full of
+    /// "+", which the default JSON writer escapes as +: still the same string to anything that parses JSON, and
+    /// a different key to anything that does not — a command line, where the operator is told to put it.
+    /// </summary>
+    [Fact]
+    public void The_key_is_written_out_in_a_form_that_can_be_copied()
+    {
+        var key = Convert.ToBase64String([.. Enumerable.Range(0, 48).Select(value => (byte)(value * 7))]);
+        Assert.Contains('+', key); // this key is only interesting if it has one
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { RelaySharedKey = key });
+
+        var written = File.ReadAllText(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName));
+        Assert.Contains(key, written, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u002B", written, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_key_given_by_the_installer_is_used_as_it_is()
+    {
+        var key = Convert.ToBase64String(new byte[32]);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { RelaySharedKey = key });
+
+        Assert.Equal(key, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).SharedKey);
+    }
+
+    [Theory]
+    [InlineData("not base64 at all")]
+    [InlineData("c2hvcnQ=")] // "short", five bytes
+    public void A_key_that_would_stop_a_server_from_starting_is_refused(string key)
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions { RelaySharedKey = key }));
+    }
+
+    [Theory]
+    [InlineData("rd.example.com")] // no port
+    [InlineData("rd.example.com:not-a-port")]
+    [InlineData(":5082")]
+    public void A_relay_address_that_is_not_host_and_port_is_refused(string endpoint) =>
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = endpoint }));
+
+    [Fact]
+    public void Nothing_is_written_when_a_value_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "http://0.0.0.0:5080",
+            RelaySharedKey = "not base64 at all",
+        }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    /// <summary>
+    /// The package's default for the relay address is <c>%COMPUTERNAME%:5082</c>, and a name is not something a
+    /// client can be sent to: it takes the address and sends UDP there. So the name is expanded and resolved here,
+    /// once, and what lands in the settings file is an address — which is what the servers insist on, and what this
+    /// checks by asking them.
+    /// </summary>
+    [Fact]
+    public void A_name_in_the_relay_address_is_resolved_to_an_address()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = "%COMPUTERNAME%:5083" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        rendezvous.Validate();
+
+        var host = rendezvous.RelayEndpoint[..rendezvous.RelayEndpoint.LastIndexOf(':')];
+        Assert.True(IPAddress.TryParse(host, out _), $"The relay address written was '{rendezvous.RelayEndpoint}', which is not an address.");
+        Assert.EndsWith(":5083", rendezvous.RelayEndpoint, StringComparison.Ordinal);
+        Assert.Equal(5083, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).Port);
+        Assert.NotEmpty(notes);
+    }
+
+    /// <summary>
+    /// Without a database the device codes live in memory, which means every restart hands out different ones — the
+    /// machines that were set up to be reached without anybody present stop being reachable. Worth saying out loud.
+    /// </summary>
+    [Fact]
+    public void Having_no_database_is_said_out_loud()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        Assert.Empty(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).PostgresConnectionString!);
+    }
+
+    [Fact]
+    public void Plain_http_is_configured_and_called_out()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "auto" });
+
+        Assert.Equal("http://0.0.0.0:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A certificate that is not there yet must not leave a server that cannot start: the installation stays on http
+    /// and says what is missing.
+    /// </summary>
+    [Fact]
+    public void A_certificate_that_is_not_there_leaves_the_server_on_http()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "http://0.0.0.0:5080",
+            TlsCertificatePath = Path.Combine(_folder, "not-written-yet.pfx"),
+        });
+
+        Assert.Equal("http://0.0.0.0:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Contains(notes, note => note.Contains("not there", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void A_certificate_that_is_there_switches_the_server_to_https()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "http://0.0.0.0:5080",
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        var root = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("https://0.0.0.0:5080", root["Urls"]);
+        Assert.NotNull(root["Kestrel:Certificates:Default:Path"]);
+        Assert.Equal("pfx-password", root["Kestrel:Certificates:Default:Password"]);
+    }
+
+    /// <summary>An operator's own settings are not the installer's to throw away.</summary>
+    [Fact]
+    public void Settings_that_were_edited_by_hand_survive()
+    {
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """
+            {
+              "Logging": { "LogLevel": { "Default": "Warning" } },
+              "Rendezvous": { "PresenceEnabled": false }
+            }
+            """);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        var root = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("Warning", root["Logging:LogLevel:Default"]);
+        Assert.False(root.GetValue<bool>("Rendezvous:PresenceEnabled"));
+        Assert.False(File.Exists(path + ".tmp"));
+    }
+
+    /// <summary>
+    /// The step the installer runs, from the command line to the files on disk. Two things about it are only visible
+    /// from here: that the arguments the package passes are the ones being read, and that what happened is written
+    /// down — the installer runs this through cmd.exe and shows its output to nobody.
+    /// </summary>
+    [Fact]
+    public void The_command_line_the_installer_uses_writes_both_files_and_leaves_a_note()
+    {
+        var output = new StringWriter();
+        var handled = SetupCommands.TryRun(
+            [
+                "--configure-system",
+                "--install-directory", _folder,
+                "--urls", "http://0.0.0.0:5080",
+                "--relay-endpoint", "203.0.113.10:5082",
+                "--relay-key", "auto",
+                "--postgres", "auto",
+                "--tls-certificate", string.Empty,
+                "--tls-password", string.Empty,
+            ],
+            defaultInstallDirectory: _folder,
+            output,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(SetupCommands.Success, exitCode);
+        Assert.NotEmpty(output.ToString());
+
+        var log = File.ReadAllText(Path.Combine(_folder, SetupCommands.LogFileName));
+        Assert.Contains("Signaling listens on", log, StringComparison.Ordinal);
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        rendezvous.Validate();
+        Assert.Equal("203.0.113.10:5082", rendezvous.RelayEndpoint);
+    }
+
+    [Fact]
+    public void The_command_line_is_left_alone_when_it_is_not_the_setup_step()
+    {
+        var output = new StringWriter();
+
+        var handled = SetupCommands.TryRun(["--urls", "http://0.0.0.0:5080"], _folder, output, out _);
+
+        Assert.False(handled); // the server starts as usual
+        Assert.Empty(output.ToString());
+    }
+
+    [Fact]
+    public void A_value_that_cannot_be_used_is_reported_and_written_down()
+    {
+        var output = new StringWriter();
+
+        var handled = SetupCommands.TryRun(
+            ["--configure-system", "--install-directory", _folder, "--relay-key", "not base64 at all"],
+            defaultInstallDirectory: _folder,
+            output,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(SetupCommands.InvalidArguments, exitCode);
+        Assert.Contains("base64", File.ReadAllText(Path.Combine(_folder, SetupCommands.LogFileName)), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    private string WriteCertificate()
+    {
+        var path = Path.Combine(_folder, "signaling.pfx");
+        File.WriteAllBytes(path, [1, 2, 3]); // only its presence matters here; the TLS test covers a real one
+        return path;
+    }
+
+    private IConfigurationRoot Configuration(string folder) =>
+        new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(_folder, folder, ServerSetup.SettingsFileName))
+            .Build();
+
+    private T Read<T>(string folder, string section)
+        where T : new() =>
+        Configuration(folder).GetSection(section).Get<T>() ?? new T();
+}

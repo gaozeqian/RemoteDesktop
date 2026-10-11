@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The components that need more than "a file": the two services, the inbound firewall rules that let clients reach
+  them, and the two settings files. Everything else is generated from the publish output into Files.generated.wxs.
+
+  The two server folders (Rendezvous, Relay) are declared by that generated file, which mirrors the publish output;
+  build-server-installer.ps1 tells the generator to name those two directories RendezvousFolder and RelayFolder, so
+  the components here can be placed in them regardless of the order the publish output happens to be read in.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Fragment>
+    <DirectoryRef Id="RendezvousFolder">
+
+      <!-- The signaling server: device codes, presence, and the connect requests that put two peers in touch. -->
+      <Component Id="RendezvousService" Guid="8b2c3d4e-5f6a-4b7c-9d0e-1f2a3b4c5d6e">
+        <File Id="RendezvousExeFile" Source="$(var.SourceRoot)\Rendezvous\RemoteDesktop.Server.Rendezvous.exe" KeyPath="yes" />
+        <ServiceInstall Id="RendezvousServiceInstall"
+                        Name="RemoteDesktopRendezvous"
+                        DisplayName="Remote Desktop Rendezvous"
+                        Description="Connects Remote Desktop devices to each other (signaling)."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
+        <!-- Started when installed, stopped on uninstall and on upgrades, so the executable is never in use. The same
+             service name is what the program checks for when it decides whether it was started as a service or from a
+             console (Program.cs), so the two have to keep agreeing. -->
+        <ServiceControl Id="RendezvousServiceControl" Name="RemoteDesktopRendezvous" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- Restarted three times over, five seconds apart, with the count cleared after a day of running. A service
+             that dies on a machine nobody is watching is a server that stays down until somebody notices, and the
+             reset period is what keeps a server that crashed once — months ago, at a busy moment - from being counted
+             with one that is crash-looping right now. -->
+        <util:ServiceConfig ServiceName="RemoteDesktopRendezvous"
+                            FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="5"
+                            ResetPeriodInDays="1" />
+      </Component>
+
+      <!-- Read at every start-up, and written by the configuration step below. Never overwritten: it carries what this
+           deployment was told (the address clients relay through, an operator's PostgreSQL connection string) and the
+           generated relay key, none of which an upgrade may put back to the built-in defaults. Removing the product
+           removes it; a repair does not put the packaged copy back over an edited one. -->
+      <Component Id="RendezvousSettings" Guid="be5f6a7b-8c9d-4e0f-9a1b-4c5d6e7f8091" NeverOverwrite="yes">
+        <File Id="RendezvousAppSettingsFile" Source="$(var.SourceRoot)\Rendezvous\appsettings.json" KeyPath="yes" />
+      </Component>
+
+    </DirectoryRef>
+
+    <DirectoryRef Id="RelayFolder">
+
+      <!-- The relay: forwards UDP between two peers that could not reach each other directly, without reading what it
+           forwards. Its port and the key it shares with the signaling server come from the same configuration step. -->
+      <Component Id="RelayService" Guid="9c3d4e5f-6a7b-4c8d-9e0f-2a3b4c5d6e7f">
+        <File Id="RelayExeFile" Source="$(var.SourceRoot)\Relay\RemoteDesktop.Server.Relay.exe" KeyPath="yes" />
+        <ServiceInstall Id="RelayServiceInstall"
+                        Name="RemoteDesktopRelay"
+                        DisplayName="Remote Desktop Relay"
+                        Description="Relays Remote Desktop connections between devices that cannot reach each other."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
+        <ServiceControl Id="RelayServiceControl" Name="RemoteDesktopRelay" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- The same for the relay; see the note on the signaling server's failure actions above. -->
+        <util:ServiceConfig ServiceName="RemoteDesktopRelay"
+                            FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="5"
+                            ResetPeriodInDays="1" />
+      </Component>
+
+      <!-- The other half of the shared key; see the comment on the signaling server's settings above. -->
+      <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102" NeverOverwrite="yes">
+        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
+      </Component>
+
+    </DirectoryRef>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+
+      <!--
+        The three inbound rules in a component of their own, keyed by a registry value rather than by one of the files
+        or the services they are about. Two reasons, both of them from how Windows Installer works rather than from
+        taste:
+
+          * a firewall rule is a rule about a program, not a property of it: putting the rules inside the service
+            components would tie "the rule was added" to "the service is installed", and a repair of one would touch
+            the other;
+          * NOFIREWALL=1 has to be able to leave them out while the services are still installed, which is what the
+            condition on the component is for - a condition that is false installs none of what the component holds,
+            and the same component is then simply absent from the machine (it is not an error for a component to be
+            conditional, the way it is for a component that is missing from the package entirely).
+
+        A failure to add a rule must not fail the installation (IgnoreFailure): without it the server still listens,
+        it is simply unreachable from elsewhere until an administrator adds the rule by hand - which is exactly the
+        case NOFIREWALL exists for.
+      -->
+      <Component Id="FirewallRules" Guid="ad4e5f6a-7b8c-4d9e-8f0a-3b4c5d6e7f80" Condition="NOFIREWALL&lt;&gt;&quot;1&quot;">
+        <RegistryValue Root="HKLM" Key="Software\RemoteDesktop" Name="ServerFirewallRules" Type="integer" Value="1" KeyPath="yes" />
+
+        <!-- Signaling: the WebSocket the clients and the devices keep open. The rule names the port as well as the
+             program - "this program, on this port" is narrower than "this program, on anything it likes" - which
+             means the rule is written for the default port. A deployment that moves a server (RENDEZVOUSURL, the
+             relay's port) opens its own rule for the port it moved to; these three stay where the defaults are. -->
+        <firewall:FirewallException Id="SignalingTcp"
+                                    Name="Remote Desktop Rendezvous (TCP 5080)"
+                                    Description="Incoming signaling connections from Remote Desktop clients and devices."
+                                    Program="[#RendezvousExeFile]" Port="5080"
+                                    Protocol="tcp" Profile="all" Scope="any" IgnoreFailure="yes" />
+
+        <!-- Address reflection: the UDP exchange that tells each peer how the other one appears from the outside, which
+             is what lets them try a direct connection first. -->
+        <firewall:FirewallException Id="SignalingReflectionUdp"
+                                    Name="Remote Desktop Rendezvous address reflection (UDP 5081)"
+                                    Description="Incoming address-reflection packets, used to find each peer's address as seen from the internet."
+                                    Program="[#RendezvousExeFile]" Port="5081"
+                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+
+        <!-- The relay's UDP port: the traffic that could not go directly goes through here instead. -->
+        <firewall:FirewallException Id="RelayUdp"
+                                    Name="Remote Desktop Relay (UDP 5082)"
+                                    Description="Relayed Remote Desktop traffic from devices that cannot reach each other directly."
+                                    Program="[#RelayExeFile]" Port="5082"
+                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+      </Component>
+
+    </DirectoryRef>
+
+    <!--
+      The steps that need elevated rights go through the rendezvous executable, which the installer has just put in
+      place. All are deferred, run as the system, and are safe to repeat. It is the rendezvous executable that carries
+      the step (and not the relay's) because it is the one the installer has a path to and because what it writes
+      belongs to both servers: they share the key that signs the relay tickets.
+
+      They live in this fragment, next to the components, on purpose: WiX 5.0.2 drops a fragment that holds no
+      component when linking (silently), which would quietly leave the installer without its custom actions.
+    -->
+    <!--
+      These run through System32\cmd.exe instead of using the server executable as the action's own target, and they
+      ignore the exit code. Both details come from a real failed upgrade of the client installer:
+
+        * A type 18 action (the packaged file as the target) fails the whole installation with error 1721 when Windows
+          cannot start that file, which is what happens when an earlier version's file is waiting for a reboot because
+          a process still held it. "ignore" covers a non-zero exit code, not a failure to launch. Going through
+          cmd.exe turns every failure, including "the file is not there", into an exit code that is ignored.
+        * The work is best-effort by design: the addresses are already baked into the two appsettings.json files when
+          the installer is built, and the same step can be repeated by hand at any time, by running the rendezvous
+          executable with its configure-system command and the same arguments.
+
+      A configuration step must never leave a half-installed product behind.
+    -->
+    <CustomAction Id="ConfigureSystem"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system --urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;&quot;"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!--
+      The four arguments the two command lines here have in common - the address, the relay endpoint, the key and the
+      database - set once into a property, because the certificate's line cannot afford to spell them out a second
+      time (the note under it has the numbers). The line above keeps its own copy written out in full, because it fits.
+
+      The property is declared in Package.wxs with Secure="yes", and that is what makes it readable here: a deferred
+      action is run from the installation script, past the elevation boundary, and only the properties in the secure
+      list have their values copied into that script. Without it this line and the one above would disagree - the
+      certificate's installation would configure the four values to their defaults rather than to what was passed.
+
+      What it holds is the text above, with the property values as they stand when the setter is reached; the setter
+      runs in the immediate pass, before either command line is written into the script, which is also how the
+      properties in the line above reach it.
+    -->
+    <CustomAction Id="SetConfigureArguments"
+                  Property="CONFIGUREARGUMENTS"
+                  Value="--urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;"
+                  Execute="immediate" />
+
+    <!--
+      The same command line plus the certificate, for an installation that was given one. A second action rather than
+      one command line that always carries the two arguments: the server reads an empty password as "no password", but
+      an empty string in the place of a path is a value it would have to guess about, so the certificate's arguments
+      are only put on a command line that has a path to put there. Which of the two runs is decided by
+      TLSCERTIFICATEPATH: "auto" (what the package defaults to) is this installer's "there is no certificate", and
+      anything else that is not empty is a path.
+
+      The four arguments the two lines share are read out of [CONFIGUREARGUMENTS] here, set by the action just above -
+      see the note there for why that property has to be secure for this line to receive anything at all.
+
+      They are read from a property because of a limit rather than for brevity: a column of the installer database
+      holds 265 characters (ICE03 calls anything longer a string overflow), this line with all six arguments written
+      out is 332, and even with the installed file's own key standing in for the path - [#RendezvousExeFile] instead
+      of [INSTALLFOLDER]Rendezvous\... - it is 291, which does not fit either. With the property standing in for the
+      four shared ones it is 216, and the certificate's own two stay spelled out here, where a reader comes looking
+      for them.
+    -->
+    <CustomAction Id="ConfigureSystemWithTls"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system [CONFIGUREARGUMENTS] --tls-certificate &quot;[TLSCERTIFICATEPATH]&quot; --tls-password &quot;[TLSCERTIFICATEPASSWORD]&quot;&quot;"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!--
+        Installing only: "NOT REMOVE" is what decides that, and nothing about a removal may be added to it.
+
+        An earlier version of the client installer's line read "NOT REMOVE OR UPGRADINGPRODUCTCODE", meaning to cover
+        the new product of an upgrade. It did the opposite: during a major upgrade the installer sets
+        UPGRADINGPRODUCTCODE while it *removes the old product*, so the condition became true there too, and the old
+        product ran this action after its own files had been deleted. Windows then reported error 1721 ("a program
+        required for this install to complete could not be run") for an executable that was no longer there, and the
+        installation rolled back with 1603 - three upgrades in a row failed exactly that way.
+
+        During an upgrade the new product installs with REMOVE empty, so "NOT REMOVE" is already true when it should
+        be, and false while the old product is being removed.
+
+        The second half of each condition below is not about removal at all: it picks which of the two command lines
+        runs. The first is for TLSCERTIFICATEPATH saying "auto" (what the package defaults to) or holding nothing at
+        all, the second for it naming a file; between them every value it can have is covered, so an installation
+        neither configures twice nor leaves the four shared values at their defaults. It reads only properties this
+        installer always sets, never one the installer engine sets by itself, which is what UPGRADINGPRODUCTCODE was.
+      -->
+      <!-- The property the second line reads is put in place immediately before it, and this is the only ordering that
+           matters among the three: the setter runs in the immediate pass, the two command lines are deferred and are
+           built (with the property as it stands then) as their turn comes. -->
+      <Custom Action="SetConfigureArguments"
+              Before="ConfigureSystem"
+              Condition="NOT REMOVE" />
+      <Custom Action="ConfigureSystem"
+              After="InstallFiles"
+              Condition="NOT REMOVE AND (TLSCERTIFICATEPATH=&quot;auto&quot; OR TLSCERTIFICATEPATH=&quot;&quot;)" />
+      <Custom Action="ConfigureSystemWithTls"
+              After="ConfigureSystem"
+              Condition="NOT REMOVE AND TLSCERTIFICATEPATH&lt;&gt;&quot;auto&quot; AND TLSCERTIFICATEPATH&lt;&gt;&quot;&quot;" />
+    </InstallExecuteSequence>
+  </Fragment>
+
+</Wix>

@@ -104,7 +104,8 @@ public sealed class RendezvousOptions
 
         if (!System.Net.IPEndPoint.TryParse(RelayEndpoint, out _))
         {
-            throw new InvalidOperationException($"Rendezvous:RelayEndpoint must look like host:port (got '{RelayEndpoint}').");
+            // An address and not a name: this value is handed to the clients, which send UDP straight to it.
+            throw new InvalidOperationException($"Rendezvous:RelayEndpoint must be an address and port, like 203.0.113.10:5082 (got '{RelayEndpoint}'). Clients are sent straight to it, so a name will not do.");
         }
 
         // The key signs the tickets that let a peer use the relay; an empty or short one would let anybody relay through

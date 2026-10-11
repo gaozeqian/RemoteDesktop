@@ -150,7 +150,8 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 **不安装就直接检查包内容**（`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
 自定义操作和属性，缺什么就报错）。产物在 `build/installer/windows/artifacts/`，约 49 MB。
 
-- 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒、5 秒、30 秒重启），
+- 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒自动重启；
+  连续三次之后不再自动重启，稳定运行一天后重新计数），
   加一条**只针对该程序**的入站 UDP 防火墙规则（打洞需要；没有它连接会退回中继），加开始菜单快捷方式。
 - 安装时把服务器地址写进 `appsettings.json`；这个文件在升级时**不会被覆盖**，所以就地改过的地址会保留。
   静默安装可以覆盖：`msiexec /i RemoteDesktop-0.1.0.0-x64.msi /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
@@ -170,6 +171,10 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 - 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持，风险见方案）。
   改动 `build/installer/windows` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
   自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——上面那个包内容检查就是为了这个。
+
+**服务端**（信令 + 中继）有自己的安装包，装的是另一套东西，和这个包互不影响：
+`build/installer/server/build-server-installer.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
+把两个服务器注册成服务、开好防火墙、写好配置。见 [docs/deployment.md](docs/deployment.md) 的"最省事的一条路"。
 
 安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/security.md](docs/security.md)。
 

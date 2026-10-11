@@ -28,7 +28,55 @@
 
 ## 二、部署服务器
 
-### 1. 构建
+### 1. 最省事的一条路：服务端安装包（Windows）
+
+不想手工发布 + `sc.exe` + `netsh`（也就是下面 2、3、6、8 节那些步骤）的话，用仓库里的服务端安装包。
+它只做 Windows；Linux 用手工发布或 Docker。
+
+```powershell
+pwsh -File build/installer/server/build-server-installer.ps1
+# 产物：build/installer/server/artifacts/RemoteDesktop.Server-<版本>-x64.msi
+```
+
+安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
+
+```powershell
+msiexec /i RemoteDesktop.Server-0.1.0.0-x64.msi /qn `
+  RENDEZVOUSURL="https://0.0.0.0:5080" `
+  RELAYPUBLICENDPOINT="203.0.113.10:5082" `
+  POSTGRESCONNECTIONSTRING="Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." `
+  TLSCERTIFICATEPATH="C:\rd\signaling.pfx" TLSCERTIFICATEPASSWORD="..."
+```
+
+它做的事：把两个服务器（信令 + 中继，各自自包含）装进 `%ProgramFiles%\Remote Desktop Server`，
+注册两个自动启动、崩溃后自动重启的服务（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`），
+加三条**只针对这两个程序**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好两份
+`appsettings.json`。设置是由信令服务器自己写进去的（`--configure-system`），它把做过什么记在安装目录的
+`server-setup.log` 里——安装程序不会给任何人看这一步的输出。
+
+| 属性 | 默认 | 说明 |
+|---|---|---|
+| `RENDEZVOUSURL` | `http://0.0.0.0:5080` | 信令监听的地址。给了证书会自动变成 `https://` |
+| `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
+| `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
+| `POSTGRESCONNECTIONSTRING` | `auto` | `auto` = 不用数据库 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | 空 | 给了就写进 Kestrel 配置并切到 https。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
+
+三件必须知道的事：
+
+- **安装包不装数据库。** 不填 `POSTGRESCONNECTIONSTRING` 时设备代码只存在内存里，**信令服务器一重启，
+  所有设备代码都会变**——被设成无人值守的机器会因此失联。长期使用请给它一个 PostgreSQL。
+- **中继装在另一台机器上时**，那把自动生成的密钥要抄过去：两边都传 `RELAYSHAREDKEY=<同一个值>`，
+  或者把 `Rendezvous:RelaySharedKey` 的值填进那台的 `Relay\appsettings.json`。
+- **改了端口就要自己改防火墙规则**：三条规则是按 5080/5081/5082 开的，`RENDEZVOUSURL` 或中继端口改了
+  它们就对不上。
+
+升级：同版本号重装即可，**`appsettings.json` 不会被覆盖**，手改过的值和已经生成的密钥都保留。
+卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；`server-setup.log` 不在安装清单里，
+会留在目录里，删不删随你。
+
+### 2. 手工构建
 
 ```
 dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/rendezvous
@@ -37,7 +85,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
 
 （Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等即可，服务端是跨平台的。）
 
-### 2. 配置
+### 3. 配置
 
 `appsettings.json` 与各自的可执行文件放在一起。
 
@@ -72,7 +120,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
 密钥用一条命令生成：`openssl rand -base64 48`。**两边必须一致**；不一致时中继会拒绝所有票据，
 而客户端只会看到"连不上"（被控端日志里会有中继相关的失败）。
 
-### 3. 生产环境：信令必须走 TLS
+### 4. 生产环境：信令必须走 TLS
 
 `ws://` 是开发用的默认值，公网上不要用：设备代码、你的公网地址、谁在连谁，以及**中继票据**都在明文里
 （票据是一张 2 分钟有效的凭据，在途被拿走就能抢用你的中继带宽）。两种做法任选一种。
@@ -160,7 +208,7 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 > 把一张自签证书装进受信任根，等于**持有它私钥的人可以在那些机器上冒充任何服务器**。私钥（.pfx）只放在
 > 服务器上，别外传；证书换新时，客户端机器要跟着换。
 
-### 4. 公网上的限额
+### 5. 公网上的限额
 
 默认值按"公网上的自建服务"选的，除非你的规模和它差很远，否则不用动。被限流的事件以 Warning 写进日志，
 **带来源地址**——这是服务器唯一把地址写下来的地方，专门为了让你能看出有人在滥用。
@@ -174,7 +222,7 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 | `Rendezvous:MaxPendingRequestsPerDevice` | 8 | 一台设备同时挂起的连接请求数 |
 | `Rendezvous:MaxPendingRequests` | 4096 | 全服务器同时挂起的连接请求数 |
 
-### 5. 作为服务运行
+### 6. 作为服务运行
 
 以**管理员** PowerShell 执行（两个可执行文件都能直接作为 Windows 服务运行，同一份文件也能当控制台程序跑）：
 
@@ -191,14 +239,14 @@ sc.exe start RemoteDesktopRelay
 - 想同时看控制台输出，就以控制台方式运行（`.\RemoteDesktop.Server.Rendezvous.exe`），日志打到标准输出。
 - Linux 用 systemd 单元调用同样的可执行文件即可（`Restart=always`）；服务生命周期那一层在非 Windows 上是空操作。
 
-### 6. 用 Docker 部署（Linux 服务器首选）
+### 7. 用 Docker 部署（Linux 服务器首选）
 
 仓库里已经准备好两个镜像和一份 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10 运行时（不装 SDK）：
 
 ```bash
 cd build/docker
 export RELAY_SHARED_KEY="$(openssl rand -base64 48)"   # PowerShell: $env:RELAY_SHARED_KEY = "..."
-export RELAY_PUBLIC_ENDPOINT="rd.example.com:5082"     # 客户端要能连到的中继地址
+export RELAY_PUBLIC_ENDPOINT="203.0.113.10:5082"     # 客户端要能连到的中继**地址**（不能写域名）
 docker compose up -d --build
 ```
 
@@ -214,7 +262,7 @@ docker compose up -d --build
   即使服务重启、升级或重建容器，所有被控端的设备代码永久固定不变，完全保障无人值守长效可用。
   如果本地开发不需要 PostgreSQL，留空 `Rendezvous:PostgresConnectionString` 会自动回退为纯内存模式。
 
-### 7. 防火墙
+### 8. 防火墙
 
 ```
 netsh advfirewall firewall add rule name="RemoteDesktop Rendezvous" dir=in action=allow protocol=TCP localport=5080
@@ -222,7 +270,7 @@ netsh advfirewall firewall add rule name="RemoteDesktop Reflect"    dir=in actio
 netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in action=allow protocol=UDP localport=5082
 ```
 
-### 8. 健康检查
+### 9. 健康检查
 
 ```
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
