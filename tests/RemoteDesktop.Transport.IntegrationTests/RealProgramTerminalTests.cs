@@ -113,9 +113,14 @@ public sealed class RealProgramTerminalTests : IDisposable
         await shell.WaitForAsync("line number 40");
         shell.Control('f'); // scroll forward a page
         await shell.WaitUntilAsync(s => s.Screen().Split('\n')[0] == "line number 53", "the second page");
-        var rowBefore = shell.CursorRow();
+
+        // The wait above can be satisfied by a half-drawn frame, and the key pressed on top of a redraw is a race the
+        // test used to lose on a slow machine. Wait for vim to stop drawing before taking the row to compare against.
+        var rowBefore = await shell.SettledCursorRowAsync("vim");
         shell.Key(TerminalKey.Down);
-        await shell.WaitUntilAsync(s => s.CursorRow() == rowBefore + 1, "the cursor moving down");
+        await shell.WaitUntilAsync(
+            s => s.CursorRow() == rowBefore + 1,
+            $"the cursor moving down from row {rowBefore} (it sits at row {shell.CursorRow()} now)");
 
 
         shell.Type(":q!");
@@ -263,6 +268,44 @@ public sealed class RealProgramTerminalTests : IDisposable
             {
                 Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.{Why()} The screen shows:\n{Screen()}");
                 await Task.Delay(50, Ct);
+            }
+        }
+
+        /// <summary>
+        /// Waits until the screen has stopped changing for a moment, then answers the row the cursor is on.
+        /// </summary>
+        /// <remarks>
+        /// A wait for "the screen contains X" can be satisfied by a screen that is still being drawn: the program has
+        /// written the part the test is looking for but has not finished the frame. A row read at that moment is a row
+        /// from the *previous* frame, and an assertion comparing against it can never come true — which is exactly
+        /// what the CI failure looked like: 46 seconds of waiting while vim sat still on screen row 7, a row that the
+        /// test would only have accepted if the baseline had been 6, where the frame it was read from had the cursor
+        /// somewhere else entirely. It only ever failed on the runner because the runner is about ten times slower at
+        /// this than a workstation (the same test: 4s here, 46s there), which is the whole window for the race.
+        /// </remarks>
+        public async Task<int> SettledCursorRowAsync(string what)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(45);
+            var last = Screen();
+            var row = CursorRow();
+            var stableSince = DateTime.UtcNow;
+            while (true)
+            {
+                await Task.Delay(50, Ct);
+                var screen = Screen();
+                var current = CursorRow();
+                if (!string.Equals(screen, last, StringComparison.Ordinal) || current != row)
+                {
+                    last = screen;
+                    row = current;
+                    stableSince = DateTime.UtcNow;
+                }
+                else if (DateTime.UtcNow - stableSince >= TimeSpan.FromMilliseconds(300))
+                {
+                    return row;
+                }
+
+                Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what} to stop redrawing.{Why()}");
             }
         }
 
