@@ -19,6 +19,12 @@ public sealed record ServerSetupOptions
     /// <summary>The value that says "decide for me".</summary>
     public const string Auto = "auto";
 
+    /// <summary>
+    /// TlsCertificatePath value that means "make one for this machine" instead of naming a file: a self-signed
+    /// certificate, created on the spot and kept in the machine's certificate store. See <see cref="SelfSignedCertificate"/>.
+    /// </summary>
+    public const string GenerateCertificate = "generate";
+
     /// <summary>What the signaling server listens on, e.g. <c>http://0.0.0.0:5080</c> or <c>https://0.0.0.0:5080</c>.</summary>
     public string? Urls { get; init; }
 
@@ -96,14 +102,29 @@ public static class ServerSetup
         rendezvousSection["RelaySharedKey"] = key;
         rendezvousSection["PostgresConnectionString"] = IsAuto(postgres) ? string.Empty : postgres;
 
-        if (!string.IsNullOrWhiteSpace(options.TlsCertificatePath) && urls.StartsWith("https://", StringComparison.Ordinal))
+        if (!IsAuto(options.TlsCertificatePath) && urls.StartsWith("https://", StringComparison.Ordinal))
         {
             var certificates = Section(rendezvous, "Kestrel");
             certificates = Section(certificates, "Certificates");
             certificates = Section(certificates, "Default");
-            certificates["Path"] = options.TlsCertificatePath;
-            certificates["Password"] = options.TlsCertificatePassword ?? string.Empty;
-            notes.Add($"Signaling is served over TLS with {options.TlsCertificatePath}.");
+
+            if (options.TlsCertificatePath == ServerSetupOptions.GenerateCertificate)
+            {
+                // The certificate is made during this run and kept in the machine's store, so the settings name it
+                // rather than point at a file. A path from an earlier run is dropped, or it would win.
+                certificates.Remove("Path");
+                certificates.Remove("Password");
+                certificates["Subject"] = SelfSignedCertificate.Ensure(installDirectory, notes);
+                certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
+                certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
+                notes.Add("Signaling is served over TLS with the certificate this step created.");
+            }
+            else
+            {
+                certificates["Path"] = options.TlsCertificatePath;
+                certificates["Password"] = options.TlsCertificatePassword ?? string.Empty;
+                notes.Add($"Signaling is served over TLS with {options.TlsCertificatePath}.");
+            }
         }
 
         var relaySection = Section(relay, "Relay");
@@ -247,7 +268,7 @@ public static class ServerSetup
 
         if (urls.StartsWith("https://", StringComparison.Ordinal))
         {
-            if (string.IsNullOrWhiteSpace(certificatePath))
+            if (IsAuto(certificatePath))
             {
                 notes.Add("The signaling address is https but no certificate was given: the server will not start until Kestrel:Certificates:Default is filled in by hand.");
             }
@@ -260,18 +281,20 @@ public static class ServerSetup
             throw new InvalidOperationException($"The signaling address must start with http:// or https:// (got '{urls}').");
         }
 
-        if (string.IsNullOrWhiteSpace(certificatePath))
+        // "auto" is the installer's default property value, and it means the same as an empty one here: no certificate.
+        if (IsAuto(certificatePath))
         {
             notes.Add("Signaling is served over plain http: anyone on the way can read the device codes and take a relay ticket. Give the installer a certificate (see docs/deployment.md) or put a reverse proxy in front.");
             return urls;
         }
 
-        if (!File.Exists(certificatePath))
+        if (certificatePath != ServerSetupOptions.GenerateCertificate && !File.Exists(certificatePath))
         {
             notes.Add($"The certificate '{certificatePath}' is not there, so the server was left on plain http. Put the file in place and set Kestrel:Certificates:Default by hand, or run this step again.");
             return urls;
         }
 
+        // Either a file that is there, or the certificate this step is about to make.
         return "https://" + urls["http://".Length..];
     }
 

@@ -12,7 +12,13 @@
 
   <Package Name="Remote Desktop Server" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
            UpgradeCode="7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
-           Scope="perMachine" Compressed="yes" InstallerVersion="500">
+           Scope="perMachine" Compressed="yes" InstallerVersion="500"
+           Codepage="936">
+    <!-- Codepage 936 (GBK) because the settings page below is the first thing in this package whose *strings live in
+         the MSI tables* rather than in a file: the license text is an RTF file, and the summary information is
+         English, so until now the default (1252) was never a problem. A Chinese-only UI on a Windows-only package
+         makes this the code page that fits; an MSI built this way renders its own strings correctly on any
+         locale. -->
 
     <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
          somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
@@ -107,6 +113,12 @@
          centrally, or one whose server only listens on a network the rules are not wanted on. "0" is the default and
          means the three inbound rules in Components.wxs are installed. -->
     <Property Id="NOFIREWALL" Value="0" Secure="yes" />
+
+    <!-- Which of the three TLS answers the settings page has chosen. This one is the page's own business: it never
+         reaches the deferred action, it only decides what TLSCERTIFICATEPATH is set to when Next is pressed. A
+         property with no value would not be in the property table at all, and the radio group would start with
+         nothing selected. -->
+    <Property Id="TLSCHOICE" Value="none" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />

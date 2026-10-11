@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Configuration;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Rendezvous;
@@ -274,6 +276,39 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal(SetupCommands.InvalidArguments, exitCode);
         Assert.Contains("base64", File.ReadAllText(Path.Combine(_folder, SetupCommands.LogFileName)), StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    [Fact]
+    public void A_certificate_value_of_auto_is_the_same_as_none_and_says_so()
+    {
+        // "auto" is what the installer's property defaults to. It used to fall through to the file check and come back
+        // as "the certificate 'auto' is not there", which reads like the operator did something wrong.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { TlsCertificatePath = ServerSetupOptions.Auto });
+
+        Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(notes, note => note.Contains("'auto' is not there", StringComparison.Ordinal));
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        rendezvous.Validate();
+        Assert.StartsWith("http://", Configuration(ServerSetup.RendezvousFolder)["Urls"], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_generated_certificate_covers_this_machine_and_keeps_its_private_key()
+    {
+        using var certificate = SelfSignedCertificate.CreateForThisMachine(SelfSignedCertificate.SubjectForThisMachine);
+
+        // A certificate straight out of CreateSelfSigned has a private key that only lives as long as the RSA object;
+        // this one has been through PKCS#12 so that a certificate store can keep it.
+        Assert.True(certificate.HasPrivateKey, "the private key did not survive the round trip, so the store cannot keep it");
+        Assert.Equal(certificate.Subject, certificate.Issuer); // self-signed
+        Assert.True(certificate.NotAfter > DateTime.UtcNow.AddYears(1), "a certificate that expires soon would be worse than none");
+
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+        Assert.Contains(Environment.MachineName, names.EnumerateDnsNames());
+
+        var usage = certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single();
+        Assert.Contains(usage.EnhancedKeyUsages.Cast<Oid>(), oid => oid.Value == "1.3.6.1.5.5.7.3.1"); // serverAuth
     }
 
     private string WriteCertificate()

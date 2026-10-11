@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.Versioning;
 
 namespace RemoteDesktop.Platform.Windows.Tests;
@@ -108,6 +109,38 @@ public sealed class ServerInstallerPackageTests
 
         Assert.Equal("auto", properties["RELAYSHAREDKEY"]);
         Assert.Contains("5080", properties["RENDEZVOUSURL"], StringComparison.Ordinal);
+
+        // --- the page that makes this package answerable without a command line --------------------------------
+        // Without it a double-click install takes every default, and the defaults are "no database" and "plain http":
+        // the two settings whose consequences are worst, and whose warnings were only ever written to a log file.
+        var dialogs = package.Rows("SELECT `Dialog` FROM `Dialog`", 1).Select(row => row[0]).ToList();
+        Assert.Contains("ServerSettingsDlg", dialogs);
+
+        // The wizard has to reach it. Exactly one NewDialog on InstallDirDlg's Next: two would mean the wizard's own
+        // publish is still there alongside ours, and which of them wins is not something to leave to chance.
+        var events = package.Rows("SELECT `Control_`, `Event`, `Argument`, `Ordering`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'InstallDirDlg'", 5);
+        var forward = events.Where(row => row[0] == "Next" && row[1] == "NewDialog").ToList();
+
+        // The dialog set keeps its own transition to the confirmation page, so there are two of these. What matters is
+        // which one takes effect: control events run in ordering order and the last matching transition is the one the
+        // wizard follows, so ours has to be the last — not merely present.
+        var last = forward.OrderByDescending(row => int.Parse(row[3], CultureInfo.InvariantCulture)).First();
+        Assert.Equal("ServerSettingsDlg", last[2]);
+        Assert.True(int.Parse(last[3], CultureInfo.InvariantCulture) > forward.Count, "our transition has to come after the dialog set's own");
+
+        // And back returns to it from the confirmation, so the page is not a one-way trip.
+        var back = package.Rows("SELECT `Control_`, `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'VerifyReadyDlg'", 3);
+        Assert.Contains(back, row => row[0] == "Back" && row[1] == "NewDialog" && row[2] == "ServerSettingsDlg");
+
+        // Every control on the page writes a property the deferred action already reads, which is what makes the page
+        // work without touching the install logic.
+        var pageControls = package.Rows("SELECT `Control`, `Property` FROM `Control` WHERE `Dialog_` = 'ServerSettingsDlg'", 2);
+        foreach (var property in new[] { "POSTGRESCONNECTIONSTRING", "RELAYPUBLICENDPOINT", "TLSCERTIFICATEPATH", "TLSCERTIFICATEPASSWORD" })
+        {
+            Assert.True(pageControls.Any(row => row[1] == property), $"The settings page has no control for {property}.");
+        }
+
+        Assert.True(pageControls.Any(row => row[1] == "TLSCHOICE"), "The settings page has no TLS choice.");
 
         // --- the step that gives both servers the same key ------------------------------------------------------
         var actions = package.Rows("SELECT `Action` FROM `CustomAction`", 1).Select(row => row[0]).ToList();
