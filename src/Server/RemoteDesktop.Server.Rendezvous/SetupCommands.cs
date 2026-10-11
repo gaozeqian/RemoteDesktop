@@ -94,7 +94,7 @@ public static class SetupCommands
         exitCode = InvalidArguments;
         if (args.Length < 3)
         {
-            output.WriteLine("Usage: --check database <connection string> | --check relay <host:port>");
+            output.WriteLine("Usage: --check database <connection string> | --check relay <host:port> [--dialog]");
             return true;
         }
 
@@ -106,9 +106,35 @@ public static class SetupCommands
         };
 
         output.WriteLine(message);
+
+        // The wizard runs this from a custom action with Return="check", where a failure shows Windows Installer's own
+        // sentence and drops whatever this process wrote to its output. Showing the reason here is the difference
+        // between "the installer refused" and "the installer refused because the password is wrong".
+        if (Array.Exists(args, argument => argument == "--dialog"))
+        {
+            ShowMessage(ok ? "检查通过" : "检查未通过", message);
+        }
+
         exitCode = ok ? Success : CheckFailed;
         return true;
     }
+
+    /// <summary>A message box without dragging a UI framework into a console program.</summary>
+    private static void ShowMessage(string title, string text)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const uint Ok = 0x0;
+        const uint Information = 0x40;
+        const uint Warning = 0x30;
+        _ = MessageBox(0, text, title, Ok | (text.StartsWith("检查通过", StringComparison.Ordinal) ? Information : Warning));
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int MessageBox(nint window, string text, string caption, uint type);
 
     private static void Write(string installDirectory, IEnumerable<string> lines, TextWriter output)
     {
