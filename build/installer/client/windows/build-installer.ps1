@@ -726,7 +726,10 @@ if ($trustedRootCertificate) { $expectedCertificates++ }
 if ($trustedServerCertificate) { $expectedCertificates++ }
 $env:RD_EXPECTED_CERTIFICATES = "$expectedCertificates"
 
-dotnet test (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter 'FullyQualifiedName~InstallerPackageTests' --nologo -v quiet
+# 一个类一个类地跑（--filter-class 认的是完全限定类名；写成 `*InstallerPackageTests` 会把服务端那个类也选上）。
+# 没有 --nologo：新的 dotnet test（Microsoft.Testing.Platform 模式）不认它，会把它转发给测试程序，测试程序
+# 以退出码 5 拒绝整次运行。
+dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter-class RemoteDesktop.Platform.Windows.Tests.InstallerPackageTests -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
 Remove-Item Env:\RD_INSTALLER_MSI
 Remove-Item Env:\RD_EXPECTED_CERTIFICATES
