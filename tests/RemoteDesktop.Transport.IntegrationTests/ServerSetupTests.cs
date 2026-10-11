@@ -293,6 +293,55 @@ public sealed class ServerSetupTests : IDisposable
         Assert.StartsWith("http://", Configuration(ServerSetup.RendezvousFolder)["Urls"], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The settings written for a certificate this step makes itself have to say how to load it, or the server does
+    /// not start.
+    /// </summary>
+    /// <remarks>
+    /// Skipped without elevation, because making that certificate means writing to the machine's certificate store.
+    /// Which is also why this went wrong in the first place: the whole path only ever runs during an installation, and
+    /// nothing that runs on a build agent could see it. Kestrel looks a certificate up in the store with "valid only"
+    /// unless a setting says otherwise, and a self-signed certificate fails that test on every machine — so the host
+    /// stopped with "could not be found in LocalMachine/My" about a certificate that was in there, with its private
+    /// key, all along.
+    /// </remarks>
+    [Fact]
+    public void A_certificate_this_step_generates_is_written_so_that_the_server_can_load_it()
+    {
+        Assert.SkipUnless(
+            new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator),
+            "Writing to the machine's certificate store needs elevation.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            RelayPublicEndpoint = "203.0.113.10:5082",
+            RelaySharedKey = Convert.ToBase64String(new byte[48]),
+            TlsCertificatePath = ServerSetupOptions.GenerateCertificate,
+        });
+
+        Assert.Contains(notes, note => note.Contains("certificate this step created", StringComparison.Ordinal));
+
+        var certificates = Configuration(ServerSetup.RendezvousFolder).GetSection("Kestrel:Certificates:Default");
+        Assert.Equal(SelfSignedCertificate.CertificateStoreLocation, certificates["Location"]);
+        Assert.Equal(SelfSignedCertificate.CertificateStoreName, certificates["Store"]);
+
+        // Without the CN=: Kestrel finds a certificate by its subject *name*, so the distinguished form the
+        // certificate itself carries matches nothing — and says so as "could not be found in LocalMachine/My".
+        Assert.Equal(SelfSignedCertificate.NameForThisMachine, certificates["Subject"]);
+        Assert.DoesNotContain("CN=", certificates["Subject"]!, StringComparison.Ordinal);
+        Assert.Equal("true", certificates["AllowInvalid"]);
+
+        // And the certificate really is where those settings say it is, with a key the service can use. Looked up the
+        // way Kestrel does it, so that a name it cannot find fails here rather than at the first start-up.
+        using var store = new X509Store(SelfSignedCertificate.CertificateStoreName, StoreLocation.LocalMachine);
+        store.Open(OpenFlags.ReadOnly);
+        var found = store.Certificates.Find(X509FindType.FindBySubjectName, certificates["Subject"]!, validOnly: false);
+        Assert.Single(found);
+        Assert.True(found[0].HasPrivateKey, "the store kept the certificate without its key, so TLS could not be served with it");
+    }
+
     [Fact]
     public void The_generated_certificate_covers_this_machine_and_keeps_its_private_key()
     {

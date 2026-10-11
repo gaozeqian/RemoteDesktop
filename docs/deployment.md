@@ -60,7 +60,7 @@ msiexec /i RemoteDesktop.Server-0.2.1.0-x64.msi /qn `
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `POSTGRESCONNECTIONSTRING` | `auto` | `auto` = 不用数据库 |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | 空 | 给了就写进 Kestrel 配置并切到 https。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`configure-server.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
 
 三件必须知道的事：

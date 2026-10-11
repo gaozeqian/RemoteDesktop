@@ -114,9 +114,24 @@ public static class ServerSetup
                 // rather than point at a file. A path from an earlier run is dropped, or it would win.
                 certificates.Remove("Path");
                 certificates.Remove("Password");
-                certificates["Subject"] = SelfSignedCertificate.Ensure(installDirectory, notes);
+
+                // This is the call that makes the certificate, keeps it if it is already there, and writes the public
+                // half out for clients to be given. What it returns is the subject with the CN= on the front, which is
+                // not what goes into the settings: Kestrel looks a certificate up by subject *name*, so the prefixed
+                // form finds nothing. See NameForThisMachine.
+                SelfSignedCertificate.Ensure(installDirectory, notes);
+                certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
                 certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
                 certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
+
+                // Without this the server does not start at all. Kestrel looks a certificate up in the store with
+                // "valid only" unless told otherwise, and a self-signed certificate is not in this machine's trusted
+                // roots — it is not in anybody's — so the lookup finds nothing and the host stops with "The requested
+                // certificate <subject> could not be found in LocalMachine/My with AllowInvalid setting: False",
+                // which is a sentence about a setting rather than about the reason. Trusting it is the client's
+                // business; serving it is the server's, and this is what lets it.
+                certificates["AllowInvalid"] = "true";
+
                 notes.Add("Signaling is served over TLS with the certificate this step created.");
             }
             else

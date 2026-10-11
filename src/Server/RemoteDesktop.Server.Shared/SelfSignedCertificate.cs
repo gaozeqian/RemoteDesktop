@@ -32,7 +32,20 @@ public static class SelfSignedCertificate
     private const string CommonNamePrefix = "RemoteDesktop Server";
 
     /// <summary>The subject this machine's certificate is created under.</summary>
-    public static string SubjectForThisMachine => $"CN={CommonNamePrefix} ({Environment.MachineName})";
+    public static string SubjectForThisMachine => $"CN={NameForThisMachine}";
+
+    /// <summary>
+    /// The same thing without the <c>CN=</c>, which is the form the settings file has to carry.
+    /// </summary>
+    /// <remarks>
+    /// Kestrel looks a certificate up by its subject <em>name</em>, not by its distinguished name, so a settings file
+    /// that says <c>CN=RemoteDesktop Server (MACHINE)</c> finds nothing at all — and reports it as "The requested
+    /// certificate ... could not be found in LocalMachine/My", which reads like the certificate is missing rather than
+    /// like the name is written the wrong way round. It was: with the prefix, the lookup returns nothing; without it,
+    /// the same certificate is found. Both traps on this path — this and AllowInvalid below — presented as the
+    /// certificate not being there while it sat in the store with its key.
+    /// </remarks>
+    public static string NameForThisMachine => $"{CommonNamePrefix} ({Environment.MachineName})";
 
     private static readonly TimeSpan Validity = TimeSpan.FromDays(3 * 365);
 
