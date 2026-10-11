@@ -79,18 +79,23 @@ jobs:
 
       # 运行构建脚本打包 MSI（客户端 / 被控端）。服务器地址由上一步决定：有就内置，没有就不传
       # -RendezvousUri（脚本保留项目里的默认值，并在日志里给出警告）。
+      #
+      # 参数用哈希表展开（@{} 按名字绑定）而不是数组展开：@() 是**按位置**传参的，写成
+      # @('-Configuration','Release') 会让 '-Configuration' 这个字符串成为第一个位置参数的值，参数名根本不起作用
+      # ——第一次跑 v0.2.0 就是这么失败的（目录被建成名为 `-Configuration` 的文件夹，WiX 找不到 SourceRoot）。
       - name: Build MSI Installer
         shell: pwsh
         run: |
-          $arguments = @('-Configuration', 'Release')
-          if ($env:DEFAULT_SERVER) { $arguments += @('-RendezvousUri', $env:DEFAULT_SERVER) }
-
-          # 如果有配置证书，则传入证书路径；否则传入 -SkipSigning
+          $arguments = @{ Configuration = 'Release' }
+          if ($env:DEFAULT_SERVER) { $arguments.RendezvousUri = $env:DEFAULT_SERVER }
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
-              .\build\installer\client\windows\build-installer.ps1 @arguments -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
+              $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
+              $arguments.CertificatePassword = $env:PFX_PASSWORD
           } else {
-              .\build\installer\client\windows\build-installer.ps1 @arguments -SkipSigning
+              $arguments.SkipSigning = $true
           }
+
+          .\build\installer\client\windows\build-installer.ps1 @arguments
 
       # 服务端（信令 + 中继）的安装包。和上面那个用同一套签名参数、同一个版本号，但是两个各自独立安装的包：
       # 一台机器可以只做被控端、只做服务器，或者两个都做。
