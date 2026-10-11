@@ -12,7 +12,13 @@
 
   <Package Name="Remote Desktop Server" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
            UpgradeCode="7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
-           Scope="perMachine" Compressed="yes" InstallerVersion="500">
+           Scope="perMachine" Compressed="yes" InstallerVersion="500"
+           Codepage="936">
+    <!-- Codepage 936 (GBK) because the settings page below is the first thing in this package whose *strings live in
+         the MSI tables* rather than in a file: the license text is an RTF file, and the summary information is
+         English, so until now the default (1252) was never a problem. A Chinese-only UI on a Windows-only package
+         makes this the code page that fits; an MSI built this way renders its own strings correctly on any
+         locale. -->
 
     <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
          somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
@@ -83,13 +89,31 @@
          the deferred action that reads it would find nothing. -->
     <Property Id="TLSCERTIFICATEPATH" Value="auto" Secure="yes" />
 
+    <!-- What the certificate file box on the settings page shows, and what the browse button writes. Separate from
+         TLSCERTIFICATEPATH above because that one holds a word rather than a path whenever TLS is off or the
+         certificate is to be generated, and a box labelled "path" showing the word generate is worse than useless.
+
+         The single space is the value that makes the box look empty while keeping it usable: a property with no value
+         never reaches the property table, and a control bound to it comes out greyed and untypable — which is exactly
+         what happened to the certificate path box when it had none. A space is invisible, and the server already reads
+         a value of nothing but spaces as "no certificate", the same as auto. -->
+    <Property Id="TLSCERTIFICATEFILE" Value=" " Secure="yes" />
+
     <!-- The password of that .pfx. Nothing is the normal case: a .pfx made for a service is usually protected by where
-         the file lives rather than by a password the installer would have to pass around. Whatever is passed here
-         ends up in the installer's own log like any command-line value, which is the reason to prefer a passwordless
-         file. Left unset it reaches the server as an empty argument, which is exactly how the server reads "no
-         password" - no word is needed for that, and none would do. Secure, like the rest, so the deferred action -
-         which runs as the system - is where it is needed. -->
-    <Property Id="TLSCERTIFICATEPASSWORD" Secure="yes" />
+         the file lives rather than by a password the installer would have to pass around. Whatever is passed here ends
+         up in the installer's own log like any command-line value, which is the reason to prefer a passwordless file.
+         A value of nothing but spaces reaches the server as "no password", which it already understood before this
+         property existed.
+
+         The space is here because the property has to be. A control is only editable while the property it is bound to
+         is defined, and a property with no value never reaches the property table at all — take the value away and the
+         password box on the settings page comes out greyed and untypable, the same way the certificate path box did
+         before it was given one. So the box has to hold something, and a space is the something that reads as nothing.
+         The box is a plain one rather than a masked one on purpose: a masked box draws a dot for every character, so a
+         property that has to hold a value can never make the field look empty. The password is therefore visible while
+         it is typed, which is a real cost, taken because the installer runs on the machine being set up and behind an
+         elevation prompt. It is trimmed to nothing on the way out if it is left alone - see NormalizeSettings. -->
+    <Property Id="TLSCERTIFICATEPASSWORD" Value=" " Secure="yes" />
 
     <!--
       The four arguments both configuration command lines carry - the address, the relay endpoint, the key and the
@@ -108,8 +132,19 @@
          means the three inbound rules in Components.wxs are installed. -->
     <Property Id="NOFIREWALL" Value="0" Secure="yes" />
 
+    <!-- Which of the three TLS answers the settings page has chosen. This one is the page's own business: it never
+         reaches the deferred action, it only decides what TLSCERTIFICATEPATH is set to when Next is pressed. A
+         property with no value would not be in the property table at all, and the radio group would start with
+         nothing selected. -->
+    <Property Id="TLSCHOICE" Value="none" />
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />
+    </StandardDirectory>
+    <!-- Somewhere to point "where do I change this" at. The shortcut goes to the page in the installation folder rather
+         than to a URL: this repository is private, and whoever runs the server may never have seen it. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ServerShortcutFolder" Name="Remote Desktop Server" />
     </StandardDirectory>
 
     <Feature Id="Main" Title="Remote Desktop Server" Level="1" AllowAbsent="no">
@@ -121,6 +156,7 @@
       <!-- The settings each server reads at start-up, which an upgrade must not put back to their built-in defaults. -->
       <ComponentRef Id="RendezvousSettings" />
       <ComponentRef Id="RelaySettings" />
+      <ComponentRef Id="ServerShortcut" />
       <!-- Everything else: the runtime, libraries and the settings templates' neighbours. -->
       <ComponentGroupRef Id="Payload" />
     </Feature>

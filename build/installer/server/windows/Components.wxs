@@ -71,7 +71,7 @@
 
       <!-- The other half of the shared key; see the comment on the signaling server's settings above. -->
       <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102" NeverOverwrite="yes">
-        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
+>        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
       </Component>
 
     </DirectoryRef>
@@ -152,7 +152,7 @@
     <CustomAction Id="ConfigureSystem"
                   Directory="SystemFolder"
                   ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system --urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;&quot;"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
+                  Execute="deferred" Impersonate="no" Return="check" />
 
     <!--
       The four arguments the two command lines here have in common - the address, the relay endpoint, the key and the
@@ -194,7 +194,7 @@
     <CustomAction Id="ConfigureSystemWithTls"
                   Directory="SystemFolder"
                   ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system [CONFIGUREARGUMENTS] --tls-certificate &quot;[TLSCERTIFICATEPATH]&quot; --tls-password &quot;[TLSCERTIFICATEPASSWORD]&quot;&quot;"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
+                  Execute="deferred" Impersonate="no" Return="check" />
 
     <InstallExecuteSequence>
       <!--
@@ -229,6 +229,185 @@
               After="ConfigureSystem"
               Condition="NOT REMOVE AND TLSCERTIFICATEPATH&lt;&gt;&quot;auto&quot; AND TLSCERTIFICATEPATH&lt;&gt;&quot;&quot;" />
     </InstallExecuteSequence>
+
+    <!-- ==========================================================================================================
+         The one page of this wizard that asks anything.
+
+         Everything these controls write is a property the deferred action above already reads, so the page is the
+         only new thing: without it a double-click install takes every default, and the defaults are "no database"
+         and "plain http" — the two settings whose consequences are worst (device codes that change on every restart,
+         and device codes and relay tickets readable by anyone on the way) and whose warnings end up in a log file
+         nobody installing by double-click ever opens.
+
+         It goes through WixUI_InstallDir's sequence rather than replacing it: the standard dialogs stay, this one is
+         wired in after the install folder has been chosen.
+         ========================================================================================================== -->
+    <!-- ==========================================================================================================
+         The start menu entry: "how do I change this", pointed at the page that answers it.
+
+         Keyed by a registry value under HKCU because a shortcut is per-user data even when the program is installed
+         for everybody (ICE43/ICE57) — the same shape the client package uses for its own shortcut.
+         ========================================================================================================== -->
+    <DirectoryRef Id="ServerShortcutFolder">
+      <Component Id="ServerShortcut" Guid="d17b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d">
+        <Shortcut Id="HowToConfigureLink" Name="服务器配置说明"
+                  Description="How to change the database, relay address and TLS settings of these servers"
+                  Target="[INSTALLFOLDER]如何配置.txt" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\RemoteDesktop\Server" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <!-- Windows Installer only removes folders it is told about. -->
+        <RemoveFolder Id="RemoveServerShortcutFolder" Directory="ServerShortcutFolder" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- The custom actions the settings page calls, packed into one DLL by the build (net48: msiexec hosts the .NET
+         Framework runtime, so this is the only kind of assembly it can load). They are immediate actions, which is the
+         whole point — they run inside msiexec, where the properties the page wrote are readable and a property they
+         set is what the page shows next. -->
+    <Binary Id="PageActions" SourceFile="$(var.CustomActionsPath)" />
+    <CustomAction Id="BrowseForCertificate" BinaryRef="PageActions" DllEntry="BrowseForCertificate" Execute="immediate" Return="check" />
+    <CustomAction Id="PrefillSettings" BinaryRef="PageActions" DllEntry="PrefillSettings" Execute="immediate" Return="check" />
+    <CustomAction Id="NormalizeSettings" BinaryRef="PageActions" DllEntry="NormalizeSettings" Execute="immediate" Return="check" />
+
+    <UI>
+
+    <Dialog Id="ServerSettingsDlg" Width="370" Height="364" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器设置" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下三项都可以留空，装完也能改（见安装目录下的 configure-server.ps1）。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="328" Width="370" Height="0" />
+
+      <!-- The database: optional, but leaving it out is the single most consequential default in this package.
+
+           The box arrives filled with a template pointing at this machine, because a connection string is a shape
+           nobody remembers and an empty box teaches nothing. That is only safe because of the check below: whatever
+           is in this box is tried before anything is installed, and the install stops if it does not answer. -->
+      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（仅支持 PostgreSQL；留空 = 不使用数据库）" />
+      <Control Id="PostgresEdit" Type="Edit" X="20" Y="64" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" />
+      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="会自建表，不会自建库：库要先建好。留空则设备代码只在内存里，服务重启后全部改变。" />
+
+      <!-- Where clients are told to reach the relay. "auto" picks this machine's first non-loopback address, which on
+           a machine with a VPN is the VPN's. -->
+      <Control Id="RelayLabel" Type="Text" X="20" Y="104" Width="330" Height="12" NoPrefix="yes" Text="中继公网地址（客户端用它找中继）" />
+      <Control Id="RelayEdit" Type="Edit" X="20" Y="116" Width="330" Height="16" Property="RELAYPUBLICENDPOINT" Text="[RELAYPUBLICENDPOINT]" />
+      <Control Id="RelayNote" Type="Text" X="20" Y="134" Width="330" Height="24" NoPrefix="yes" Text="auto = 自动选本机地址，装了 VPN 或有虚拟网卡时会选错。也可以填域名，但安装时会解析成 IP 写死。" />
+
+      <!-- TLS: three choices, and the middle one is why this page is worth having. -->
+      <Control Id="TlsLabel" Type="Text" X="20" Y="166" Width="330" Height="12" NoPrefix="yes" Text="信令是否走 TLS" />
+      <!-- Flat, not nested: in this schema the group is a control of its own and each button is a sibling that names
+           the group's property. -->
+      <Control Id="TlsChoice" Type="RadioButtonGroup" X="20" Y="178" Width="330" Height="46" Property="TLSCHOICE">
+        <RadioButtonGroup Property="TLSCHOICE">
+          <RadioButton Value="none" X="4" Y="2" Width="322" Height="13" Text="不启用：明文 http，设备代码与中继票据在途中可被读取" />
+          <RadioButton Value="generate" X="4" Y="17" Width="322" Height="13" Text="自动生成一张自签名证书并启用 https（推荐）" />
+          <RadioButton Value="file" X="4" Y="32" Width="322" Height="13" Text="使用已有的证书文件" />
+        </RadioButtonGroup>
+      </Control>
+
+      <!-- Two lines, one field each: on one line the password box came out about thirty pixels wide, which is not a
+           field anybody can type a password into. -->
+      <Control Id="TlsPathLabel" Type="Text" X="34" Y="230" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
+      <!-- Bound to its own property, and not to the one the install reads, so that nothing the install needs can show
+           up in a box labelled "path". TLSCERTIFICATEPATH holds a word rather than a path whenever TLS is off or the
+           certificate is to be generated, and this box used to display it: choosing "generate" and pressing Next left
+           the word generate sitting in the path field, which is at best confusing and at worst looks like a filename.
+
+           It arrives holding a single space. That is not decoration: a control is only editable while the property it
+           is bound to is defined, and a property with no value never reaches the property table, so an empty one
+           would leave this box greyed. A space is invisible in a text box, and the server reads a value of nothing but
+           spaces as "no certificate" - it already did, for the properties it reads. -->
+      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="242" Width="240" Height="16" Property="TLSCERTIFICATEFILE" />
+      <!-- Windows Installer's own browse dialog picks folders, not files, so this button runs our own action, which
+           puts the chosen path into the property the page shows.
+
+           Writing the property is not enough on its own. The edit box above was filled in from the property when the
+           dialog opened and never looks at it again, so the path would be stored while the box still showed the old
+           text. There is no event that pushes a property back into a control: Reset looks like one and is the
+           opposite, restoring the control's original text and writing *that* into the property, which silently threw
+           the chosen path away — the log showed the path being set and then replaced by "auto" 27 milliseconds later.
+
+           What does refresh a dialog is navigating to it: the installer builds a dialog each time it is entered, and
+           its controls then read their [Property] text afresh. Showing a dialog on top of this one is not enough —
+           the installer's log showed the page below never being built again when a spawned dialog closed, which is
+           how the first attempt at this failed. So choosing a file moves forward to a page that shows it, and coming
+           back from there is what makes this page correct.
+
+           That page cannot be this one. Pointing the transition at ServerSettingsDlg would save the extra step, and
+           was tried: the installer refuses with "Error 2856: Creating a second copy of the dialog ServerSettingsDlg"
+           and the wizard dies on the spot, so the step is not a shortcoming of this button but the shortest way round
+           a rule. It is also why none of the dialogs in WiX's own interface ever names itself. -->
+      <Control Id="TlsBrowseButton" Type="PushButton" X="278" Y="242" Width="72" Height="16" Text="浏览…">
+        <Publish Event="DoAction" Value="BrowseForCertificate" Order="1" />
+        <!-- Only when a file was actually chosen: nothing changed if the file dialog was cancelled, so there is nothing
+             to show and no reason to interrupt. -->
+        <Publish Event="NewDialog" Value="CertificateChosenDlg" Order="2" Condition="TLSCERTIFICATECHOSEN = &quot;1&quot;" />
+      </Control>
+      <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="264" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
+      <!-- A plain box, showing what is typed. It was a password box, which draws a dot per character, and that made the
+           field impossible to leave looking empty: the property has to hold something for the box to be usable at all,
+           so it held a word, so it showed four dots, and the page appeared to have been filled in already. Now it holds
+           a space, which reads as nothing, and the value is trimmed on the way out so that typing a real password after
+           it still works. The cost is that the password is on screen, and in the installer's log like any other
+           command-line value — which is why a certificate protected by where the file lives is still the better one. -->
+      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="276" Width="316" Height="16" Property="TLSCERTIFICATEPASSWORD" />
+      <Control Id="TlsNote" Type="Text" X="20" Y="298" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
+
+      <Control Id="Back" Type="PushButton" X="180" Y="337" Width="56" Height="17" Text="!(loc.WixUIBack)">
+        <Publish Event="NewDialog" Value="InstallDirDlg" />
+      </Control>
+      <Control Id="Next" Type="PushButton" X="236" Y="337" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+        <!-- What is in the boxes is tidied up on the way out — the password trimmed, and any box left empty put back
+             to the space the page needs in order to be able to show it. See NormalizeSettings. -->
+        <Publish Event="DoAction" Value="NormalizeSettings" Order="1" Condition="1" />
+        <!-- The radio group and what the install acts on are two different properties: the page collects a choice in
+             TLSCHOICE and the file in TLSCERTIFICATEFILE, and the deferred action reads TLSCERTIFICATEPATH, which is
+             either a file or the word the server reads as "no certificate" or "make one". These lines are the
+             mapping, and they have to be written as "[Property]" — the event column is where a property to set is
+             named, and there is no event called SetProperty. Written that way the installer reports "Error 2812: The
+             event SetProperty is not recognized" and dies on this button, but only when one of these conditions is
+             met, so it stayed hidden while the page was being used with a certificate file chosen. -->
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="auto" Order="2" Condition="TLSCHOICE = &quot;none&quot;" />
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="generate" Order="3" Condition="TLSCHOICE = &quot;generate&quot;" />
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="[TLSCERTIFICATEFILE]" Order="4" Condition="TLSCHOICE = &quot;file&quot;" />
+        <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="5" Condition="1" />
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="304" Y="337" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg" />
+      </Control>
+    </Dialog>
+
+    <!-- ==========================================================================================================
+         Shown after a certificate file has been picked, and shown for two reasons.
+
+         One is that a path is worth seeing before it is relied on: the settings page behind cannot update its own
+         text box while it is on screen (see the note on the browse button), so this is where the choice is confirmed
+         to the person who made it. The other is that it is the way back — returning to the settings page builds it
+         again, which is the only thing that makes its controls re-read the property.
+
+         It holds nothing to type into, so it cannot fail: one button, and the file that will be used.
+         ========================================================================================================== -->
+    <Dialog Id="CertificateChosenDlg" Width="370" Height="120" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}已选择证书文件" />
+      <Control Id="Description" Type="Text" X="25" Y="26" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="安装后将用这个文件对外提供 https。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="84" Width="370" Height="0" />
+      <!-- Two lines tall: a path is easily longer than the dialog is wide, and a path cut off mid-way is worse than
+           no confirmation at all, because it looks like a different file. -->
+      <Control Id="ChosenPath" Type="Text" X="25" Y="52" Width="330" Height="26" Transparent="yes" NoPrefix="yes" Text="[TLSCERTIFICATEPATH]" />
+      <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+        <Publish Event="NewDialog" Value="ServerSettingsDlg" />
+      </Control>
+    </Dialog>
+
+      <!-- Into the wizard, after the folder has been chosen. The dialog set's own transition to VerifyReadyDlg stays
+           where it is, with a lower ordering: the last matching transition is the one that takes effect, which is why
+           these carry a higher Order than the built-in ones (the dialog set uses 1 and 4). -->
+      <!-- Filling the address boxes in happens here rather than inside the page, because a control's text is read from
+           its property once, when the dialog is built — a value set after that is one the page never shows. This runs
+           immediately before the transition, in the same batch of events. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="PrefillSettings" Order="5" Condition="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ServerSettingsDlg" Order="6" Condition="1" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ServerSettingsDlg" Order="5" Condition="1" />
+    </UI>
   </Fragment>
 
 </Wix>

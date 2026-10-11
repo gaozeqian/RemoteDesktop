@@ -562,6 +562,13 @@ if (-not (Test-Path -LiteralPath $licenseRtf)) { throw "The license RTF was not 
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
+# The two files that make an installation maintainable rather than only installable: a script that writes the settings
+# the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
+# servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
+foreach ($extra in 'configure-server.ps1', '如何配置.txt') {
+    Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
+}
+
 # Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
 # which is what leaves out both copies of it: the publish output has one in each server folder.
 $handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'appsettings.json')
@@ -607,10 +614,26 @@ foreach ($name in $handWritten) {
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
+# The custom actions the settings page needs: asking for a certificate file, and finding out whether a database
+# answers. A separate net48 project (msiexec hosts the .NET Framework runtime, so a custom action assembly has to be
+# one it can load), built here because it is installer plumbing rather than part of the product's solution.
+Write-Host 'Building the installer custom actions...'
+dotnet build (Join-Path $installerDirectory 'CustomActions\RemoteDesktop.Server.Installer.CustomActions.csproj') -c $Configuration --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'The installer custom actions failed to build.' }
+
+# The packaging step turns the assembly into a single DLL that carries its dependencies and the DTF runtime with it;
+# that one is what goes into the package, not the plain assembly next to it.
+# "x64" in the path is part of the path on purpose: the project sets Platform=x64 so that SfxCA packs the 64-bit native
+# host stub, and that is what satisfies the x64 package below. Packed with the x86 stub instead, msiexec cannot load the
+# action at all and it fails without a word in the log, so the folder spelling out the bitness is worth keeping.
+$customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\x64\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
+if (-not (Test-Path -LiteralPath $customActions)) { throw "The custom actions were not packaged into $customActions." }
+
 $wixArguments = @(
     "-p:ProductVersion=$version"
     "-p:SourceRoot=$PublishDirectory"
     "-p:DefaultRendezvousUrl=$defaultRendezvousUrl"
+    "-p:CustomActionsPath=$customActions"
 )
 
 dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Server.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory

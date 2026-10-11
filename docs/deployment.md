@@ -60,7 +60,7 @@ msiexec /i RemoteDesktop.Server-0.2.1.0-x64.msi /qn `
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `POSTGRESCONNECTIONSTRING` | `auto` | `auto` = 不用数据库 |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | 空 | 给了就写进 Kestrel 配置并切到 https。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`configure-server.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
 
 三件必须知道的事：
@@ -75,6 +75,28 @@ msiexec /i RemoteDesktop.Server-0.2.1.0-x64.msi /qn `
 升级：同版本号重装即可，**`appsettings.json` 不会被覆盖**，手改过的值和已经生成的密钥都保留。
 卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；`server-setup.log` 不在安装清单里，
 会留在目录里，删不删随你。
+
+### 装完之后改配置
+
+安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
+
+- **`configure-server.ps1`** —— 推荐的路子。在**管理员** PowerShell 里给它想改的项即可，没给的保持不动；
+  它写完之后会重启两个服务让设置生效：
+
+  ```powershell
+  cd "C:\Program Files\Remote Desktop Server"
+  .\configure-server.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+  .\configure-server.ps1 -TlsGenerate            # 本机生成自签名证书并切 https
+  .\configure-server.ps1 -RelayPublicEndpoint 203.0.113.10:5082
+  .\configure-server.ps1 -PostgresConnectionString '' -NoRestart   # 回到不用数据库，先不重启
+  ```
+
+  它会调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
+  所以两者的行为不会分叉；做过什么会追加到 `server-setup.log`。拿不准就先加 `-WhatIf` 看一眼。
+- **`如何配置.txt`** —— 同一件事的短说明，面向拿到机器的人。
+- 两个 `appsettings.json`（`Rendezvous\` 与 `Relay\`）—— 也可以直接改，改完重启对应服务。
+  它们在升级时不会被覆盖，所以手改的值会保留。**注意它们在安装目录里，本机任何用户都能读**：
+  带口令的连接串放这儿，等于本机所有用户都能看到。
 
 ### 2. 手工构建
 

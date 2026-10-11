@@ -22,7 +22,6 @@ public static class SetupCommands
 
     private const string Command = "--configure-system";
 
-    /// <returns><c>true</c> when the command line was this command (then <paramref name="exitCode"/> is the result and no server must start).</returns>
     public static bool TryRun(string[] args, string defaultInstallDirectory, TextWriter output, out int exitCode)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -71,6 +70,7 @@ public static class SetupCommands
     /// so without this an installation whose settings could not be written looks like one that went fine until a
     /// service does not start.
     /// </summary>
+
     private static void Write(string installDirectory, IEnumerable<string> lines, TextWriter output)
     {
         try
