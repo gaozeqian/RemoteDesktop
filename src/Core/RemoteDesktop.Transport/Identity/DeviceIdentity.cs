@@ -32,7 +32,7 @@ public sealed class DeviceIdentity : IDisposable
         {
             try
             {
-                return new DeviceIdentity(X509CertificateLoader.LoadPkcs12(stored, password: null));
+                return new DeviceIdentity(Import(stored));
             }
             catch (CryptographicException)
             {
@@ -42,11 +42,24 @@ public sealed class DeviceIdentity : IDisposable
 
         var pfx = CreatePfx();
         store.Save(SecretName, pfx);
-        return new DeviceIdentity(X509CertificateLoader.LoadPkcs12(pfx, password: null));
+        return new DeviceIdentity(Import(pfx));
     }
 
     /// <summary>An identity that is not persisted (tests, one-off tools).</summary>
-    public static DeviceIdentity CreateEphemeral() => new(X509CertificateLoader.LoadPkcs12(CreatePfx(), password: null));
+    public static DeviceIdentity CreateEphemeral() => new(Import(CreatePfx()));
+
+    /// <summary>
+    /// Imports the PKCS#12 as a certificate the TLS stack can actually use.
+    /// </summary>
+    /// <remarks>
+    /// <c>Exportable</c> is what makes this work on macOS. Loading a PKCS#12 there stores the private key in the
+    /// keychain as non-exportable by default, and MsQuic exports the key when it builds its TLS configuration, so the
+    /// handshake fails with <c>AppleCommonCryptoCryptographicException: The contents of this item cannot be
+    /// retrieved.</c> On Windows the flag only changes whether the key can be re-exported, which SChannel does not
+    /// care about, so the one code path serves both.
+    /// </remarks>
+    private static X509Certificate2 Import(byte[] pfx) =>
+        X509CertificateLoader.LoadPkcs12(pfx, password: null, X509KeyStorageFlags.Exportable);
 
     public static string ComputeFingerprint(X509Certificate2 certificate)
     {

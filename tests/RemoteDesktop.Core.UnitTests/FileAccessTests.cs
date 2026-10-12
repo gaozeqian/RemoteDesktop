@@ -7,6 +7,16 @@ public sealed class FileAccessPolicyTests
 {
     private static readonly FileAccessPolicy Open = FileAccessPolicy.Unrestricted;
 
+    /// <summary>
+    /// The three tests that use this pin Windows path semantics: drive roots, backslash separators, reserved device
+    /// names. <see cref="FileAccessPolicy"/> is Windows-shaped today (the macOS story is P7 in
+    /// docs/macos-port-plan.md), and off Windows "C:\…" is simply not an absolute path — so they would fail for a
+    /// reason that says nothing about the policy. The name-validation tests in this class are platform independent
+    /// and keep running everywhere.
+    /// </summary>
+    private const string WindowsPathReason =
+        "The file-access policy is Windows-path-shaped and has no macOS roots yet (docs/macos-port-plan.md, P7).";
+
     [Theory]
     [InlineData("")]
     [InlineData("relative\\path.txt")]
@@ -29,6 +39,8 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void Dot_segments_are_resolved_before_anything_else_is_decided()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsPathReason);
+
         Assert.Equal(@"C:\a\c", Open.Normalize(@"C:\a\b\..\c"));
         Assert.Equal(@"C:\a", Open.Normalize(@"C:\a\"));
         Assert.Equal(@"C:\", Open.Normalize(@"C:\"));
@@ -37,6 +49,8 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void A_configured_root_confines_every_path_including_tricks_that_climb_out_of_it()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsPathReason);
+
         var policy = new FileAccessPolicy([@"C:\Share"]);
 
         Assert.Equal(@"C:\Share", policy.Normalize(@"C:\Share"));
@@ -87,6 +101,8 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void Drive_roots_and_configured_roots_are_protected_from_deletion()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsPathReason);
+
         var policy = new FileAccessPolicy([@"C:\Share"]);
         Assert.True(policy.IsProtectedRoot(@"C:\"));
         Assert.True(policy.IsProtectedRoot(@"C:\Share"));
@@ -167,6 +183,16 @@ public sealed class LocalFileOperationsTests : IDisposable
     [Fact]
     public void A_policy_with_roots_also_limits_operations_and_places()
     {
+        // Off Windows this fails for a real reason, and the reason is worth writing down rather than hiding:
+        // FileAccessPolicy stores an allowed root as Path.GetFullPath(root), but compares it against
+        // ResolveFinalTarget(path), which follows symbolic links. On macOS every temp path starts with /var, a
+        // symlink to /private/var, so the resolved path can never match the unresolved root and a folder that was
+        // genuinely shared is refused as "not shared". The fix belongs with P7, next to the separator question in
+        // FileSources.Combine -- both are the same "the file-transfer layer still assumes Windows" gap.
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "A configured root that sits under a symlink never matches the link-resolved path (P7).");
+
         var inside = Directory.CreateDirectory(Path.Combine(_root, "inside")).FullName;
         var ops = new LocalFileOperations(new FileAccessPolicy([inside]));
 

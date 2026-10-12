@@ -9,7 +9,6 @@ using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client.ViewModels;
@@ -50,14 +49,8 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         _codecs = codecs;
         _time = time;
         _logger = logger;
-        if (recorderFactory is not null)
-        {
-            _recorderFactory = recorderFactory;
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            _recorderFactory = new MfVideoRecorderFactory();
-        }
+        // From the container, like the desktop window's: null on a platform whose recorder does not exist yet.
+        _recorderFactory = recorderFactory;
 
         _recordingTimer.Tick += (_, _) => UpdateRecordingDuration();
     }

@@ -13,6 +13,8 @@ public sealed partial class FileTransferSessionTests
     [Fact]
     public async Task Folder_trees_are_recreated_at_the_destination_in_both_directions()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsHostReason);
+
         await using var pair = await Pair.StartAsync(server, SessionMode.Control);
         await using var remote = new RemoteFileSource(pair.Session.Context.Connection);
         await using var manager = new TransferManager(pair.Session.Context.Connection, new LocalFileSource(), remote);

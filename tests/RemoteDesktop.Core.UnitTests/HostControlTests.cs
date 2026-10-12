@@ -7,6 +7,12 @@ namespace RemoteDesktop.Core.UnitTests;
 /// <summary>The UI ↔ service pipe: the UI's client against the service's handler over a real named pipe.</summary>
 public class HostControlTests
 {
+    public HostControlTests() =>
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "Windows only: macOS has no service/agent split to control (see docs/macos-port-plan.md 2.1), and .NET maps a " +
+            "named pipe onto a Unix socket whose path cannot exceed 104 characters -- the temp path alone is already longer.");
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]

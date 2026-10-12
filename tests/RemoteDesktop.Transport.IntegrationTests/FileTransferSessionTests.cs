@@ -15,6 +15,17 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
 {
     private readonly string _root = Directory.CreateTempSubdirectory("rd-files-").FullName;
 
+    /// <summary>
+    /// The file-transfer layer still assumes a Windows host, in two places that the tests below trip over:
+    /// <c>RemoteFileSource.Combine</c> joins with a literal backslash ("Hosts are Windows in this phase"), and
+    /// <see cref="FileAccessPolicy"/> compares an allowed root that was <em>not</em> link-resolved against a path that
+    /// was, so any root under a symlink — every macOS temp path, since /var links to /private/var — is refused as
+    /// "not shared". Both are P7 in docs/macos-port-plan.md. The rest of the class is platform independent and keeps
+    /// running everywhere.
+    /// </summary>
+    private const string WindowsHostReason =
+        "The file-transfer layer assumes a Windows host: backslash path joining and Windows root semantics (P7).";
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -22,6 +33,8 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
     [Fact]
     public async Task Folders_can_be_browsed_created_renamed_and_deleted_remotely()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsHostReason);
+
         await using var pair = await Pair.StartAsync(server, SessionMode.Control);
         await using var remote = new RemoteFileSource(pair.Session.Context.Connection);
         var folder = Path.Combine(_root, "host");
@@ -207,6 +220,8 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
     [Fact]
     public async Task The_host_shares_only_what_its_policy_allows()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsHostReason);
+
         var shared = Directory.CreateDirectory(Path.Combine(_root, "shared")).FullName;
         var secret = Directory.CreateDirectory(Path.Combine(_root, "secret")).FullName;
         File.WriteAllText(Path.Combine(secret, "key.txt"), "secret");

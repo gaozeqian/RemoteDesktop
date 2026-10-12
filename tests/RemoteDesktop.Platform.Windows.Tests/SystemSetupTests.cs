@@ -13,13 +13,24 @@ public sealed class SystemSetupTests : IDisposable
     private const string SasValue = "SoftwareSASGeneration";
 
     private readonly string _keyRoot = $@"Software\RemoteDesktop.Tests\{Guid.NewGuid():N}";
-    private readonly string _folder = Directory.CreateTempSubdirectory("rd-setup-").FullName;
+    private readonly string _folder;
     private readonly SystemSetup _setup;
 
-    public SystemSetupTests() => _setup = new SystemSetup(new SystemSetupLocations(
-        Registry.CurrentUser,
-        $@"{_keyRoot}\Policy",
-        $@"{_keyRoot}\Marker"));
+    public SystemSetupTests()
+    {
+        // The whole class is the installer's Windows side: HKCU policy values for SoftwareSASGeneration, and the
+        // settings file next to the service. There is no macOS equivalent of either, and Registry.CurrentUser is
+        // null off Windows, which is why this has to be the first statement in the constructor rather than a
+        // per-test skip -- everything below would otherwise throw before any test body ran. The temp folder is
+        // created after the skip so that a skipped run does not leave one behind (Dispose never runs).
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "The installer's registry and SAS-policy steps are Windows only.");
+
+        _folder = Directory.CreateTempSubdirectory("rd-setup-").FullName;
+        _setup = new SystemSetup(new SystemSetupLocations(
+            Registry.CurrentUser,
+            $@"{_keyRoot}\Policy",
+            $@"{_keyRoot}\Marker"));
+    }
 
     private string PolicyPath => $@"{_keyRoot}\Policy";
 

@@ -8,10 +8,19 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        if (!OperatingSystem.IsWindows())
+        // The client is the only host on macOS: there is no service/agent split there (no Session 0), so this one
+        // process is both the controller and — in standalone mode — the device others connect to.
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
         {
-            Console.Error.WriteLine("Only Windows is supported in phase 1.");
+            Console.Error.WriteLine("Remote Desktop runs on Windows and macOS.");
             return 1;
+        }
+
+        // Reports what the platform layer can do, from inside whatever this binary was launched from. A windowed
+        // program has nowhere to print, so it is a separate mode rather than a log.
+        if (args.Contains("--self-check", StringComparer.Ordinal))
+        {
+            return SelfCheck.Run(args);
         }
 
         IHost host;

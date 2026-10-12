@@ -10,7 +10,6 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Protocol.Desktop;
 using RemoteDesktop.Transport;
 
@@ -57,14 +56,9 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _session = session;
         _logger = logger;
         _cameraFactory = cameraFactory;
-        if (recorderFactory is not null)
-        {
-            _recorderFactory = recorderFactory;
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            _recorderFactory = new MfVideoRecorderFactory();
-        }
+        // Null means this platform has no recorder yet, which the recording command reports rather than hides behind
+        // a button that cannot work. It comes from the container, so the platform layer decides — not this class.
+        _recorderFactory = recorderFactory;
         CanUseCamera = session.Context.Grant.Allows(Permissions.Camera) && cameraFactory is not null;
         ShowCameraButton = CanUseCamera;
         Viewer = viewer;

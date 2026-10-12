@@ -127,6 +127,10 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_name_in_the_relay_address_is_resolved_to_an_address()
     {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "%COMPUTERNAME% is a Windows environment variable, so there is no name to resolve off Windows.");
+
         var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = "%COMPUTERNAME%:5083" });
 
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
@@ -308,6 +312,9 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_certificate_this_step_generates_is_written_so_that_the_server_can_load_it()
     {
+        // The platform check has to come first. WindowsIdentity.GetCurrent() throws PlatformNotSupportedException off
+        // Windows, so evaluating the elevation test below on macOS failed the run instead of skipping it.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "The generated certificate goes into the Windows certificate store.");
         Assert.SkipUnless(
             new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
                 .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator),

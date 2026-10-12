@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Every test checks OperatingSystem.IsMacOS() and skips elsewhere, exactly like the Windows test project. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- The interop probes call the same pointer-based P/Invoke signatures the platform project exposes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Platform\RemoteDesktop.Platform.MacOS\RemoteDesktop.Platform.MacOS.csproj" />
+    <ProjectReference Include="..\..\src\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Building a provider, rather than only inspecting the registrations, is what lets the test fail when a port is
+         registered with an implementation that cannot actually be constructed. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+</Project>

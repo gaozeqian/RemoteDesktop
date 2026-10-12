@@ -438,5 +438,10 @@ build/installer/server/windows/Files.generated.wxs
 build/signing/certificates/
 build/signing/*/certificates/
 
+# The macOS client's signing identity is a per-machine decision, not a project fact: it names a personal certificate,
+# and macOS keys the screen-recording and accessibility grants to it. Pinned locally by make-app.sh, never committed.
+build/installer/client/macos/development-identity
+
 # WorkBuddy workspace memory (per-session notes, not project code).
 .workbuddy/
+.workbuddy-ai/

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The bundle is not cosmetic on macOS: TCC (screen recording, accessibility, camera) and the keychain both key their
+  decisions off the code-signing identity *of a bundle*, and since macOS 26 a bare CLI executable does not even appear
+  in the Privacy & Security list. So the client has to run from an .app to be grantable at all.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleExecutable</key>
+	<string>RemoteDesktop.Client</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.remotedesktop.client</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Remote Desktop</string>
+	<key>CFBundleDisplayName</key>
+	<string>Remote Desktop</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.3.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<!-- Must match the highest `minos` of the bundled dylibs, otherwise dyld refuses to load them. The Homebrew
+	     bottles of libmsquic/openssl@4 are built for macOS 26, so this tracks that (see docs/macos-port-plan.md 3.4). -->
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Tells AppKit this is a real GUI application: without it the process gets no menu bar and no Dock entry. -->
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+
+	<!--
+	  Usage descriptions. macOS shows these in the permission prompt; a missing key is not a warning, it is a crash the
+	  moment the framework is touched. Screen recording has no key of its own — ScreenCaptureKit asks for itself.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>Remote Desktop 需要访问摄像头，才能把本机摄像头画面转发给远端会话。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Remote Desktop 需要访问麦克风，才能把本机声音转发给远端会话。</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Remote Desktop 需要访问桌面文件夹，才能在被控时传输其中的文件。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Remote Desktop 需要访问文稿文件夹，才能在被控时传输其中的文件。</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Remote Desktop 需要访问下载文件夹，才能在被控时传输其中的文件。</string>
+</dict>
+</plist>

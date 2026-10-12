@@ -7,7 +7,6 @@ on:
 
 jobs:
   build:
-    # Phase 1 targets Windows only; macOS and Linux join the matrix with their platform projects.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,81 +25,40 @@ jobs:
           if ($report -match 'has the following vulnerable packages') {
             throw "Vulnerable packages found; the report is above."
           }
-      - name: Test
-        shell: pwsh
-        # Microsoft.Testing.Platform 模式（global.json 里的 test.runner）：--logger 是 VSTest 的东西，
-        # 在这个模式下会被忽略或拒绝；TRX 由 MTP 的扩展写出来，路径还是 TestResults/*.trx，下面那步照旧解析。
-        # 注意 --nologo 在这里不能用：它会被转发给测试程序，测试程序以退出码 5 拒绝整次运行。
-        #
-        # 失败自动重跑一次。集成测试要跑真实进程、真实 PTY、真实 UDP 打洞和真实 Media Foundation 编码器，
-        # 而 runner 又慢又抢：同一提交常常这次红一个测试、下次红另一个（2026-10-11 三个不同的测试各红过一次），
-        # 重跑基本都过。代价必须写明——真实存在的偶发 bug 也会被这一次重试掩盖，所以第一次失败会打成 GitHub 警告
-        # 并列出失败的测试名，重试的结果才写进 TestResults 给汇总表用；两次都失败则照样判红。
-        run: |
-          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
-          if ($LASTEXITCODE -eq 0) { exit 0 }
-
-          $failed = [System.Collections.Generic.List[string]]::new()
-          foreach ($file in Get-ChildItem TestResults/*.trx -ErrorAction SilentlyContinue) {
-              [xml]$xml = Get-Content $file.FullName
-              $xml.TestRun.Results.UnitTestResult |
-                  Where-Object { $_.outcome -eq 'Failed' } |
-                  ForEach-Object { $failed.Add($_.testName) }
-          }
-
-          $names = if ($failed.Count) { $failed -join '; ' } else { '(no TRX recorded a failure)' }
-          Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
-          Write-Host "Failed on the first attempt: $names"
-
-          Remove-Item TestResults -Recurse -Force -ErrorAction SilentlyContinue
-          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
-          }
-      - name: Upload Test Results
-        uses: actions/upload-artifact@v7
-        if: always()
+      - uses: ./.github/actions/run-test-suite
         with:
-          name: test-results
-          path: TestResults/*.trx
-      - name: Generate Test Summary
-        if: always()
+          artifact-name: test-results-windows
+
+  build-macos:
+    # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
+    # minos 26.0 and dyld refuses to load them on anything older (docs/macos-port-plan.md 3.4). That is also what makes
+    # this job possible at all: on macos-latest (macos-14/15) every transport test would fail with "Unable to load
+    # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
+      # this. It stages artifacts/native/macos, and RemoteDesktop.Transport copies that directory next to every
+      # executable that references it -- the test hosts included. It has to run before the build, because that copy is
+      # an MSBuild glob over a directory that would otherwise not exist yet.
+      - name: Stage the native MsQuic library
+        run: ./native/macos/fetch-libmsquic.sh
+      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      - name: Audit packages for known vulnerabilities
         shell: pwsh
         run: |
-          if (Test-Path TestResults) {
-            $trxFiles = Get-ChildItem TestResults/*.trx
-            $summary = @()
-            $summary += "### 🧪 Test Results Summary"
-            $summary += ""
-            $summary += "| Test Suite | Total | Passed | Failed | Skipped | Status |"
-            $summary += "| :--- | :---: | :---: | :---: | :---: | :---: |"
-            $hasFailures = $false
-            foreach ($file in $trxFiles) {
-              [xml]$xml = Get-Content $file.FullName
-              $storage = $xml.TestRun.TestDefinitions.UnitTest[0].storage
-              $suite = if ($storage) { [System.IO.Path]::GetFileNameWithoutExtension($storage) } else { $file.BaseName }
-              $counters = $xml.TestRun.ResultSummary.Counters
-              $failed = [int]$counters.failed
-              if ($failed -gt 0) { $hasFailures = $true }
-              $status = if ($failed -eq 0) { "✅ Passed" } else { "❌ Failed" }
-              $summary += "| $($suite) | $($counters.total) | $($counters.passed) | $($counters.failed) | $($counters.notExecuted) | $($status) |"
-            }
-            if ($hasFailures) {
-              $summary += ""
-              $summary += "### ❌ Failed Tests"
-              foreach ($file in $trxFiles) {
-                [xml]$xml = Get-Content $file.FullName
-                $failedResults = $xml.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' }
-                foreach ($f in $failedResults) {
-                  $msg = $f.Output.ErrorInfo.Message
-                  $summary += "<details><summary><b>$($f.testName)</b></summary>"
-                  $summary += ""
-                  $summary += '```'
-                  $summary += $msg
-                  $summary += '```'
-                  $summary += "</details>"
-                }
-              }
-            }
-            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+          $report
+          if ($report -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found; the report is above."
           }
+      - uses: ./.github/actions/run-test-suite
+        with:
+          artifact-name: test-results-macos
+
+  # release.yml still builds and tests on Windows only: the macOS port has no installer to publish yet, and its tests
+  # run there through this workflow. When a .app/.dmg is added, that job needs the same macos-26 treatment as above.

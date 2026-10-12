@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,7 +12,6 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client;
@@ -28,8 +26,15 @@ namespace RemoteDesktop.Client;
 /// <c>--DataDirectory D:\rd2 --Transport:RendezvousUri ws://10.0.0.5:5080/ws</c>. A separate data directory gives a
 /// separate device identity, which allows two instances on one machine. <c>--HostMode standalone</c> ignores an
 /// installed service; <c>--HostControlPipe name</c> talks to a service started with another pipe name (development).
+/// <para>
+/// The two <see cref="SupportedOSPlatformAttribute"/> attributes are the declaration that this host runs on Windows
+/// and on macOS — and nothing else. They are what lets one method register either platform layer while keeping the
+/// platform-compatibility analyzer satisfied: each call below sits inside a matching <c>OperatingSystem.Is…</c> check,
+/// which narrows that set to exactly one OS.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
+[SupportedOSPlatform("macos")]
 internal static class ClientHost
 {
     public static IHost Build(string[] args)
@@ -64,7 +69,7 @@ internal static class ClientHost
                          PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
 
         builder.Services
-            .AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser)
+            .AddClientPlatform(dataDirectory)
             .AddRemoteDesktopMedia()
             .AddSingleton(new ClientEnvironment(dataDirectory))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and

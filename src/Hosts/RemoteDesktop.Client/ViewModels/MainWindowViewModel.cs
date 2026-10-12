@@ -18,7 +18,6 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Platform.Windows.Setup;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
@@ -88,14 +87,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _loggers = loggers;
         _logger = loggers.CreateLogger<MainWindowViewModel>();
         _recentDevicesStore = recentDevicesStore;
-        if (recorderFactory is not null)
-        {
-            _recorderFactory = recorderFactory;
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            _recorderFactory = new MfVideoRecorderFactory();
-        }
+        // From the container: the platform layer decides whether this machine has a recorder at all.
+        _recorderFactory = recorderFactory;
 
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;

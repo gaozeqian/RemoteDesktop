@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace RemoteDesktop.Client;
@@ -16,6 +17,13 @@ internal sealed class StartupFailure(string reason, string reportPath) : Excepti
 }
 
 /// <summary>A message box from the system, for the failures that happen before there is a window to use.</summary>
+/// <remarks>
+/// Windows goes straight to <c>MessageBoxW</c>. macOS has no equivalent one-liner in a process that has not started its
+/// UI toolkit yet — and it must not, because the failure may well be that the toolkit cannot start. So the alert is
+/// shown by <c>osascript</c>, which is part of the base system: the caption and text are handed over as arguments to
+/// an AppleScript <c>run</c> handler rather than spliced into the script source, so nothing in a path or a connection
+/// string can be read as AppleScript.
+/// </remarks>
 internal static partial class UserMessage
 {
     private const uint IconError = 0x00000010;
@@ -25,6 +33,41 @@ internal static partial class UserMessage
         if (OperatingSystem.IsWindows())
         {
             MessageBox(nint.Zero, text, caption, IconError);
+            return;
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            ShowWithAppleScript(text, caption);
+        }
+    }
+
+    private static void ShowWithAppleScript(string text, string caption)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("osascript")
+            {
+                // `--` ends osascript's own options: everything after it reaches `on run argv`, which is why the
+                // message needs no escaping.
+                ArgumentList =
+                {
+                    "-e", "on run argv",
+                    "-e", "display alert (item 1 of argv) message (item 2 of argv) as critical",
+                    "-e", "end run",
+                    "--", caption, text,
+                },
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+            });
+
+            // An alert waits for the person in front of the screen, so this waits with it. Bounded all the same: a
+            // dialog nobody answers must not turn a startup failure into a process that never exits.
+            process?.WaitForExit((int)TimeSpan.FromMinutes(5).TotalMilliseconds);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            // Showing the reason is a courtesy; failing to show it must not replace the reason with a second failure.
         }
     }
 

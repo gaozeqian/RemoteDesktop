@@ -7,4 +7,15 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
+  <!-- MsQuic is what System.Net.Quic talks to. Windows gets msquic.dll from the .NET runtime pack; macOS gets
+       nothing, so the application carries its own. native/macos/fetch-libmsquic.sh stages a self-contained set into
+       artifacts/native/macos, and putting it here means every project that references this one — the hosts and the
+       transport tests — has it copied next to its executable, which is where the runtime looks for it. The condition
+       keeps a Windows build from globbing a directory that only exists on a developer's Mac. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\artifacts\native\macos\*.dylib"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
