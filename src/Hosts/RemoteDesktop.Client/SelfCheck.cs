@@ -151,7 +151,7 @@ internal static class SelfCheck
         if (OperatingSystem.IsMacOS())
         {
             Section("permissions");
-            foreach (var grant in new[] { TccGrant.ScreenRecording, TccGrant.Accessibility })
+            foreach (var grant in new[] { TccGrant.ScreenRecording, TccGrant.Accessibility, TccGrant.Camera })
             {
                 var granted = TccGrants.IsGranted(grant);
                 Line(grant.ToString(), granted ? "granted" : $"NOT GRANTED — {TccGrants.SettingsAnchor(grant)}");
@@ -198,6 +198,8 @@ internal static class SelfCheck
         Probe("screen capture", () => ScreenCapture(provider), ref exitCode);
         Probe("keep awake", () => KeepAwake(provider), ref exitCode);
         Probe("clipboard", Clipboard, ref exitCode);
+        Probe("cameras", () => Cameras(provider), ref exitCode);
+        Probe("audio", () => Audio(provider), ref exitCode);
         Probe("shells offered", () => string.Join(", ", provider.GetRequiredService<IPtyHost>().GetAvailableShells()), ref exitCode);
         Probe("files and shells allowed", () => provider.GetRequiredService<IUserContextGuard>().GetRefusalReason() ?? "yes", ref exitCode);
 
@@ -352,6 +354,114 @@ internal static class SelfCheck
     /// </remarks>
     private const string SamplePngBase64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP4z8DwHwwZ/oMBA+kCAA97J9n4xwmsAAAAAElFTkSuQmCC";
+
+    /// <summary>
+    /// Lists the cameras and the modes each offers.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately stops short of opening one. Opening needs the camera grant, and a self-check that turned the
+    /// camera light on — or that spent the user's first prompt — would be a self-check nobody runs twice. What this
+    /// proves is the part that does not need permission: that the AVFoundation calls behind the enumerator are
+    /// reachable and answer, which is exactly what a wrong ABI declaration would break. The grant itself is
+    /// reported in the permissions section above.
+    /// </remarks>
+    private static string Cameras(IServiceProvider provider)
+    {
+        var cameras = provider.GetRequiredService<ICameraEnumerator>().GetCameras();
+        if (cameras.Count == 0)
+        {
+            // Not a failure: a Mac mini has no camera, and a closed lid is a normal state.
+            return "none connected";
+        }
+
+        var described = cameras.Select(camera => $"{camera.Name} ({camera.Modes.Count} modes)");
+        return $"{cameras.Count}: {string.Join(", ", described)}";
+    }
+
+    /// <summary>
+    /// Plays a short, quiet tone and captures it back through the loopback.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Playback is exercised first and on its own, because <c>rd_audio_player_enqueue</c> takes a pointer and a
+    /// length — the shape that a source-generated marshaller gets wrong silently, by filling the length with the
+    /// next argument (docs/macos-port-plan.md 3.12). That failure is a crash inside <c>memmove</c>, not a wrong
+    /// number, so it has to be run for real to be ruled out.
+    /// </para>
+    /// <para>
+    /// The tone is quiet and brief because this runs on a real machine with real speakers; what matters is that the
+    /// samples make the round trip, not what they sound like. A loopback that delivers nothing is reported rather
+    /// than treated as a failure — ScreenCaptureKit only delivers while something is rendering, and that is a state
+    /// this probe cannot fully control from here.
+    /// </para>
+    /// </remarks>
+    private static string Audio(IServiceProvider provider)
+    {
+        var format = AudioFormat.Standard;
+        var burst = BuildTone(format, TimeSpan.FromMilliseconds(100));
+        var burstMilliseconds = burst.Length / format.Channels * 1000.0 / format.SampleRate;
+
+        var player = provider.GetRequiredService<IAudioPlayerFactory>().Create();
+        var capturer = provider.GetRequiredService<IAudioCapturerFactory>().Create();
+        try
+        {
+            player.StartAsync(format).GetAwaiter().GetResult();
+
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var first = FirstChunkAsync(capturer, limit.Token);
+
+            // Keep the output busy until a chunk arrives or the limit runs out: the loopback only has something to
+            // hand over while audio is actually rendering.
+            while (!first.IsCompleted && !limit.IsCancellationRequested)
+            {
+                player.Enqueue(burst);
+                Thread.Sleep(50);
+            }
+
+            var queued = player.Buffered;
+            if (!first.Wait(TimeSpan.FromSeconds(2)) || first.Result is not { } chunk)
+            {
+                return $"playback ok ({queued.TotalMilliseconds:F0} ms queued), but the loopback delivered nothing";
+            }
+
+            return $"ok — played {burstMilliseconds:F0} ms bursts, loopback delivered {chunk.Length} sample(s)";
+        }
+        finally
+        {
+            capturer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            player.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>Reads one chunk and stops, which is all the probe needs to know the stream is alive.</summary>
+    private static async Task<ReadOnlyMemory<float>?> FirstChunkAsync(
+        IAudioCapturer capturer, CancellationToken cancellationToken)
+    {
+        await foreach (var chunk in capturer.CaptureAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return chunk;
+        }
+
+        return null;
+    }
+
+    private static float[] BuildTone(AudioFormat format, TimeSpan duration)
+    {
+        var frames = (int)(format.SampleRate * duration.TotalSeconds);
+        var samples = new float[frames * format.Channels];
+
+        // 440 Hz at a twentieth of full scale: audible enough to be a real signal, quiet enough not to startle.
+        for (var frame = 0; frame < frames; frame++)
+        {
+            var value = (float)Math.Sin(2 * Math.PI * 440 * frame / format.SampleRate) * 0.05f;
+            for (var channel = 0; channel < format.Channels; channel++)
+            {
+                samples[(frame * format.Channels) + channel] = value;
+            }
+        }
+
+        return samples;
+    }
 
     /// <summary>
     /// Captures one frame from the primary display.

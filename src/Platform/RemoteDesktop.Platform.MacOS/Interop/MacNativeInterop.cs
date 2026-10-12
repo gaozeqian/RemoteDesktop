@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using RemoteDesktop.Platform.MacOS.Audio;
+using RemoteDesktop.Platform.MacOS.Camera;
 using RemoteDesktop.Platform.MacOS.Display;
 
 namespace RemoteDesktop.Platform.MacOS.Interop;
@@ -69,6 +71,57 @@ internal unsafe struct RdClipboardContent
     public nuint Length;
 }
 
+/// <summary>One camera, as <c>rd_camera_info</c>.</summary>
+/// <remarks>
+/// Both strings belong to the helper and stay valid only until the next listing call, so the enumerator copies them
+/// into managed strings before asking for anything else.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdCameraInfo
+{
+    public byte* Id;
+    public byte* Name;
+}
+
+/// <summary>One picture size and rate a camera offers, as <c>rd_camera_mode</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct RdCameraMode
+{
+    public int Width;
+    public int Height;
+    public double FrameRate;
+}
+
+/// <summary>One camera picture, as <c>rd_camera_frame</c>.</summary>
+/// <remarks>
+/// As with <see cref="RdFrame"/>, the pixels are only valid for the duration of the callback.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdCameraFrame
+{
+    public byte* Bgra;
+    public int Width;
+    public int Height;
+    public int BytesPerRow;
+    public ulong HostTimeNanoseconds;
+}
+
+/// <summary>One chunk of captured audio, as <c>rd_audio_chunk</c>.</summary>
+/// <remarks>
+/// As with <see cref="RdFrame"/>, the samples are only valid for the duration of the callback: the helper reuses
+/// one buffer for every chunk, so the consumer has to copy before returning.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdAudioChunk
+{
+    /// <summary><see cref="FrameCount"/> times <see cref="ChannelCount"/> floats, channel-interleaved.</summary>
+    public float* Samples;
+
+    public int FrameCount;
+    public int ChannelCount;
+    public int SampleRate;
+}
+
 /// <summary>
 /// The flat C ABI exported by <c>libRemoteDesktopMacNative.dylib</c>, built from <c>native/macos</c>.
 /// </summary>
@@ -97,6 +150,8 @@ internal static unsafe partial class MacNativeInterop
     public const int ErrorStream = -4;
     public const int ErrorTimeout = -5;
     public const int ErrorUnavailable = -6;
+    public const int ErrorDeviceNotFound = -7;
+    public const int ErrorAudioDevice = -8;
 
     /// <summary>Called on the stream's private serial queue, once per frame that has new content.</summary>
     public static delegate* unmanaged[Cdecl]<nint, RdFrame*, void> FrameCallback =>
@@ -163,6 +218,114 @@ internal static unsafe partial class MacNativeInterop
     public static partial int rd_clipboard_write_png(
         string? pasteboard, byte* png, nuint length, byte* error, nuint errorSize);
 
+    // Camera authorization, mirroring the enum in rd_native.h.
+    public const int CameraNotDetermined = 0;
+    public const int CameraRestricted = 1;
+    public const int CameraDenied = 2;
+    public const int CameraAuthorized = 3;
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_camera_authorization_status();
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_camera_request_access();
+
+    /// <remarks>
+    /// <c>out</c> is an array owned by the helper. Its strings stay valid until the next listing call, so the
+    /// enumerator reads them into managed strings immediately and never holds the pointer.
+    /// </remarks>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_camera_list(
+        out RdCameraInfo* cameras, out int count, byte* error, nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_camera_modes(
+        string cameraId, out RdCameraMode* modes, out int count, byte* error, nuint errorSize);
+
+    /// <summary>Called on the session's private serial queue, once per picture.</summary>
+    public static delegate* unmanaged[Cdecl]<nint, RdCameraFrame*, void> CameraFrameCallback => &OnCameraFrame;
+
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_camera_create(
+        string cameraId,
+        int width,
+        int height,
+        double frameRate,
+        delegate* unmanaged[Cdecl]<nint, RdCameraFrame*, void> callback,
+        nint user,
+        out nint camera,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_camera_start(nint camera, byte* error, nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_camera_stop(nint camera);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_camera_destroy(nint camera);
+
+    /// <summary>Called on the audio stream's private serial queue, once per chunk. Serialized, so no locking here.</summary>
+    public static delegate* unmanaged[Cdecl]<nint, RdAudioChunk*, void> AudioChunkCallback => &OnAudioChunk;
+
+    /// <summary>
+    /// Starts loopback capture of what the machine is playing.
+    /// </summary>
+    /// <remarks>
+    /// This is the system mix, not a microphone: it needs the Screen Recording grant and no microphone grant, and it
+    /// is what makes <see cref="RemoteDesktop.Abstractions.Audio.IAudioCapturer"/>'s "what the host is playing"
+    /// contract true on this platform. Audio from this process is excluded natively, so the far end's own voice does
+    /// not come back around.
+    /// </remarks>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_audio_capture_create(
+        delegate* unmanaged[Cdecl]<nint, RdAudioChunk*, void> callback,
+        nint user,
+        out nint capture,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_audio_capture_start(nint capture, byte* error, nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_audio_capture_stop(nint capture);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_audio_capture_destroy(nint capture);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_audio_player_create(
+        int sampleRate, int channelCount, out nint player, byte* error, nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_audio_player_start(nint player, byte* error, nuint errorSize);
+
+    /// <remarks>
+    /// A pointer and a length rather than a <c>ReadOnlySpan&lt;float&gt;</c>, for the reason recorded on
+    /// <see cref="rd_clipboard_write_text(string?, byte*, nuint, byte*, nuint)"/>: the source-generated marshaller
+    /// passes a span as a bare pointer with no length beside it, so the native <c>sample_count</c> would be filled
+    /// by whatever argument followed.
+    /// </remarks>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_audio_player_enqueue(
+        nint player, float* samples, nuint sampleCount, byte* error, nuint errorSize);
+
+    /// <summary>Samples queued but not yet played, or -1 for an invalid handle.</summary>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial long rd_audio_player_buffered(nint player);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_audio_player_stop(nint player);
+
+    /// <summary>Empties the queue without stopping the device.</summary>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_audio_player_discard(nint player);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_audio_player_destroy(nint player);
+
     [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int rd_open_settings(string anchor);
 
@@ -187,8 +350,24 @@ internal static unsafe partial class MacNativeInterop
         ErrorStream => "ScreenCaptureKit refused the stream.",
         ErrorTimeout => "The native helper timed out.",
         ErrorUnavailable => "The native helper cannot provide this on this system.",
+        ErrorDeviceNotFound => "That device is not connected.",
+        ErrorAudioDevice => "No audio device could be opened.",
         _ => $"The native helper failed with status {status}.",
     };
+
+    /// <summary>
+    /// The helper's own message when it wrote one, falling back to the generic text for the status.
+    /// </summary>
+    /// <remarks>
+    /// The helper's message is always more specific — "Camera access has not been granted to this application"
+    /// against "Screen Recording has not been granted" — and it is the one that names the device or the permission
+    /// actually at fault, so it is preferred whenever it is present.
+    /// </remarks>
+    public static unsafe string Describe(int status, byte* error, int errorSize)
+    {
+        var detail = ReadError(error, errorSize);
+        return detail.Length > 0 ? detail : DescribeStatus(status);
+    }
 
     // The address of this is handed to the helper, which calls it from its own thread. It must not throw: an
     // exception escaping into Objective-C would unwind through a frame that is not prepared for it, so the
@@ -206,6 +385,40 @@ internal static unsafe partial class MacNativeInterop
         catch (Exception)
         {
             // Swallowed on purpose; see above. The capture reports the failure on the next managed call.
+        }
+    }
+
+    /// <inheritdoc cref="OnFrame"/>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnCameraFrame(nint user, RdCameraFrame* frame)
+    {
+        try
+        {
+            if (GCHandle.FromIntPtr(user).Target is MacCameraFrameSink sink)
+            {
+                sink.Deliver(frame);
+            }
+        }
+        catch (Exception)
+        {
+            // Swallowed on purpose; see OnFrame.
+        }
+    }
+
+    /// <inheritdoc cref="OnFrame"/>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnAudioChunk(nint user, RdAudioChunk* chunk)
+    {
+        try
+        {
+            if (GCHandle.FromIntPtr(user).Target is MacAudioChunkSink sink)
+            {
+                sink.Deliver(chunk);
+            }
+        }
+        catch (Exception)
+        {
+            // Swallowed on purpose; see OnFrame.
         }
     }
 }

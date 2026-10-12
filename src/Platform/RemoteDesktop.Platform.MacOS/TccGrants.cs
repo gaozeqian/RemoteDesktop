@@ -7,18 +7,21 @@ namespace RemoteDesktop.Platform.MacOS;
 /// A permission macOS makes the user grant by hand, in System Settings.
 /// </summary>
 /// <remarks>
-/// Only the two the capture path needs. Camera, microphone and the protected folders are also TCC-gated, but their
-/// state cannot be read without the framework that owns them (AVFoundation for the first two), so they arrive with
-/// the milestone that brings that framework rather than being guessed at here.
+/// The two capture permissions the port needs, plus the camera. The protected folders are also TCC-gated, but their
+/// state cannot be read without the framework that owns them (and a folder grant has no preflight call at all), so
+/// they are handled where they are used rather than guessed at here.
 /// </remarks>
 [SupportedOSPlatform("macos")]
 public enum TccGrant
 {
-    /// <summary>Required before any ScreenCaptureKit stream will start.</summary>
+    /// <summary>Required before any ScreenCaptureKit stream will start. Also covers system-audio capture.</summary>
     ScreenRecording,
 
     /// <summary>Required before synthetic input reaches other applications.</summary>
     Accessibility,
+
+    /// <summary>Required before an AVFoundation capture session will deliver pictures.</summary>
+    Camera,
 }
 
 /// <summary>
@@ -45,6 +48,7 @@ public static class TccGrants
     {
         TccGrant.ScreenRecording => CoreGraphics.CGPreflightScreenCaptureAccess() != 0,
         TccGrant.Accessibility => CoreGraphics.CGPreflightPostEventAccess() != 0,
+        TccGrant.Camera => MacNativeInterop.rd_camera_authorization_status() == MacNativeInterop.CameraAuthorized,
         _ => throw new ArgumentOutOfRangeException(nameof(grant)),
     };
 
@@ -59,6 +63,7 @@ public static class TccGrants
     {
         TccGrant.ScreenRecording => CoreGraphics.CGRequestScreenCaptureAccess() != 0,
         TccGrant.Accessibility => CoreGraphics.CGRequestPostEventAccess() != 0,
+        TccGrant.Camera => MacNativeInterop.rd_camera_request_access() == MacNativeInterop.CameraAuthorized,
         _ => throw new ArgumentOutOfRangeException(nameof(grant)),
     };
 
@@ -83,6 +88,7 @@ public static class TccGrants
     {
         TccGrant.ScreenRecording => "Privacy_ScreenCapture",
         TccGrant.Accessibility => "Privacy_Accessibility",
+        TccGrant.Camera => "Privacy_Camera",
         _ => throw new ArgumentOutOfRangeException(nameof(grant)),
     };
 
@@ -97,6 +103,9 @@ public static class TccGrants
         TccGrant.Accessibility =>
             "远程桌面需要「辅助功能」权限才能把鼠标键盘事件发送给其他应用。"
             + "请在「系统设置 → 隐私与安全性 → 辅助功能」中勾选本应用。",
+        TccGrant.Camera =>
+            "远程桌面需要「摄像头」权限才能把本机摄像头画面转发给远端会话。"
+            + "请在「系统设置 → 隐私与安全性 → 摄像头」中勾选本应用，然后重新启动应用。",
         _ => throw new ArgumentOutOfRangeException(nameof(grant)),
     };
 }

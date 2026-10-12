@@ -57,6 +57,10 @@ enum {
     RD_ERROR_TIMEOUT = -5,
     /// The platform does not offer what was asked for (e.g. no cursor image is available).
     RD_ERROR_UNAVAILABLE = -6,
+    /// No camera with the requested identifier is connected.
+    RD_ERROR_DEVICE_NOT_FOUND = -7,
+    /// No audio device could be opened for playback.
+    RD_ERROR_AUDIO_DEVICE = -8,
 };
 
 /// One captured frame, handed to rd_frame_callback.
@@ -199,6 +203,205 @@ RD_EXPORT int rd_clipboard_write_png(const char *name,
                                      size_t length,
                                      char *error,
                                      size_t error_size);
+
+/// Camera permission state, mirroring AVAuthorizationStatus.
+///
+/// Reported as its own enum rather than as a bool because "not decided yet" and "refused" need different words in
+/// front of the user: the first is a prompt, the second is a trip to System Settings.
+enum {
+    RD_CAMERA_NOT_DETERMINED = 0,
+    RD_CAMERA_RESTRICTED = 1,
+    RD_CAMERA_DENIED = 2,
+    RD_CAMERA_AUTHORIZED = 3,
+};
+
+/// Whether this process may use the camera, as AVAuthorizationStatus.
+///
+/// Read without prompting, so it is safe to call on a timer. Like Screen Recording, the answer is cached by the
+/// process at start-up: a grant made while this process runs is only seen by the next one.
+RD_EXPORT int rd_camera_authorization_status(void);
+
+/// Asks for camera access, showing the system prompt the first time.
+///
+/// Blocks until the user answers, so it must not be called on the main thread. Returns the state afterwards —
+/// which, for the same reason as above, may still be "not granted" from the running process's point of view.
+RD_EXPORT int rd_camera_request_access(void);
+
+/// One camera the system knows about.
+typedef struct {
+    /// AVCaptureDevice.uniqueID, UTF-8.
+    const char *id;
+    /// The name to show the user, UTF-8.
+    ///
+    /// Both strings are owned by this library and stay valid until the next rd_camera_* call that returns a list,
+    /// so a caller that wants to keep them has to copy first — the same rule as the clipboard read buffer.
+    const char *name;
+} rd_camera_info;
+
+/// One picture size and rate a camera offers.
+typedef struct {
+    int32_t width;
+    int32_t height;
+    double frame_rate;
+} rd_camera_mode;
+
+/// Lists the connected cameras.
+///
+/// `*out` receives a library-owned array valid until the next listing call. No cameras is RD_OK with a zero count,
+/// not an error: a machine without one is a normal machine.
+RD_EXPORT int rd_camera_list(const rd_camera_info **out,
+                             int32_t *out_count,
+                             char *error,
+                             size_t error_size);
+
+/// Lists the modes one camera offers, largest first.
+///
+/// A camera that cannot be opened right now (in use by another application, or unplugged between the two calls)
+/// still enumerates with no modes rather than failing, which is what the Windows implementation does — the reason
+/// it cannot be used is reported when it is actually opened.
+RD_EXPORT int rd_camera_modes(const char *id,
+                              const rd_camera_mode **out,
+                              int32_t *out_count,
+                              char *error,
+                              size_t error_size);
+
+/// One picture, handed to rd_camera_frame_callback.
+///
+/// As with rd_frame, the pixels point into a buffer that is only valid for the duration of the callback.
+typedef struct {
+    /// Tightly-or-row-padded BGRA pixels, `height` rows of `bytes_per_row` bytes.
+    const uint8_t *bgra;
+    int32_t width;
+    int32_t height;
+    int32_t bytes_per_row;
+    /// Mach host ticks converted to nanoseconds, on the same clock the display capture reports.
+    uint64_t host_time_ns;
+} rd_camera_frame;
+
+/// Called on the session's private queue, once per picture.
+///
+/// Delivery is serialized, so the callee needs no locking of its own. A camera has no "nothing changed" state the
+/// way a display does: every callback carries a new picture.
+typedef void (*rd_camera_frame_callback)(void *user, const rd_camera_frame *frame);
+
+/// Opaque camera handle.
+typedef void *rd_camera_ref;
+
+/// Opens one camera at the size and rate closest to the request. Does not start it.
+///
+/// Fails with RD_ERROR_PERMISSION when the user has not granted camera access, and with
+/// RD_ERROR_DEVICE_NOT_FOUND when the identifier no longer names a connected camera. The mode is chosen by scoring
+/// the camera's own formats, because AVFoundation has no notion of asking a device for an arbitrary size.
+RD_EXPORT int rd_camera_create(const char *id,
+                               int32_t width,
+                               int32_t height,
+                               double frame_rate,
+                               rd_camera_frame_callback callback,
+                               void *user,
+                               rd_camera_ref *out,
+                               char *error,
+                               size_t error_size);
+
+/// Starts delivering pictures. Blocks while the session starts, so it must not be called on the main thread.
+RD_EXPORT int rd_camera_start(rd_camera_ref camera, char *error, size_t error_size);
+
+/// Stops delivering pictures. Safe on a camera that was never started, and safe to call twice.
+RD_EXPORT void rd_camera_stop(rd_camera_ref camera);
+
+/// Stops if needed, releases everything, and invalidates the handle. No frames arrive after this returns.
+RD_EXPORT void rd_camera_destroy(rd_camera_ref camera);
+
+/// One chunk of captured audio, handed to rd_audio_callback.
+///
+/// The samples are interleaved 32-bit float and only valid for the duration of the callback.
+typedef struct {
+    /// `frame_count * channel_count` floats, channel-interleaved.
+    const float *samples;
+    /// Sample frames, not samples: this times `channel_count` is the number of floats.
+    int32_t frame_count;
+    int32_t channel_count;
+    int32_t sample_rate;
+} rd_audio_chunk;
+
+/// Called on the stream's private queue with each chunk of captured audio.
+///
+/// Delivery is serialized, so the callee needs no locking of its own. Unlike a display stream, nothing is filtered
+/// out here: silence that the system actually renders is delivered, because it is part of what the far end should
+/// hear. The stream simply delivers nothing while no application is playing.
+typedef void (*rd_audio_callback)(void *user, const rd_audio_chunk *chunk);
+
+/// Opaque system-audio capture handle.
+typedef void *rd_audio_capture_ref;
+
+/// Starts capturing what the machine is playing, through ScreenCaptureKit.
+///
+/// This is loopback, not a microphone: it needs the Screen Recording grant and no microphone grant, and it captures
+/// the whole system's output. Audio from this process is excluded, because the host plays the far end's audio
+/// through the same process and capturing it back would close a loop.
+///
+/// The stream is fixed at 48 kHz stereo, which is what the wire format carries, so nothing has to resample.
+RD_EXPORT int rd_audio_capture_create(rd_audio_callback callback,
+                                      void *user,
+                                      rd_audio_capture_ref *out,
+                                      char *error,
+                                      size_t error_size);
+
+/// Starts delivering audio. Blocks until ScreenCaptureKit confirms the start.
+RD_EXPORT int rd_audio_capture_start(rd_audio_capture_ref capture, char *error, size_t error_size);
+
+/// Stops delivering audio. Safe on a capture that was never started, and safe to call twice.
+RD_EXPORT void rd_audio_capture_stop(rd_audio_capture_ref capture);
+
+/// Stops if needed, releases everything, and invalidates the handle.
+RD_EXPORT void rd_audio_capture_destroy(rd_audio_capture_ref capture);
+
+/// Opaque playback handle.
+typedef void *rd_audio_player_ref;
+
+/// Opens a playback device for interleaved 32-bit float audio.
+///
+/// Does not start it. The device is the system default output, followed automatically if the user switches it.
+RD_EXPORT int rd_audio_player_create(int32_t sample_rate,
+                                     int32_t channel_count,
+                                     rd_audio_player_ref *out,
+                                     char *error,
+                                     size_t error_size);
+
+/// Starts playing, and from here on the device asks for audio continuously.
+///
+/// Until something is queued it plays silence, so an underrun is a pause rather than an error — the same choice the
+/// Windows player makes by reading fully from its buffer.
+RD_EXPORT int rd_audio_player_start(rd_audio_player_ref player, char *error, size_t error_size);
+
+/// Queues interleaved float samples.
+///
+/// When the device has fallen behind — the queue already holds more than this layer keeps — the oldest audio is
+/// dropped to make room, trading a click for bounded latency rather than playing late.
+RD_EXPORT int rd_audio_player_enqueue(rd_audio_player_ref player,
+                                      const float *samples,
+                                      size_t sample_count,
+                                      char *error,
+                                      size_t error_size);
+
+/// Samples queued but not yet played, or -1 for an invalid handle.
+///
+/// A count rather than a duration because the caller already knows the format it opened the device with; the
+/// managed layer turns it into the TimeSpan the port contract asks for.
+RD_EXPORT int64_t rd_audio_player_buffered(rd_audio_player_ref player);
+
+/// Stops playing and discards anything queued. Safe on a player that was never started.
+RD_EXPORT void rd_audio_player_stop(rd_audio_player_ref player);
+
+/// Throws away everything queued but keeps playing, so the next enqueue is heard immediately.
+///
+/// Distinct from stopping and starting again, which would also tear down the device. The managed layer uses this to
+/// hold latency to the bound its port contract asks for: the ring is a full second deep so that it cannot grow
+/// without limit, but a second of delay is not something a remote session can live with, so the policy lives above
+/// this layer and the ring is the safety net underneath it.
+RD_EXPORT void rd_audio_player_discard(rd_audio_player_ref player);
+
+/// Stops if needed, releases everything, and invalidates the handle.
+RD_EXPORT void rd_audio_player_destroy(rd_audio_player_ref player);
 
 /// Opens System Settings on the Privacy & Security pane named by `anchor`, e.g. "Privacy_ScreenCapture".
 ///

@@ -37,7 +37,7 @@ source_dir="$root/native/macos"
 out_dir="$root/artifacts/native/macos"
 output="$out_dir/libRemoteDesktopMacNative.dylib"
 
-sources="$source_dir/rd_screen_capture.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m"
+sources="$source_dir/rd_screen_capture.m $source_dir/rd_camera.m $source_dir/rd_audio.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m"
 header="$source_dir/rd_native.h"
 
 for tool in xcrun clang install_name_tool codesign otool; do
@@ -91,6 +91,8 @@ xcrun clang \
     -o "$output" \
     $sources \
     -framework AppKit \
+    -framework AudioToolbox \
+    -framework AVFoundation \
     -framework CoreGraphics \
     -framework CoreMedia \
     -framework CoreVideo \

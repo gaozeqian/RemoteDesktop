@@ -72,10 +72,10 @@ Platform.* / Media 只依赖 Abstractions
 | `IScreenCapturerFactory`                     | DXGI Desktop Duplication       | **ScreenCaptureKit**（`SCStream`，含光标信息）                                                      | **高** |
 | `IInputInjector`                             | SendInput（`SendInputInjector`） | **CGEvent**（`CGEventPost`）+ 扫描码映射表                                                          | 中     |
 | `IPtyHost`                                   | ConPTY（`ConPtyHost`）           | **`posix_openpt`/`forkpty`**（`libSystem`）                                                   | 低     |
-| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation               | **AVFoundation**（`AVCaptureDevice` / `AVCaptureSession`）                                    | 中高    |
-| `IClipboard`                                 | Win32 剪贴板（`WindowsClipboard`）  | **NSPasteboard**（`MacClipboard`；变更靠轮询 changeCount，平台不发通知）                                  | 中     |
-| `IAudioCapturerFactory`                      | WASAPI 环回                      | **ScreenCaptureKit 音频**（与截屏共用同一个权限）                                                         | 中     |
-| `IAudioPlayerFactory`                        | WASAPI                         | **AVAudioEngine** / AudioQueue                                                              | 中     |
+| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation               | **AVFoundation**（`AVCaptureDevice` / `AVCaptureSession`）                                    | 中高 → 低 ✅ |
+| `IClipboard`                                 | Win32 剪贴板（`WindowsClipboard`）  | **NSPasteboard**（`MacClipboard`；变更靠轮询 changeCount，平台不发通知）                                  | 中 → 低 ✅ |
+| `IAudioCapturerFactory`                      | WASAPI 环回                      | **ScreenCaptureKit 音频**（与截屏共用同一个权限）                                                         | 中 → 低 ✅ |
+| `IAudioPlayerFactory`                        | WASAPI                         | **AudioToolbox AudioQueue**（环形缓冲 + 丢旧）                                                       | 中 → 低 ✅ |
 | `IVideoEncoderFactory` ×2                    | Media Foundation MFT（硬/软）      | **VideoToolbox**（`VTCompressionSession`，Apple Silicon 硬编）                                   | 中高    |
 | `IVideoDecoderFactory`                       | Media Foundation               | **VideoToolbox**（`VTDecompressionSession`）                                                  | 中     |
 | `IVideoRecorderFactory`                      | MF Sink Writer                 | **AVAssetWriter**（H.264 + MP4）                                                              | 中     |
@@ -781,6 +781,97 @@ public static partial int rd_clipboard_write_text(
 
 ---
 
+### 3.13 P8/P9 实测记录
+
+#### ① 无符号回绕，只在正常路径上发作
+
+P9 环形缓冲里原来写的是：
+
+```objc
+const size_t overflow = (self.count + sample_count) - self.capacity;
+if (overflow > 0) { … 丢最旧的 … }
+```
+
+三个量都是 `size_t`。**总数小于容量时**（也就是每一次正常入队），这个减法回绕成约 `1.8e19`，
+`> 0` 恒真，于是"腾地方"分支**每次都走**，`readIndex` 被拖到 `(readIndex + 1.8e19) % capacity`
+这么一个没有意义的位置。症状是入队 4800 个采样、`buffered` 报回来一个不相干的数；
+等到入队超过容量，走的是另一个分支，报表看起来反而正常 —— 所以"溢出能钳位"那条测试一直是过的。
+
+改成显式比较：
+
+```objc
+const size_t total = self.count + sample_count;
+if (total > self.capacity) { const size_t overflow = total - self.capacity; … }
+```
+
+**这是 §3.12 那条教训的第二个实例**：`-Wall -Wextra -Werror` 全过、28 个符号全导出、
+C 探针里"参数路径 / 溢出钳位 / 生命周期"也都过 —— 唯一能发现它的是探针里那条
+"**入队 4800、报回来正好 4800**"。一条"数值对得上"的断言，比十条"没崩"的断言值钱。
+
+#### ② `AVCaptureSessionPresetInputPriority` 是 iOS/macCatalyst 专用
+
+`API_UNAVAILABLE(macos)`。iOS 的 AVCam 类项目几乎都在用，抄过来直接 `-Werror`。
+
+macOS 上让 session 保留我们自己选的 `activeFormat` 的办法是：
+`beginConfiguration` → 加 input → 加 output → `commitConfiguration`，
+**然后**再 `lockForConfiguration` 设 `activeFormat`。顺序不能反 —— session 一旦开始运行，
+格式就改不动了；而在 commit 之前设，`canAddInput` 阶段还可能被 preset 覆盖掉。
+
+同类还有 `AVCaptureDeviceTypeExternalUnknown`（已废弃，`-Werror`）——
+用 `AVCaptureDeviceTypeExternal`，正好是 macOS 14.0，与我们的下限对齐。
+
+#### ③ C 函数读不到 `@property` 的实例变量
+
+`player->_lock` 在 `@property` 自动合成的 `_lock` 上报 `instance variable '_lock' is private`。
+自动合成的实例变量默认是这个可见性，`.m` 文件里的 `@interface` 声明的 property 都在这个范畴。
+
+解决办法不是把它们挪成 `@public`，而是把"锁内状态转移"收进实例方法（`enqueue:count:` /
+`buffered` / `discard`），入口函数只调方法。形状与已有的 `drain:wanted:` 一致，
+而且顺带让"每次状态转移都在锁内"这件事变得可查 —— 这正是环形缓冲最容易出错的地方。
+
+器物层面同一个调用上还有一条：`AudioQueueNewOutput(…, &player.queue)` 编译不过，
+property 没有地址可取，得用局部 `AudioQueueRef` 再赋回去。
+
+#### ④ 摄像头/音频的探针真的会说话
+
+`--self-check` 新增两条：
+
+```
+cameras   4: MacBook Pro相机 (7 modes), MacBook Pro桌上视角相机 (1 modes),
+           "iPhone-13-Pro"的桌上视角相机 (1 modes), "iPhone-13-Pro"的相机 (8 modes)
+audio     ok — played 100 ms bursts, loopback delivered 1920 sample(s)
+```
+
+4 个摄像头里有 2 个是 iPhone Continuity（有线连着手机），说明 `AVCaptureDeviceDiscoverySession`
+把 continuity 设备也报回来了 —— 与 Windows 侧枚举 DirectShow 设备的覆盖面基本一致。
+
+`audio` 那条特意**不放真音频文件**：探针自己发一段 20 ms 的 440 Hz（1/20 全刻度），
+环回收到的采样数就是"真的跑通了"的证据。而 `1920 = 960 帧 × 2` 正好一次 chunk 的量，
+也顺带证明了交织布局（`flatten` 那段跨 channel 的重排在屏幕侧看到的就是左右声道交替）。
+
+#### ⑤ 客户端启动阻塞的第二次更正
+
+P3 记的是"剪贴板/音频/摄像头没实现 → 客户端起不来"，P5 更正为"要 P8 + P9"。
+P8/P9 落地后**再更正一次：问题消失，客户端能正常启动。**
+
+实测方式（`open artifacts/app/…/RemoteDesktop.app`，绕开沙箱）：
+
+```
+lsappinfo info -only pid com.remotedesktop.client   →  "pid"=49506
+lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # 退出后
+（运行期间 crash.log 字节数不变、无新增 .ips）
+```
+
+而沙箱内直接跑二进制，报错会**换一个**：`ValidateOnBuild` 过了，`host.Start()` 里
+`DeviceIdentity.LoadOrCreate` 抛 `OSStatus 100001`。这不是代码问题 ——
+同一时刻 `security add-generic-password` 在沙箱外成功、`KeychainSecretStoreTests`
+在沙箱外全绿。**沙箱拦的是钥匙串访问，与 P8/P9 无关，也不是回归。**
+
+判据是报错发生在哪个阶段：`ClientHost.Build`（DI 解析）还是 `host.Start()`（运行时）。
+这一次换成了后者，就是这段工作生效的证据。
+
+---
+
 ## 4. 可复用 / 需新增 清单
 
 **完全复用（零改动或近乎零改动）**  
@@ -798,19 +889,30 @@ public static partial int rd_clipboard_write_text(
   - `TccGrants.cs`（屏幕录制 / 辅助功能的预检、申请与 `x-apple.systempreferences` 深链）
   - `Interop/MacNativeInterop.cs`、`Interop/MacNativeLibraryResolver.cs`（辅助库的 P/Invoke 面与加载器）
   - P5 补上的部分：`Clipboard/MacClipboard.cs`（`IClipboard`）
+  - P8 补上的部分：`Camera/MacCameraEnumerator.cs` / `Camera/MacCameraSourceFactory.cs` /
+    `Camera/MacCameraSource.cs`；`Camera/MacCameraFrameSink.cs`（反向回调 → `VideoFrame`，
+    把像素行 padding 拆掉，只保留最新一帧）
+  - P9 补上的部分：`Audio/MacAudioCapturer.cs`（`IAudioCapturer`，含 `MacAudioChunkSink`）、
+    `Audio/MacAudioPlayer.cs`（`IAudioPlayer`，200 ms 丢 backlog 的策略在这里）
 - `native/macos/` —— §2.2 方案 C 的原生辅助库：
-  - `rd_native.h`：**扁平 C ABI**（10 个入口 + 一个反向帧回调；P3 时是 6 个，P5 加了 4 个剪贴板入口）。
+  - `rd_native.h`：**扁平 C ABI**（28 个入口 + 三个反向回调；P3 时是 6 个，
+    P5 加 4 个剪贴板入口，P8 加 8 个摄像头入口，P9 加 10 个音频入口）。
     `RD_EXPORT` 不是装饰：库以 `-fvisibility=hidden` 编译，不标就一个符号都不导出，
     而症状是"编得过、签得过、第一次 `DllImport` 才炸"。
   - `rd_screen_capture.m`（ScreenCaptureKit）、`rd_cursor.m`（指针位置 + 形状）、`rd_system.m`（打开系统设置）、
-    `rd_clipboard.m`（NSPasteboard 读写 + changeCount；P5）
+    `rd_clipboard.m`（NSPasteboard 读写 + changeCount；P5）、
+    `rd_camera.m`（AVFoundation 枚举 / 模式 / 会话；P8）、
+    `rd_audio.m`（SCK 环回采集 + AudioQueue 播放 + 环形缓冲；P9）
   - `build-native.sh`：编 `libRemoteDesktopMacNative.dylib`，`install_name_tool -id @rpath/…` 后 ad-hoc 签名；
     由 `RemoteDesktop.Platform.MacOS.csproj` 的 `BuildMacNativeHelper` target 调起
   - `fetch-libmsquic.sh`（把 libmsquic + openssl@4 重定位成 `@loader_path` 并随包分发，§3.4）
 - `build/installer/client/macos/`：`make-app.sh`（`.app` 打包、`Info.plist`、entitlements、`codesign --deep`）、
   `make-dev-cert.sh`（自签开发身份，§3.9）、`development-identity`（**gitignore** 的本机文件，把签名身份钉住，
   避免 TCC 授权因"换了一张证书"而失效，§3.11⑦）。公证与 `.dmg` 待做。
-- `src/Hosts/RemoteDesktop.Client/SelfCheck.cs`（`--self-check` 诊断模式，§3.8④；P5 新增 `clipboard` 探针）。
+- `src/Hosts/RemoteDesktop.Client/SelfCheck.cs`（`--self-check` 诊断模式，§3.8④；
+  P5 新增 `clipboard` 探针、P8 新增 `cameras` 探针、P9 新增 `audio` 探针）。
+  **三条探针的共同点：真的把端口用一遍**（发声音、看帧、写读剪贴板），而不是只列"端口已注册" ——
+  后者就抓不到 §3.12 和 §3.13①。
 - `.github/actions/run-test-suite/action.yml`（Windows / macOS 两个 job 共用的"重试一次 + TRX + 汇总表"，§3.10）。
 - `build/service/macos/`（`SMAppService` 登录项注册脚本）。
 
@@ -822,8 +924,18 @@ public static partial int rd_clipboard_write_text(
   `README.md`/`docs/*`。
 - 测试：`SystemSetupTests` / `HostControlTests` / `FileAccessPolicyTests` / `LocalFileOperationsTests` /
   `ServerSetupTests` / `FileTransferSessionTests` 加平台跳过（§3.10）；新增
-  `RemoteDesktop.Platform.MacOS.Tests`（`ScreenCaptureTests.cs` 与 `DisplayAndInputTests.cs` 是 P3 的；
-  `ClipboardTests.cs` 是 P5 的）、`MsQuicAvailabilityTests`、`DeviceIdentityTests`。
+  `RemoteDesktop.Platform.MacOS.Tests`
+  - P3：`ScreenCaptureTests.cs`（帧 sink 与坐标约定）、`DisplayAndInputTests.cs`、
+    `MacNativeInteropTests`、`TccGrantTests`、`ScreenCaptureKitCapturerTests`
+  - P5：`ClipboardTests.cs`
+  - P8/P9：`AudioTests.cs`（`MacAudioPlayerTests` / `MacAudioCapturerTests`）；
+    `ServiceCollectionExtensionsTests` 扩到覆盖摄像头与音频端口
+  - 另有 `IOPMAssertionKeepAwakeTests.cs`（P5 收尾）、`KeychainSecretStoreTests`（P2）、
+    `PosixPtyTests.cs` / `PtyWindowSizeInteropTests.cs`（P6）
+  - **没有** `CameraTests.cs`：枚举的是真实设备、`Open` 的是真实会话，写不成确定性的单元测试；
+    摄像头侧的可测部分（帧 sink）目前由 §3.13④ 的 `--self-check` 探针覆盖。
+    `native/macos/` 下的 C 探针（`artifacts/probe/`）承担 ABI 层面的验证。
+  - `MsQuicAvailabilityTests`、`DeviceIdentityTests`。
 
 ---
 
@@ -842,6 +954,12 @@ public static partial int rd_clipboard_write_text(
 ## 6. 分阶段计划（P1–P10）
 
 图例：✅ 完成 · 🔄 进行中 · ⬜ 未开始
+
+> **进度（2026-10-13）**：P1 ✅ · P2 ✅ · P3 ✅ · P4 ⬜ · P5 ✅ · P6 ✅ · P7 ⬜ · P8 ✅ · P9 ✅ · P10 ⬜。
+> **P8 + P9 落地后客户端已能正常启动**（此前被 DI 解析阻塞，§3.13⑤）——
+> 也就是说 P1/P2/P3/P5/P6/P8/P9 这一组已经把"跑得起来的主干"凑齐了，
+> 剩下的 P4（编解码）/P7（文件传输）/P10（打包与开机自启）都还**不是**启动阻塞。
+> 未做的技术项见 §8 "仍未落实的技术项"。
 
 ### P1 平台骨架与工具链 ✅
 
@@ -906,7 +1024,8 @@ public static partial int rd_clipboard_write_text(
 
 验收：`RemoteDesktop.Platform.MacOS.Tests` **50/50** 通过（非沙箱；其中 2 条真实采集用例在授予屏幕录制后运行）。
 `--self-check` 在 `.app` 内外都能报告采集结果（**直接执行 `Contents/MacOS/RemoteDesktop.Client`**，见 §3.11⑧）。
-（P5 之后这个项目变成 **66** 条：50 + 剪贴板 9 + 坐标换算 7。）
+（P5 之后这个项目变成 **66** 条，P8/P9 之后 **78** 条：50 + 剪贴板 9 + 坐标换算 7 + 摄像头相关 4 + 音频 11 -
+部分归并。）
 
 > ⚠️ **P3 顺带暴露、但没修的一件事**：macOS 客户端目前**起不来**。`ClientHost.Build` 在 `ValidateOnBuild`
 > 阶段就抛 `Unable to resolve service for type 'RemoteDesktop.Abstractions.Clipboard.IClipboard' while
@@ -916,13 +1035,16 @@ public static partial int rd_clipboard_write_text(
 > **不要用"只注册存在的服务"糊过去** —— 那会把独立宿主静默降级成"能启动但功能残缺"，
 > 反而更难发现。
 >
-> **（P5 完成后更正）** 上面那句原先写的是"等 P5 落地后自然解除" —— **错的**。P5 落地后实测，剪贴板那条已经
-> 消失，但客户端仍然起不来。P5 收尾时重跑了一次 `RemoteDesktop.Client`，`ValidateOnBuild` 现在抛的是：
-> `IAudioPlayerFactory`（激活 `MainWindowViewModel`）、`IAudioCapturerFactory`（激活 `AudioChannelModule`）、
-> `ICameraEnumerator`（激活 `CameraModule`）—— 也就是 **P8 + P9**，与 P5 无关。对照 `--self-check` 的端口表，
-> 剪贴板已变成 `registered (MacClipboard)`。所以这条要等 **P8 和 P9**，不是 P5。
-> 顺带一个反直觉的实测：`IVideoEncoderFactory` / `IVideoDecoderFactory` / `IVideoRecorderFactory` **不在**
-> 这份清单里 —— 它们不是启动期依赖（录制相关的解析发生在建会话时），所以 P4 也不是解除条件。
+> **（P8 + P9 完成后更正，第二次）**：上面这段是**已经解决**的问题。P8/P9 落地后 `ClientHost.Build` 不再抛
+> 解析错误，客户端能正常启动 —— 用 `open artifacts/app/…/RemoteDesktop.app` 启动（绕开沙箱）实测
+> `lsappinfo` 报 `"pid"=…`、`crash.log` 不增长、无新增 ips，稳定运行 11 秒后退出。
+> 这一段的历史（P5 后"要 P8+P9"的判断）是有用的，因为它证明了这个诊断方法：
+> **报错里的服务名就是这个顺序的准绳**，而不是猜。
+>
+> 顺带确认了一件坏事的边界：`ValidateOnBuild` 之后 `host.Start()` 里，`DeviceIdentity.LoadOrCreate`
+> 会因为**沙箱**拿不到钥匙串而抛 `OSStatus 100001` —— 这不是代码问题（`security add-generic-password`
+> 在沙箱外成功，`KeychainSecretStoreTests` 在沙箱外全绿），是**运行环境**问题。
+> 同样的程序从 Finder/LaunchServices 启动就没事。
 
 > ⚠️ **P3 的第二件未了事：输入注入只验到了映射层。** `CGEventInputInjector` 的 9 条测试覆盖的是
 > 扫描码→`CGKeyCode`、修饰键、拖拽、滚轮换算，**没有一条真的发过事件** —— 因为本机 `Accessibility`
@@ -994,13 +1116,66 @@ public static partial int rd_clipboard_write_text(
       改动落在安全相关代码上，要在能同时验证 Windows 行为的环境里做
 - [ ] 受保护目录的 TCC：`~/Desktop`、`~/Documents`、`~/Downloads` 的首次访问弹窗与拒绝路径
 
-### P8 远程摄像头（AVFoundation）⬜
+### P8 远程摄像头（AVFoundation）✅
 
-`AVCaptureSession` + delegate，走 ObjC 辅助库；需 `NSCameraUsageDescription` 与摄像头 TCC 授权。
+- [x] `ICameraEnumerator` / `ICameraSourceFactory` → `AVCaptureDevice.DiscoverySession` + `AVCaptureSession`，
+      走 ObjC 辅助库（`native/macos/rd_camera.m`，8 个 `_rd_camera_*` 入口）
+- [x] 模式筛选口径与 Windows 一致：**低于 160 点宽或低于 5 帧/秒不是模式**（虚拟摄像头会报一大堆这种尺寸），
+      按"面积优先、同面积取更高速率"排序
+- [x] 输出 `32BGRA` —— 与截屏、编码器全都一致，中间**不插入颜色转换**
+- [x] `alwaysDiscardsLateVideoFrames = YES` + 托管侧 `BoundedChannel(1, DropOldest)`：**只保留最新一帧**，
+      两端都在丢而不是在攒（Windows 侧同一形状）
+- [x] 摄像头 TCC：`TccGrant.Camera` + `AVCaptureDevice.authorizationStatus` / `requestAccess`，
+      `Privacy_Camera` 深链；`TccGrants` 的注释里"等 AVFoundation 那个里程碑"说的就是这里
+- [x] `NSCameraUsageDescription` 已在 `Info.plist`（P3 就带上了）
 
-### P9 音频采集与播放 ⬜
+**native 侧三个坑**（都只有编译期/运行期才能发现）：
 
-首选与截屏共用权限的 ScreenCaptureKit 音频；必要时降级为"不支持"。
+1. **`AVCaptureSessionPresetInputPriority` 是 `API_UNAVAILABLE(macos)`** —— 只有 iOS/macCatalyst 有。
+   iOS 示例里到处都在用，抄过来就是编译不过。macOS 上只能在 `beginConfiguration`/`commitConfiguration`
+   **之后**设 `activeFormat`（配 `lockForConfiguration`），session 已经认了输入就不管了。
+2. **`output.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: …}` 的 `(id)` 不是合法 ARC 转型**，
+   要用 `(__bridge id)` —— 其余地方的桥接风格是一致的，这里因为 key 是 CFStringRef 所以特别容易写错。
+3. 附带一条经验：`AVCaptureDeviceTypeExternal` 正好是 macOS 14.0（我们的下限），
+   而 `AVCaptureDeviceTypeExternalUnknown` 已废弃 —— `-Werror` 会把"抄了旧示例"变成编译失败。
+
+验收：C 探针直连 dylib 实测 **4 个摄像头**（内置 / 桌上视角 / 两个 iPhone Continuity），模式按 largest-first
+排序，两个错误路径（找不到设备 / 没授权）分别返回 `RD_ERROR_UNAVAILABLE` 与 `RD_ERROR_PERMISSION`，
+`id` 跨调用稳定；托管侧 `--self-check` 的 `cameras` 探针同样列出 4 个及其模式数，
+`Camera NOT GRANTED` 如实上报。
+
+### P9 音频采集与播放 ✅
+
+- [x] `IAudioCapturerFactory` → **ScreenCaptureKit 音频**（`native/macos/rd_audio.m`）。
+      环回语义与端口契约完全对上（"捕获主机正在播放的声音"），**复用 P3 的 Screen Recording 授权，
+      不新增麦克风权限**；原生侧 `excludesCurrentProcessAudio = YES`，避免把远端的语音环回去
+- [x] 采集固定 **48 kHz 立体声 float32 交织**，与线上格式一致，**不做重采样**
+      （Windows 侧还要接 WASAPI 设备格式 → `WdlResamplingSampleProvider`，这里整段不需要）
+- [x] `IAudioPlayerFactory` → `AudioQueue`
+- [x] 播放侧 **环形缓冲 1 秒** + `Enqueue` 放下最旧的：这里只是**兜底**，真正 200 ms 的策略在托管层
+      （`MacAudioPlayer.MaxBuffered`），所以 ABI 上必须有 `rd_audio_player_discard` —— 否则端口契约的
+      200 ms 上限会被原生层的 1 秒容量悄悄放大 5 倍
+
+**native 侧三个真问题，都是 C 探针抓到的**：
+
+1. **`const size_t overflow = (self.count + sampleCount) - self.capacity;` 无符号下溢。**
+   总数**小于**容量时（也就是正常路径）这个减法回绕成约 1.8e19，于是"腾地方"分支**每次入队都会走**，
+   read index 被拖到一个没有意义的位置。症状是"放进去 4800 个采样，报回来一个不相干的数"。
+   改成显式比较（`total > capacity` 才算溢出）才对。编译干净、符号全导出、`-Wall -Wextra -Werror` 全过，
+   **完全看不出来** —— 这是 §3.12 那条教训的又一个实例。
+2. **C 函数里不能读 `@property` 自动合成的实例变量**（`player->_lock` 报 `is private`）。
+   把环形缓冲的锁内操作收进 `RDAudioPlayer` 的实例方法（`enqueue:count:` / `buffered` / `discard`），
+   入口函数只调方法 —— 与已有的 `drain:wanted:` 同一形状，而且顺带让"每次状态转移都在锁内"变得可查。
+3. 器物层面：`AudioQueueNewOutput(…, &player.queue)` 编译不过 —— property 没有地址可取，
+   得用局部 `AudioQueueRef`。
+
+验收：C 探针 **32 条断言**（参数路径、环形缓冲边界、溢出钳位、discard 语义、生命周期、null 句柄）；
+探针里真的放了 1 秒 440 Hz，环回**收到 103 个 chunk / 98880 帧**。
+托管侧 `--self-check` 的 `audio` 探针：`ok — played 100 ms bursts, loopback delivered 1920 sample(s)`。
+`MacAudioPlayerTests` 8 条 / `MacAudioCapturerTests` 3 条全绿。
+
+**这一段交付的直接后果**：`ClientHost.Build` 的 DI 解析错误消失，**客户端能正常启动了**
+（见 §6 P3 那段"P8 + P9 完成后更正"）。
 
 ### P10 录制、打包与无人值守 ⬜
 
@@ -1014,7 +1189,8 @@ public static partial int rd_clipboard_write_text(
 | ScreenCaptureKit 的 ObjC 互操作复杂度    | 高  | 方案 C 用小型 ObjC 辅助库收敛复杂度；先做最小可用截屏 PoC 再展开                                         |
 | TCC 权限在开发期反复丢失                    | 高  | 第一天就用 `.app` + 稳定 Apple Development 签名（2.3）                                     |
 | macOS 上 `CGEvent` 注入在某些受保护 UI 上无效 | 中  | 与 Windows 的 UIAccess 限制对齐，在文档中说明边界                                              |
-| 音频环回权限与稳定性                        | 中  | 首选与截屏共用权限的 ScreenCaptureKit 音频；必要时降级为"不支持"                                      |
+| 音频环回权限与稳定性                        | 低  | **已解决（P9）**：走 ScreenCaptureKit 音频，与截屏共用同一个 Screen Recording 授权，**不新增麦克风权限**；原生侧 `excludesCurrentProcessAudio = YES` 防止远端的语音环回去 |
+| 摄像头设备枚举与格式协商                     | 低  | **已解决（P8）**：AVFoundation 枚举 + 按 Windows 同口径筛模式 + 只保留最新一帧；预设 iOS 专有的 preset 是 `API_UNAVAILABLE(macos)`，`-Werror` 直接拦下（§3.13②） |
 | `libmsquic` 分发（重定位、openssl 依赖）    | 中  | 打包时用 `install_name_tool` 重写 `@@HOMEBREW_PREFIX@@` 并随包携带 `openssl@4` 依赖（**已实现**，见 `native/macos/fetch-libmsquic.sh`） |
 | **bottle 的 `minos 26.0` 顶高最低系统版本** | **高** | 已决策接受 macOS 26 为下限（§3.4/§8）；要降到 macOS 14 需改走"从源码构建 MsQuic + OpenSSL" |
 | 公证需要付费开发者账号                       | 中  | 开发期用 Development 签名；发布前再决定是否公证                                                  |
@@ -1025,6 +1201,7 @@ public static partial int rd_clipboard_write_text(
 | 端口"能注册"≠"能用"                      | 中  | 电源断言就是这么坏的：容器能解析、第一次调用才抛（§3.8②）；剪贴板是第二个（构建/签名/符号/C 探针全绿，托管侧一调就 SIGSEGV，§3.12）。`--self-check` 会真的把每个端口用一遍 |
 | **`[LibraryImport]` 把数组/span 当裸指针传** | **中** | 原生签名里的 `length` 会被下一个实参填上，症状是写路径 SIGSEGV、读路径全好（§3.12）。凡"缓冲区 + 长度"的原生签名一律显式传 `byte*` + `nuint`，别交给 marshaller |
 | Retina/多屏坐标与像素换算错误                | 低  | 统一约定：虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1。**P3 已完成**：换算集中在 `Input/PointerCoordinates.cs`，7 条测试钉住边界、钳制、副屏偏移与"缩放不参与换算" |
+| **原生侧 `size_t` 无符号回绕**                 | 中  | `a - b` 在 `b > a` 时是天文数字，`> 0` 的判断就恒真（§3.13①）。环形缓冲的"腾地方"只有在**正常路径**上触发这个 bug，所以只有一条"数值对得上"的断言能发现它 —— 探针里必须有这种断言，不能只断言"没崩" |
 
 ---
 
@@ -1049,7 +1226,8 @@ public static partial int rd_clipboard_write_text(
 - 受保护目录 TCC 行为的实际表现（P7）。
 - **`open --args` 送不到参数**的定论（§3.11⑧）：需要在一个**没有沙箱**的终端里重跑一次，
   才能区分"macOS 26 不再传参"和"沙箱拦住了 LaunchServices"。目前两种解释都站着。
-- 沙箱外重跑一次完整套件（P5 之后只拿到沙箱内的数字，见附录 A）。
+- ~~沙箱外重跑一次完整套件~~ —— **已完成**（P8/P9 时拿到，78/0/0，见附录 A）。
+  P5 那 2 条钥匙串假阴性到此确认是环境问题。
 
 ---
 
@@ -1302,12 +1480,80 @@ tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platfor
 
 # ⚠️ 提权这次没生效，所以 P5 只有沙箱内的数字。判定办法不是看提权开关，而是在同一条命令里探一次：
 #     if ps -p 1 >/dev/null 2>&1; then echo UNSANDBOXED; else echo SANDBOXED; fi
-#   → SANDBOXED（裸 `ps` 报 operation not permitted）。加了提权开关后**仍然**是 SANDBOXED。
-#   对照：同一时刻 `security add-generic-password` 成功且打印了 "Sandbox bypassed"，
+#   这次跑出来是 SANDBOXED。对照：同一时刻 `security add-generic-password` 成功且打印了 "Sandbox bypassed"，
 #   说明钥匙串本身可写 —— 被沙箱包住的是测试进程，不是钥匙串坏了。
-#   所以那 2 条失败是环境假阴性，不是回归；但**没有沙箱外数字背书**，这一点要说清楚。
-#   顺带修正一条旧记录：先前写"沙箱内跑会看到 3 条失败"，实测沙箱内是 **2** 条 —— 这个项目里
-#   依赖钥匙串的用例只有 2 条（`KeychainSecretStoreTests`），第 3 条在别的项目里。
+#   所以那 2 条失败是环境假阴性，不是回归。
+#   **（P8/P9 时补到了沙箱外的数字，见下。）**
+
+# P8 + P9 之后（Platform.MacOS.Tests；**沙箱外**，输出里能看到 "Sandbox bypassed"）：
+tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.Tests -noColor
+  → 78 总计 / 78 成功 / 0 失败 / 0 跳过
+#   P8 新增 4 条（MacCameraEnumerator 相关）+ P9 新增 11 条 = MacAudioPlayerTests 8 + MacAudioCapturerTests 3
+#   ServiceCollectionExtensionsTests 新增 1 条（audio/camera 工厂独立性）
+#   **这一跑拿到了沙箱外**，那 2 条 KeychainSecretStoreTests 随大流全绿 —— P5 那 2 条假阴性到此确认。
+#   提权是间歇性的：同一天里，`security`、以及"沙箱外那一次全量测试"拿到了，
+#   `./RemoteDesktop.Client --self-check` 反复拿不到。判据只能是输出里有没有 "Sandbox bypassed"。
+
+# ====================================================================================================
+# P8 + P9 验收
+# ====================================================================================================
+
+# P8 探针：C 直连 dylib（绕过托管侧，先确认 ABI 本身）
+$ /tmp/rd_camera_probe
+已授权               NOT_DETERMINED        # 4 个摄像头全都看得见，授权状态如实
+枚举出的摄像头        4 个，id 与名字
+  00000000-00000000-0000…  MacBook Pro相机                    7 modes
+  …
+模式                 largest-first 排序，60.00 fps 是 ceiling
+create（未授权）     RD_ERROR_PERMISSION    ← 与 AVAuthorizationStatus 一致
+create（假 id）      RD_ERROR_UNAVAILABLE
+id 跨调用稳定性       一致
+
+# P8 托管侧（--self-check，构建输出目录直接跑）：
+cameras               4: MacBook Pro相机 (7 modes), MacBook Pro桌上视角相机 (1 modes),
+                       "iPhone-13-Pro"的桌上视角相机 (1 modes), "iPhone-13-Pro"的相机 (8 modes)
+Camera                NOT GRANTED — Privacy_Camera
+
+# ====================================================================================================
+
+# P9 探针：C 直连 dylib（32 条断言全过）
+$ /tmp/rd_audio_probe
+playback / arguments  create 打开默认输出；0 采样率 / 0 声道 / null out → RD_ERROR_ARGUMENT；null handle → -1
+playback / ring       新实例 0；入队 4800 → 报 4800；null / 0 个采样是不错的空操作；
+                      超过 1 秒容量 → 钳位到 capacity（不增长）；discard 归零且可继续用
+playback / lifecycle  start 幂等；stop 幂等；销毁后指针立即失效
+capture               环回真的收到 103 chunk / 98880 frame（探针自己放 1 秒 440 Hz）
+                      start 幂等；stop 幂等
+#  ← "入队 4800、报回 4800" 这条是唯一能发现 §3.13① 的断言。"没崩"的那一堆当时全绿。
+
+# P9 托管侧（--self-check）：
+audio                 ok — played 100 ms bursts, loopback delivered 1920 sample(s)
+#   1920 = 960 帧 × 2 声道，正好一个 chunk，顺带证明交织布局对。
+
+# P8/P9 托管侧新增的 C# 测试：
+MacAudioPlayerTests 8 条：起步时缓冲为 0；未 start 就 Enqueue 抛；重复 start 抛；
+  buffer 计量按帧不按样本（1.00 × 100ms 立体声 = 100ms，不是 200ms）；
+  backlog 跨过 200ms 后被丢弃；非标准格式（44.1 kHz 单声道）也能起；未 start 就销毁安全
+MacAudioCapturerTests 3 条：48 kHz 立体声；取消能终止（含超时保护）；播放时有 chunk 到达
+ServiceCollectionExtensionsTests +1：端口表扩到摄像头/音频 + 工厂独立性
+#  → 全部用**静音**缓冲区，只有 MacAudioCapturerTests 末一条真的放 100 ms 20% 刻度的 440 Hz
+#    （环回只在真的有声音渲染时才给数据，静音换不来）。测试套件因此不会一直响。
+
+# 客户端启动阻塞解除（§3.13⑤）：
+$ open artifacts/app/audio/RemoteDesktop.app
+$ lsappinfo info -only pid   com.remotedesktop.client   →  "pid"=49506     # 活着
+   lsappinfo info -only state com.remotedesktop.client   →  "state"=[ NULL ] # 退出后
+   crash.log 字节数不变；无新增 .ips
+#   对比沙箱内直接跑二进制：ValidateOnBuild 过了，host.Start() 里
+#   DeviceIdentity.LoadOrCreate 抛 OSStatus 100001（钥匙串被沙箱拦，与 P8/P9 无关）
+
+# 原生辅助库（native/macos，-Wall -Wextra -Werror 全过）：
+$ nm -gU artifacts/native/macos/libRemoteDesktopMacNative.dylib | grep ' T _rd_audio'
+   _rd_audio_capture_create / _start / _stop / _destroy
+   _rd_audio_player_create / _start / _enqueue / _buffered / _discard / _stop / _destroy
+#   ★ rd_audio_player_discard 是 P9 加的：环形缓冲 1 秒只是兜底，
+#     端口契约的 200 ms 上限必须由托管层主动丢，所以 ABI 上得有这个入口。
+
 
 # CI（.github/workflows/ci.yml）
 build        → runs-on: windows-latest（步骤未变，测试部分抽到组合动作）
