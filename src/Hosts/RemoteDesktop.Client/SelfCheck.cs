@@ -13,6 +13,7 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.MacOS;
+using RemoteDesktop.Platform.MacOS.Clipboard;
 
 namespace RemoteDesktop.Client;
 
@@ -196,6 +197,7 @@ internal static class SelfCheck
         Probe("display enumeration", () => DisplaySummary(provider), ref exitCode);
         Probe("screen capture", () => ScreenCapture(provider), ref exitCode);
         Probe("keep awake", () => KeepAwake(provider), ref exitCode);
+        Probe("clipboard", Clipboard, ref exitCode);
         Probe("shells offered", () => string.Join(", ", provider.GetRequiredService<IPtyHost>().GetAvailableShells()), ref exitCode);
         Probe("files and shells allowed", () => provider.GetRequiredService<IUserContextGuard>().GetRefusalReason() ?? "yes", ref exitCode);
 
@@ -286,6 +288,70 @@ internal static class SelfCheck
         keepAwake.Release();
         return "ok (acquire, release)";
     }
+
+    /// <summary>
+    /// Round-trips text and a picture through a scratch pasteboard.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A registered port is not a working port, and this one has been both at once. The write path compiled, signed
+    /// and loaded cleanly while a marshalling mistake made every write read its length out of the caller's stack and
+    /// die inside <c>memmove</c> — the dylib was fine, the ABI declaration was not. Nothing short of writing and
+    /// reading back finds that, which is why this probe exists rather than a second registration line.
+    /// </para>
+    /// <para>
+    /// It deliberately does not use the pasteboard the client will use. A self-check that overwrote whatever the user
+    /// had copied would be one nobody dares run, and reading the general pasteboard unprompted makes macOS 15 and
+    /// later show its "pasted from" notice. The scratch pasteboard reaches the same helper, the same two entry points
+    /// and the same UTF-8 and PNG paths, and the system releases it when this process exits, so nothing is left
+    /// behind and nothing of the user's is touched.
+    /// </para>
+    /// </remarks>
+    private static string Clipboard()
+    {
+        // The probe is written against the macOS port because that is the one this report is for, but the behaviour
+        // section runs on every platform the client builds for, and the Windows build uses a different pasteboard
+        // entirely. Saying so is better than reporting a macOS result that was never produced.
+        if (!OperatingSystem.IsMacOS())
+        {
+            return "not applicable on this platform";
+        }
+
+        // A name rather than the general pasteboard, for the reasons above. It is process-scoped, so it cannot
+        // collide with anything the user or another application is using.
+        using var scratch = new MacClipboard("com.remotedesktop.self-check.clipboard");
+
+        // Non-ASCII on purpose: the length that matters is the byte count, not the character count, and a pure-ASCII
+        // string cannot tell the two apart.
+        const string Text = "self-check — 中文 🎉";
+        scratch.Set(new TextClipboardContent(Text));
+
+        if (scratch.Get() is not TextClipboardContent text || !string.Equals(text.Text, Text, StringComparison.Ordinal))
+        {
+            return "wrote text but read back something else";
+        }
+
+        // Byte-for-byte, not decoded and re-compared: this is the entry point that was writing past the end of its
+        // buffer, and comparing lengths would have missed it.
+        var png = Convert.FromBase64String(SamplePngBase64);
+        scratch.Set(new ImageClipboardContent(png));
+
+        if (scratch.Get() is not ImageClipboardContent image || !image.Png.Span.SequenceEqual(png))
+        {
+            return "wrote a picture but read back different bytes";
+        }
+
+        return "ok (text and PNG round trip on a scratch pasteboard)";
+    }
+
+    /// <summary>A 4x4 RGBA PNG. Only that it survives the trip matters, not what it shows.</summary>
+    /// <remarks>
+    /// The same bytes the clipboard tests use. The two cannot share a constant — the tests are a separate assembly
+    /// that the client does not reference — and a picture is needed here because <c>rd_clipboard_write_png</c> is a
+    /// different entry point from the text one, with its own way of going wrong.
+    /// </remarks>
+    private const string SamplePngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP4z8DwHwwZ/oMBA+kCAA97J9n4xwmsAAAAAElFTkSuQmCC";
 
     /// <summary>
     /// Captures one frame from the primary display.

@@ -277,9 +277,8 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
     private CGPoint Point(string displayId, double x, double y)
     {
         var display = FindDisplay(displayId);
-        return new CGPoint(
-            display.Bounds.X + (Math.Clamp(x, 0, 1) * (display.Bounds.Width - 1)),
-            display.Bounds.Y + (Math.Clamp(y, 0, 1) * (display.Bounds.Height - 1)));
+        var (pointX, pointY) = PointerCoordinates.FromNormalized(display, x, y);
+        return new CGPoint(pointX, pointY);
     }
 
     private DisplayInfo FindDisplay(string displayId)

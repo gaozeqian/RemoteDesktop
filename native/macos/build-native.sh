@@ -37,7 +37,7 @@ source_dir="$root/native/macos"
 out_dir="$root/artifacts/native/macos"
 output="$out_dir/libRemoteDesktopMacNative.dylib"
 
-sources="$source_dir/rd_screen_capture.m $source_dir/rd_cursor.m $source_dir/rd_system.m"
+sources="$source_dir/rd_screen_capture.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m"
 header="$source_dir/rd_native.h"
 
 for tool in xcrun clang install_name_tool codesign otool; do
@@ -69,7 +69,7 @@ fi
 
 mkdir -p "$out_dir"
 
-# -fobjc-arc because the two .m files rely on ARC for the Objective-C object lifetimes they hand across the C ABI.
+# -fobjc-arc because the .m files rely on ARC for the Objective-C object lifetimes they hand across the C ABI.
 # -mmacosx-version-min is deliberately lower than the application's floor: nothing here needs anything newer than
 # ScreenCaptureKit 12.3, and pinning it to the app's macOS 26 would blame this library for a limit it does not
 # impose. -fvisibility=hidden keeps everything that is not explicitly exported out of the symbol table, so the

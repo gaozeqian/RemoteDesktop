@@ -1,3 +1,4 @@
+using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Platform.MacOS.Display;
 using RemoteDesktop.Platform.MacOS.Input;
 
@@ -47,6 +48,92 @@ public class DisplayTests
 
         Assert.True(width >= display.Bounds.Width, "A Retina display has more pixels than points.");
         Assert.True(height >= display.Bounds.Height);
+    }
+}
+
+/// <summary>
+/// The normalized-to-global pointer mapping, pinned against the one mistake that is invisible on a 1.0 display.
+/// </summary>
+public class PointerCoordinatesTests
+{
+    private static DisplayInfo Display(int x, int y, int width, int height, double scale = 1.0) =>
+        new("1", "test", new PixelRect(x, y, width, height), scale, IsPrimary: x == 0 && y == 0);
+
+    [Fact]
+    public void The_top_left_of_a_display_maps_to_its_own_origin()
+    {
+        var (x, y) = PointerCoordinates.FromNormalized(Display(0, 0, 1440, 900), 0, 0);
+        Assert.Equal(0, x);
+        Assert.Equal(0, y);
+    }
+
+    [Fact]
+    public void The_far_edge_maps_to_the_last_addressable_point_not_the_one_past_it()
+    {
+        var (x, y) = PointerCoordinates.FromNormalized(Display(0, 0, 1440, 900), 1, 1);
+
+        // 1439, not 1440: a normalized 1.0 is the last coordinate the display has, and aiming one past it would put
+        // the far edge of the screen permanently out of reach.
+        Assert.Equal(1439, x);
+        Assert.Equal(899, y);
+    }
+
+    [Fact]
+    public void A_secondary_display_contributes_its_origin_as_an_offset()
+    {
+        // A display sitting to the right of a 1352-point-wide main display, as the machine this was written on does.
+        var (x, y) = PointerCoordinates.FromNormalized(Display(1352, 0, 1920, 1080), 0, 0);
+
+        Assert.Equal(1352, x);
+        Assert.Equal(0, y);
+    }
+
+    [Fact]
+    public void A_position_outside_the_unit_square_is_clamped_rather_than_extrapolated()
+    {
+        var display = Display(0, 0, 1440, 900);
+
+        var below = PointerCoordinates.FromNormalized(display, -5, -5);
+        var above = PointerCoordinates.FromNormalized(display, 5, 5);
+
+        Assert.Equal(PointerCoordinates.FromNormalized(display, 0, 0), below);
+        Assert.Equal(PointerCoordinates.FromNormalized(display, 1, 1), above);
+    }
+
+    [Fact]
+    public void The_backing_scale_does_not_enter_the_mapping()
+    {
+        // The regression this exists to catch. Both displays have the same point size; one is Retina. A click at the
+        // same normalized position has to land in the same place, because CGEvent counts points, not pixels — so
+        // anyone "fixing" this to use the pixel size would break Retina input and nothing else.
+        var plain = Display(0, 0, 1440, 900, scale: 1.0);
+        var retina = Display(0, 0, 1440, 900, scale: 2.0);
+
+        Assert.Equal(
+            PointerCoordinates.FromNormalized(plain, 0.5, 0.5),
+            PointerCoordinates.FromNormalized(retina, 0.5, 0.5));
+
+        // Stated the other way round, so a mapping that multiplied by the scale cannot pass by returning a tuple of
+        // zeros for both: on the Retina display the far edge is still 1439, not 2879.
+        var (x, y) = PointerCoordinates.FromNormalized(retina, 1, 1);
+        Assert.Equal(1439, x);
+        Assert.Equal(899, y);
+    }
+
+    [Fact]
+    public void The_midpoint_lands_in_the_middle_of_the_display()
+    {
+        var (x, y) = PointerCoordinates.FromNormalized(Display(0, 0, 1441, 901), 0.5, 0.5);
+
+        // Half of 1440 and half of 900 — the -1 is why the centre of an odd-sized display is a whole number.
+        Assert.Equal(720, x);
+        Assert.Equal(450, y);
+    }
+
+    [Fact]
+    public void A_null_display_is_rejected_rather_than_mapped_to_the_origin()
+    {
+        Assert.Throws<ArgumentNullException>(() => PointerCoordinates.FromNormalized(null!, 0.5, 0.5));
     }
 }
 

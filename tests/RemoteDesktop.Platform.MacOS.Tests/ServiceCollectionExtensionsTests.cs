@@ -1,8 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
+using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
+using RemoteDesktop.Platform.MacOS.Clipboard;
 using RemoteDesktop.Platform.MacOS.Display;
 using RemoteDesktop.Platform.MacOS.Input;
 using RemoteDesktop.Platform.MacOS.Terminal;
@@ -31,5 +33,6 @@ public class ServiceCollectionExtensionsTests
         Assert.IsType<MacUserContextGuard>(provider.GetRequiredService<IUserContextGuard>());
         Assert.IsType<PosixPtyHost>(provider.GetRequiredService<IPtyHost>());
         Assert.IsType<IOPMAssertionKeepAwake>(provider.GetRequiredService<ISystemKeepAwake>());
+        Assert.IsType<MacClipboard>(provider.GetRequiredService<IClipboard>());
     }
 }

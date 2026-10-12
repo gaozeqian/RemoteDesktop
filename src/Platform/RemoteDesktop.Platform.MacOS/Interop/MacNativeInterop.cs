@@ -54,6 +54,21 @@ internal unsafe struct RdCursorSnapshot
     public int HotspotY;
 }
 
+/// <summary>One clipboard read, as <c>rd_clipboard_content</c>.</summary>
+/// <remarks>
+/// <see cref="Bytes"/> is owned by the helper and stays valid until the next clipboard read of any pasteboard, so
+/// it has to be copied before another read is attempted.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdClipboardContent
+{
+    /// <summary>One of <see cref="MacNativeInterop.ClipboardNone"/> and friends.</summary>
+    public int Kind;
+
+    public byte* Bytes;
+    public nuint Length;
+}
+
 /// <summary>
 /// The flat C ABI exported by <c>libRemoteDesktopMacNative.dylib</c>, built from <c>native/macos</c>.
 /// </summary>
@@ -113,6 +128,40 @@ internal static unsafe partial class MacNativeInterop
 
     [LibraryImport(NativeLibraries.MacNative)]
     public static partial int rd_cursor_read(RdCursorSnapshot* snapshot);
+
+    // What a clipboard read produced, mirroring the enum in rd_native.h.
+    public const int ClipboardNone = 0;
+    public const int ClipboardText = 1;
+    public const int ClipboardPng = 2;
+
+    /// <summary>
+    /// The pasteboard's change count, or -1 when it cannot be read. Only "different from last time" means anything.
+    /// </summary>
+    /// <param name="pasteboard">A pasteboard name, or <see langword="null"/> for the general pasteboard.</param>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial long rd_clipboard_change_count(string? pasteboard);
+
+    /// <param name="pasteboard">A pasteboard name, or <see langword="null"/> for the general pasteboard.</param>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_clipboard_read(string? pasteboard, RdClipboardContent* content);
+
+    /// <remarks>
+    /// The buffer and its length are two parameters here rather than a <c>ReadOnlySpan&lt;byte&gt;</c>, and that is
+    /// not a style choice. Source-generated marshalling passes an array or a span as a <em>bare pointer</em>, with
+    /// no length beside it — so a span in this position would leave the native <c>length</c> argument to be filled
+    /// by whatever parameter came next, and the helper would then read that many bytes. It read the address of the
+    /// caller's stack buffer as a length and died in <c>memmove</c> against a guard page, which is a memorable way
+    /// to learn the rule.
+    /// </remarks>
+    /// <param name="pasteboard">A pasteboard name, or <see langword="null"/> for the general pasteboard.</param>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_clipboard_write_text(
+        string? pasteboard, byte* utf8, nuint length, byte* error, nuint errorSize);
+
+    /// <inheritdoc cref="rd_clipboard_write_text(string?, byte*, nuint, byte*, nuint)"/>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_clipboard_write_png(
+        string? pasteboard, byte* png, nuint length, byte* error, nuint errorSize);
 
     [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int rd_open_settings(string anchor);

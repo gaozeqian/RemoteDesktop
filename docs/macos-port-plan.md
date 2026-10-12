@@ -73,7 +73,7 @@ Platform.* / Media 只依赖 Abstractions
 | `IInputInjector`                             | SendInput（`SendInputInjector`） | **CGEvent**（`CGEventPost`）+ 扫描码映射表                                                          | 中     |
 | `IPtyHost`                                   | ConPTY（`ConPtyHost`）           | **`posix_openpt`/`forkpty`**（`libSystem`）                                                   | 低     |
 | `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation               | **AVFoundation**（`AVCaptureDevice` / `AVCaptureSession`）                                    | 中高    |
-| `IClipboard`                                 | Win32 剪贴板（`WindowsClipboard`）  | **NSPasteboard**                                                                            | 中     |
+| `IClipboard`                                 | Win32 剪贴板（`WindowsClipboard`）  | **NSPasteboard**（`MacClipboard`；变更靠轮询 changeCount，平台不发通知）                                  | 中     |
 | `IAudioCapturerFactory`                      | WASAPI 环回                      | **ScreenCaptureKit 音频**（与截屏共用同一个权限）                                                         | 中     |
 | `IAudioPlayerFactory`                        | WASAPI                         | **AVAudioEngine** / AudioQueue                                                              | 中     |
 | `IVideoEncoderFactory` ×2                    | Media Foundation MFT（硬/软）      | **VideoToolbox**（`VTCompressionSession`，Apple Silicon 硬编）                                   | 中高    |
@@ -719,6 +719,66 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 不要依赖 `open --args`。这也意味着 §3.8④ 里 `--output` 那个"经 LaunchServices 启动就没有可读 stdout"
 的动机，目前是**够不着**的场景 —— 但留着无害，直接跑时想把报告落盘也一样有用。
 
+### 3.12 P5 实测记录：`[LibraryImport]` 把 span 当裸指针传（**一个新写法踩到的新坑**）
+
+#### 症状
+
+剪贴板 9 条测试刚写完，构建干净、辅助库符号齐全、C 探针直连 dylib 也一切正常，但一跑测试：
+
+```
+An_empty_pasteboard_reports_nothing_rather_than_failing   exit=0     # 读没问题
+Text_survives_a_round_trip                                exit=139   # SIGSEGV
+A_picture_survives_a_round_trip_byte_for_byte             exit=138   # SIGBUS
+```
+
+崩溃报告直接指出了位置：
+
+```
+exception: EXC_BAD_ACCESS, signal SIGBUS, subtype KERN_PROTECTION_FAILURE at 0x000000031ffffff8
+  libsystem_platform.dylib        _platform_memmove
+  Foundation                      -[_NSPlaceholderData initWithBytes:length:copy:deallocator:]
+  libRemoteDesktopMacNative.dylib rd_clipboard_write_png
+  libcoreclr.dylib                CallDescrWorkerInternal
+```
+
+#### 根因
+
+`0x31ffffff8` 这个"长度"是一个**栈地址**（`0x16b3ffffff8` 被截断）—— 也就是说原生侧的 `length` 形参
+收到的是紧随其后的 `error` 缓冲区指针。
+
+原因在于 `[LibraryImport]` 的源生成 marshalling：**数组或 `ReadOnlySpan<byte>` 传过去就是一个裸指针，
+后面不带长度**。所以
+
+```csharp
+// ✗ 错的写法：length 形参会拿到 error 指针
+public static partial int rd_clipboard_write_text(
+    string? pasteboard, ReadOnlySpan<byte> utf8, byte* error, nuint errorSize);
+```
+
+在原生侧展开成 `(name, ptr, error, errorSize)` —— `length` 那一格被 `error` 占了，于是辅助库拿着一个栈地址
+去 `memmove`，撞上保护页。**读路径完全正常**（`rd_clipboard_read` 只写一个 out 结构体，没有这个问题），
+所以症状是"写全炸、读全过"，很容易被误判成辅助库的写实现有 bug。
+
+改法是显式钉住并把长度自己传：
+
+```csharp
+// ✓ 长度自己传
+public static partial int rd_clipboard_write_text(
+    string? pasteboard, byte* utf8, nuint length, byte* error, nuint errorSize);
+```
+
+调用侧 `fixed (byte* bytes = utf8)` 之后显式传 `(nuint)utf8.Length`。
+
+#### 教训
+
+- **这个坑是"新写法"带来的**：`[DllImport]` 时代只能传 `byte[]`，marshaller 会同时给出长度；换成
+  `[LibraryImport]` + span 之后，长度信息**静默消失**。迁移到源生成 marshalling 时，
+  凡是"缓冲区 + 长度"的原生签名都要逐个复查。
+- **"编得过、签得过、符号全在、C 探针也过"仍然不够**。这四条当时全绿，唯一能发现它的是**从托管侧真的调一次**。
+  这也是 P5 验收里那条 `clipboard` 探针存在的理由 —— 自检要能自己走一遍写和读，而不是只列出"端口已注册"。
+- 另一个相关的坑（同一个调用里发现）：`Marshal.GetLastPInvokeError()` 在 `stackalloc` 之后返回 0 —— 
+  基本可以当 marshaller 的 bug，别指望用它读 `stackalloc` 缓冲区那次调用的错误码。
+
 ---
 
 ## 4. 可复用 / 需新增 清单
@@ -733,19 +793,24 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 
 - `src/Platform/RemoteDesktop.Platform.MacOS/`（`AddMacOSPlatform()` + 各端口实现）。P3 补上的部分：
   - `Display/ScreenCaptureKitCapturer.cs`、`Display/ScreenCaptureKitFrameSink.cs`（`IScreenCapturer`）
+  - `Input/PointerCoordinates.cs`（归一化 0..1 → 全局点坐标；从 `CGEventInputInjector` 里提出来就是为了能被测试钉住，
+    见 P3 checklist 最后一条）
   - `TccGrants.cs`（屏幕录制 / 辅助功能的预检、申请与 `x-apple.systempreferences` 深链）
   - `Interop/MacNativeInterop.cs`、`Interop/MacNativeLibraryResolver.cs`（辅助库的 P/Invoke 面与加载器）
+  - P5 补上的部分：`Clipboard/MacClipboard.cs`（`IClipboard`）
 - `native/macos/` —— §2.2 方案 C 的原生辅助库：
-  - `rd_native.h`：**扁平 C ABI**（6 个入口 + 一个反向帧回调）。`RD_EXPORT` 不是装饰：
-    库以 `-fvisibility=hidden` 编译，不标就一个符号都不导出，而症状是"编得过、签得过、第一次 `DllImport` 才炸"。
-  - `rd_screen_capture.m`（ScreenCaptureKit）、`rd_cursor.m`（指针位置 + 形状）、`rd_system.m`（打开系统设置）
+  - `rd_native.h`：**扁平 C ABI**（10 个入口 + 一个反向帧回调；P3 时是 6 个，P5 加了 4 个剪贴板入口）。
+    `RD_EXPORT` 不是装饰：库以 `-fvisibility=hidden` 编译，不标就一个符号都不导出，
+    而症状是"编得过、签得过、第一次 `DllImport` 才炸"。
+  - `rd_screen_capture.m`（ScreenCaptureKit）、`rd_cursor.m`（指针位置 + 形状）、`rd_system.m`（打开系统设置）、
+    `rd_clipboard.m`（NSPasteboard 读写 + changeCount；P5）
   - `build-native.sh`：编 `libRemoteDesktopMacNative.dylib`，`install_name_tool -id @rpath/…` 后 ad-hoc 签名；
     由 `RemoteDesktop.Platform.MacOS.csproj` 的 `BuildMacNativeHelper` target 调起
   - `fetch-libmsquic.sh`（把 libmsquic + openssl@4 重定位成 `@loader_path` 并随包分发，§3.4）
 - `build/installer/client/macos/`：`make-app.sh`（`.app` 打包、`Info.plist`、entitlements、`codesign --deep`）、
   `make-dev-cert.sh`（自签开发身份，§3.9）、`development-identity`（**gitignore** 的本机文件，把签名身份钉住，
   避免 TCC 授权因"换了一张证书"而失效，§3.11⑦）。公证与 `.dmg` 待做。
-- `src/Hosts/RemoteDesktop.Client/SelfCheck.cs`（`--self-check` 诊断模式，§3.8④）。
+- `src/Hosts/RemoteDesktop.Client/SelfCheck.cs`（`--self-check` 诊断模式，§3.8④；P5 新增 `clipboard` 探针）。
 - `.github/actions/run-test-suite/action.yml`（Windows / macOS 两个 job 共用的"重试一次 + TRX + 汇总表"，§3.10）。
 - `build/service/macos/`（`SMAppService` 登录项注册脚本）。
 
@@ -757,8 +822,8 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
   `README.md`/`docs/*`。
 - 测试：`SystemSetupTests` / `HostControlTests` / `FileAccessPolicyTests` / `LocalFileOperationsTests` /
   `ServerSetupTests` / `FileTransferSessionTests` 加平台跳过（§3.10）；新增
-  `RemoteDesktop.Platform.MacOS.Tests`（其中 `ScreenCaptureTests.cs` 是 P3 的，50 条里的 22 条）、
-  `MsQuicAvailabilityTests`、`DeviceIdentityTests`。
+  `RemoteDesktop.Platform.MacOS.Tests`（`ScreenCaptureTests.cs` 与 `DisplayAndInputTests.cs` 是 P3 的；
+  `ClipboardTests.cs` 是 P5 的）、`MsQuicAvailabilityTests`、`DeviceIdentityTests`。
 
 ---
 
@@ -834,10 +899,14 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
       实测抓到 **2704×1756 BGRA**（主显示器 1352×878 点 @2x，即**像素**尺寸，不是点尺寸）✅
 - [x] TCC 权限引导：`TccGrants`（`CGPreflight*`/`CGRequest*` + `x-apple.systempreferences` 深链），
       `--self-check` 会打印两项授权状态
-- [x] 坐标约定统一：虚拟桌面用**逻辑点**、采集返回**像素**、输入用**归一化 0..1**，换算集中在一处并补 7 条测试
+- [x] 坐标约定统一：虚拟桌面用**逻辑点**、采集返回**像素**、输入用**归一化 0..1**。换算集中在
+      `Input/PointerCoordinates.cs` 一处，`PointerCoordinatesTests` 7 条钉住边界（`1.0` 落在 `Width-1`
+      而不是 `Width`）、越界钳制、副屏偏移，以及最关键的一条：**缩放系数不参与换算**
+      （同一个归一化位置在 1.0 与 2.0 的屏幕上必须落在同一点 —— 把 `display.Scale` 乘进去会只坏 Retina 上的输入）
 
 验收：`RemoteDesktop.Platform.MacOS.Tests` **50/50** 通过（非沙箱；其中 2 条真实采集用例在授予屏幕录制后运行）。
 `--self-check` 在 `.app` 内外都能报告采集结果（**直接执行 `Contents/MacOS/RemoteDesktop.Client`**，见 §3.11⑧）。
+（P5 之后这个项目变成 **66** 条：50 + 剪贴板 9 + 坐标换算 7。）
 
 > ⚠️ **P3 顺带暴露、但没修的一件事**：macOS 客户端目前**起不来**。`ClientHost.Build` 在 `ValidateOnBuild`
 > 阶段就抛 `Unable to resolve service for type 'RemoteDesktop.Abstractions.Clipboard.IClipboard' while
@@ -845,7 +914,15 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 > `IAudioCapturerFactory` / `IAudioPlayerFactory` / `ICameraEnumerator`）。这是**既有问题**，不是 P3 引入的
 > （本机更早的崩溃日志早于本次改动），根因是剪贴板（P5）、音频（P9）、摄像头（P8）在 macOS 上还没有实现。
 > **不要用"只注册存在的服务"糊过去** —— 那会把独立宿主静默降级成"能启动但功能残缺"，
-> 反而更难发现。等 P5 落地后自然解除。
+> 反而更难发现。
+>
+> **（P5 完成后更正）** 上面那句原先写的是"等 P5 落地后自然解除" —— **错的**。P5 落地后实测，剪贴板那条已经
+> 消失，但客户端仍然起不来。P5 收尾时重跑了一次 `RemoteDesktop.Client`，`ValidateOnBuild` 现在抛的是：
+> `IAudioPlayerFactory`（激活 `MainWindowViewModel`）、`IAudioCapturerFactory`（激活 `AudioChannelModule`）、
+> `ICameraEnumerator`（激活 `CameraModule`）—— 也就是 **P8 + P9**，与 P5 无关。对照 `--self-check` 的端口表，
+> 剪贴板已变成 `registered (MacClipboard)`。所以这条要等 **P8 和 P9**，不是 P5。
+> 顺带一个反直觉的实测：`IVideoEncoderFactory` / `IVideoDecoderFactory` / `IVideoRecorderFactory` **不在**
+> 这份清单里 —— 它们不是启动期依赖（录制相关的解析发生在建会话时），所以 P4 也不是解除条件。
 
 > ⚠️ **P3 的第二件未了事：输入注入只验到了映射层。** `CGEventInputInjector` 的 9 条测试覆盖的是
 > 扫描码→`CGKeyCode`、修饰键、拖拽、滚轮换算，**没有一条真的发过事件** —— 因为本机 `Accessibility`
@@ -857,12 +934,42 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 
 `VTCompressionSession` / `VTDecompressionSession` 手写绑定，对齐 Windows 侧的 Media Foundation 实现。
 
-### P5 剪贴板与防休眠 🔄
+### P5 剪贴板与防休眠 ✅
 
 - [x] `ISystemKeepAwake` → `IOPMAssertionKeepAwake`（`IOPMAssertionCreateWithName` / `Release`，嵌套计数）
       —— **修过一次**：断言类型原先按导出符号查，第一次 `Acquire` 必抛（§3.8②），已改为字面量并补 4 条测试
 - [x] `IUserContextGuard` → 恒返回 `null`；`IPrivacyScreen` → 未注册（`IsSupported` 语义见 §5）
-- [ ] `IClipboard` → NSPasteboard（ObjC）
+- [x] `IClipboard` → `MacClipboard`（`NSPasteboard`，经 ObjC 辅助库；9 条测试）
+
+原生侧新增 4 个 C ABI 入口（`rd_native.h` / `rd_clipboard.m`，见 §4）：
+`rd_clipboard_change_count` / `rd_clipboard_read` / `rd_clipboard_write_text` / `rd_clipboard_write_png`。
+托管侧 `MacClipboard` 实现 `IClipboard`，在 `AddMacOSPlatform` 里以工厂注册（容器负责 Dispose，
+否则轮询定时器不会停 —— 与 Windows 注册同因）。
+
+三个设计决定，都是被平台逼出来的：
+
+1. **入口多一个 `name` 参数**（`NULL` = 通用剪贴板）。这不是为了灵活，是为了**可测**：测试全程跑在
+   私有剪贴板上，不会覆盖用户正在用的剪贴板。顺带解决了一个更硬的问题 —— `[DllImport]` 无法把
+   `string?` marshal 成 `NULL`，而 `[LibraryImport]` + `StringMarshalling.Utf8` 可以。
+2. **文本优先于图片**。表格选区会同时发布两种类型，用户想要的是文本。读取顺序因此固定为 text → picture。
+3. **变更靠轮询 changeCount，不靠通知**。NSPasteboard **在别的进程抢走剪贴板时不发任何通知**，这是平台事实
+   不是取舍。轮询的是**计数**而不是内容：按定时器读内容会把用户复制的每一样东西（包括他没打算分享的图片）
+   一秒拉进本进程几次，而且 macOS 15 起会反复弹系统的"从…粘贴"提示。轮询只在有监听者时进行（引用计数），
+   与 Windows 实现同形。
+   另外 `rd_clipboard_read` 返回的指针**在下一次读任何剪贴板后即失效**，所以托管侧用了一把**静态**锁
+   （不是实例锁 —— 缓冲区是进程级的），并在锁内就把字节拷走。
+
+验收：`MacClipboardTests` 9/9 通过（文本往返、非 ASCII 往返、PNG 逐字节往返、空剪贴板返回 `null`、
+变更通知、最后一个监听者退出后不再通知、两个剪贴板互不串味、并发读不互相破坏、不支持的类型抛
+`ArgumentException`）。`--self-check` 的 `behaviour` 段新增一条 `clipboard` 探针（§3.12），
+实测输出 `ok (text and PNG round trip on a scratch pasteboard)` —— 本次是在**构建输出目录直接跑**的，
+不是 `.app` 内（探针本身与 bundle 无关；要放进 `.app` 验收得等 P10 打包那次一起做）。
+
+> 探针**故意不碰通用剪贴板**：会覆盖用户剪贴板的自检没人敢跑，而主动读通用剪贴板会让 macOS 15+
+> 弹"从…粘贴"。它走私有剪贴板，命中同一套辅助库、同两个入口、同一条 UTF-8 / PNG 路径，进程退出时由系统回收。
+
+> **未覆盖**：「文本优先于图片」这条规则需要一个原生写两种类型的入口，而 ABI 故意没有提供
+> （写入是二选一的），所以它只在 `rd_clipboard.m` 的读取顺序里成立，没有自动化用例。
 
 ### P6 远程终端（PTY）✅
 
@@ -915,8 +1022,9 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 | **文件传输层仍假设 Windows 被控端**         | **中** | 两处：`Combine` 硬编码 `\`；允许根未做链接解析（§3.10）。P7 处理；在此之前 3 条文件传输用例在 macOS 上跳过 |
 | **`codesign` 静默只签可执行文件**          | **高** | 不加 `--deep` 时它拒绝密封 bundle，却**不报错**，只把标识符退化成 `apphost`、`Info.plist` 不绑定（§3.8①）。打包脚本必须用 `codesign --verify --deep --strict` 断言，不能只看退出码 |
 | 框架依赖的 `.app` 在 Homebrew 的 .NET 上起不来 | 中  | 打包默认自包含（§3.8③）；`--framework-dependent` 仅用于调试 |
-| 端口"能注册"≠"能用"                      | 中  | 电源断言就是这么坏的：容器能解析、第一次调用才抛（§3.8②）。`--self-check` 会真的把每个端口用一遍 |
-| Retina/多屏坐标与像素换算错误                | 中  | 统一约定：虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1；在 P3 建立坐标单元测试                                  |
+| 端口"能注册"≠"能用"                      | 中  | 电源断言就是这么坏的：容器能解析、第一次调用才抛（§3.8②）；剪贴板是第二个（构建/签名/符号/C 探针全绿，托管侧一调就 SIGSEGV，§3.12）。`--self-check` 会真的把每个端口用一遍 |
+| **`[LibraryImport]` 把数组/span 当裸指针传** | **中** | 原生签名里的 `length` 会被下一个实参填上，症状是写路径 SIGSEGV、读路径全好（§3.12）。凡"缓冲区 + 长度"的原生签名一律显式传 `byte*` + `nuint`，别交给 marshaller |
+| Retina/多屏坐标与像素换算错误                | 低  | 统一约定：虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1。**P3 已完成**：换算集中在 `Input/PointerCoordinates.cs`，7 条测试钉住边界、钳制、副屏偏移与"缩放不参与换算" |
 
 ---
 
@@ -934,9 +1042,14 @@ _LSOpenURLsWithCompletionHandler() failed with error -10669.
 
 **仍未落实的技术项**（不是决策，是实施中要验证的）：
 
-- 屏幕采集走 ScreenCaptureKit 的最小可用 PoC（P3 第一件事）。
+- ~~屏幕采集走 ScreenCaptureKit 的最小可用 PoC~~ —— **已完成**（P3，实测 2704×1756 BGRA，§3.11③）。
+- ~~把 Windows 专有的测试用 `Assert.SkipUnless` 关掉，macOS 上的 CI 才有意义~~ —— **已完成**（§3.10，
+  47 条红 → 3 条沙箱假阴性 → 沙箱外 0 失败）。
+- **输入注入真的发一次事件**（P3 只验到映射层，§P3 第二条警告）。要授予辅助功能后**手动**做，放在 P10 联调。
 - 受保护目录 TCC 行为的实际表现（P7）。
-- 把 Windows 专有的测试用 `Assert.SkipUnless` 关掉，macOS 上的 CI 才有意义（P1 的 CI 项）。
+- **`open --args` 送不到参数**的定论（§3.11⑧）：需要在一个**没有沙箱**的终端里重跑一次，
+  才能区分"macOS 26 不再传参"和"沙箱拦住了 LaunchServices"。目前两种解释都站着。
+- 沙箱外重跑一次完整套件（P5 之后只拿到沙箱内的数字，见附录 A）。
 
 ---
 
@@ -1112,7 +1225,7 @@ $ artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client --se
 #   采集按像素请求 —— 按点请求的话 Retina 上会静默只拿到一半分辨率。
 #   keychain round trip 这一行随沙箱而变：沙箱内 FAILED — OSStatus 100001，沙箱外 ok（§3.7）。
 
-# 原生辅助库被真的打进 bundle 并导出（make-app.sh 的验证输出，§3.11）
+# 原生辅助库被真的打进 bundle 并导出（make-app.sh 的验证输出，§3.11；P5 后是 10 个入口）
     libRemoteDesktopMacNative.dylib present; exported entry points:
       0000000000001234 T _rd_capture_create
       0000000000002064 T _rd_capture_destroy
@@ -1120,6 +1233,13 @@ $ artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client --se
       0000000000001f5c T _rd_capture_stop
       0000000000002130 T _rd_cursor_read
       000000000000254c T _rd_open_settings
+      # P5 新增（§3.12 那个 SIGSEGV 就是在这四个里的写入口上）
+      0000000000002a10 T _rd_clipboard_change_count
+      0000000000002a80 T _rd_clipboard_read
+      0000000000002b20 T _rd_clipboard_write_text
+      0000000000002bd0 T _rd_clipboard_write_png
+#   ↑ 注意 _rd_clipboard_write_text/_png 的 C 签名里 length 是**独立形参**。
+#     托管侧如果按 ReadOnlySpan<byte> 声明，marshaller 只传裸指针，length 会被 error 指针填上 → SIGSEGV（§3.12）。
 
 # 指针形状指纹（§3.11②）—— 这三行就是 memset 存在的理由
 源图数据 hash      16105697154201175716   （五次调用完全一致，说明源没问题）
@@ -1134,8 +1254,33 @@ $ security find-identity -v -p codesigning
 # 两张真证书都在时"取第一个"等于抛硬币，而 TCC 按签名身份记忆 —— 换一张授权就全失效。
 # 所以身份写进 build/installer/client/macos/development-identity（gitignore），读不到才回退到排序取第一个并告警。
 
-# 测试（macOS 26.7.1 本机，dotnet test RemoteDesktop.slnx，**沙箱外**）：
-dotnet build RemoteDesktop.slnx              → 0 警告 0 错误
+# P5 验收：--self-check 的 behaviour 段（直接执行，未走 .app，所以 keychain 那行是沙箱内的结果）
+$ RemoteDesktop.Client --self-check
+== behaviour ==
+   keychain round trip      FAILED — InvalidOperationException: … (OSStatus 100001)   # 沙箱内假阴性，§3.7
+   display enumeration      1: 1352x878@2
+   screen capture           ok — 2704x1756 Bgra32, 1 dirty rect(s)
+   keep awake               ok (acquire, release)
+   clipboard                ok (text and PNG round trip on a scratch pasteboard)      # ← P5 新增
+   shells offered           zsh, bash, sh
+   files and shells allowed yes
+== platform ports ==
+   clipboard                registered (MacClipboard)
+#   注意 clipboard 那行**在沙箱内也是 ok** —— 剪贴板不像钥匙串那样要特权，所以这一条探针
+#   不依赖提权就能给出可信结论（也正因如此它没被上面那个提权问题挡住）。
+#   screen capture 直接跑（非 .app）也能过，是因为此时"负责进程"是终端，而终端已有屏幕录制授权。
+
+# P5 的 C 探针（直连 libRemoteDesktopMacNative.dylib，绕开托管侧）：
+文本往返      逐字节一致
+PNG 往返      逐字节一致
+changeCount   每次写入后都变
+空剪贴板      NONE（不是错误）
+三个坏参数路径 全部返回 -1
+#   ↑ 这五条当时全绿，但托管侧一调就 SIGSEGV —— 这就是 §3.12 的教训：
+#     C 探针过不代表托管侧的 ABI 声明是对的。
+
+# 测试（macOS 26.7.1 本机）：
+dotnet build RemoteDesktop.slnx              → 0 警告 0 错误（P5 之后重跑，仍是 0/0）
 加平台跳过之前（§3.10 之前）                   → 480 总计 / 380 成功 / 47 失败 / 53 跳过
 加平台跳过之后                                → 480 总计 / 380 成功 /  3 失败 / 97 跳过
 P3 之后（沙箱外）                             → 502 总计 / 405 成功 /  0 失败 / 97 跳过
@@ -1148,8 +1293,21 @@ P3 之后（沙箱外）                             → 502 总计 / 405 成功
 #   Platform.MacOS.Tests        50 / 0 /  0      ← P3 新增 22 条（§3.11）
 #   Platform.Windows.Tests      92 / 0 / 61      ← §3.10 新增的跳过
 #   Transport.IntegrationTests 138 / 0 / 26      ← §3.10 新增的跳过
-# 沙箱内跑会看到 3 条失败（502/402/3/97）。先跑 kcprobe3 看 sandbox_check(NULL) 是不是 0，
-# 不是 0 就说明这次运行被沙箱包住了，结论不可信 —— 这一步不能省（§3.7 那次误判就是这么来的）。
+
+# P5 之后（Platform.MacOS.Tests；**这一次没能拿到沙箱外的运行**）：
+tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.Tests -noColor
+  → 66 总计 / 64 成功 / 2 失败 / 0 跳过
+#   P5 新增 16 条 = MacClipboardTests 9 + PointerCoordinatesTests 7，全过
+#   2 条失败就是上面那对 KeychainSecretStoreTests（沙箱内 100001 假阴性），与 P5 无关
+
+# ⚠️ 提权这次没生效，所以 P5 只有沙箱内的数字。判定办法不是看提权开关，而是在同一条命令里探一次：
+#     if ps -p 1 >/dev/null 2>&1; then echo UNSANDBOXED; else echo SANDBOXED; fi
+#   → SANDBOXED（裸 `ps` 报 operation not permitted）。加了提权开关后**仍然**是 SANDBOXED。
+#   对照：同一时刻 `security add-generic-password` 成功且打印了 "Sandbox bypassed"，
+#   说明钥匙串本身可写 —— 被沙箱包住的是测试进程，不是钥匙串坏了。
+#   所以那 2 条失败是环境假阴性，不是回归；但**没有沙箱外数字背书**，这一点要说清楚。
+#   顺带修正一条旧记录：先前写"沙箱内跑会看到 3 条失败"，实测沙箱内是 **2** 条 —— 这个项目里
+#   依赖钥匙串的用例只有 2 条（`KeychainSecretStoreTests`），第 3 条在别的项目里。
 
 # CI（.github/workflows/ci.yml）
 build        → runs-on: windows-latest（步骤未变，测试部分抽到组合动作）

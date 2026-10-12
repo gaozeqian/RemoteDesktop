@@ -142,6 +142,64 @@ typedef struct {
 /// the Windows capture does, so both platforms behave the same way.
 RD_EXPORT int rd_cursor_read(rd_cursor_snapshot *out);
 
+/// What a clipboard read produced.
+enum {
+    /// The pasteboard holds nothing this layer can represent. Not an error.
+    RD_CLIPBOARD_NONE = 0,
+    /// `bytes` is UTF-8 text and `length` is its byte length; it is not NUL-terminated.
+    RD_CLIPBOARD_TEXT = 1,
+    /// `bytes` is a complete PNG file.
+    RD_CLIPBOARD_PNG = 2,
+};
+
+/// One clipboard read.
+///
+/// `bytes` is owned by this library and stays valid until the next read of *any* pasteboard, so a caller that wants
+/// to keep it has to copy before reading again.
+typedef struct {
+    int32_t kind;
+    const uint8_t *bytes;
+    size_t length;
+} rd_clipboard_content;
+
+/// The pasteboard's change count, or -1 when it cannot be read at all.
+///
+/// Only "is it different from last time" means anything; the number itself is opaque and not comparable across
+/// processes. Polling this is how the managed side notices that something else took the clipboard — NSPasteboard
+/// posts no notification for that, and polling the *content* instead would mean pulling a picture the user never
+/// asked to share into this process on every tick.
+///
+/// `name` is the pasteboard name, or NULL for the general pasteboard. Taking the name is what makes this testable:
+/// a test can work on a private pasteboard rather than overwriting whatever the user had copied.
+RD_EXPORT int64_t rd_clipboard_change_count(const char *name);
+
+/// Reads the pasteboard.
+///
+/// Text wins over a picture when both are present, because copying a range of cells out of a spreadsheet puts both
+/// there and the text is what the user meant — the same rule the Windows implementation follows. A picture is taken
+/// from PNG, or converted from TIFF when that is all the writer offered, since TIFF is still what most macOS
+/// applications put on the pasteboard.
+///
+/// Returns RD_OK with `kind == RD_CLIPBOARD_NONE` for an empty or unrepresentable pasteboard.
+RD_EXPORT int rd_clipboard_read(const char *name, rd_clipboard_content *out);
+
+/// Replaces the pasteboard contents with UTF-8 text. `length` is the byte length, excluding any terminator.
+RD_EXPORT int rd_clipboard_write_text(const char *name,
+                                      const char *utf8,
+                                      size_t length,
+                                      char *error,
+                                      size_t error_size);
+
+/// Replaces the pasteboard contents with a PNG.
+///
+/// The picture is offered as PNG and, when it converts, also as TIFF, so applications that only look for the older
+/// type can still paste it.
+RD_EXPORT int rd_clipboard_write_png(const char *name,
+                                     const uint8_t *png,
+                                     size_t length,
+                                     char *error,
+                                     size_t error_size);
+
 /// Opens System Settings on the Privacy & Security pane named by `anchor`, e.g. "Privacy_ScreenCapture".
 ///
 /// Returns RD_OK once the request has been handed to the workspace. It does not wait for the pane to appear, and it
