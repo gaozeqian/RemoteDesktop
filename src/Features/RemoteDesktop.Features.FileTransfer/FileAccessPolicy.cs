@@ -68,12 +68,60 @@ public sealed class FileAccessPolicy
             throw Invalid("The path contains a reserved device name.");
         }
 
-        if (_allowedRoots.Length > 0 && !_allowedRoots.Any(root => IsSameOrInside(full, root)))
+        if (_allowedRoots.Length > 0)
         {
-            throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
+            // A path may sit inside a root as a string yet resolve, through a symbolic link or junction, to somewhere
+            // outside it. The string check alone would let a planted link turn a "shared" path into an escape: follow
+            // the links that exist and judge the real destination instead.
+            if (!_allowedRoots.Any(root => IsSameOrInside(ResolveFinalTarget(full), root)))
+            {
+                throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
+            }
         }
 
         return full;
+    }
+
+    /// <summary>
+    /// The place a path actually leads once symbolic links and junctions are followed. Only the parts that exist are
+    /// resolved (a path that is about to be created has nothing to follow yet); a nonexistent tail keeps its literal
+    /// spelling, which the caller then checks against the roots as a string.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> follows a single reparse point; walking the segments from
+    /// the root down resolves a chain of links. The walk stops at the first segment that does not exist, so a path into
+    /// a directory that is still to be made is judged by the ancestor that is really there.
+    /// </remarks>
+    private static string ResolveFinalTarget(string full)
+    {
+        var root = Path.GetPathRoot(full);
+        if (root is null)
+        {
+            return full;
+        }
+
+        var current = root;
+        var segments = full[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var segment in segments)
+        {
+            var candidate = Path.Combine(current, segment);
+
+            // A reparse point is only visible on a path segment that exists; a segment that does not exist yet (a file
+            // or folder that is about to be created) cannot be followed, so the remaining tail stays literal.
+            FileSystemInfo info = Directory.Exists(candidate) ? new DirectoryInfo(candidate) : new FileInfo(candidate);
+            if (!info.Exists)
+            {
+                current = candidate;
+                continue;
+            }
+
+            // Follow the link and keep walking from where it really points, so a link inside a link is followed too.
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            current = target?.FullName ?? candidate;
+        }
+
+        return TrimTrailingSeparator(current);
     }
 
     /// <summary>Validates the name of a file or folder to create or rename to (a single path segment).</summary>

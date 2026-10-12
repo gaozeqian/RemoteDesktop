@@ -36,6 +36,17 @@ jobs:
           dotnet restore RemoteDesktop.slnx
           dotnet build RemoteDesktop.slnx --no-restore -c Release
 
+      # A release is the one build nobody re-checks before it is public, so a known-vulnerable dependency must stop it
+      # here exactly as it stops CI. The report walks the whole transitive graph, not just direct references.
+      - name: Audit packages for known vulnerabilities
+        shell: pwsh
+        run: |
+          $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+          $report
+          if ($report -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found; the report is above."
+          }
+
       # Same retry-once policy as ci.yml (see the comment there): the integration suite is timing-sensitive on a
       # runner and red-flags a different test from run to run. A release is still not published on a red run — the
       # second failure fails the step — but a single flake no longer holds up a release.
@@ -159,11 +170,15 @@ jobs:
 
       # 上传至 GitHub Release：一个版本一个 Release，两个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
+      # 用官方 gh CLI 取代第三方 softprops/action-gh-release（上游已停维护）；gh 在托管 runner 上预装，
+      # github.token 已有 contents:write 权限。
       - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: release-body.md
-          files: |
-            ${{ env.CLIENT_MSI }}
-            ${{ env.SERVER_MSI }}
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            "$env:CLIENT_MSI" "$env:SERVER_MSI" `
+            --title "$env:GITHUB_REF_NAME" `
+            --notes-file release-body.md `
+            --generate-notes

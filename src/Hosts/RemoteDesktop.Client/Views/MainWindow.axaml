@@ -347,7 +347,7 @@
                       <Border Classes="inset" IsVisible="{Binding IsEditingFixedPassword}">
                         <StackPanel Spacing="{DynamicResource RdSpaceSm}">
                           <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●"
-                                   PlaceholderText="输入新固定密码（至少 6 位）" />
+                                   PlaceholderText="输入新固定密码（至少 8 位）" />
                           <TextBlock Text="{Binding FixedPasswordError}" Classes="danger"
                                      IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" />
                           <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">

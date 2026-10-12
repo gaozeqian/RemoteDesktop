@@ -267,6 +267,7 @@ ClientBin/
 *.dbproj.schemaview
 *.jfm
 *.pfx
+*.cer
 *.publishsettings
 orleans.codegen.cs
 
@@ -436,3 +437,6 @@ build/installer/server/windows/Files.generated.wxs
 # so the pattern covers the folder and every platform folder under it.
 build/signing/certificates/
 build/signing/*/certificates/
+
+# WorkBuddy workspace memory (per-session notes, not project code).
+.workbuddy/
