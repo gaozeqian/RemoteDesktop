@@ -895,8 +895,8 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
   - P9 补上的部分：`Audio/MacAudioCapturer.cs`（`IAudioCapturer`，含 `MacAudioChunkSink`）、
     `Audio/MacAudioPlayer.cs`（`IAudioPlayer`，200 ms 丢 backlog 的策略在这里）
 - `native/macos/` —— §2.2 方案 C 的原生辅助库：
-  - `rd_native.h`：**扁平 C ABI**（28 个入口 + 三个反向回调；P3 时是 6 个，
-    P5 加 4 个剪贴板入口，P8 加 8 个摄像头入口，P9 加 10 个音频入口）。
+  - `rd_native.h`：**扁平 C ABI**（29 个入口 + 三个反向回调；P3 时是 6 个，
+    P5 加 4 个剪贴板入口，P8 加 8 个摄像头入口，P9 加 11 个音频入口）。
     `RD_EXPORT` 不是装饰：库以 `-fvisibility=hidden` 编译，不标就一个符号都不导出，
     而症状是"编得过、签得过、第一次 `DllImport` 才炸"。
   - `rd_screen_capture.m`（ScreenCaptureKit）、`rd_cursor.m`（指针位置 + 形状）、`rd_system.m`（打开系统设置）、
