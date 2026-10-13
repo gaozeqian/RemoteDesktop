@@ -12,6 +12,16 @@ jobs:
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
     # dyld 拒绝在更老的系统上加载（docs/macos-port-plan.md §3.4）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
+    # 证书与公证凭据都是可选的：没配就出一个**未签名**的 .pkg（Gatekeeper 会提示"身份不明的开发者"，
+    # 右键 → 打开即可），配了就签名 + 公证（下载即开）。四个证书 Secret 与三个公证 Secret 见下面的注释。
+    env:
+      APP_CERT_BASE64: ${{ secrets.MACOS_APP_CERT_BASE64 }}
+      APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+      INSTALLER_CERT_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_BASE64 }}
+      INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+      NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+      NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -28,11 +38,70 @@ jobs:
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-macos-release
+
+      # 把两张 Developer ID 证书导入一个**临时**钥匙串（不用登录钥匙串：runner 上那个是空的，而且用完即弃）。
+      # 不用第三方 action，理由与下面用 gh 而不用 softprops 相同：少一个会停维护的依赖。
+      #
+      # 需要的 Secret：
+      #   MACOS_APP_CERT_BASE64 / MACOS_APP_CERT_PASSWORD          —— "Developer ID Application" 的 .p12
+      #   MACOS_INSTALLER_CERT_BASE64 / MACOS_INSTALLER_CERT_PASSWORD —— "Developer ID Installer" 的 .p12
+      # 生成方式（本机，导出为 base64 单行）：
+      #   security export -k login.keychain-db -t identities -f pkcs12 -o app.p12 -P <口令>
+      #   base64 -i app.p12 | tr -d '\n'
+      - name: Import the Developer ID certificates (optional)
+        if: env.APP_CERT_BASE64 != '' && env.INSTALLER_CERT_BASE64 != ''
+        run: |
+          set -euo pipefail
+          KC="$RUNNER_TEMP/rd-signing.keychain-db"
+          KC_PW="$(openssl rand -hex 16)"
+
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security default-keychain -s "$KC"
+
+          # -A 是因为 [Convert]::ToBase64String 出来的是一整行，没有换行。
+          printf '%s' "$APP_CERT_BASE64"       | openssl base64 -d -A -out "$RUNNER_TEMP/app.p12"
+          printf '%s' "$INSTALLER_CERT_BASE64" | openssl base64 -d -A -out "$RUNNER_TEMP/installer.p12"
+
+          # -T 把"允许这两个工具使用这把私钥"写进钥匙串项；少了它，codesign/productbuild 会卡在授权弹窗上
+          # （CI 里没人能点），报出来是含糊的 "User interaction is not allowed"。
+          security import "$RUNNER_TEMP/app.p12" -k "$KC" -P "$APP_CERT_PASSWORD" \
+              -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+          security import "$RUNNER_TEMP/installer.p12" -k "$KC" -P "$INSTALLER_CERT_PASSWORD" \
+              -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+
+          # 让上述 -T 在非交互环境下真正生效。
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "$KC_PW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/installer.p12"
+
+          echo "==> Signing identities available:"
+          security find-identity -v -p codesigning "$KC"
+
       # 打包成 .pkg（装到 /Applications）。脚本会顺带构建 .app 与原生辅助库。
-      # 包是**未签名**的：没有配 Apple Developer ID Installer 证书。在别人的 Mac 上 Gatekeeper 会提示
-      # "unidentified developer"，用户需要右键 → 打开。签名 + 公证是另一件事，依赖付费账号，见脚本头部说明。
+      # 有证书就 --distribution（硬化运行时 + 安全时间戳，可公证）；再配了公证凭据就 --notarize
+      # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
       - name: Build the macOS .pkg
-        run: ./build/installer/client/macos/make-pkg.sh --configuration Release
+        run: |
+          set -euo pipefail
+          args=(--configuration Release)
+
+          if [[ -n "${APP_CERT_BASE64:-}" && -n "${INSTALLER_CERT_BASE64:-}" ]]; then
+            args+=(--distribution)
+            if [[ -n "${NOTARY_KEY_BASE64:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER_ID:-}" ]]; then
+              printf '%s' "$NOTARY_KEY_BASE64" | openssl base64 -d -A -out "$RUNNER_TEMP/notary_key.p8"
+              export NOTARY_KEY_PATH="$RUNNER_TEMP/notary_key.p8"
+              args+=(--notarize)
+            else
+              echo "::warning title=Signed but not notarized::The Developer ID certificates are configured but the notary credentials (MACOS_NOTARY_*) are not, so the .pkg will be signed but not notarized — Gatekeeper still warns on a first run."
+            fi
+          else
+            echo "::warning title=Unsigned .pkg::No Developer ID certificates configured (MACOS_APP_CERT_BASE64 / MACOS_INSTALLER_CERT_BASE64). The .pkg will be unsigned and Gatekeeper will report 'unidentified developer' on other machines."
+          fi
+
+          ./build/installer/client/macos/make-pkg.sh "${args[@]}"
+
       - name: Rename the installer for the release
         run: |
           set -euo pipefail

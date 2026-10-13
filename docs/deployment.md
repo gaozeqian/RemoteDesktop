@@ -507,10 +507,10 @@ build/installer/client/macos/make-pkg.sh --configuration Release
 
 三件必须知道的事：
 
-- **包默认未签名**（没有 Apple Developer ID Installer 证书）：在别人的 Mac 上 Gatekeeper 会提示
+- **包默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
   "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
-  有证书时用 `--identity "Developer ID Installer: …"` 签名；要做到下载即开，还需要公证（notarization），
-  需要付费 Apple Developer 账号。
+  有证书时加 `--distribution` 与 `--notarize` 做签名 + 公证，下载即开；证书与凭据的配置见
+  [build/signing/README.md](../build/signing/README.md) 的 macOS 一节。
 - **被控端需要手动授权两项权限**：装完后打开应用，在「系统设置 → 隐私与安全性」里给它开
   **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。macOS 会在首次使用时弹窗；授权后可能要重启应用。
 - **无人值守**：在应用里开启登录项（`SMAppService`）。它按**已签名并位于 `/Applications` 的应用**记账，

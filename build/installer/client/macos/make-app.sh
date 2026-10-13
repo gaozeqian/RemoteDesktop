@@ -9,6 +9,11 @@
 #
 # Usage:
 #   build/installer/client/macos/make-app.sh [--configuration Release] [--output <dir>] [--framework-dependent]
+#                                            [--distribution]
+#
+# --distribution signs with the hardened runtime and a secure timestamp (and refuses to build without a real signing
+# identity) so the result can be notarized. Without it the bundle is signed for local development, which is faster and
+# works offline. make-pkg.sh turns it on for a distributable .pkg.
 #
 # Self-contained by default, and that is not a size preference: a framework-dependent apphost resolves the shared
 # runtime from a registered location (`/usr/local/share/dotnet`, `DOTNET_ROOT`, …), and a machine whose .NET came from
@@ -38,6 +43,11 @@ SELF_CONTAINED=1
 APP_NAME="RemoteDesktop.app"
 BUNDLE_ID="com.remotedesktop.client"
 EXECUTABLE_NAME="RemoteDesktop.Client"
+# Distribution signing (Developer ID) differs from development signing in two ways that matter: the signature needs a
+# secure timestamp (`--timestamp`, not `--timestamp=none`) and the hardened runtime (`--options runtime`). Both are
+# prerequisites for notarization; neither is needed for a local build. Off by default so the development flow is
+# unchanged. See make-pkg.sh, which turns this on.
+DISTRIBUTION="${RD_DISTRIBUTION:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --output)        OUTPUT_DIR="$2";    shift 2 ;;
         --self-contained)    SELF_CONTAINED=1; shift ;;
         --framework-dependent) SELF_CONTAINED=0; shift ;;
+        --distribution)  DISTRIBUTION=1; shift ;;
         -h|--help)       sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
@@ -145,7 +156,34 @@ if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)"
 fi
 
-SIGN_ARGS=(--force --timestamp=none --entitlements "$SCRIPT_DIR/entitlements.plist")
+# A distribution build must be signed with a real Developer ID and hardened runtime: an ad-hoc signature cannot be
+# notarized, and the whole point of --distribution is to hand the result to notarization. Failing here beats producing
+# a bundle that notarytool rejects five minutes later.
+#
+# The certificate *type* is checked, not just its presence: an "Apple Development" certificate is perfectly valid for
+# local development and is exactly what a developer machine has, so without this check `--distribution` would happily
+# produce a hardened-runtime bundle signed with a certificate Apple will not notarize.
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    if [[ -z "$IDENTITY" ]]; then
+        echo "Refusing to build a distribution bundle without a signing identity." >&2
+        echo "Set APPLE_DEVELOPMENT_IDENTITY to a 'Developer ID Application: …' certificate." >&2
+        exit 1
+    fi
+    if [[ "$IDENTITY" != "Developer ID Application:"* ]]; then
+        echo "Refusing to build a distribution bundle with a non-distribution identity:" >&2
+        echo "    $IDENTITY" >&2
+        echo "It must be a 'Developer ID Application: …' certificate — an Apple Development certificate cannot be notarized." >&2
+        exit 1
+    fi
+fi
+
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    SIGN_FLAGS=(--options runtime --timestamp)
+else
+    SIGN_FLAGS=(--timestamp=none)
+fi
+
+SIGN_ARGS=(--force "${SIGN_FLAGS[@]}" --entitlements "$SCRIPT_DIR/entitlements.plist")
 if [[ -n "$IDENTITY" ]]; then
     echo "    identity: $IDENTITY"
     SIGN_ARGS+=(--sign "$IDENTITY")
@@ -175,7 +213,7 @@ fi
 # allow-jit. (--deep below may re-apply them; that is noise, not breakage, and P10 replaces --deep with an explicit
 # Contents/Frameworks layout for notarization anyway.)
 while IFS= read -r -d '' nested; do
-    codesign --force --timestamp=none --sign "${IDENTITY:--}" "$nested"
+    codesign --force "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$nested"
 done < <(find "$MACOS_DIR" -type f \( -name '*.dylib' -o -name '*.so' \) -print0)
 
 # --deep is not decoration here, it is the only way to seal this bundle. codesign treats *every* file in

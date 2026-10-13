@@ -11,16 +11,26 @@
 # The .pkg is UNSIGNED by default. Without an Apple "Developer ID Installer" certificate there is nothing to sign it
 # with, and the consequence is concrete: on someone else's Mac, Gatekeeper shows "cannot be opened because it is from
 # an unidentified developer" and the user has to right-click → Open (or allow it in System Settings → Privacy &
-# Security). That is a limitation of shipping without a certificate, not a bug in this script. When a certificate is
-# available, pass it with --identity and the .pkg is signed — see the note at the bottom for what notarization adds.
+# Security). That is a limitation of shipping without a certificate, not a bug in this script.
+#
+# With certificates, --distribution signs the app (Developer ID Application, hardened runtime, secure timestamp) and
+# the .pkg (Developer ID Installer). Add --notarize to also submit the .pkg to Apple and staple the ticket, which is
+# what makes it open with no warning at all.
 #
 # Usage:
 #   build/installer/client/macos/make-pkg.sh [--configuration Release] [--output <dir>] [--skip-app-build]
-#                                           [--identity "Developer ID Installer: ..."]
+#                                            [--distribution] [--notarize]
+#                                            [--app-identity "Developer ID Application: …"]
+#                                            [--identity     "Developer ID Installer: …"]
+#
+# --distribution / --app-identity / --identity: sign for distribution. With --distribution the identities are found
+#   in the keychain automatically; pass them explicitly when more than one is installed.
+# --notarize: submit to Apple and staple. Needs credentials, from either of:
+#     NOTARY_KEY_PATH  + NOTARY_KEY_ID + NOTARY_ISSUER_ID     (App Store Connect API key .p8 — preferred for CI)
+#     NOTARY_APPLE_ID  + NOTARY_PASSWORD + NOTARY_TEAM_ID     (Apple ID + app-specific password)
 #
 # Environment:
 #   RD_SKIP_APP_BUILD=1   Reuse the existing .app instead of rebuilding it (same as --skip-app-build).
-#   INSTALLER_IDENTITY    Signing identity; overrides nothing, only fills in when --identity is absent.
 #
 set -euo pipefail
 
@@ -35,7 +45,10 @@ BUNDLE_ID="com.remotedesktop.client"
 INSTALL_LOCATION="/Applications"
 ARCH="arm64"
 SKIP_APP_BUILD="${RD_SKIP_APP_BUILD:-0}"
-IDENTITY="${INSTALLER_IDENTITY:-}"
+DISTRIBUTION=0
+NOTARIZE=0
+APP_IDENTITY=""
+PKG_IDENTITY=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -43,7 +56,10 @@ while [[ $# -gt 0 ]]; do
         --output)          OUTPUT_DIR="$2";    shift 2 ;;
         --app)             APP_DIR="$2";       shift 2 ;;
         --arch)            ARCH="$2";          shift 2 ;;
-        --identity)        IDENTITY="$2";      shift 2 ;;
+        --app-identity)    APP_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
+        --identity)        PKG_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
+        --distribution)    DISTRIBUTION=1;     shift ;;
+        --notarize)        NOTARIZE=1;         shift ;;
         --skip-app-build)  SKIP_APP_BUILD=1;   shift ;;
         -h|--help)         sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -62,11 +78,44 @@ for tool in pkgbuild productbuild pkgutil; do
     }
 done
 
+# --- 0. Distribution signing identities ------------------------------------------------------------------------
+
+# Sorted so the pick is at least reproducible; `security find-identity` enumerates in no particular order. With more
+# than one of a kind installed this is a coin toss, which is why an explicit flag wins over the search.
+find_identity() {
+    security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n "s/.*\"\\($1: [^\"]*\\)\".*/\\1/p" | sort | sed -n '1p'
+}
+
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    [[ -n "$APP_IDENTITY" ]] || APP_IDENTITY="$(find_identity "Developer ID Application")"
+    [[ -n "$PKG_IDENTITY" ]] || PKG_IDENTITY="$(find_identity "Developer ID Installer")"
+
+    if [[ -z "$APP_IDENTITY" ]]; then
+        echo "No 'Developer ID Application' certificate found. Install one, or pass --app-identity." >&2
+        exit 1
+    fi
+    if [[ -z "$PKG_IDENTITY" ]]; then
+        echo "No 'Developer ID Installer' certificate found. Install one, or pass --identity." >&2
+        exit 1
+    fi
+    echo "==> Distribution signing"
+    echo "    app:       $APP_IDENTITY"
+    echo "    installer: $PKG_IDENTITY"
+fi
+
 # --- 1. The .app -----------------------------------------------------------------------------------------------
 
 if [[ "$SKIP_APP_BUILD" != "1" ]]; then
     echo "==> Building $APP_NAME ($CONFIGURATION)"
-    "$SCRIPT_DIR/make-app.sh" --configuration "$CONFIGURATION" --output "$(dirname "$APP_DIR")"
+    APP_ARGS=(--configuration "$CONFIGURATION" --output "$(dirname "$APP_DIR")")
+    if [[ "$DISTRIBUTION" == "1" ]]; then
+        # make-app.sh reads the identity from the environment; --distribution switches it to hardened runtime + a
+        # secure timestamp, which notarization requires.
+        APP_ARGS+=(--distribution)
+        export APPLE_DEVELOPMENT_IDENTITY="$APP_IDENTITY"
+    fi
+    "$SCRIPT_DIR/make-app.sh" "${APP_ARGS[@]}"
 fi
 
 if [[ ! -d "$APP_DIR" ]]; then
@@ -104,14 +153,19 @@ pkgbuild \
 
 # The welcome and conclusion screens are the only place a first-time user is told what the two permission prompts
 # they are about to see actually mean. Without them the app looks broken ("why does it want to record my screen?").
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    SIGNED_NOTE=""
+else
+    SIGNED_NOTE='<p style="color:#888;">This package is not signed with an Apple Developer ID, so macOS may warn that it is from an unidentified developer. If it refuses to open, right-click the .pkg and choose <b>Open</b>.</p>'
+fi
+
 cat > "$RES_DIR/welcome.html" <<HTML
 <html><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Remote Desktop</h2>
 <p>This installs <b>Remote Desktop</b> into <b>/Applications</b>.</p>
 <p>Remote Desktop can act as a controller (connect out to another machine) and as a controlled host (let someone
 else connect in). Both roles live in the same app.</p>
-<p style="color:#888;">This package is not signed with an Apple Developer ID, so macOS may warn that it is from an
-unidentified developer. If it refuses to open, right-click the .pkg and choose <b>Open</b>.</p>
+$SIGNED_NOTE
 </body></html>
 HTML
 
@@ -158,23 +212,22 @@ FINAL_PKG="$OUTPUT_DIR/$PKG_NAME"
 
 BUILD_ARGS=(--distribution "$WORK_DIR/distribution.xml" --resources "$RES_DIR" --package-path "$WORK_DIR")
 
-if [[ -n "$IDENTITY" ]]; then
-    echo "==> Signing with: $IDENTITY"
-    BUILD_ARGS+=(--sign "$IDENTITY")
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    BUILD_ARGS+=(--sign "$PKG_IDENTITY")
 else
     cat >&2 <<'WARNING'
 
     ###########################################################################################
-    # No --identity given: building an UNSIGNED .pkg.                                         #
+    # Building an UNSIGNED .pkg.                                                              #
     #                                                                                         #
     # It will install, but on any other Mac Gatekeeper reports "unidentified developer" and   #
     # the user must right-click → Open (or allow it in System Settings → Privacy & Security).  #
-    # To sign, install an Apple "Developer ID Installer" certificate and pass                 #
-    #     --identity "Developer ID Installer: Your Name (TEAMID)"                             #
+    # To sign, install an Apple "Developer ID Installer" certificate and pass --distribution   #
+    # (or --identity "Developer ID Installer: Your Name (TEAMID)").                            #
     #                                                                                         #
-    # Signing alone is not enough for a clean first-run on macOS 10.15+: the .pkg should also  #
-    # be notarized (xcrun notarytool submit … && xcrun stapler staple …). That needs a paid    #
-    # Apple Developer account and is deliberately out of scope here.                          #
+    # Signing alone is not enough for a clean first-run on macOS 10.15+: add --notarize, which #
+    # submits the .pkg to Apple and staples the ticket. That needs a paid Apple Developer      #
+    # account and notary credentials (see the header).                                        #
     ###########################################################################################
 
 WARNING
@@ -183,12 +236,50 @@ fi
 echo "==> Building $PKG_NAME"
 productbuild "${BUILD_ARGS[@]}" "$FINAL_PKG"
 
-# --- 6. Verify -------------------------------------------------------------------------------------------------
+# --- 6. Notarization -------------------------------------------------------------------------------------------
+
+if [[ "$NOTARIZE" == "1" ]]; then
+    if [[ "$DISTRIBUTION" != "1" ]]; then
+        echo "Refusing to notarize an unsigned .pkg: notarization requires a Developer ID signature." >&2
+        exit 1
+    fi
+
+    # Two credential shapes are accepted. The API key is preferred for CI: no Apple ID, no 2FA, no per-machine
+    # app-specific password to rotate.
+    NOTARY_CREDS=()
+    if [[ -n "${NOTARY_KEY_PATH:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER_ID:-}" ]]; then
+        NOTARY_CREDS=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+    elif [[ -n "${NOTARY_APPLE_ID:-}" && -n "${NOTARY_PASSWORD:-}" && -n "${NOTARY_TEAM_ID:-}" ]]; then
+        NOTARY_CREDS=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$NOTARY_TEAM_ID")
+    else
+        cat >&2 <<'ERR'
+--notarize needs credentials. Set either
+    NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER_ID   (App Store Connect API key)
+or  NOTARY_APPLE_ID + NOTARY_PASSWORD + NOTARY_TEAM_ID   (Apple ID + app-specific password)
+ERR
+        exit 1
+    fi
+
+    echo "==> Notarizing (this uploads to Apple and can take a few minutes)"
+    xcrun notarytool submit "$FINAL_PKG" "${NOTARY_CREDS[@]}" --wait
+
+    # Stapling attaches the ticket to the .pkg itself, so a machine that installs it later does not have to ask Apple
+    # (and works offline).
+    echo "==> Stapling the notarization ticket"
+    xcrun stapler staple "$FINAL_PKG"
+fi
+
+# --- 7. Verify -------------------------------------------------------------------------------------------------
 
 echo "==> Verifying"
-# --check-signature exits non-zero for an unsigned package, which is expected here, so it is not allowed to abort
-# the script — the output is the point, not the status.
+# --check-signature exits non-zero for an unsigned package, which is expected when no certificate is configured, so
+# it is not allowed to abort the script — the output is the point, not the status.
 pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    # The question that actually matters for a user: would Gatekeeper let this install? "accepted" is the answer we
+    # want; "source=Notarized Developer ID" only appears once --notarize has run.
+    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+fi
 echo "    payload:"
 pkgutil --payload-files "$FINAL_PKG" | head -8 | sed 's/^/      /'
 echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries)"

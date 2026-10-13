@@ -45,9 +45,10 @@ build/installer/client/macos/make-pkg.sh --configuration Release
 > `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。平台细节与实测记录见
 > [docs/macos-port-plan.md](docs/macos-port-plan.md)，选型评审见 [docs/macos-port-review.md](docs/macos-port-review.md)。
 >
-> `.pkg` **默认未签名**（没有 Apple Developer ID Installer 证书）：在别人的 Mac 上 Gatekeeper 会提示
-> "unidentified developer"，需要右键 → 打开。有证书时用 `--identity "Developer ID Installer: …"` 签名；
-> 完整的首次运行体验还需要公证（notarization），需要付费 Apple Developer 账号。
+> `.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
+> "unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID 签名 + 硬化运行时）
+> 和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开——证书与公证凭据的配置见
+> [build/signing/README.md](build/signing/README.md) 的 macOS 一节。
 
 ## 本地运行（单机两个客户端互连）
 

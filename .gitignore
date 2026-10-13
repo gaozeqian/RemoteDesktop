@@ -442,6 +442,9 @@ build/signing/*/certificates/
 # and macOS keys the screen-recording and accessibility grants to it. Pinned locally by make-app.sh, never committed.
 build/installer/client/macos/development-identity
 
+# Finder writes these into any directory it has displayed; they are per-machine noise with no meaning in a repository.
+.DS_Store
+
 # WorkBuddy workspace memory (per-session notes, not project code).
 .workbuddy/
 .workbuddy-ai/
