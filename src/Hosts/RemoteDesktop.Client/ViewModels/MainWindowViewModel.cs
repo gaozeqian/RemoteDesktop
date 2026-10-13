@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Clipboard;
+using RemoteDesktop.Abstractions.Configuration;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
@@ -18,7 +19,6 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Windows.Setup;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -453,22 +453,45 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveServerAddressAsync()
     {
-        // There is no installed service to reconfigure anywhere but Windows. The guard is also what tells the platform
-        // analyzer that the Windows-only parsing below is reached on Windows only.
-        if (!OperatingSystem.IsWindows())
-        {
-            ServerAddressError = "只有 Windows 版本可以修改被控端的服务器地址";
-            return;
-        }
-
-        // Parsed here, before anything is started as administrator, and by the same rule the service applies when it
-        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt.
-        if (!SystemSetup.TryParseRendezvousUri(NewServerAddress, out var rendezvous))
+        // Parsed by the same rule the host applies when it starts, on every platform — so an address this box accepts
+        // is one the host will accept, and a rejected one costs the user a sentence rather than a restart that comes
+        // back broken.
+        if (!RendezvousAddress.TryParse(NewServerAddress, out var rendezvous))
         {
             ServerAddressError = "地址要写成 ws://主机:端口/ws 或 wss://主机/ws";
             return;
         }
 
+        // Where the address has to go depends on who is being controlled. On Windows that is the installed service,
+        // which owns the setting in its own appsettings.json — only an elevated run can write that file, so the client
+        // asks the service to do it. On macOS there is no service: this process is the controlled side, so the address
+        // is written down for this process and the app restarts.
+        if (OperatingSystem.IsWindows())
+        {
+            await SaveServerAddressViaServiceAsync(rendezvous);
+            return;
+        }
+
+        try
+        {
+            ServerAddressStore.Save(DataDirectory, rendezvous);
+            IsEditingServerAddress = false;
+            RestartClient();
+        }
+        catch (Exception ex)
+        {
+            ServerAddressError = $"无法应用配置：{ex.Message}";
+        }
+    }
+
+    /// <summary>The Windows path: hand the address to the installed service, which writes it and restarts itself.</summary>
+    /// <remarks>
+    /// This is the only place where something the user typed reaches a process running as administrator, which is why
+    /// the address is parsed above and passed as its own argument rather than folded into a command line.
+    /// </remarks>
+    [SupportedOSPlatform("windows")]
+    private async Task SaveServerAddressViaServiceAsync(Uri rendezvous)
+    {
         try
         {
             var exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe");
@@ -493,18 +516,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
 
             IsEditingServerAddress = false;
-
-            // Restart the client application so it picks up the new address for outbound connections.
-            var clientExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-            if (!string.IsNullOrEmpty(clientExe))
-            {
-                System.Diagnostics.Process.Start(clientExe);
-                Environment.Exit(0);
-            }
+            RestartClient();
         }
         catch (Exception ex)
         {
             ServerAddressError = $"无法应用配置：{ex.Message}";
+        }
+    }
+
+    /// <summary>Starts a fresh copy of this process and leaves, so a changed address takes effect immediately.</summary>
+    private static void RestartClient()
+    {
+        var clientExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+        if (!string.IsNullOrEmpty(clientExe))
+        {
+            System.Diagnostics.Process.Start(clientExe);
+            Environment.Exit(0);
         }
     }
 
@@ -886,11 +913,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
 
         // The device code comes from the server, so a machine that cannot reach it has no code to give out. Saying so
-        // here is the difference between "it is broken" and "the server address is wrong".
+        // here is the difference between "it is broken" and "the server address is wrong". The remedy named is the one
+        // that platform actually has: Windows installs the address into the service at install time, macOS has no
+        // service and goes through the box in 高级设置.
         ServerHint = online
             ? null
-            : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
-              + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。";
+            : OperatingSystem.IsWindows()
+                ? "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
+                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。"
+                : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
+                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/deployment.md）。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
         HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
         SetIncoming(status.Sessions);

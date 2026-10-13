@@ -49,6 +49,7 @@ internal static class ClientHost
         var dataDirectory = builder.Configuration["DataDirectory"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RemoteDesktop");
         CrashLog.Register(dataDirectory);
+        AddSavedSettings(builder.Configuration, dataDirectory);
 
         // Read before anything is built: a mistyped address used to end in an exception nobody saw, because a windowed
         // program that dies while starting up has nowhere to say why. The reason goes to the crash log and to the
@@ -99,5 +100,45 @@ internal static class ClientHost
         }
 
         return builder.Build();
+    }
+
+    /// <summary>
+    /// Loads the address the user saved in 高级设置 over the one the app shipped with.
+    /// </summary>
+    /// <remarks>
+    /// The saved value lives in the data directory rather than in the <c>appsettings.json</c> next to the executable,
+    /// because on macOS that file is inside the signed .app and rewriting it would invalidate the signature — which
+    /// there also costs the screen-recording and accessibility grants. See <see cref="ServerAddressStore"/>.
+    /// <para>
+    /// The source is inserted directly above the bundled appsettings.json rather than simply appended. Appending would
+    /// put it above the environment and the command line too, and then <c>--Transport:RendezvousUri</c> would stop
+    /// being an override — it would look like it was ignored, which is exactly the kind of thing that costs an hour.
+    /// </para>
+    /// </remarks>
+    private static void AddSavedSettings(ConfigurationManager configuration, string dataDirectory)
+    {
+        var path = ServerAddressStore.PathFor(dataDirectory);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        // AddJsonFile is what wires up the file provider for an absolute path; the source then has to move.
+        configuration.AddJsonFile(path, optional: true, reloadOnChange: false);
+        var sources = configuration.Sources;
+        var saved = sources[^1];
+        sources.RemoveAt(sources.Count - 1);
+
+        var afterAppSettings = 0;
+        for (var i = 0; i < sources.Count; i++)
+        {
+            if (sources[i] is FileConfigurationSource file
+                && string.Equals(Path.GetFileName(file.Path), "appsettings.json", StringComparison.OrdinalIgnoreCase))
+            {
+                afterAppSettings = i + 1;
+            }
+        }
+
+        sources.Insert(afterAppSettings, saved);
     }
 }
