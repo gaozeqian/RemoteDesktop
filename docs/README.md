@@ -18,6 +18,12 @@
 * [**设备列表与存储 (device-list-storage.md)**](device-list-storage.md)
   * 客户端本地存储结构及账号系统同步升级预留接口。
 
-### 3. 开发指引
+### 3. 平台移植 (Platform Ports)
+* [**macOS (arm64) 移植实现计划 (macos-port-plan.md)**](macos-port-plan.md)
+  * P1–P10 的分阶段计划、本机实测记录（原生互操作、TCC、打包签名、VideoToolbox 等）与风险清单。
+* [**macOS (arm64) 移植评审 (macos-port-review.md)**](macos-port-review.md)
+  * 架构与技术选型评估、对原体系的影响评估、遗留技术债与改进建议。
+
+### 4. 开发指引
 * 请参阅根目录下的 [`CONTRIBUTING.md`](../CONTRIBUTING.md) 了解代码提交、环境搭建与架构测试规范。
 * 项目历史与版本迭代请参考 [`CHANGELOG.md`](../CHANGELOG.md)。

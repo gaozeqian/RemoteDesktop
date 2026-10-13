@@ -2,6 +2,42 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [Unreleased] · macOS (Apple Silicon) 平台移植（P1–P10）
+
+新增 `RemoteDesktop.Platform.MacOS` 平台项目（`net10.0`，与 Windows 侧同形），实现全部平台端口，
+使同一份客户端代码可在 macOS 上构建运行。核心层（`Domain` / `Application` / `Media` / `Protocol` /
+`Signaling`）**零改动**，依赖规则（`ArchitectureTests`）无需修改。
+
+### Added
+- [Platform] **屏幕采集与输入注入**：ScreenCaptureKit 截屏（含光标）、CGEvent 键鼠注入，统一坐标换算
+  （虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1）。
+- [Platform] **视频编解码**：VideoToolbox H.264（硬件优先 + 软件兜底），线上 Annex-B、内部 AVCC 显式互转。
+- [Platform] **音频**：ScreenCaptureKit 环回采集（复用屏幕录制授权，**不新增麦克风权限**）+ AudioQueue 播放。
+- [Platform] **摄像头**：AVFoundation 枚举与采集。
+- [Platform] **录制**：AVAssetWriter（H.264 + MP4），复用共享 `Media` 层录制契约。
+- [Platform] **无人值守**：`SMAppService` 登录项（新增 `ILoginItem` 端口）。
+- [Platform] **剪贴板 / 防休眠 / 远程终端 / 密钥**：NSPasteboard、IOKit 电源断言、BSD 伪终端（`posix_spawn`）、
+  Keychain。
+- [Build] **`.app` 打包脚本** `build/installer/client/macos/make-app.sh`（自包含、`codesign --deep`、身份钉住）
+  与原生辅助库构建 `native/macos/build-native.sh`（扁平 C ABI，44 个导出入口）。
+- [CI] 新增 `build-macos` job（`macos-26`，arm64），与 Windows job 共用 `run-test-suite` 组合动作。
+- [Client] `--self-check` 诊断模式：在 bundle 内逐一验证每个平台端口与行为探针。
+
+### Changed
+- [Transport] `DeviceIdentity` 加载 PKCS#12 时加 `X509KeyStorageFlags.Exportable`（macOS 上不加则私钥
+  不可导出、MsQuic 握手失败；Windows 不受影响，一个代码路径服务两平台）。
+- [FileTransfer] 修掉两个"假设被控端是 Windows"的真 bug：`RemoteFileSource.Combine` 不再硬编码 `\`（分隔符
+  从被控端返回的路径字符串上读）；`FileAccessPolicy` 允许根与入参同做链接解析（修 macOS `/var→/private/var` 误判）。
+- [Hosts] `ClientHost` / `Program` 去掉 Windows 硬编码，新增 `ClientPlatformRegistration` 运行时选平台；
+  录制器改由 DI 注入。
+- [Tests] Windows 专有用例改为 `SkipUnless` 跳过（macOS 上不再计为失败）。
+
+### Notes
+- 最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
+  （见 `docs/macos-port-plan.md` §3.4）。降低下限需改走"从源码构建 MsQuic"。
+- 已知未覆盖（需人工授权，自动化测试无法验证）：辅助功能授权下的真实输入注入、受保护目录
+  （`~/Desktop`/`~/Documents`/`~/Downloads`）的 TCC 弹窗路径。
+
 ## [0.3.0] - 2026-10-11 · 安装向导与自签名证书
 
 ### Changed

@@ -1,7 +1,7 @@
 # Remote Desktop
 
 跨平台远程桌面软件（类 ToDesk）：远程控制、观看模式、文件传输、远程终端、远程摄像头。
-后端 .NET 10，前端 Avalonia 12。第一阶段仅支持 Windows，macOS / Linux 在后续阶段通过新增平台项目接入。
+后端 .NET 10，前端 Avalonia 12。**已支持 Windows 与 macOS (Apple Silicon)**；Linux 计划通过新增平台项目接入。
 
 ## 📚 项目文档
 
@@ -12,6 +12,8 @@
   - **[网络通信协议 (Protocol)](docs/protocol.md)**
   - **[安全机制说明 (Security)](docs/security.md)**
   - **[设备列表存储设计 (Storage)](docs/device-list-storage.md)**
+  - **[macOS 移植计划 (macOS Port Plan)](docs/macos-port-plan.md)**
+  - **[macOS 移植评审 (macOS Port Review)](docs/macos-port-review.md)**
 - **[🤝 贡献指南 (Contributing)](CONTRIBUTING.md)**：包含代码提交流程、环境要求与架构依赖规则。
 - **[📜 更新日志 (Changelog)](CHANGELOG.md)**：记录各里程碑的新增特性与修复。
 
@@ -27,6 +29,17 @@ dotnet test RemoteDesktop.slnx
 ```
 pwsh -File build/installer/client/windows/build-installer.ps1
 ```
+
+macOS `.app`（Apple Silicon，需要 Xcode Command Line Tools；打包为**自包含** .app 并用 Apple Development 身份签名）：
+
+```
+build/installer/client/macos/make-app.sh --configuration Release
+```
+
+> macOS 侧最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0`
+> 决定。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；首次构建前需运行
+> `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。平台细节与实测记录见
+> [docs/macos-port-plan.md](docs/macos-port-plan.md)，选型评审见 [docs/macos-port-review.md](docs/macos-port-review.md)。
 
 ## 本地运行（单机两个客户端互连）
 

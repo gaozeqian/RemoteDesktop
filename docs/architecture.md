@@ -38,12 +38,17 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 ### 5. 具体实现层 (Implementations & Platforms)
 *   **`RemoteDesktop.Media`**: 编解码算法落地。智能调度硬件编解码（H.264）或 CPU 回退方案，负责画面缩放、色彩空间转换 (BT.709) 等。
 *   **`RemoteDesktop.Platform.Windows`**: 对 `Abstractions` 的 Windows 原生实现。调用 DXGI 进行超低延迟截屏、使用 SendInput 模拟键鼠、对接 Media Foundation、读写 Windows DPAPI。
+*   **`RemoteDesktop.Platform.MacOS`**: 对 `Abstractions` 的 macOS (Apple Silicon) 原生实现。调用 ScreenCaptureKit 截屏与环回音频、CGEvent 模拟键鼠、VideoToolbox 编解码、AVFoundation 摄像头、AVAssetWriter 录制、Keychain 存密钥、`SMAppService` 开机自启。平台项目同样保持 `net10.0`（**不是** `net10.0-macos`），C 框架直连 P/Invoke，ObjC-only 框架经一个小型辅助库（`native/macos` → `libRemoteDesktopMacNative.dylib`）暴露扁平 C ABI。详见 [macos-port-plan.md](macos-port-plan.md)。
 
 ### 6. 宿主与程序入口 (Hosts)
-*   **`RemoteDesktop.Client`**: 基于 Avalonia 12 编写的跨平台（目前第一阶段运行在 Windows 上）图形客户端。
-*   **`RemoteDesktop.HostService`**: （被控端核心）以 Windows LocalSystem 服务身份运行的守护进程。负责维持系统级存活并对接信令服务器。
-*   **`RemoteDesktop.SessionAgent`**: 由 HostService 在当前激活的用户桌面（或登录界面）创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。
+*   **`RemoteDesktop.Client`**: 基于 Avalonia 12 编写的跨平台图形客户端，**同一份代码在 Windows 与 macOS 上构建运行**（`ClientPlatformRegistration` 在运行时按 OS 选择平台层，ILLink 按目标 OS 裁掉另一分支）。
+*   **`RemoteDesktop.HostService`**: （被控端核心，**Windows 专属**）以 Windows LocalSystem 服务身份运行的守护进程。负责维持系统级存活并对接信令服务器。
+*   **`RemoteDesktop.SessionAgent`**: （**Windows 专属**）由 HostService 在当前激活的用户桌面（或登录界面）创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。
 *   **`RemoteDesktop.Server.*`**: 包含 Rendezvous（信令协调）和 Relay（流量中继）服务器。可以部署在 Linux/Docker 上。
+
+> **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，因此
+> Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的**同一个 `.app`**
+> （自带托管能力），开机自启用 `SMAppService` 登录项而非系统服务。见 [macos-port-plan.md §2.1](macos-port-plan.md)。
 
 ## 防御性编程与权限设计
 *   **最低权限原则**：一切文件传输、终端操作默认以当前登录用户 (Agent 所属用户) 的权限执行，而非服务宿主 (System)。
