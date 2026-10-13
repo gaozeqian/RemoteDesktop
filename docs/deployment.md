@@ -21,8 +21,15 @@
 | 机器 | 需要什么 |
 |---|---|
 | 服务器 | .NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
-| 被控端 | Windows 10/11 x64；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
-| 控制端 | Windows 10/11 x64；同一块 MSI |
+| 被控端 | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
+| 控制端 | Windows 11 / Windows Server 2022+（x64）；同一块 MSI |
+
+> **为什么不是 Windows 10**：传输层走 QUIC（`System.Net.Quic` / MsQuic），它在 Windows 上依赖 Schannel 的
+> TLS 1.3 加密 API，而这只在 Windows 11、Windows Server 2022 及更新系统里提供。Windows 10 缺这些 API，
+> `QuicListener.IsSupported` / `QuicConnection.IsSupported` 会返回 `false`，被控端日志打出
+> `QUIC is not supported on this system; incoming connections are disabled.`，表现就是控制端报
+> 「无法建立网络连接」、对方报「对方无响应」。要支持 Windows 10，要么升级系统，要么换用自建的
+> OpenSSL 版 `msquic.dll`（不在这份文档的官方支持矩阵里）。
 
 服务器地址必须是**两台机器都能访问到的地址**（局域网 IP、域名或公网地址）。`127.0.0.1` 只能自己连自己。
 
@@ -514,3 +521,4 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 | 能看到画面但键盘鼠标没反应 | 会话是"观看模式" | 连接时不要勾"观看模式"；被控端也可以把会话降级为仅观看 |
 | 文件/终端/摄像头不可用 | 被控端只有登录界面/UAC（Agent 是 SYSTEM）或权限被收回 | 登录到用户桌面再试；确保会话不是观看模式 |
 | 锁屏后终端断开 | Agent 切换会结束终端会话 | 重新打开终端；文件传输则可以在重连后继续 |
+| 日志出现 "QUIC is not supported on this system" | 系统不支持 QUIC（Windows 10 缺 Schannel 的 TLS 1.3） | 升级到 Windows 11 / Server 2022+；或换用 OpenSSL 版 msquic.dll |
