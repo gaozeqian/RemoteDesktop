@@ -35,7 +35,7 @@
 
 ```powershell
 pwsh -File build/installer/server/windows/build-server-installer.ps1
-# 产物：build/installer/server/windows/artifacts/RemoteDesktop.Server-<版本>-x64.msi
+# 产物：artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
 ```
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
@@ -101,11 +101,12 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 ### 2. 手工构建
 
 ```
-dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/rendezvous
-dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/relay
+dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/rendezvous
+dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/relay
 ```
 
-（Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等即可，服务端是跨平台的。）
+（Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等，并把 `artifacts/app/windows/` 里的 `windows`
+换成对应平台 —— 服务端是跨平台的。产物目录的约定见 [CONTRIBUTING.md](../CONTRIBUTING.md) 的"构建产物布局"。）
 
 ### 3. 配置
 
@@ -500,7 +501,7 @@ macOS 侧是**单进程**的：同一个 `.app` 既能当控制端、也能当�
 
 ```
 build/installer/client/macos/make-pkg.sh --configuration Release
-# 产物：artifacts/pkg/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
+# 产物：artifacts/installer/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
 ```
 
 **安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。

@@ -15,7 +15,7 @@
   .\build\security-audit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"
 
 .EXAMPLE
-  .\build\security-audit.ps1 -SettingsPath .\artifacts\rendezvous\appsettings.json
+  .\build\security-audit.ps1 -SettingsPath .\artifacts\app\windows\rendezvous\appsettings.json
 
 .NOTES
   这份脚本只读文件、不改任何东西。它不能代替真正的渗透测试，但能在"看着正常、其实在裸奔"的部署上线前

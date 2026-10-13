@@ -18,7 +18,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
 ASSETS_DIR="$REPO_ROOT/src/Hosts/RemoteDesktop.Client/Assets"
-OUTPUT="$REPO_ROOT/artifacts/AppIcon.icns"
+OUTPUT="$REPO_ROOT/artifacts/app/macos/AppIcon.icns"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

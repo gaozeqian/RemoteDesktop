@@ -105,15 +105,15 @@ jobs:
       - name: Rename the installer for the release
         run: |
           set -euo pipefail
-          src="$(ls artifacts/pkg/macos/*.pkg | head -1)"
-          dst="artifacts/pkg/macos/RemoteDesktop-macOS-arm64-${GITHUB_REF_NAME}.pkg"
+          src="$(ls artifacts/installer/macos/*.pkg | head -1)"
+          dst="artifacts/installer/macos/RemoteDesktop-macOS-arm64-${GITHUB_REF_NAME}.pkg"
           mv "$src" "$dst"
           echo "macOS installer: $dst"
       - name: Upload the macOS installer
         uses: actions/upload-artifact@v7
         with:
           name: macos-installer
-          path: artifacts/pkg/macos/*.pkg
+          path: artifacts/installer/macos/*.pkg
 
   build-and-release:
     # 等 macOS 包先出来：发布是一个原子动作，缺一个产物就不该发（见上面 build-macos 的注释）。
@@ -259,25 +259,24 @@ jobs:
       - name: Rename Artifacts for Release
         shell: pwsh
         run: |
-          # 两个包分别在 build/installer/<角色>/windows/artifacts/ 下，各取最新打出的那个 .msi
-          $clientFolder = 'build/installer/client/windows/artifacts'
-          $serverFolder = 'build/installer/server/windows/artifacts'
-          $client = Get-ChildItem -Path $clientFolder/*.msi -ErrorAction SilentlyContinue |
+          # 两个包都在同一个 artifacts/installer/windows/ 下（角色写在文件名里），各取最新打出的那个 .msi
+          $installerFolder = 'artifacts/installer/windows'
+          $client = Get-ChildItem -Path $installerFolder/RemoteDesktop-Windows-*.msi -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          $server = Get-ChildItem -Path $serverFolder/*.msi -ErrorAction SilentlyContinue |
+          $server = Get-ChildItem -Path $installerFolder/RemoteDesktop-Server-Windows-*.msi -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           # 少一个就什么都别发：只发出客户端、悄悄少了服务端，是发完才会被发现的那种错。
-          if (-not $client) { throw "No client installer in $clientFolder." }
-          if (-not $server) { throw "No server installer in $serverFolder." }
+          if (-not $client) { throw "No client installer in $installerFolder." }
+          if (-not $server) { throw "No server installer in $installerFolder." }
 
           # 根据 GitHub Tag (例如 v1.0.0) 重命名文件，使其更加专业
           $clientName = "RemoteDesktop-Windows-x64-$($env:GITHUB_REF_NAME).msi"
           $serverName = "RemoteDesktop-Server-Windows-x64-$($env:GITHUB_REF_NAME).msi"
           Rename-Item -Path $client.FullName -NewName $clientName
           Rename-Item -Path $server.FullName -NewName $serverName
-          Write-Output "CLIENT_MSI=build/installer/client/windows/artifacts/$clientName" >> $env:GITHUB_ENV
-          Write-Output "SERVER_MSI=build/installer/server/windows/artifacts/$serverName" >> $env:GITHUB_ENV
+          Write-Output "CLIENT_MSI=$installerFolder/$clientName" >> $env:GITHUB_ENV
+          Write-Output "SERVER_MSI=$installerFolder/$serverName" >> $env:GITHUB_ENV
 
       # 取回 build-macos 打好的 .pkg。用 artifact 而不是让 macOS job 自己上传 Release，是为了让"发版"只发生
       # 在这一处——否则 Windows 和 macOS 会各自尝试创建同一个 Release，谁先谁后不定。

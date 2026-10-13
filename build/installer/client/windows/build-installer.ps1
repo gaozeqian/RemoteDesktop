@@ -99,10 +99,18 @@ Set-StrictMode -Version Latest
 # every path that means "next to this script" is resolved here instead. Running the release build with the PowerShell
 # that ships with Windows is common enough that it has to work there as well as in PowerShell 7.
 $installerDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $PublishDirectory) { $PublishDirectory = Join-Path $installerDirectory 'artifacts\publish' }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $installerDirectory 'artifacts' }
-
 $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..\..')
+
+# Both outputs live under the repository's single artifacts/ root, laid out as <kind>/<os>/ — the same shape the macOS
+# scripts use and the one a Linux package will use. One root means "where did the build put it" has one answer; before
+# this, Windows wrote under build/installer/…/artifacts while macOS wrote under artifacts/, so every new platform had
+# to pick a side.
+#
+# The publish output is an intermediate and the MSI is the deliverable, hence two kinds. The role is a directory only
+# where one OS has more than one of that kind — Windows publishes a client and a server, so their publish outputs need
+# separate trees; the MSIs do not, because the role is already in their file names.
+if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts\app\windows\client' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'artifacts\installer\windows' }
 
 # Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
 # it, a typo) is worth a plain sentence now, not a cryptographic error five minutes into the build.

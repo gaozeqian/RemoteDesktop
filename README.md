@@ -146,8 +146,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 
 ```
 # 管理员 PowerShell
-dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
-.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\host -RendezvousUri ws://<服务器>:5080/ws
+dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/windows/host
+.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
 .\build\service\windows\uninstall-service.ps1
 ```
 
@@ -170,7 +170,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名（见下）→
 **不安装就直接检查包内容**（`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
-自定义操作和属性，缺什么就报错）。产物在 `build/installer/client/windows/artifacts/`，约 49 MB。
+自定义操作和属性，缺什么就报错）。产物在 `artifacts/installer/windows/`，约 49 MB。
 
 - 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒自动重启；
   连续三次之后不再自动重启，稳定运行一天后重新计数），

@@ -20,6 +20,18 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
+## 📦 构建产物布局
+
+所有构建产物都在仓库根的 `artifacts/`（已 gitignore），按 `<类别>/<平台>/` 组织：
+
+| 路径 | 是什么 |
+|---|---|
+| `artifacts/installer/<平台>/` | **交付物**：安装包（`.msi` / `.pkg` / 未来的 `.deb`）。角色写在文件名里（`RemoteDesktop-Windows-x64-*` 与 `RemoteDesktop-Server-Windows-*`） |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 是各角色的 publish 输出（`app/windows/client/`、`app/windows/server/`），因为同一台机器上会同时出两个角色 |
+| `artifacts/native/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
+
+**只有一个产物根目录。** 新增平台照 `<类别>/<平台>/` 加一层即可；不要再另起一个 `artifacts/` 目录（比如写在 `build/` 里面）—— 那样"产物在哪"就会有两个答案，每加一个平台都要重新选边。
+
 ## 📐 架构与依赖规则
 
 本项目采用严格的**洋葱架构/整洁架构**，依赖方向只能**由外向内**。此规则由 `RemoteDesktop.ArchitectureTests` 强制校验。

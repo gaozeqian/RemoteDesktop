@@ -28,24 +28,26 @@ public sealed class ServerInstallerPackageTests
             return File.Exists(given) ? given : null;
         }
 
-        // The repository root is the folder with the solution file; the installer ends up in its own artifacts folder.
+        // The repository root is the folder with the solution file; installers land under its single artifacts/ root
+        // (see CONTRIBUTING.md, "构建产物布局"). The server shares that directory with the client, so the file name is
+        // what tells them apart — hence the prefix rather than a bare "*.msi".
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))
         {
             directory = directory.Parent;
         }
 
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "server", "windows", "artifacts");
+        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
         return artifacts is null || !Directory.Exists(artifacts)
             ? null
-            : Directory.GetFiles(artifacts, "*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            : Directory.GetFiles(artifacts, "RemoteDesktop.Server-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
     }
 
     [Fact]
     public void The_package_installs_both_servers_the_ports_they_need_and_the_settings_they_share()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\build-server-installer.ps1).");
+        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\windows\\build-server-installer.ps1).");
 
         using var package = new MsiPackage(Msi!);
 

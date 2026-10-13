@@ -38,7 +38,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONFIGURATION="Release"
-OUTPUT_DIR="$REPO_ROOT/artifacts/pkg/macos"
+OUTPUT_DIR="$REPO_ROOT/artifacts/installer/macos"
 APP_DIR="$REPO_ROOT/artifacts/app/macos/RemoteDesktop.app"
 APP_NAME="RemoteDesktop.app"
 BUNDLE_ID="com.remotedesktop.client"

@@ -215,7 +215,7 @@ pwsh -File build/installer/client/windows/build-installer.ps1 -TimestampServer h
 
 ```powershell
 # 安装包
-Get-AuthenticodeSignature .\build\installer\client\windows\artifacts\RemoteDesktop-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
 
 # 装好的程序
 Get-AuthenticodeSignature 'C:\Program Files\RemoteDesktop\RemoteDesktop.Client.exe' | Format-List Status, SignerCertificate
