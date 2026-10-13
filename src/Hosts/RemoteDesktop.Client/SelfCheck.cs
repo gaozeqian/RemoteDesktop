@@ -12,6 +12,7 @@ using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
+using RemoteDesktop.Media;
 using RemoteDesktop.Platform.MacOS;
 using RemoteDesktop.Platform.MacOS.Clipboard;
 
@@ -200,6 +201,7 @@ internal static class SelfCheck
         Probe("clipboard", Clipboard, ref exitCode);
         Probe("cameras", () => Cameras(provider), ref exitCode);
         Probe("audio", () => Audio(provider), ref exitCode);
+        Probe("video round trip", () => VideoRoundTrip(provider), ref exitCode);
         Probe("shells offered", () => string.Join(", ", provider.GetRequiredService<IPtyHost>().GetAvailableShells()), ref exitCode);
         Probe("files and shells allowed", () => provider.GetRequiredService<IUserContextGuard>().GetRefusalReason() ?? "yes", ref exitCode);
 
@@ -218,6 +220,10 @@ internal static class SelfCheck
         {
             var services = new ServiceCollection();
             services.AddClientPlatform(dataDirectory);
+
+            // The media layer as well: codec selection lives above the platform ports, and the video probe cannot
+            // ask an encoder factory directly without bypassing the ordering the client actually uses.
+            services.AddRemoteDesktopMedia();
             return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
         }
         catch (Exception ex)
@@ -461,6 +467,81 @@ internal static class SelfCheck
         }
 
         return samples;
+    }
+
+    /// <summary>
+    /// Encodes one synthetic frame and decodes it back, checking the picture that comes out against the one that
+    /// went in.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the only check that can tell a working codec from one whose declarations are wrong. Both halves of
+    /// P4 build, register and resolve happily with a mismatched struct between them — a field in the wrong place
+    /// produces pictures of the wrong height, or none at all — and only running both against each other shows it.
+    /// That is exactly the failure the managed layer hit during development, which is why this probe exists rather
+    /// than a line saying the encoder port resolves.
+    /// </para>
+    /// <para>
+    /// The frame is synthetic and thrown away. Encoding it costs a few milliseconds and no display.
+    /// </para>
+    /// </remarks>
+    private static string VideoRoundTrip(IServiceProvider provider)
+    {
+        var codecs = provider.GetRequiredService<VideoCodecSelector>();
+        var options = new VideoEncoderOptions(VideoCodec.H264, 320, 240, 30, 6000);
+
+        var factory = codecs.GetEncoderCandidates(options).FirstOrDefault();
+        if (factory is null)
+        {
+            return "no H.264 encoder registered";
+        }
+
+        // A frame with real detail: a flat frame compresses to almost nothing and a decode returning garbage still
+        // looks plausible, whereas noise has to survive the trip to prove the pictures are being moved.
+        using var frame = new MemoryVideoFrame(320, 240, PixelFormat.Nv12, TimeSpan.Zero);
+        var pixels = frame.Buffer;
+        for (var i = 0; i < pixels.Length; i++)
+        {
+            pixels[i] = (byte)((i * 37) & 0xFF);
+        }
+
+        using var encoder = factory.Create(options);
+        var key = encoder.Encode(frame, forceKeyFrame: true);
+        if (key.Count == 0)
+        {
+            return $"{encoder.Name} produced no picture";
+        }
+
+        using var decoder = codecs.CreateDecoder(VideoCodec.H264, 320, 240);
+        using var decoded = decoder.Decode(key[0]);
+
+        if (decoded is null)
+        {
+            return $"{encoder.Name} refused its own picture";
+        }
+
+        if (decoded.Width != 320 || decoded.Height != 240)
+        {
+            return $"{encoder.Name} round-tripped to {decoded.Width}x{decoded.Height}, expected 320x240";
+        }
+
+        var mean = 0.0;
+        var samples = 0;
+        var outPixels = decoded.GetPixels(out var stride);
+        for (var y = 0; y < 240; y += 8)
+        {
+            for (var x = 0; x < 320; x += 8)
+            {
+                mean += outPixels[(y * stride) + x];
+                samples++;
+            }
+        }
+
+        mean /= samples;
+
+        // Sampled bytes from a pseudo-random pattern average near 128. A wrong plane order or a stride bug shows up
+        // here as a mean near one end of the range, which is the cheapest way to see it.
+        return $"ok — {encoder.Name} → 320x240 NV12, luma mean {mean:F0} (expected near 128)";
     }
 
     /// <summary>

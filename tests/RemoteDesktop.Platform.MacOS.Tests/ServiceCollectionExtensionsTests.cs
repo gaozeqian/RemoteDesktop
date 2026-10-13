@@ -4,6 +4,7 @@ using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.MacOS.Audio;
@@ -12,6 +13,7 @@ using RemoteDesktop.Platform.MacOS.Clipboard;
 using RemoteDesktop.Platform.MacOS.Display;
 using RemoteDesktop.Platform.MacOS.Input;
 using RemoteDesktop.Platform.MacOS.Terminal;
+using RemoteDesktop.Platform.MacOS.Video;
 
 namespace RemoteDesktop.Platform.MacOS.Tests;
 
@@ -42,6 +44,14 @@ public class ServiceCollectionExtensionsTests
         Assert.IsType<MacCameraSourceFactory>(provider.GetRequiredService<ICameraSourceFactory>());
         Assert.IsType<MacAudioCapturerFactory>(provider.GetRequiredService<IAudioCapturerFactory>());
         Assert.IsType<MacAudioPlayerFactory>(provider.GetRequiredService<IAudioPlayerFactory>());
+
+        // Two encoder factories, hardware first. The selector orders by IsHardware descending, so the order they
+        // are registered in does not matter — but the pair must exist, or there is no fallback when the hardware
+        // encoder refuses a configuration.
+        var encoders = provider.GetServices<IVideoEncoderFactory>().ToList();
+        Assert.Contains(encoders, factory => factory.IsHardware);
+        Assert.Contains(encoders, factory => !factory.IsHardware);
+        Assert.IsType<VideoToolboxH264DecoderFactory>(provider.GetRequiredService<IVideoDecoderFactory>());
     }
 
     [Fact]

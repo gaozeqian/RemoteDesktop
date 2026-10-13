@@ -61,6 +61,8 @@ enum {
     RD_ERROR_DEVICE_NOT_FOUND = -7,
     /// No audio device could be opened for playback.
     RD_ERROR_AUDIO_DEVICE = -8,
+    /// The codec refused the configuration, or the bitstream cannot be decoded.
+    RD_ERROR_CODEC = -9,
 };
 
 /// One captured frame, handed to rd_frame_callback.
@@ -402,6 +404,134 @@ RD_EXPORT void rd_audio_player_discard(rd_audio_player_ref player);
 
 /// Stops if needed, releases everything, and invalidates the handle.
 RD_EXPORT void rd_audio_player_destroy(rd_audio_player_ref player);
+
+#pragma mark - Video
+
+/// One access unit, already in Annex-B form.
+///
+/// The bytes belong to the encoder and stay valid only until the next `rd_video_encoder_encode` call, so a caller
+/// that keeps them must copy first. Every access unit the caller receives must be sent: dropping one desynchronises
+/// the decoder's reference pictures.
+typedef struct {
+    /// Annex-B bitstream: a start code (00 00 00 01) before each NAL, parameter sets included on key frames.
+    const uint8_t *data;
+    size_t length;
+
+    /// Non-zero when this access unit carries an IDR picture.
+    int32_t is_key_frame;
+} rd_video_packet;
+
+/// Called on VideoToolbox's own thread when a compressed picture becomes available.
+///
+/// The encoder is not driven from here; the callback only records that something arrived and the entry point picks
+/// it up. Delivery is serialized by VideoToolbox, so the callee needs no locking of its own.
+typedef void (*rd_video_encoder_callback)(void *user);
+
+/// Opaque video encoder handle.
+typedef void *rd_video_encoder_ref;
+
+/// Creates a VideoToolbox compression session.
+///
+/// - `codec` is a four-character code: 'avc1' for H.264 (kCMVideoCodecType_H264).
+/// - `prefer_software` selects the software encoder over the hardware one when both exist. On Apple Silicon the
+///   hardware encoder is the sensible default; the software one exists so a caller can fall back when the hardware
+///   one refuses a configuration or is busy.
+/// - `output_packets`/`output_capacity` are not used at creation; they belong to `rd_video_encoder_encode`.
+/// - `name_out`/`is_hardware_out` report which encoder actually accepted the configuration, because the two are
+///   chosen by a lookup that can fail and fall back — a caller that assumed would report the wrong backend.
+///
+/// Returns RD_OK, or a negative status with a message in `error`.
+RD_EXPORT int rd_video_encoder_create(
+    int32_t codec,
+    int32_t width,
+    int32_t height,
+    int32_t frame_rate,
+    int32_t bitrate_kbps,
+    int32_t prefer_software,
+    rd_video_encoder_callback callback,
+    void *user,
+    rd_video_encoder_ref *out,
+    char *name_out,
+    size_t name_size,
+    int32_t *is_hardware_out,
+    char *error,
+    size_t error_size);
+
+/// Adjusts the bitrate while the session runs, in kbit/s.
+RD_EXPORT int rd_video_encoder_set_bitrate(rd_video_encoder_ref encoder, int32_t bitrate_kbps);
+
+/// Presents one NV12 frame of exactly the configured width × height, tightly packed (stride == width).
+///
+/// Returns RD_OK with whatever access units became ready: usually one, none while the encoder is buffering, or more
+/// than one when a late output arrives together with this picture. All of them must be sent onward.
+RD_EXPORT int rd_video_encoder_encode(
+    rd_video_encoder_ref encoder,
+    const uint8_t *nv12,
+    size_t nv12_size,
+    int32_t force_key_frame,
+    int64_t timestamp_ns,
+    rd_video_packet *output_packets,
+    int32_t output_capacity,
+    int32_t *count_out,
+    int32_t timeout_ms,
+    char *error,
+    size_t error_size);
+
+/// Stops the session and releases everything.
+RD_EXPORT void rd_video_encoder_destroy(rd_video_encoder_ref encoder);
+
+/// Called on VideoToolbox's own thread when a decoded picture becomes available.
+typedef void (*rd_video_decoder_callback)(void *user);
+
+/// Opaque video decoder handle.
+typedef void *rd_video_decoder_ref;
+
+/// Creates a VideoToolbox decompression session.
+///
+/// The session starts without a format description: the first access unit carries the SPS and PPS it needs, and the
+/// description is rebuilt whenever those change. That is what makes the decoder usable on a stream whose dimensions
+/// are not known in advance.
+RD_EXPORT int rd_video_decoder_create(
+    int32_t codec,
+    rd_video_decoder_callback callback,
+    void *user,
+    rd_video_decoder_ref *out,
+    char *error,
+    size_t error_size);
+
+/// One decoded picture, as two planes.
+///
+/// As with every other output of this helper, the bytes belong to the decoder and stay valid only until the next
+/// call; the caller copies them out.
+typedef struct {
+    uint8_t *y;
+    uint8_t *uv; ///< Interleaved CbCr plane, half the height of Y.
+    int32_t y_stride;
+    int32_t uv_stride;
+    int32_t width;
+    int32_t height;
+
+    /// Non-zero when a picture was produced. Zero without an error means "nothing ready yet".
+    int32_t has_frame;
+} rd_video_picture;
+
+/// Decodes one Annex-B access unit.
+///
+/// Returns RD_OK with `picture` describing the picture that became ready (possibly none, when the access unit was
+/// not a picture or the decoder is still filling its pipeline), RD_ERROR_UNAVAILABLE when the bitstream cannot be
+/// decoded (the caller should request a key frame), or another negative status with a message in `error`.
+RD_EXPORT int rd_video_decoder_decode(
+    rd_video_decoder_ref decoder,
+    const uint8_t *annex_b,
+    size_t annex_b_size,
+    int64_t timestamp_ns,
+    int32_t timeout_ms,
+    rd_video_picture *picture,
+    char *error,
+    size_t error_size);
+
+/// Stops the session and releases everything.
+RD_EXPORT void rd_video_decoder_destroy(rd_video_decoder_ref decoder);
 
 /// Opens System Settings on the Privacy & Security pane named by `anchor`, e.g. "Privacy_ScreenCapture".
 ///

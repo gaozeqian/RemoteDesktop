@@ -872,6 +872,71 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
 
 ---
 
+### 3.14 P4 实测记录（VideoToolbox H.264 编解码）
+
+#### ① `CVPixelBufferCreateWithBytes` 在双平面 NV12 上静默 SIGSEGV
+
+硬件 `VTCompressionSession` 接收 `CVPixelBufferRef`。用 `CVPixelBufferCreateWithBytes` 把一整块
+（Y 平面 width×height 紧跟交织 UV 平面 width×height/2）包成单平面缓冲，结果 plane 1 指针是 NULL。
+编码器内部 `VTPixelTransferSessionTransferImage` → `_platform_memmove` 从 NULL 读 → SIGSEGV。
+
+最阴的是**：所有返回的状态码都是 0** —— `VTCompressionSessionCreate` 成功、
+`VTCompressionSessionPrepareToEncodeFrame` 返回 0、回调"被调用"的报告也是成功，只有**第一帧真正出帧**时才炸。
+所以"创建 OK、状态全 0、回调触发了"全部满足，看起来一切正常，直到第一帧像素被搬运。
+
+修复：`CVPixelBufferCreateWithPlanarBytes(NULL, w, h, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+NULL, 0, 2, planePointers, planeSizes, planeWidths, planeHeights, NULL)`，把 Y 与 UV 两个指针都显式传进去。
+
+#### ② VideoToolbox 输出 AVCC，线上要 Annex-B，转换层必须先钉死
+
+`VTCompressionSession` 的 `CMSampleBuffer` 里每个 NAL 是 4 字节**大端长度前缀**（AVCC）。而本项目的
+线上封装是 **Annex-B**（`00 00 00 01` 起手码）。所以：
+
+- 编码端：`RDVideoEncoderOutput` 收到 `CMSampleBuffer` 后，先 `RDVideoParameterSetTotalSize` +
+  `RDVideoAppendParameterSets` 把 SPS/PPS 拼在**帧数据前面**——`CMSampleBuffer` **不保证每帧都带参数集**，
+  连 key frame 都未必，所以只在 `is_key_frame` 时拼；再用 `RDVideoAvccToAnnexB` 把每个 NAL 的长度前缀
+  替换成起手码。存在 3 字节（`00 00 01`）与 4 字节起手码两种情况，转换时按 4 字节长度前缀切分、
+  末尾的 padding 0 要 trim 掉。
+- 解码端：`RDVideoAnnexBToAvcc` 反向拆 NAL、拼回 AVCC 缓冲区（长度前缀 + NAL），交给
+  `CMBlockBufferCreateWithMemoryBlock` → `CMSampleBufferCreate` → `VTDecompressionSessionDecodeFrame`。
+
+**转换层用 `vt_conv_probe.c`（21 条断言，往返字节级一致）先钉死**，再写会话逻辑。否则转换器里的
+off-by-one / 漏拼参数集会被"帧能解出来"掩盖，只有在远端实际解码失败时才暴露，排错极慢。
+
+#### ③ 解码端 `CMBlockBuffer` 的"所有权移交"坑（与 §3.12 同类）
+
+`CMBlockBufferCreateWithMemoryBlock(NULL, avcc, written, NULL, NULL, 0, written, 0, &block)` 的
+`blockAllocator=NULL` 含义是**缓冲区所有权移交给 block**，会话结束后系统回收，调用方**不应再 `free(avcc)`**。
+最初在 `CMSampleBufferCreate` 成功后又 `free(avcc)` 一次 → 双重释放（也是"符号/签名/C 探针全绿，托管侧一调就崩"）。
+修复：只在 `CMBlockBufferCreateWithMemoryBlock` **返回失败**的那条路径上 `free`；成功路径把 `avcc` 置 `NULL` 交出去。
+
+顺带两个只会在"真帧过管线"时炸的 Core Media API 误用：
+- `CMSampleBufferCreate` 的 `numSamples` 与 `numSampleTimingEntries`：**二者都为 1（应为 `numSamples=1, numSampleTimingEntries=0`）会触发
+  `figSampleBufferCreateCallbackOrHandler` 从 NULL 指针 `memmove`** → SIGSEGV。解码端没有逐样本时间信息，必须 0。
+- `VTDecompressionSessionCreate` 的回调是**一个结构体**（`VTDecompressionOutputCallbackRecord`），
+  不是 `(callback, refcon)` 两个参数。写成两个参数能编过（`-Werror` 拦不住函数指针类型），但运行时会踩内存。
+
+#### ④ 托管侧 ABI 声明的两处静默错位
+
+- `RdVideoPicture` 结构体：最初漏了 `Height` 字段，于是 `HasFrame` 偏移错位——C 侧按
+  `{y, uv, y_stride, uv_stride, width, height, has_frame}` 布局，托管侧少一个 `height` 字段，
+  `HasFrame` 就落到 `Height` 上。症状不是崩溃而是**永远读到 0 帧**，极难定位。必须在托管结构里
+  显式保留 `Height`（哪怕 C# 端不用它），与 C 端一一对齐。
+- `RdVideoPacket` / `RdVideoPicture` 必须声明在**命名空间层级**（像 `RdCameraFrame` 那样），不能塞进
+  `MacNativeInterop` 类里——否则 `[LibraryImport]` 的 P/Invoke 签名引不到它们，报 CS0246。
+
+#### ⑤ 本机两个 H.264 编码器都存在（硬件 + 软件）
+
+`VTCopyVideoEncoderList` 实测同时给出 `avc1 hw=yes`（VideoToolbox 硬件）与 `avc1 hw=no`（软件）。
+所以 Windows 的"双 `IVideoEncoderFactory`（硬件 + 软件）"形状在 macOS 上自然成立，`prefer_software`
+形参直接映射到 `kVTVideoEncoderSpecification_EncoderID` 的选择。不是为对称硬凑。
+
+#### ⑥ 结论
+
+P4 端到端打通：`--self-check` 的 `video round trip` 探针实测
+`Apple H.264 (HW) → 320x240 NV12, luma mean 123 (expected near 128)`。单测 14/14（编码/解码/工厂三块），
+`dotnet build` 0 警告 0 错误。自 P3 起每加一层，都有"能注册≠能用"的真帧探针拦着（§3.12 / §3.13① / 本题 ①③④）。
+
 ## 4. 可复用 / 需新增 清单
 
 **完全复用（零改动或近乎零改动）**  
@@ -894,15 +959,22 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
     把像素行 padding 拆掉，只保留最新一帧）
   - P9 补上的部分：`Audio/MacAudioCapturer.cs`（`IAudioCapturer`，含 `MacAudioChunkSink`）、
     `Audio/MacAudioPlayer.cs`（`IAudioPlayer`，200 ms 丢 backlog 的策略在这里）
+  - P4 补上的部分：`Video/VideoToolboxH264Encoder.cs` / `Video/VideoToolboxH264EncoderFactory.cs` /
+    `Video/VideoToolboxH264Decoder.cs` / `Video/VideoToolboxH264DecoderFactory.cs`；
+    `Video/MacVideoFrameSink.cs`（GCHandle/RefCon 持有，回调空操作）；`Interop/MacNativeInterop.cs` 扩 `RdVideoPacket` /
+    `RdVideoPicture` 结构与 `rd_video_*` 的 `[LibraryImport]` 声明
 - `native/macos/` —— §2.2 方案 C 的原生辅助库：
-  - `rd_native.h`：**扁平 C ABI**（29 个入口 + 三个反向回调；P3 时是 6 个，
-    P5 加 4 个剪贴板入口，P8 加 8 个摄像头入口，P9 加 11 个音频入口）。
+  - `rd_native.h`：**扁平 C ABI**（36 个入口 + 三个反向回调；P3 时是 6 个，
+    P4 加 7 个视频编解码入口，P5 加 4 个剪贴板入口，P8 加 8 个摄像头入口，P9 加 11 个音频入口）。
     `RD_EXPORT` 不是装饰：库以 `-fvisibility=hidden` 编译，不标就一个符号都不导出，
     而症状是"编得过、签得过、第一次 `DllImport` 才炸"。
   - `rd_screen_capture.m`（ScreenCaptureKit）、`rd_cursor.m`（指针位置 + 形状）、`rd_system.m`（打开系统设置）、
     `rd_clipboard.m`（NSPasteboard 读写 + changeCount；P5）、
     `rd_camera.m`（AVFoundation 枚举 / 模式 / 会话；P8）、
-    `rd_audio.m`（SCK 环回采集 + AudioQueue 播放 + 环形缓冲；P9）
+    `rd_audio.m`（SCK 环回采集 + AudioQueue 播放 + 环形缓冲；P9）、
+    `rd_video_common.m`（AVCC↔Annex-B 互转 + VT 状态码映射 + 参数集拼装；P4）、
+    `rd_video_encoder.m`（`VTCompressionSession` 封装；P4）、
+    `rd_video_decoder.m`（`VTDecompressionSession` 封装；P4）
   - `build-native.sh`：编 `libRemoteDesktopMacNative.dylib`，`install_name_tool -id @rpath/…` 后 ad-hoc 签名；
     由 `RemoteDesktop.Platform.MacOS.csproj` 的 `BuildMacNativeHelper` target 调起
   - `fetch-libmsquic.sh`（把 libmsquic + openssl@4 重定位成 `@loader_path` 并随包分发，§3.4）
@@ -910,7 +982,7 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
   `make-dev-cert.sh`（自签开发身份，§3.9）、`development-identity`（**gitignore** 的本机文件，把签名身份钉住，
   避免 TCC 授权因"换了一张证书"而失效，§3.11⑦）。公证与 `.dmg` 待做。
 - `src/Hosts/RemoteDesktop.Client/SelfCheck.cs`（`--self-check` 诊断模式，§3.8④；
-  P5 新增 `clipboard` 探针、P8 新增 `cameras` 探针、P9 新增 `audio` 探针）。
+  P4 新增 `video round trip` 探针、P5 新增 `clipboard` 探针、P8 新增 `cameras` 探针、P9 新增 `audio` 探针）。
   **三条探针的共同点：真的把端口用一遍**（发声音、看帧、写读剪贴板），而不是只列"端口已注册" ——
   后者就抓不到 §3.12 和 §3.13①。
 - `.github/actions/run-test-suite/action.yml`（Windows / macOS 两个 job 共用的"重试一次 + TRX + 汇总表"，§3.10）。
@@ -930,6 +1002,10 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
   - P5：`ClipboardTests.cs`
   - P8/P9：`AudioTests.cs`（`MacAudioPlayerTests` / `MacAudioCapturerTests`）；
     `ServiceCollectionExtensionsTests` 扩到覆盖摄像头与音频端口
+  - P4：`VideoCodecTests.cs`（`VideoToolboxH264EncoderTests` / `VideoToolboxH264DecoderTests` /
+    `VideoToolboxCodecFactoryTests`，14 条；编码产物为 Annex-B 且 key frame 带 SPS/PPS、解码 round-trip
+    320×240 NV12、双工厂一个硬件一个软件、`IsSupported` 只对 H.264 为 true）；
+    `ServiceCollectionExtensionsTests` 再扩到覆盖两个 `IVideoEncoderFactory` 与 `IVideoDecoderFactory`
   - 另有 `IOPMAssertionKeepAwakeTests.cs`（P5 收尾）、`KeychainSecretStoreTests`（P2）、
     `PosixPtyTests.cs` / `PtyWindowSizeInteropTests.cs`（P6）
   - **没有** `CameraTests.cs`：枚举的是真实设备、`Open` 的是真实会话，写不成确定性的单元测试；
@@ -1052,9 +1128,47 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
 > 它会动用户的鼠标、敲用户的键盘。所以这一段要**手动验证**（授予辅助功能后，用 `--self-check` 之外的方式
 > 驱动一次），在 P10 的联调里补。
 
-### P4 视频编解码（VideoToolbox）⬜
+### P4 视频编解码（VideoToolbox）✅
 
-`VTCompressionSession` / `VTDecompressionSession` 手写绑定，对齐 Windows 侧的 Media Foundation 实现。
+- [x] `IVideoEncoderFactory` ×2（`VideoToolboxH264EncoderFactory`，硬件 + 软件两个实例）→ `IVideoEncoder`（`VideoToolboxH264Encoder`）
+- [x] `IVideoDecoderFactory` → `VideoToolboxH264DecoderFactory` → `IVideoDecoder`（`VideoToolboxH264Decoder`）
+- [x] `VideoCodecSelector` 自然接管：硬件优先、软件兜底，与 Windows 的 Media Foundation 形状一致
+- H.265/HEVC 故意不提供（`IsSupported` 只对 `VideoCodec.H264` 返回 true）
+
+原生侧新增 7 个 C ABI 入口（`rd_native.h` / `rd_video_*.m`，见 §4）：
+`rd_video_encoder_create` / `_set_bitrate` / `_encode` / `_destroy`、
+`rd_video_decoder_create` / `_decode` / `_destroy`；以及共享的 `rd_video_common.m`
+（AVCC↔Annex-B 互转、VT 状态码映射、参数集拼装）。
+
+三个设计决定，都是被平台逼出来的：
+
+1. **VideoToolbox 输出 AVCC，线上要 Annex-B，必须显式转**。`rd_video_encoder_output` 在 key frame 上只把
+   SPS/PPS 通过 `RDVideoAppendParameterSets` 拼一次（`CMSampleBuffer` 不保证每个 frame 都带，连 key frame 都未必），
+   然后 `RDVideoAvccToAnnexB` 把每个 NAL 的长度前缀改成 `00 00 00 01` 起手码。解码端 `RDVideoAnnexBToAvcc`
+   反向拆 NAL、拼回 AVCC 缓冲区再交给 `CMSampleBufferCreate`。**AVCC↔Annex-B 的 C 探针 `vt_conv_probe.c`
+   21 条断言往返字节级一致**，先钉死转换层再写会话逻辑 —— 否则转换器里的 off-by-one 会被"帧能解出来"掩盖。
+2. **`CVPixelBufferCreateWithBytes` 在双平面 NV12 上静默 SIGSEGV**。单平面 `CreateWithBytes` 只填 plane 0，
+   plane 1 指针是 NULL，硬件编码器的像素搬运读到 NULL → SIGSEGV，而且**所有返回的状态码都是 0**（编得过、
+   分辨率出得来、回调不报错，只有第一帧出帧时炸）。必须用 `CVPixelBufferCreateWithPlanarBytes`，把 Y 平面和
+   交织 UV 平面两个指针都显式传进去（§3.14①）。
+3. **解码端的 `CMBlockBuffer` 不能 `free` 两次**。AVCC 缓冲区交给 `CMBlockBufferCreateWithMemoryBlock` 时传
+   `blockAllocator=NULL` = 缓冲区所有权移交 block，会话结束后系统回收；在创建失败路径之外再 `free` 一次就是
+   双重释放。这是 §3.12 的同一类坑：C 探针/符号/签名全绿，托管侧一调就崩，只有真帧过管线才暴露（§3.14③）。
+
+验收：
+- `VideoCodecTests` 14/14 通过（编码器 produce Annex-B 且 key frame 带 SPS/PPS；解码器 round-trip：
+  320×240 NV12 噪声帧，luma mean 编码 64 / 解码 63，结构正确；工厂两个实例一个硬件一个软件、
+  `IsSupported` 只对 H.264 为 true、HEVC 拒绝）。
+- `ServiceCollectionExtensionsTests` 扩到覆盖两个 `IVideoEncoderFactory`（硬件/软件）与
+  `IVideoDecoderFactory`（`VideoToolboxH264DecoderFactory`）。
+- `--self-check` 新增 `video round trip` 探针：构造合成 NV12 噪声帧 → 硬件 H.264 编码 key frame → 解码
+  → 断言 320×240 + luma mean ~128。实测输出
+  `video round trip  ok — Apple H.264 (HW) → 320x240 NV12, luma mean 123 (expected near 128)`
+  （直接执行、非 `.app`；keychain 那行仍是沙箱假阴性，与 P4 无关）。
+
+> 注意 `rd_video_encoder_create` 的 `prefer_software` 形参：本机实测 `VTCopyVideoEncoderList` 同时给出
+> `avc1 hw=yes` 与 `avc1 hw=no` 两个编码器（见 §3.14⑤），所以 Windows 的"双工厂"形状在 macOS 上可行，
+> 不是为满足对称而硬凑。
 
 ### P5 剪贴板与防休眠 ✅
 
@@ -1202,6 +1316,7 @@ lsappinfo info -only state com.remotedesktop.client →  "state"=[ NULL ]   # �
 | **`[LibraryImport]` 把数组/span 当裸指针传** | **中** | 原生签名里的 `length` 会被下一个实参填上，症状是写路径 SIGSEGV、读路径全好（§3.12）。凡"缓冲区 + 长度"的原生签名一律显式传 `byte*` + `nuint`，别交给 marshaller |
 | Retina/多屏坐标与像素换算错误                | 低  | 统一约定：虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1。**P3 已完成**：换算集中在 `Input/PointerCoordinates.cs`，7 条测试钉住边界、钳制、副屏偏移与"缩放不参与换算" |
 | **原生侧 `size_t` 无符号回绕**                 | 中  | `a - b` 在 `b > a` 时是天文数字，`> 0` 的判断就恒真（§3.13①）。环形缓冲的"腾地方"只有在**正常路径**上触发这个 bug，所以只有一条"数值对得上"的断言能发现它 —— 探针里必须有这种断言，不能只断言"没崩" |
+| **视频编解码的 AVCC/Annex-B 与双平面像素缓冲** | 低  | **已解决（P4）**：VideoToolbox 输出 AVCC、线上要 Annex-B，转换层用 `vt_conv_probe.c` 21 条断言先钉死；NV12 必须用 `CVPixelBufferCreateWithPlanarBytes` 而非 `CreateWithBytes`（后者在双平面静默 SIGSEGV，所有返回码却都是 0，§3.14①②）。`CMBlockBuffer` 所有权移交后不能重复 `free`（§3.14③） |
 
 ---
 
@@ -1554,6 +1669,39 @@ $ nm -gU artifacts/native/macos/libRemoteDesktopMacNative.dylib | grep ' T _rd_a
 #   ★ rd_audio_player_discard 是 P9 加的：环形缓冲 1 秒只是兜底，
 #     端口契约的 200 ms 上限必须由托管层主动丢，所以 ABI 上得有这个入口。
 
+
+# ====================================================================================================
+# P4 验收（VideoToolbox H.264 编解码）
+# ====================================================================================================
+
+# 本机两个 H.264 编码器都存在（VTCopyVideoEncoderList，vt_recon.c / vt_encoder_probe.c）：
+avc1  hw=yes   VideoToolbox 硬件编码器
+avc1  hw=no    VideoToolbox 软件编码器
+#  → Windows 的"双 IVideoEncoderFactory"形状在 macOS 上自然成立，prefer_software 直接映射到 EncoderID 选择
+
+# 编码产物为 Annex-B（vt_encoder_probe.c）：
+encode key frame  → 以 00 00 00 01 起手（SPS=7 / PPS=8 / IDR=5），SPS/PPS 仅在 key frame 出现
+encode P frame    → 以 00 00 00 01 起手（Slice=1）
+AVCC↔Annex-B 往返 → 字节级一致（rd_video_common 的 21 条断言，vt_conv_probe.c 覆盖）
+
+# 解码 round-trip（vt_roundtrip_probe.c）：
+320x240 NV12 噪声帧  →  编码（硬件）→  解码  →  luma mean 编码 64 / 解码 63，结构正确
+
+# 原生辅助库导出的视频符号（build-native.sh -Wall -Wextra -Werror 全过）：
+$ nm -gU artifacts/native/macos/libRemoteDesktopMacNative.dylib | grep ' T _rd_video'
+   _rd_video_encoder_create / _set_bitrate / _encode / _destroy
+   _rd_video_decoder_create / _decode / _destroy
+#   注意：编码器回调里必须用 RDVideoAppendParameterSets 把 SPS/PPS 拼上，
+#         因为 CMSampleBuffer 不保证每帧都带参数集（连 key frame 都未必）
+
+# P4 托管侧单测（Platform.MacOS.Tests，VideoCodecTests 14/14）：
+VideoToolboxH264EncoderTests   编码产物 Annex-B + key frame 带 SPS/PPS
+VideoToolboxH264DecoderTests   解码 round-trip 320x240 NV12，luma mean 解码 63 ≈ 编码 64
+VideoToolboxCodecFactoryTests  双工厂（一个硬件一个软件）；IsSupported 仅 H.264=true、HEVC=false
+
+# P4 托管侧（--self-check，构建输出目录直接跑）：
+video round trip    ok — Apple H.264 (HW) → 320x240 NV12, luma mean 123 (expected near 128)
+#   keychain 那行随沙箱而变（沙箱内 FAILED — OSStatus 100001，与 P4 无关）
 
 # CI（.github/workflows/ci.yml）
 build        → runs-on: windows-latest（步骤未变，测试部分抽到组合动作）

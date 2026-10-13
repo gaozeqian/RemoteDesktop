@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using RemoteDesktop.Platform.MacOS.Audio;
 using RemoteDesktop.Platform.MacOS.Camera;
 using RemoteDesktop.Platform.MacOS.Display;
+using RemoteDesktop.Platform.MacOS.Video;
 
 namespace RemoteDesktop.Platform.MacOS.Interop;
 
@@ -120,6 +121,44 @@ internal unsafe struct RdAudioChunk
     public int FrameCount;
     public int ChannelCount;
     public int SampleRate;
+}
+
+/// <summary>One access unit the encoder produced, as <c>rd_video_packet</c>.</summary>
+/// <remarks>
+/// <see cref="Data"/> belongs to the encoder and stays valid only until the next call to
+/// <see cref="MacNativeInterop.rd_video_encoder_encode"/>, so the managed side copies it before calling again.
+/// Dropping one of these desynchronises the decoder's reference pictures, which is why the encoder hands back a
+/// list rather than a single frame.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdVideoPacket
+{
+    public byte* Data;
+    public nuint Length;
+    public int IsKeyFrame;
+}
+
+/// <summary>One decoded picture, as <c>rd_video_picture</c>.</summary>
+/// <remarks>
+/// The two planes are tightly packed by the helper; it copied them out of VideoToolbox's buffer precisely so they
+/// could be. Valid only until the next decode call.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct RdVideoPicture
+{
+    public byte* Y;
+    public byte* Uv;
+    public int YStride;
+    public int UvStride;
+    public int Width;
+
+    /// <summary>
+    /// The picture's height. Declared even though the caller usually knows it, because leaving it out shifts every
+    /// field after it — <see cref="HasFrame"/> would then be read from this one's slot.
+    /// </summary>
+    public int Height;
+
+    public int HasFrame;
 }
 
 /// <summary>
@@ -326,6 +365,80 @@ internal static unsafe partial class MacNativeInterop
     [LibraryImport(NativeLibraries.MacNative)]
     public static partial void rd_audio_player_destroy(nint player);
 
+    #region Video
+
+    /// <summary>Called when a compressed picture became available.</summary>
+    public static delegate* unmanaged[Cdecl]<nint, void> VideoEncoderCallback => &OnVideoEncoded;
+
+    /// <summary>Called when a decoded picture became available.</summary>
+    public static delegate* unmanaged[Cdecl]<nint, void> VideoDecoderCallback => &OnVideoDecoded;
+
+    /// <remarks>
+    /// The buffer and its length are declared separately for the reason recorded on
+    /// <see cref="rd_clipboard_write_text(string?, byte*, nuint, byte*, nuint)"/>.
+    /// </remarks>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_video_encoder_create(
+        int codec,
+        int width,
+        int height,
+        int frameRate,
+        int bitrateKbps,
+        int preferSoftware,
+        delegate* unmanaged[Cdecl]<nint, void> callback,
+        nint user,
+        out nint encoder,
+        byte* name,
+        nuint nameSize,
+        out int isHardware,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_video_encoder_set_bitrate(nint encoder, int bitrateKbps);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_video_encoder_encode(
+        nint encoder,
+        byte* nv12,
+        nuint nv12Size,
+        int forceKeyFrame,
+        long timestampNanoseconds,
+        RdVideoPacket* packets,
+        int capacity,
+        out int count,
+        int timeoutMilliseconds,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_video_encoder_destroy(nint encoder);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_video_decoder_create(
+        int codec,
+        delegate* unmanaged[Cdecl]<nint, void> callback,
+        nint user,
+        out nint decoder,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_video_decoder_decode(
+        nint decoder,
+        byte* annexB,
+        nuint annexBSize,
+        long timestampNanoseconds,
+        int timeoutMilliseconds,
+        RdVideoPicture* picture,
+        byte* error,
+        nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_video_decoder_destroy(nint decoder);
+
+    #endregion
+
     [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int rd_open_settings(string anchor);
 
@@ -421,4 +534,28 @@ internal static unsafe partial class MacNativeInterop
             // Swallowed on purpose; see OnFrame.
         }
     }
+
+    // The two video callbacks have no work of their own — the helper queues what it produced and the next
+    // encode/decode call drains it — so what they check is that the sink is still there. Reaching the target
+    // through the handle is that check: if the managed side disposed the sink, the native session was destroyed
+    // first, so this cannot happen, and any exception is swallowed rather than unwinding into the helper.
+    private static void ConfirmVideoSink(nint user)
+    {
+        try
+        {
+            _ = GCHandle.FromIntPtr(user).Target;
+        }
+        catch (Exception)
+        {
+            // See OnFrame.
+        }
+    }
+
+    /// <inheritdoc cref="OnFrame"/>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnVideoEncoded(nint user) => ConfirmVideoSink(user);
+
+    /// <inheritdoc cref="OnFrame"/>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnVideoDecoded(nint user) => ConfirmVideoSink(user);
 }
