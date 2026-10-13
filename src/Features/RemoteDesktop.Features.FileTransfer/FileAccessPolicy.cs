@@ -72,8 +72,12 @@ public sealed class FileAccessPolicy
         {
             // A path may sit inside a root as a string yet resolve, through a symbolic link or junction, to somewhere
             // outside it. The string check alone would let a planted link turn a "shared" path into an escape: follow
-            // the links that exist and judge the real destination instead.
-            if (!_allowedRoots.Any(root => IsSameOrInside(ResolveFinalTarget(full), root)))
+            // the links that exist and judge the real destination instead. Both the incoming path and the configured
+            // roots are resolved the same way, so a root that itself lives behind a symlink (macOS keeps /var as a
+            // symlink to /private/var, and every temp path begins there) still matches the paths beneath it — without
+            // this, a genuinely shared folder is refused as "not shared" on macOS.
+            var resolved = ResolveFinalTarget(full);
+            if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root))))
             {
                 throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
             }

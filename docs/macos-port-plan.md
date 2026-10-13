@@ -937,6 +937,52 @@ P4 端到端打通：`--self-check` 的 `video round trip` 探针实测
 `Apple H.264 (HW) → 320x240 NV12, luma mean 123 (expected near 128)`。单测 14/14（编码/解码/工厂三块），
 `dotnet build` 0 警告 0 错误。自 P3 起每加一层，都有"能注册≠能用"的真帧探针拦着（§3.12 / §3.13① / 本题 ①③④）。
 
+### 3.15 P7 实测记录（文件传输的两个 Windows 假设）
+
+#### ① 分隔符属于被控端，`RemoteFileSource.Combine` 不能硬编码 `\`
+
+`RemoteFileSource` 代表"另一台电脑"（被控端）的文件；它的 `Combine(folder, name)` 用来把宿主返回的文件夹路径和子项名
+拼回去发给宿主。原代码写死 `$"{folder.TrimEnd('\\')}\\{name}"`，隐含"被控端是 Windows"。但 macOS 端口里被控端**也可以是
+macOS**，而且方向是对称的：macOS 控制器连 Windows 宿主、Windows 控制器连 macOS 宿主，两种都要对。
+
+关键观察：`Combine` 的 `folder` 参数**总是宿主格式的路径**——它来自 `FilePaneViewModel` 里的 `contents.Path` / `Place.Path`，
+而那是宿主经 `DirectoryListing` / `Places` 返回、用宿主自己的 `Path` 写出来的。所以分隔符直接**从 `folder` 字符串上读**就对了，
+不需要改协议、也不需要让被控端来拼：
+
+```csharp
+var separator = folder.Contains('\\') ? '\\'
+              : folder.Contains('/') ? '/'
+              : Path.DirectorySeparatorChar;
+return $"{folder.TrimEnd(separator)}{separator}{name}";
+```
+
+边界：`folder` 里没有分隔符时（裸盘符 `C:`），回退到本机 `Path.DirectorySeparatorChar`；而 Windows 宿主的 `Path.GetFullPath`
+两种斜杠都认，所以即便回退成 `/` 给 Windows 宿主也无妨。新测试 `RemoteFileSourceCombineTests` 钉住：Windows 格式文件夹
+→ `\`、Unix 格式 → `/`、空文件夹 → 直接返回名、无分隔符 → 本机分隔符。
+
+#### ② `FileAccessPolicy` 允许根必须与入参用同一种链接解析
+
+原代码把允许根存成 `Path.GetFullPath(root)`（**不跟链接**），却在比较时把入参过 `ResolveFinalTarget`（**跟链接**）。
+macOS 上 `/var` 是 `/private/var` 的符号链接，而所有临时目录都在 `/var` 下，于是：
+- 存的 root = `/var/folders/.../inside`
+- 入参解析后 = `/private/var/folders/.../inside/x`
+- `IsSameOrInside` 永远不成立 → 本该共享的目录被拒成 "not shared"
+
+修复：比较时两侧都过 `ResolveFinalTarget`：
+```csharp
+var resolved = ResolveFinalTarget(full);
+if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root))))
+    throw ... NotAllowed;
+```
+根本身仍按 `Path.GetFullPath` 存（与 `IsProtectedRoot` 保持一致）。`Core.UnitTests` 里那条 `SkipUnless(IsWindows)` 的
+`A_policy_with_roots_also_limits_operations_and_places` 现在在 macOS 上跑通——它用一个位于 `/var` 下的临时根，
+正好命中 `/var` / `/private/var` 这个坑。
+
+#### ③ 没动的部分：受保护目录的 TCC
+
+`~/Desktop`、`~/Documents`、`~/Downloads` 的首次访问弹窗与拒绝路径，需要真实 `.app` + TCC 授权才能验证，放到 P10 联调。
+代码层已正确（`GetPlaces` 对落在共享根外的候选会 `catch` 掉不提供），不阻塞 P7 收尾。
+
 ## 4. 可复用 / 需新增 清单
 
 **完全复用（零改动或近乎零改动）**  
@@ -1216,19 +1262,20 @@ P4 端到端打通：`--self-check` 的 `video round trip` 探针实测
 
 验收：`PtyWindowSizeInteropTests` 3 条 + `PosixPtyTests` 6 条全绿（0.23 s）。
 
-### P7 文件传输适配 ⬜
+### P7 文件传输适配 ✅（两个真 bug 已修；TCC 行为待 P10 联调）
 
-复用 .NET `File` / `FileStream`，不涉及原生互操作。要确认的是**受保护目录**（`~/Desktop`、`~/Documents`、
-`~/Downloads`）的 TCC 行为与拒绝时的错误提示。
+复用 .NET `File` / `FileStream`，不涉及原生互操作。两个"这一层还假设 Windows"的真 bug 已修（§3.15）：
 
-**已经知道要修的两个点**（都是"这一层还假设 Windows"，§3.10 里有完整证据）：
-
-- [ ] `RemoteFileSource.Combine` 用字面量 `\` 拼路径（`FileSources.cs:105`）。**不是换成 `Path.Combine` 就完了** ——
-      路径语法由被控端决定，控制器不知道对端是什么系统，需要协议层面给出分隔符（或让被控端拼接）
-- [ ] `FileAccessPolicy` 的允许根用 `Path.GetFullPath` 存、却拿 `ResolveFinalTarget` 去比（`FileAccessPolicy.cs:26` vs `:76`）。
-      macOS 上 `/var → /private/var`，所有临时目录都在 `/var` 下，于是共享目录被判成 "not shared"。
-      改动落在安全相关代码上，要在能同时验证 Windows 行为的环境里做
-- [ ] 受保护目录的 TCC：`~/Desktop`、`~/Documents`、`~/Downloads` 的首次访问弹窗与拒绝路径
+- [x] `RemoteFileSource.Combine` 不再硬编码 `\`。分隔符从**被控端返回的路径字符串**上读：调用方传进来的 `folder`
+      **必是上一轮 listing / places 的宿主格式路径**，所以有 `\` 用 `\`、有 `/` 用 `/`、都没有（如裸盘符 `C:`）回退到
+      本机 `Path.DirectorySeparatorChar`。这样 macOS 控制器浏览 Windows 宿主、以及 Windows 控制器浏览 macOS 宿主
+      **都成立，且不需要改协议**（§3.15①）。取出成 `public static RemoteFileSource.CombinePaths` 便于单测。
+- [x] `FileAccessPolicy` 允许根与入参用**同一种**链接解析：比较时两侧都过 `ResolveFinalTarget`
+      （`FileAccessPolicy.cs:76` 一带）。macOS 的 `/var → /private/var` 不再让"本该共享的目录"被判成 not shared
+      （§3.15②）。`Core.UnitTests` 里那条原 `SkipUnless(IsWindows)` 的 `A_policy_with_roots_also_limits_operations_and_places`
+      现已在 macOS 上跑通；新增 `RemoteFileSourceCombineTests` 钉住分隔符行为。
+- [ ] 受保护目录的 TCC：`~/Desktop`、`~/Documents`、`~/Downloads` 的首次访问弹窗与拒绝路径 ——
+      需要真实 `.app` + TCC 授权才能验证，留到 P10 联调（不影响代码正确性，见 §3.15③）。
 
 ### P8 远程摄像头（AVFoundation）✅
 
@@ -1309,7 +1356,7 @@ P4 端到端打通：`--self-check` 的 `video round trip` 探针实测
 | **bottle 的 `minos 26.0` 顶高最低系统版本** | **高** | 已决策接受 macOS 26 为下限（§3.4/§8）；要降到 macOS 14 需改走"从源码构建 MsQuic + OpenSSL" |
 | 公证需要付费开发者账号                       | 中  | 开发期用 Development 签名；发布前再决定是否公证                                                  |
 | **开发签名证书**                          | 低  | **已解决（2026-10-12）**：两张真 Apple Development 证书已可用（`zeqian_gao` / Team `Y6ANU9Z954`，选定为开发身份）。此前的"签不了名"是缺 **WWDR G3** 中间证书，不是没证书（§3.11①）。`make-dev-cert.sh` 的自签身份保留作为无证书机器的兜底 |
-| **文件传输层仍假设 Windows 被控端**         | **中** | 两处：`Combine` 硬编码 `\`；允许根未做链接解析（§3.10）。P7 处理；在此之前 3 条文件传输用例在 macOS 上跳过 |
+| **文件传输层仍假设 Windows 被控端**         | 低  | **已解决（P7）**：`Combine` 分隔符改为从被控端返回的路径字符串上读（§3.15①）；`FileAccessPolicy` 允许根与入参都用 `ResolveFinalTarget` 解析，macOS `/var → /private/var` 不再误判（§3.15②）。受保护目录 TCC 留到 P10 联调 |
 | **`codesign` 静默只签可执行文件**          | **高** | 不加 `--deep` 时它拒绝密封 bundle，却**不报错**，只把标识符退化成 `apphost`、`Info.plist` 不绑定（§3.8①）。打包脚本必须用 `codesign --verify --deep --strict` 断言，不能只看退出码 |
 | 框架依赖的 `.app` 在 Homebrew 的 .NET 上起不来 | 中  | 打包默认自包含（§3.8③）；`--framework-dependent` 仅用于调试 |
 | 端口"能注册"≠"能用"                      | 中  | 电源断言就是这么坏的：容器能解析、第一次调用才抛（§3.8②）；剪贴板是第二个（构建/签名/符号/C 探针全绿，托管侧一调就 SIGSEGV，§3.12）。`--self-check` 会真的把每个端口用一遍 |
@@ -1702,6 +1749,16 @@ VideoToolboxCodecFactoryTests  双工厂（一个硬件一个软件）；IsSuppo
 # P4 托管侧（--self-check，构建输出目录直接跑）：
 video round trip    ok — Apple H.264 (HW) → 320x240 NV12, luma mean 123 (expected near 128)
 #   keychain 那行随沙箱而变（沙箱内 FAILED — OSStatus 100001，与 P4 无关）
+
+# P7 验收（文件传输的两个 Windows 假设，本节结尾的 §3.15 有完整记录）
+# RemoteFileSource.Combine 分隔符从被控端路径字符串上读（RemoteFileSourceCombineTests 6/6）：
+Combine("C:\Share", "file.txt")      → C:\Share\file.txt
+Combine("/Volumes/Data", "file.txt") → /Volumes/Data/file.txt
+Combine("", "report.txt")            → report.txt
+Combine("C:", "Users")               → C:<本机分隔符>Users   # 无分隔符时回退本机，宿主两种斜杠都认
+# FileAccessPolicy 允许根与入参同做链接解析（Core.UnitTests，原 SkipUnless(IsWindows) 现 macOS 跑通）：
+A_policy_with_roots_also_limits_operations_and_places  → 0 失败
+#   macOS 上 /var 是 /private/var 的符号链接，临时根落在 /var 下；解析前两侧都过 ResolveFinalTarget 后匹配
 
 # CI（.github/workflows/ci.yml）
 build        → runs-on: windows-latest（步骤未变，测试部分抽到组合动作）

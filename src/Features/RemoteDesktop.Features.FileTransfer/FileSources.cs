@@ -101,9 +101,30 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
     public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken) =>
         OperationAsync(new FileRequest { Delete = new DeleteRequest { Path = path, Recursive = recursive } }, cancellationToken);
 
-    // Hosts are Windows in this phase; another platform would have its own separator.
-    public string Combine(string folder, string name) =>
-        string.IsNullOrEmpty(folder) ? name : $"{folder.TrimEnd('\\')}\\{name}";
+    // The folder came from the remote host, so its own separator is the one to use: a macOS controller may be
+    // browsing a Windows host, and a Windows controller a macOS one. Reading the separator off the path we were just
+    // given keeps us aligned with how the host writes paths, instead of assuming one OS on either end.
+    public string Combine(string folder, string name) => CombinePaths(folder, name);
+
+    /// <summary>Joins a remote folder and an item name the way the host writes paths.</summary>
+    /// <remarks>
+    /// The separator is taken from <paramref name="folder"/> because that string arrived from the host (a listing or a
+    /// place), so it already carries the host's convention. When the folder is a bare drive root with no separator
+    /// (e.g. <c>C:</c>), the local OS separator is used as a best guess — and every host tolerates either slash.
+    /// </remarks>
+    public static string CombinePaths(string folder, string name)
+    {
+        if (string.IsNullOrEmpty(folder))
+        {
+            return name;
+        }
+
+        var separator = folder.Contains('\\') ? '\\'
+            : folder.Contains('/') ? '/'
+            : Path.DirectorySeparatorChar;
+
+        return $"{folder.TrimEnd(separator)}{separator}{name}";
+    }
 
     public async ValueTask DisposeAsync()
     {
