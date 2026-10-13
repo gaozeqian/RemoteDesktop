@@ -132,6 +132,9 @@ internal sealed class RecordingInjector : IInputInjector, IDisposable
         _signal.Release();
     }
 
+    /// <summary>False: this fake records input, and the secure attention sequence is not input it can reproduce.</summary>
+    public bool SupportsSecureAttention => false;
+
     public void SendSecureAttentionSequence()
     {
     }

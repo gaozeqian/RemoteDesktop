@@ -68,6 +68,9 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         CanControl = input is not null;
         CanTransferFiles = session.Context.Grant.Allows(Permissions.FileTransfer);
         CanUseTerminal = session.Context.Grant.Allows(Permissions.Terminal);
+        // Deliberately not derived from the controller's own injector the way CanControl is: whether Ctrl+Alt+Del
+        // exists at all is a property of the host, and the host says so by granting or withholding the permission.
+        CanSendSecureAttention = session.Context.Grant.Allows(Permissions.SecureAttention);
         HasAudio = audio is not null;
         UpdateTitle();
 
@@ -99,6 +102,14 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     /// <summary>False in watch mode, and from the moment the host switches the session to watch-only: input is neither captured nor sent.</summary>
     [ObservableProperty]
     public partial bool CanControl { get; set; }
+
+    /// <summary>
+    /// Whether this session may raise Ctrl+Alt+Del on the host. False against a host that cannot do it — which is not
+    /// the same question as the controller's platform: a Windows controller connected to a macOS host hides the button
+    /// too, and a macOS controller connected to a service-hosted Windows machine shows it.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool CanSendSecureAttention { get; set; }
 
     /// <summary>Whether the host lets this session reach its files. Goes false when the host takes it away mid-session.</summary>
     [ObservableProperty]
@@ -502,6 +513,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             {
                 await input.DisposeAsync();
             }
+        }
+
+        if (!grant.Allows(Permissions.SecureAttention))
+        {
+            CanSendSecureAttention = false;
         }
 
         if (!grant.Allows(Permissions.FileTransfer))

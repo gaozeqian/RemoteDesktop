@@ -91,6 +91,9 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
         }
     }
 
+    /// <summary>False: macOS has no secure attention sequence for a third-party application to raise.</summary>
+    public bool SupportsSecureAttention => false;
+
     public void SendSecureAttentionSequence() =>
         throw new NotSupportedException("macOS has no secure attention sequence to send.");
 

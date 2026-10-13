@@ -64,6 +64,9 @@ public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IIn
         }
     }
 
+    /// <summary>False on purpose: raising Ctrl+Alt+Del needs the host service, so a process injecting directly cannot.</summary>
+    public bool SupportsSecureAttention => false;
+
     public void SendSecureAttentionSequence() =>
         throw new NotSupportedException("Ctrl+Alt+Del requires the host service (milestone M3).");
 

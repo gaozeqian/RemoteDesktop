@@ -200,6 +200,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The sidebar's version line, built from <see cref="ClientVersion"/> so the two cannot disagree.</summary>
     public string ClientVersionLabel => $"Remote Desktop {ClientVersion}";
 
+    // The three captions below describe how this build actually behaves, and Windows and macOS differ in all three:
+    // where a fixed password is kept (DPAPI / keychain), what changing the server address costs (elevation and a
+    // service restart / neither), and what the controlled side even is (an installed service / this process).
+    //
+    // Static, because nothing about them depends on the instance — the view reaches them with {x:Static}.
+
+    /// <summary>The caption under 固定密码, naming the store this platform actually uses.</summary>
+    public static string FixedPasswordStorageNote => OperatingSystem.IsWindows()
+        ? "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。"
+        : "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。";
+
+    /// <summary>The caption under 服务器地址.</summary>
+    public static string ServerAddressNote => OperatingSystem.IsWindows()
+        ? "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。"
+        : "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。";
+
+    /// <summary>The caption explaining 本机控制端代码.</summary>
+    public static string ClientCodeNote => OperatingSystem.IsWindows()
+        ? "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。"
+        : "「本机控制端代码」是这台机器连出去时用的身份。macOS 上客户端与被控端是同一个进程，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。";
+
+    /// <summary>
+    /// The sentence for "the host did not answer", which has to name the thing that is actually unreachable: an
+    /// installed service on Windows, this process's own host state on macOS.
+    /// </summary>
+    private static string HostUnreachable => OperatingSystem.IsWindows() ? "无法联系后台服务" : "无法读取本机被控状态";
+
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
     /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
     public string ClientRendezvousUri { get; }
@@ -587,7 +614,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
         {
-            StatusMessage = "无法联系后台服务。";
+            StatusMessage = $"{HostUnreachable}。";
         }
 
         await RefreshHostStatusAsync();
@@ -891,7 +918,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             LocalDeviceId = "--- --- ---";
             TemporaryPassword = string.Empty;
-            ServerStatus = "○ 无法联系后台服务";
+            ServerStatus = $"○ {HostUnreachable}";
             SetIncoming([]);
             HostDetail = null;
             ServerHint = null;
