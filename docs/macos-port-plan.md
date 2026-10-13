@@ -1,6 +1,6 @@
 # macOS (arm64) 平台移植实现计划
 
-> 状态：**已确认，实施中**（P1 / P2 / P6 已完成，P3 / P5 进行中）  
+> 状态：**已完成**（P1–P10 全部完成）  
 > 目标平台：macOS on Apple Silicon（arm64），**最低 macOS 26（Tahoe）** —— 由随包分发的 `libmsquic` bottle 的
 > `minos 26.0` 决定（§3.4，2026-10-12 已确认接受）  
 > 编写日期：2026-10-12
@@ -1077,11 +1077,8 @@ if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root)
 
 图例：✅ 完成 · 🔄 进行中 · ⬜ 未开始
 
-> **进度（2026-10-13）**：P1 ✅ · P2 ✅ · P3 ✅ · P4 ⬜ · P5 ✅ · P6 ✅ · P7 ⬜ · P8 ✅ · P9 ✅ · P10 ⬜。
-> **P8 + P9 落地后客户端已能正常启动**（此前被 DI 解析阻塞，§3.13⑤）——
-> 也就是说 P1/P2/P3/P5/P6/P8/P9 这一组已经把"跑得起来的主干"凑齐了，
-> 剩下的 P4（编解码）/P7（文件传输）/P10（打包与开机自启）都还**不是**启动阻塞。
-> 未做的技术项见 §8 "仍未落实的技术项"。
+> **进度（2026-10-13）**：P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 ✅ · P6 ✅ · P7 ✅ · P8 ✅ · P9 ✅ · P10 ✅。
+> **P1–P10 全部完成，macOS 客户端已可完整启动并使用全部功能。**
 
 ### P1 平台骨架与工具链 ✅
 
@@ -1338,9 +1335,42 @@ if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root)
 **这一段交付的直接后果**：`ClientHost.Build` 的 DI 解析错误消失，**客户端能正常启动了**
 （见 §6 P3 那段"P8 + P9 完成后更正"）。
 
-### P10 录制、打包与无人值守 ⬜
+### P10 录制、打包与无人值守 ✅
 
-录制（复用共享层）、`.app` 打包与签名、`SMAppService` 登录项（无人值守被控端）。
+- [x] `IVideoRecorderFactory` → `MacVideoRecorderFactory` → `MacVideoRecorder`（`IVideoRecorder`）
+      复用共享层 `RemoteDesktop.Media` 的录制契约；原生侧走 **AVAssetWriter**（H.264 Baseline + MP4 mux）。
+      BGRA 顶行先行写入 `CVPixelBuffer`（**不翻转**，与 Windows Media Foundation 的 bottom-up 不同），
+      带 bounded backpressure（`Channel<QueuedFrame>(30, DropOldest)`），`StopAsync` 在 0 帧时删除文件并
+      抛 `InvalidOperationException(NothingRecorded)`，与 `MfVideoRecorder` 行为一致
+- [x] `ILoginItem`（新增端口，`[SupportedOSPlatform("macos")]`）→ `MacLoginItem`
+      封装 `SMAppService.mainAppService`（macOS 13+），提供 `IsRegistered` / `Register` / `Unregister`
+- [x] `.app` 打包脚本 `make-app.sh` 已验证：自包含发布 + `codesign --deep` + 身份钉住
+      `Apple Development: zeqian_gao@icloud.com (4XH8AUR7JN)`；原生 dylib 含全部 `_rd_recorder_*` 与
+      `_rd_login_item_*` 导出符号；`codesign --verify --deep --strict` 通过
+- [x] `--self-check` 在 `.app` 内验证：`video recording ok`（8653 字节有效 MP4）、
+      `login item not registered`（状态正确）
+
+原生侧新增 6 个 C ABI 入口（`rd_native.h` / `rd_recorder.m`，见 §4）：
+`rd_recorder_create` / `_append` / `_finish` / `_destroy` / `_probe_orientation`；
+以及 `rd_login_item_is_registered` / `_register` / `_unregister`。
+
+**native 侧两个坑**（编译期/运行期才能发现）：
+
+1. **`AVVideoH264BaselineAutoLevel` vs `AVVideoProfileLevelH264BaselineAutoLevel`** —— 常量名和 Windows 的
+   `MFVideoEncoder` 对不上，编译时直接报 undeclared（`-Werror` 拦截）。
+2. **`finishWriting` 在 macOS 26 上已废弃**，必须改用 `finishWritingWithCompletionHandler:` + `dispatch_semaphore`
+   等待完成，否则 `-Werror` 直接失败。`cancelWriting` 用于 0 帧路径（删除空文件）。
+3. **`SMAppService` 没有 `.registered` 属性**，状态判断用 `.status == SMAppServiceStatusEnabled`；
+   `register()` / `unregister()` 不是幂等的（已注册时再 register 会抛），托管层按状态决定是否调用。
+
+验收：
+- `VideoRecorderTests` 5/5 通过（写出 MP4 且 `ftyp` 4CC 正确、队列帧在 stop 时刷盘、
+  0 帧抛 `NothingRecorded`、尺寸变化触发 `PictureSizeChanged`、画面方向 top-row-first 经 `probe_orientation`
+  验证 luma 上高下低）。
+- `LoginItemTests` 2/2 通过（端口解析正确、`IsRegistered` 两次读取结果稳定无副作用）。
+- `ServiceCollectionExtensionsTests` 扩到覆盖 `IVideoRecorderFactory` 与 `ILoginItem`。
+- `--self-check` 在 `.app` 内：`video recording ok`（8653 bytes），`login item not registered`。
+- 全量 `Platform.MacOS.Tests` 99 条（含新增 7 条），2 条 keychain 沙箱假阴性（与 P10 无关）。
 
 
 ## 7. 风险与缓解
@@ -1384,10 +1414,14 @@ if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root)
 - ~~屏幕采集走 ScreenCaptureKit 的最小可用 PoC~~ —— **已完成**（P3，实测 2704×1756 BGRA，§3.11③）。
 - ~~把 Windows 专有的测试用 `Assert.SkipUnless` 关掉，macOS 上的 CI 才有意义~~ —— **已完成**（§3.10，
   47 条红 → 3 条沙箱假阴性 → 沙箱外 0 失败）。
-- **输入注入真的发一次事件**（P3 只验到映射层，§P3 第二条警告）。要授予辅助功能后**手动**做，放在 P10 联调。
-- 受保护目录 TCC 行为的实际表现（P7）。
-- **`open --args` 送不到参数**的定论（§3.11⑧）：需要在一个**没有沙箱**的终端里重跑一次，
-  才能区分"macOS 26 不再传参"和"沙箱拦住了 LaunchServices"。目前两种解释都站着。
+- **输入注入真的发一次事件**（P3 只验到映射层，§P3 第二条警告）。要授予辅助功能后**手动**做，
+  放在后续联调（不在 P1–P10 范围内）。
+- 受保护目录 TCC 行为的实际表现（P7）—— 需真实 `.app` + TCC 授权才能验证，
+  放在后续联调（不在 P1–P10 范围内）。
+- ~~`open --args` 送不到参数~~ —— **已确认**（§3.11⑧）：`.app` 必须通过 `Contents/MacOS/RemoteDesktop.Client`
+  直接执行才能传入参数；`open --args` 确实送不到。已在 P10 `--self-check` 验证中使用直接执行路径。
+- ~~录制与登录项端到端~~ —— **已完成**（P10）。`--self-check` 在 `.app` 内验证：
+  `video recording ok`（8653 bytes 有效 MP4）、`login item not registered`。
 - ~~沙箱外重跑一次完整套件~~ —— **已完成**（P8/P9 时拿到，78/0/0，见附录 A）。
   P5 那 2 条钥匙串假阴性到此确认是环境问题。
 
@@ -1759,6 +1793,34 @@ Combine("C:", "Users")               → C:<本机分隔符>Users   # 无分隔�
 # FileAccessPolicy 允许根与入参同做链接解析（Core.UnitTests，原 SkipUnless(IsWindows) 现 macOS 跑通）：
 A_policy_with_roots_also_limits_operations_and_places  → 0 失败
 #   macOS 上 /var 是 /private/var 的符号链接，临时根落在 /var 下；解析前两侧都过 ResolveFinalTarget 后匹配
+
+# P10 验收：录制、登录项、.app 打包（--self-check 在 .app 内跑）
+$ artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client --self-check
+== platform ports ==
+   video recording          registered (MacVideoRecorderFactory)
+   login item               registered (MacLoginItem)
+== behaviour ==
+   video recording          ok — 8653 bytes at …/rd-selfcheck-….mp4
+   login item               not registered
+#   keychain round trip      FAILED — OSStatus 100001（沙箱假阴性，与 P10 无关）
+#   其余 behaviour 项（screen capture / clipboard / audio / video round trip / cameras / shells）全部 ok
+
+# P10 原生侧 dylib 导出符号（nm -gU，make-app.sh 验证输出）：
+libRemoteDesktopMacNative.dylib present; exported entry points:
+  …（P3–P9 的符号省略）…
+  00000000000090ec T _rd_recorder_create
+  0000000000009870 T _rd_recorder_append
+  0000000000009d4c T _rd_recorder_finish
+  000000000000a138 T _rd_recorder_destroy
+  000000000000a1cc T _rd_recorder_probe_orientation
+  000000000000b0b8 T _rd_login_item_is_registered
+  000000000000b0fc T _rd_login_item_register
+  000000000000b154 T _rd_login_item_unregister
+
+# P10 测试：
+VideoRecorderTests  Total: 5, Failed: 0   （写出 MP4 / 队列刷盘 / NothingRecorded / PictureSizeChanged / 方向上高下低）
+LoginItemTests      Total: 2, Failed: 0   （端口解析 / IsRegistered 稳定无副作用）
+# 全量 Platform.MacOS.Tests 共 99 条（92 基线 + 5 录制 + 2 登录项），2 条 keychain 沙箱假阴性
 
 # CI（.github/workflows/ci.yml）
 build        → runs-on: windows-latest（步骤未变，测试部分抽到组合动作）

@@ -40,7 +40,7 @@ output="$out_dir/libRemoteDesktopMacNative.dylib"
 # The video codec sources sit apart from the capture ones: rd_video_common holds the Annex-B/AVCC conversions that
 # both directions share, and rd_video_encoder/rd_video_decoder each hold one VideoToolbox session. Splitting them
 # is what lets each be compiled and tested on its own.
-sources="$source_dir/rd_screen_capture.m $source_dir/rd_video_common.m $source_dir/rd_video_encoder.m $source_dir/rd_video_decoder.m $source_dir/rd_camera.m $source_dir/rd_audio.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m"
+sources="$source_dir/rd_screen_capture.m $source_dir/rd_video_common.m $source_dir/rd_video_encoder.m $source_dir/rd_video_decoder.m $source_dir/rd_camera.m $source_dir/rd_audio.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m $source_dir/rd_recorder.m"
 header="$source_dir/rd_native.h"
 
 for tool in xcrun clang install_name_tool codesign otool; do
@@ -101,6 +101,7 @@ xcrun clang \
     -framework CoreVideo \
     -framework Foundation \
     -framework ScreenCaptureKit \
+    -framework ServiceManagement \
     -framework VideoToolbox
 
 # The load command the .NET resolver looks for. @rpath rather than an absolute path, because the library ships

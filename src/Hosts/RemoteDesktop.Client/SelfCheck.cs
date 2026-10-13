@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net.Quic;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Camera;
@@ -57,6 +59,7 @@ internal static class SelfCheck
         ("video encoder", typeof(IVideoEncoderFactory)),
         ("video decoder", typeof(IVideoDecoderFactory)),
         ("video recording", typeof(IVideoRecorderFactory)),
+        ("login item", typeof(ILoginItem)),
     ];
 
     public static int Run(string[] args)
@@ -202,6 +205,12 @@ internal static class SelfCheck
         Probe("cameras", () => Cameras(provider), ref exitCode);
         Probe("audio", () => Audio(provider), ref exitCode);
         Probe("video round trip", () => VideoRoundTrip(provider), ref exitCode);
+        Probe("video recording", () => VideoRecording(provider).GetAwaiter().GetResult(), ref exitCode);
+        if (OperatingSystem.IsMacOS())
+        {
+            var loginItemState = LoginItemState(provider);
+            Probe("login item", () => loginItemState, ref exitCode);
+        }
         Probe("shells offered", () => string.Join(", ", provider.GetRequiredService<IPtyHost>().GetAvailableShells()), ref exitCode);
         Probe("files and shells allowed", () => provider.GetRequiredService<IUserContextGuard>().GetRefusalReason() ?? "yes", ref exitCode);
 
@@ -542,6 +551,70 @@ internal static class SelfCheck
         // Sampled bytes from a pseudo-random pattern average near 128. A wrong plane order or a stride bug shows up
         // here as a mean near one end of the range, which is the cheapest way to see it.
         return $"ok — {encoder.Name} → 320x240 NV12, luma mean {mean:F0} (expected near 128)";
+    }
+
+    /// <summary>
+    /// Records a few synthetic frames to a temporary MP4 through the registered <see cref="IVideoRecorderFactory"/> and
+    /// confirms a real file came out — a registered port is not a working one, and a recorder that resolves but writes
+    /// nothing (or writes an unplayable stub) is exactly the failure this probe exists to catch.
+    /// </summary>
+    private static async Task<string> VideoRecording(IServiceProvider provider)
+    {
+        var factory = provider.GetService<IVideoRecorderFactory>();
+        if (factory is null)
+        {
+            return "no recorder factory registered";
+        }
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rd-selfcheck-{Guid.NewGuid():N}.mp4");
+        await using var recorder = factory.Create();
+        try
+        {
+            const int width = 320;
+            const int height = 240;
+
+            recorder.Start(tempPath, width, height, frameRate: 30, bitrateKbps: 1500);
+            var frame = new byte[width * height * 4];
+            for (var i = 0; i < frame.Length; i++)
+            {
+                frame[i] = (byte)((i * 37) & 0xFF);
+            }
+
+            for (var i = 0; i < 10; i++)
+            {
+                recorder.RecordFrame(frame, width * 4, width, height);
+                Thread.Sleep(15);
+            }
+
+            var saved = await recorder.StopAsync();
+            var info = new FileInfo(saved);
+            if (!info.Exists || info.Length == 0)
+            {
+                return "wrote no file";
+            }
+
+            return $"ok — {info.Length} bytes at {saved}";
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Reports whether this build is registered to launch at login — read-only, no side effects.</summary>
+    [SupportedOSPlatform("macos")]
+    private static string LoginItemState(IServiceProvider provider)
+    {
+        var loginItem = provider.GetService<ILoginItem>();
+        if (loginItem is null)
+        {
+            return "not registered (no login item port)";
+        }
+
+        return loginItem.IsRegistered ? "registered" : "not registered";
     }
 
     /// <summary>

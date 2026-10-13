@@ -533,6 +533,93 @@ RD_EXPORT int rd_video_decoder_decode(
 /// Stops the session and releases everything.
 RD_EXPORT void rd_video_decoder_destroy(rd_video_decoder_ref decoder);
 
+#pragma mark - Recording
+
+/// Opaque video recorder handle.
+typedef void *rd_recorder_ref;
+
+/// Creates a recorder that encodes the frames handed to it into an H.264 MP4 at `path`.
+///
+/// `path` is a UTF-8 filesystem path; the parent directory must already exist. `frame_rate` is the timeline the file
+/// presents, because the caller hands frames over without timestamps and the recorder times them itself. `bitrate_kbps`
+/// is the target encoder bitrate; 0 lets AVFoundation choose.
+///
+/// The encoding and the MP4 muxing are both done by AVAssetWriter, which drives VideoToolbox underneath — so this is
+/// the same H.264 engine as the live pipeline, only pointed at a file instead of the wire. Returns RD_OK, or a negative
+/// status with `error` filled. The handle must be released with rd_recorder_destroy.
+RD_EXPORT int rd_recorder_create(const char *path,
+                                 int32_t width,
+                                 int32_t height,
+                                 int32_t frame_rate,
+                                 int32_t bitrate_kbps,
+                                 rd_recorder_ref *out,
+                                 char *error,
+                                 size_t error_size);
+
+/// Hands one BGRA32 frame (top row first) to the recorder.
+///
+/// `bgra` is `height` rows of `stride` bytes, where `stride >= width * 4`. A row shorter than that is a programming
+/// error: it is rejected with RD_ERROR_ARGUMENT rather than cropped silently. The recorder copies the pixels into a
+/// pixel buffer it owns, so `bgra` need not outlive the call.
+///
+/// Returns RD_OK, or a negative status with `error` filled when the frame could not be appended (writer error, or
+/// backpressure that could not be relieved within a few seconds). The first such failure marks the recording broken;
+/// later frames are ignored.
+RD_EXPORT int rd_recorder_append(rd_recorder_ref recorder,
+                                 const uint8_t *bgra,
+                                 size_t length,
+                                 int32_t stride,
+                                 int32_t width,
+                                 int32_t height,
+                                 char *error,
+                                 size_t error_size);
+
+/// Finalizes the file.
+///
+/// Sets `*out_wrote_frames` to the number of frames accepted. Returns RD_OK and a positive count when a recording was
+/// written; RD_OK with a zero count when no frame ever arrived (in which case no file is left behind); and RD_ERROR_CODEC
+/// when the writer genuinely failed to finalize a recording that did start. The caller turns the zero count into
+/// "nothing was recorded" and the codec error into "the recording could not be saved".
+RD_EXPORT int rd_recorder_finish(rd_recorder_ref recorder,
+                                 int64_t *out_wrote_frames,
+                                 char *error,
+                                 size_t error_size);
+
+/// Stops if needed and releases everything. Safe to call twice.
+RD_EXPORT void rd_recorder_destroy(rd_recorder_ref recorder);
+
+/// Reads the first frame of an MP4 back and reports the luma of its top and bottom rows, to prove a recording was
+/// written the right way up. `out_top_luma` and `out_bottom_luma` receive 0..255 averages. Returns RD_OK, or
+/// RD_ERROR_CODEC when the file cannot be read.
+///
+/// This exists only so a self-check and a test can verify that the bytes handed in top-row-first come back the same
+/// way — the one orientation mistake the contract is最容易 to make, and the one a solid-colour frame cannot reveal.
+RD_EXPORT int rd_recorder_probe_orientation(const char *path,
+                                            double *out_top_luma,
+                                            double *out_bottom_luma,
+                                            char *error,
+                                            size_t error_size);
+
+#pragma mark - Login item
+
+/// Whether this application is registered to launch when the user logs in.
+///
+/// Reports 0 (not registered) on macOS before 13, where SMAppService does not exist. The state is keyed to the
+/// signed bundle, so an ad-hoc signature reports a fresh, unregistered identity on every build.
+RD_EXPORT int rd_login_item_is_registered(void);
+
+/// Registers this application to launch at login via SMAppService.mainAppService.
+///
+/// Returns RD_OK, or RD_ERROR_UNAVAILABLE when the system refuses (not in /Applications, an ad-hoc signature, or
+/// macOS before 13). Registration is best-effort at the system level: it returns success when the request was
+/// accepted, not when the user has approved anything.
+RD_EXPORT int rd_login_item_register(void);
+
+/// Unregisters this application from launching at login.
+///
+/// Returns RD_OK, or RD_ERROR_UNAVAILABLE when the system refuses (the same conditions as rd_login_item_register).
+RD_EXPORT int rd_login_item_unregister(void);
+
 /// Opens System Settings on the Privacy & Security pane named by `anchor`, e.g. "Privacy_ScreenCapture".
 ///
 /// Returns RD_OK once the request has been handed to the workspace. It does not wait for the pane to appear, and it

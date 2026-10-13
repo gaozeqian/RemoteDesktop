@@ -439,6 +439,64 @@ internal static unsafe partial class MacNativeInterop
 
     #endregion
 
+    #region Recording
+
+    /// <remarks>
+    /// The path and the pixel buffer are passed as a UTF-8 string and a bare pointer respectively, not as a span:
+    /// the same rule as <see cref="rd_clipboard_write_text(string?, byte*, nuint, byte*, nuint)"/> applies — a span in
+    /// this position would reach the native <c>length</c> as whatever argument followed, with the consequences there.
+    /// </remarks>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_recorder_create(
+        string path,
+        int width,
+        int height,
+        int frameRate,
+        int bitrateKbps,
+        out nint recorder,
+        byte* error,
+        nuint errorSize);
+
+    /// <inheritdoc cref="rd_recorder_create(string, int, int, int, int, out nint, byte*, nuint)"/>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_recorder_append(
+        nint recorder,
+        byte* bgra,
+        nuint length,
+        int stride,
+        int width,
+        int height,
+        byte* error,
+        nuint errorSize);
+
+    /// <inheritdoc cref="rd_recorder_create(string, int, int, int, int, out nint, byte*, nuint)"/>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_recorder_finish(
+        nint recorder, out long wroteFrames, byte* error, nuint errorSize);
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial void rd_recorder_destroy(nint recorder);
+
+    /// <inheritdoc cref="rd_recorder_create(string, int, int, int, int, out nint, byte*, nuint)"/>
+    [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int rd_recorder_probe_orientation(
+        string path, out double topLuma, out double bottomLuma, byte* error, nuint errorSize);
+
+    #endregion
+
+    #region Login item
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_login_item_is_registered();
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_login_item_register();
+
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_login_item_unregister();
+
+    #endregion
+
     [LibraryImport(NativeLibraries.MacNative, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int rd_open_settings(string anchor);
 

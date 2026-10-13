@@ -13,6 +13,7 @@ using RemoteDesktop.Platform.MacOS.Camera;
 using RemoteDesktop.Platform.MacOS.Clipboard;
 using RemoteDesktop.Platform.MacOS.Display;
 using RemoteDesktop.Platform.MacOS.Input;
+using RemoteDesktop.Platform.MacOS.Recording;
 using RemoteDesktop.Platform.MacOS.Terminal;
 using RemoteDesktop.Platform.MacOS.Video;
 
@@ -23,13 +24,13 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers the macOS implementations of the platform ports: Keychain secrets, CoreGraphics display enumeration
     /// and event injection, ScreenCaptureKit capture and loopback audio, the pasteboard, AVFoundation cameras,
-    /// AudioQueue playback, VideoToolbox H.264, the BSD pseudo-terminal, and the IOKit power assertion.
+    /// AudioQueue playback, VideoToolbox H.264, the BSD pseudo-terminal, the IOKit power assertion, AVAssetWriter
+    /// recording, and the SMAppService login item for unattended hosts.
     /// </summary>
     /// <remarks>
     /// There is no scope argument the way Windows has one — DPAPI has a machine-or-user choice to make, the keychain
-    /// is per-user by construction. The ports that are missing are the ones with no macOS implementation yet
-    /// (recording); each arrives with the milestone that provides it, and until then the container refuses
-    /// to build a feature that needs it, which is the behaviour we want.
+    /// is per-user by construction. Every port the platform project implements is registered here; the Windows
+    /// registration is the mirror of this list.
     /// </remarks>
     /// <param name="dataDirectory">
     /// Where protected state lives. It also scopes the keychain items, so two data directories are two devices — the
@@ -66,6 +67,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVideoEncoderFactory>(new VideoToolboxH264EncoderFactory(hardware: true));
         services.AddSingleton<IVideoEncoderFactory>(new VideoToolboxH264EncoderFactory(hardware: false));
         services.AddSingleton<IVideoDecoderFactory, VideoToolboxH264DecoderFactory>();
+
+        // AVAssetWriter records BGRA frames to an H.264 MP4, reusing the same VideoToolbox engine the live pipeline
+        // uses. The LoginItem port is what lets an unattended controlled-side host launch at login via SMAppService.
+        services.AddSingleton<IVideoRecorderFactory, MacVideoRecorderFactory>();
+        services.AddSingleton<ILoginItem, MacLoginItem>();
         return services;
     }
 }

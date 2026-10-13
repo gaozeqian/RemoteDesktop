@@ -12,6 +12,7 @@ using RemoteDesktop.Platform.MacOS.Camera;
 using RemoteDesktop.Platform.MacOS.Clipboard;
 using RemoteDesktop.Platform.MacOS.Display;
 using RemoteDesktop.Platform.MacOS.Input;
+using RemoteDesktop.Platform.MacOS.Recording;
 using RemoteDesktop.Platform.MacOS.Terminal;
 using RemoteDesktop.Platform.MacOS.Video;
 
@@ -52,6 +53,8 @@ public class ServiceCollectionExtensionsTests
         Assert.Contains(encoders, factory => factory.IsHardware);
         Assert.Contains(encoders, factory => !factory.IsHardware);
         Assert.IsType<VideoToolboxH264DecoderFactory>(provider.GetRequiredService<IVideoDecoderFactory>());
+        Assert.IsType<MacVideoRecorderFactory>(provider.GetRequiredService<IVideoRecorderFactory>());
+        Assert.IsType<MacLoginItem>(provider.GetRequiredService<ILoginItem>());
     }
 
     [Fact]
