@@ -492,6 +492,36 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 完整说明（怎么买证书、有哪些替代方案、怎么检查签名）见 [`build/signing/README.md`](../build/signing/README.md)；
 本地测试签名用 `build/signing/windows/New-SigningCertificate.ps1` 生成证书、`build/signing/windows/Install-TrustedCertificate.ps1` 让机器信任它。
 
+### 6. macOS 客户端（.pkg）
+
+macOS 侧是**单进程**的：同一个 `.app` 既能当控制端、也能当被控端（没有 Windows 那种服务 + Agent 的拆分，
+因为 macOS 的守护进程拿不到屏幕录制权限）。安装包由 `build/installer/client/macos/make-pkg.sh` 产出，
+装到 `/Applications`。
+
+```
+build/installer/client/macos/make-pkg.sh --configuration Release
+# 产物：artifacts/pkg/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
+```
+
+**安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。
+
+三件必须知道的事：
+
+- **包默认未签名**（没有 Apple Developer ID Installer 证书）：在别人的 Mac 上 Gatekeeper 会提示
+  "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
+  有证书时用 `--identity "Developer ID Installer: …"` 签名；要做到下载即开，还需要公证（notarization），
+  需要付费 Apple Developer 账号。
+- **被控端需要手动授权两项权限**：装完后打开应用，在「系统设置 → 隐私与安全性」里给它开
+  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。macOS 会在首次使用时弹窗；授权后可能要重启应用。
+- **无人值守**：在应用里开启登录项（`SMAppService`）。它按**已签名并位于 `/Applications` 的应用**记账，
+  所以别把 `.app` 拷到别处运行。
+
+服务器地址同样可以内置：`make-pkg.sh` 会复用 `make-app.sh` 产出的 `.app`，而后者读的是构建时的配置；
+也可装完后在客户端界面用「修改服务器地址」填 `wss://<主机>:5080/ws`。
+
+> **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
+> （见 `docs/macos-port-plan.md` §3.4）。`.pkg` 只面向 Apple Silicon（arm64）。
+
 ## 五、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。

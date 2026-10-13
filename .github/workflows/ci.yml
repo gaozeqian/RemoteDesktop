@@ -60,5 +60,6 @@ jobs:
         with:
           artifact-name: test-results-macos
 
-  # release.yml still builds and tests on Windows only: the macOS port has no installer to publish yet, and its tests
-  # run there through this workflow. When a .app/.dmg is added, that job needs the same macos-26 treatment as above.
+  # release.yml now has its own macos-26 job: it builds and tests the port, then packages an (unsigned) .pkg and
+  # hands it to the release job alongside the two Windows MSIs. This job stays the place the port is exercised on
+  # every push/PR; the release job is the place it is shipped.

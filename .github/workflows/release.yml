@@ -6,7 +6,49 @@ on:
       - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
 
 jobs:
+  # macOS 安装包（.pkg）。先跑，因为下面的发布 job 需要它的产物才能发版——
+  # 只发出 Windows 的两个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
+  build-macos:
+    # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
+    # dyld 拒绝在更老的系统上加载（docs/macos-port-plan.md §3.4）。macos-26 就是 arm64 镜像。
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      # macOS 不从 .NET 运行时包拿到 MsQuic，任何碰传输层的东西没有它连加载都做不到。
+      - name: Stage the native MsQuic library
+        run: ./native/macos/fetch-libmsquic.sh
+      - name: Restore and build
+        run: |
+          dotnet restore RemoteDesktop.slnx
+          dotnet build RemoteDesktop.slnx --no-restore -c Release
+      # 与 ci.yml 同一策略：release 是唯一一个发出去之前没人再检查一遍的构建，所以它自己跑测试。
+      - uses: ./.github/actions/run-test-suite
+        with:
+          artifact-name: test-results-macos-release
+      # 打包成 .pkg（装到 /Applications）。脚本会顺带构建 .app 与原生辅助库。
+      # 包是**未签名**的：没有配 Apple Developer ID Installer 证书。在别人的 Mac 上 Gatekeeper 会提示
+      # "unidentified developer"，用户需要右键 → 打开。签名 + 公证是另一件事，依赖付费账号，见脚本头部说明。
+      - name: Build the macOS .pkg
+        run: ./build/installer/client/macos/make-pkg.sh --configuration Release
+      - name: Rename the installer for the release
+        run: |
+          set -euo pipefail
+          src="$(ls artifacts/pkg/macos/*.pkg | head -1)"
+          dst="artifacts/pkg/macos/RemoteDesktop-macOS-arm64-${GITHUB_REF_NAME}.pkg"
+          mv "$src" "$dst"
+          echo "macOS installer: $dst"
+      - name: Upload the macOS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-installer
+          path: artifacts/pkg/macos/*.pkg
+
   build-and-release:
+    # 等 macOS 包先出来：发布是一个原子动作，缺一个产物就不该发（见上面 build-macos 的注释）。
+    needs: build-macos
     runs-on: windows-latest
 
     # 权限配置：允许向 Releases 写入文件
@@ -139,7 +181,7 @@ jobs:
         shell: pwsh
         run: |
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
-              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword "$env:PFX_PASSWORD"
+              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword $env:PFX_PASSWORD
           } else {
               .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -SkipSigning
           }
@@ -168,7 +210,15 @@ jobs:
           Write-Output "CLIENT_MSI=build/installer/client/windows/artifacts/$clientName" >> $env:GITHUB_ENV
           Write-Output "SERVER_MSI=build/installer/server/windows/artifacts/$serverName" >> $env:GITHUB_ENV
 
-      # 上传至 GitHub Release：一个版本一个 Release，两个包都放在里面（装的机器不同，版本是同一个）。
+      # 取回 build-macos 打好的 .pkg。用 artifact 而不是让 macOS job 自己上传 Release，是为了让"发版"只发生
+      # 在这一处——否则 Windows 和 macOS 会各自尝试创建同一个 Release，谁先谁后不定。
+      - name: Download the macOS installer
+        uses: actions/download-artifact@v7
+        with:
+          name: macos-installer
+          path: macos-installer
+
+      # 上传至 GitHub Release：一个版本一个 Release，三个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
       # 用官方 gh CLI 取代第三方 softprops/action-gh-release（上游已停维护）；gh 在托管 runner 上预装，
       # github.token 已有 contents:write 权限。
@@ -177,8 +227,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          $pkg = Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $pkg) { throw "No macOS installer was downloaded from build-macos." }
+
           gh release create "$env:GITHUB_REF_NAME" `
-            "$env:CLIENT_MSI" "$env:SERVER_MSI" `
+            "$env:CLIENT_MSI" "$env:SERVER_MSI" "$($pkg.FullName)" `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes

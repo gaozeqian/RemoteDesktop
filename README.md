@@ -30,16 +30,24 @@ dotnet test RemoteDesktop.slnx
 pwsh -File build/installer/client/windows/build-installer.ps1
 ```
 
-macOS `.app`（Apple Silicon，需要 Xcode Command Line Tools；打包为**自包含** .app 并用 Apple Development 身份签名）：
+macOS 安装包（Apple Silicon，需要 Xcode Command Line Tools；打包为**自包含**应用）：
 
 ```
+# .app（bundle 目录，用 Apple Development 身份签名，便于本机开发调试）
 build/installer/client/macos/make-app.sh --configuration Release
+
+# .pkg（可分发安装包，装到 /Applications；默认未签名）
+build/installer/client/macos/make-pkg.sh --configuration Release
 ```
 
 > macOS 侧最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0`
 > 决定。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；首次构建前需运行
 > `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。平台细节与实测记录见
 > [docs/macos-port-plan.md](docs/macos-port-plan.md)，选型评审见 [docs/macos-port-review.md](docs/macos-port-review.md)。
+>
+> `.pkg` **默认未签名**（没有 Apple Developer ID Installer 证书）：在别人的 Mac 上 Gatekeeper 会提示
+> "unidentified developer"，需要右键 → 打开。有证书时用 `--identity "Developer ID Installer: …"` 签名；
+> 完整的首次运行体验还需要公证（notarization），需要付费 Apple Developer 账号。
 
 ## 本地运行（单机两个客户端互连）
 
