@@ -13,6 +13,10 @@
 	<string>RemoteDesktop.Client</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.remotedesktop.client</string>
+	<!-- The Dock/Finder icon. This is the only icon macOS shows for an application: a macOS window has no title-bar
+	     icon, so the bundle is the whole story. The .icns is generated from Assets/icon-*.png by make-icns.sh. -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

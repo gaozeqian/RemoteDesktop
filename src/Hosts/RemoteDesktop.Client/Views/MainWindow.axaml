@@ -4,7 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Remote Desktop"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="860" Height="560" MinWidth="860" MinHeight="560">
 
@@ -27,8 +27,9 @@
              the code is what the person on the other end needs, and it is worth having on screen at all times. -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="10" Margin="18,18,18,12">
           <Border Width="38" Height="38" CornerRadius="10" Background="{DynamicResource RdAccentSurfaceBrush}">
-            <TextBlock Text="&#xE7F4;" Classes="navIcon" Foreground="{DynamicResource RdAccentBrush}"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <PathIcon Data="{StaticResource RdIconMachine}" Width="20" Height="20"
+                      Foreground="{DynamicResource RdAccentBrush}"
+                      HorizontalAlignment="Center" VerticalAlignment="Center" />
           </Border>
           <StackPanel VerticalAlignment="Center">
             <TextBlock Text="本机" FontWeight="SemiBold" />
@@ -43,19 +44,19 @@
         <ListBox x:Name="NavList" Classes="navList" SelectedIndex="{Binding SelectedPageIndex}">
           <ListBoxItem AutomationProperties.Name="主页">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE80F;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconHome}" Classes="navIcon" />
               <TextBlock Text="主页" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>
           <ListBoxItem AutomationProperties.Name="设备列表">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE8FD;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconDevices}" Classes="navIcon" />
               <TextBlock Text="设备列表" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>
           <ListBoxItem AutomationProperties.Name="高级设置">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE713;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconSettings}" Classes="navIcon" />
               <TextBlock Text="高级设置" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>

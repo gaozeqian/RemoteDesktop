@@ -4,7 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.RemoteDesktopWindow"
         x:DataType="vm:RemoteDesktopViewModel"
         Title="{Binding Title}"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Width="1280" Height="760" Background="{DynamicResource RdVideoBackdropBrush}">
   <DockPanel>
     <Border DockPanel.Dock="Top" Classes="toolbar">

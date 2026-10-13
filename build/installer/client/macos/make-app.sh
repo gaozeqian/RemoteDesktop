@@ -108,6 +108,16 @@ cp "$SCRIPT_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 # PkgInfo is what pre-CFBundleInfo-era code looks for; AppKit still reads it.
 printf 'APPL????' > "$CONTENTS_DIR/PkgInfo"
 
+# The Dock/Finder icon, which is the only icon macOS shows for an application — a macOS window has no title-bar icon,
+# so Window.Icon plays no part here. Generated from the same PNGs the app itself uses (see make-icns.sh), and put in
+# place before signing so it is sealed into the bundle. A failure is a warning, not an error: an .app with the generic
+# icon still runs, and refusing to package over artwork would be the wrong trade.
+if "$SCRIPT_DIR/make-icns.sh" --output "$RESOURCES_DIR/AppIcon.icns" >/dev/null; then
+    echo "    icon: AppIcon.icns ($(du -h "$RESOURCES_DIR/AppIcon.icns" | cut -f1 | tr -d ' '))"
+else
+    echo "    WARNING: could not build AppIcon.icns — Finder and the Dock will show the generic application icon." >&2
+fi
+
 echo "==> Signing"
 IDENTITY="${APPLE_DEVELOPMENT_IDENTITY:-}"
 

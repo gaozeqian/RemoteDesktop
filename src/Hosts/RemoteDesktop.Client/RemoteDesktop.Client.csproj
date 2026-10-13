@@ -5,7 +5,11 @@
   </PropertyGroup>
   <!-- On Windows the subsystem and the manifest are what make it a windowed program with the right DPI behaviour, and
        the icon is embedded in the .exe. None of the three means anything on macOS: there the .app bundle's Info.plist
-       plays that role, so the binary itself stays an ordinary executable. -->
+       plays that role, so the binary itself stays an ordinary executable.
+       Note the two different icons: ApplicationIcon embeds the .exe's icon on Windows, while the windows themselves
+       use Icon="/Assets/icon-256.png" — PNG rather than the .ico next to it, because .ico is a Windows container that
+       the cross-platform decoder does not reliably read. The Dock/Finder icon on macOS comes from neither: it is the
+       bundle's CFBundleIconFile, built from these same PNGs by build/installer/client/macos/make-icns.sh. -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <OutputType>WinExe</OutputType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
