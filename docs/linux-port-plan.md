@@ -345,7 +345,7 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 即 .NET 经 D-Bus 传递文件描述符已端到端验证；`HostControlTests` 现在跑在真实的 Unix socket 传输上
 （此前它用 `NamedPipeServerStream` 搭假服务端，与新的客户端传输对不上，这也是一处真实的移植影响）。
 
-### P3 — Wayland 采集与输入（核心，风险最高）🚧 进行中
+### P3 — Wayland 采集与输入（核心，风险最高）✅ 已完成
 
 **portal 会话流程已在真实实现里跑通**（2026-10-14，真机授权一次）。
 `XdgPortal/PortalConnection.cs` + `XdgPortal/PortalResponse.cs` 完成
@@ -616,15 +616,16 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 整个测试进程直接消失且没有任何信息**；助手没有等上下文进入就绪就去加载模块，于是错误地得出「这台机器的
 声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
 把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
-### P10 — 录制 ✅ / 被控端打包 🚫 被 P3 挡住
+### P10 — 录制 ✅ / 被控端打包 ⏳ P3 已完成，不再被挡
 
-录制已完成，见上表。**被控端打包现在做不了，而且原因是可核对的，不是时间不够**：一个能启动的
-Linux 被控端需要 `IScreenCapturerFactory`、`IDisplayEnumerator`、`IInputInjector`、`IClipboard`、
-`ICameraEnumerator`、`ICameraSourceFactory` 六个端口，而它们**全部没有注册**——每一个都要 portal
-授权，也就是 P3、P5、P8。宿主用 `ValidateOnBuild = true` 构建容器，缺任何一个都会在启动时失败。
+录制已完成，见上表。**P3 完成后，被控端打包剩下的障碍比原先少了两个**：`IDisplayEnumerator`、
+`IScreenCapturerFactory`（P3）、`IInputInjector`（P3）都已注册。还差 **`IClipboard`、`ICameraEnumerator`、
+`ICameraSourceFactory`**——其中剪贴板是 P5、摄像头是 P8。宿主用 `ValidateOnBuild = true` 构建容器，
+缺任何一个都会在启动时失败。
 
-所以为一个跑不起来的程序写 `.deb` 和 systemd 单元，是在打包不存在的东西。**这一段应当跟在 P3 之后**，
-它的形状可以直接沿用服务端那套（`build/debian/server/`），差别只在 systemd **用户**单元
+所以要么先做 P5/P8，要么给这三个端口写**惰性**实现（构造函数不抛异常，用到时才报告不可用）——
+后者能让宿主先跑起来、把画面与输入这条主链路真正端到端验证一遍。形状可以直接沿用服务端那套
+（`build/debian/server/`），差别只在 systemd **用户**单元
 （`WantedBy=graphical-session.target`、`PartOf=`）与 portal 会话必须惰性建立。
 
 ### P10（原始计划） — 录制 + 被控端打包
