@@ -2,7 +2,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\src\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <!-- Every platform project has to be referenced here or the layer rules never see it: the tests load assemblies
+         by name prefix out of this project's own output folder, so an unreferenced platform would simply be absent
+         and the suite would stay green while checking nothing about it. -->
     <ProjectReference Include="..\..\src\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Platform\RemoteDesktop.Platform.Linux\RemoteDesktop.Platform.Linux.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />

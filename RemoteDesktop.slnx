@@ -25,6 +25,7 @@
   </Folder>
   <Folder Name="/src/Platform/">
     <Project Path="src/Platform/RemoteDesktop.Platform.Windows/RemoteDesktop.Platform.Windows.csproj" />
+    <Project Path="src/Platform/RemoteDesktop.Platform.Linux/RemoteDesktop.Platform.Linux.csproj" />
   </Folder>
   <Folder Name="/src/Hosts/">
     <Project Path="src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj" />
@@ -41,5 +42,6 @@
     <Project Path="tests/RemoteDesktop.ArchitectureTests/RemoteDesktop.ArchitectureTests.csproj" />
     <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />
     <Project Path="tests/RemoteDesktop.Platform.Windows.Tests/RemoteDesktop.Platform.Windows.Tests.csproj" />
+    <Project Path="tests/RemoteDesktop.Platform.Linux.Tests/RemoteDesktop.Platform.Linux.Tests.csproj" />
   </Folder>
 </Solution>
