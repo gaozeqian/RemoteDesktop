@@ -16,6 +16,13 @@ internal static class Program
             return 1;
         }
 
+        // Before anything is built, so that it still answers on a machine where the program cannot start — which is
+        // the machine somebody runs it on.
+        if (args.Any(argument => string.Equals(argument, "--self-check", StringComparison.OrdinalIgnoreCase)))
+        {
+            return SelfCheck.Run(Console.Out);
+        }
+
         IHost host;
         try
         {
