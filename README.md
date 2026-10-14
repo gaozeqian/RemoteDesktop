@@ -7,7 +7,7 @@
 三个平台的产品形状不同，因为桌面不同：Windows 上被控端是 LocalSystem 服务加一个用户会话里的 Agent；
 macOS 上客户端自己就是被控端（没有服务/Agent 拆分）；Linux 上是一个跑在图形会话里的 `systemd --user`
 服务。**下面凡写着 Windows 专有概念（ConPTY、Media Foundation、DPAPI、Session 0）的地方，其他平台的
-对应物见 [macOS 一节](#macosapple-silicon) 与 [Linux 一节](#linux-支持与限制)。**
+对应物见 [macOS 一节](#macos-apple-silicon) 与 [Linux 一节](#linux-支持与限制)。**
 
 ## 📚 项目文档
 
@@ -294,8 +294,9 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 ## 后台服务（被控端，Windows）
 
-> Linux 上不是这个形状：没有 Session 0，portal 只在该会话内应答，所以被控端是一个跑在图形会话里的
-> `systemd --user` 服务，自己就是采集和注入的那一方。见 [Linux 支持与限制](#linux-支持与限制)。
+> 其他平台不是这个形状。Linux 上没有 Session 0，portal 只在该会话内应答，所以被控端是一个跑在图形会话里的
+> `systemd --user` 服务，自己就是采集和注入的那一方（见 [Linux 支持与限制](#linux-支持与限制)）。
+> macOS 上连进程拆分都不需要：没有 Session 0，客户端进程自己就是被控端（见 [macOS 一节](#macos-apple-silicon)）。
 
 被控端由一个 Windows 服务（LocalSystem）托管，它本身无法采集屏幕或注入输入（Session 0），所以它在当前控制台会话里启动并监督一个 **Agent**
 （`RemoteDesktop.SessionAgent`），屏幕和输入由 Agent 完成，服务只负责连接、鉴权、授权和转发：
