@@ -358,6 +358,24 @@
                         </StackPanel>
                       </Border>
                     </StackPanel>
+
+                    <!-- 无人值守的另一半：固定密码管"用什么密码进"，这里管"开机后谁在等"。macOS 独占——Windows 的
+                         无人值守由服务端 MSI 装的服务提供，所以 HasLoginItem 在 Windows 上为 false，整节隐藏。 -->
+                    <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{Binding HasLoginItem}">
+                      <TextBlock Text="开机自启（无人值守）" Classes="sectionHeader" />
+                      <TextBlock Classes="caption"
+                                 Text="开启后，每次登录 macOS 都会自动启动本应用并保持被控在线，不需要有人先登录。" />
+                      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                        <TextBlock Text="{Binding LoginItemStatus}" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource RdAccentBrush}" />
+                        <Button Content="开启" Command="{Binding EnableLoginItemCommand}"
+                                IsVisible="{Binding !IsLoginItemRegistered}" />
+                        <Button Content="关闭" Command="{Binding DisableLoginItemCommand}"
+                                IsVisible="{Binding IsLoginItemRegistered}" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding LoginItemError}" Classes="danger"
+                                 IsVisible="{Binding LoginItemError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    </StackPanel>
                   </StackPanel>
                 </Border>
               </TabItem>

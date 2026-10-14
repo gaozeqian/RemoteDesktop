@@ -9,6 +9,7 @@ using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Configuration;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Setup;
@@ -56,6 +57,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IRecentDevicesStore _recentDevicesStore;
     private readonly IRendezvousClient _rendezvous;
     private readonly IVideoRecorderFactory? _recorderFactory;
+    private readonly ILoginItem? _loginItem;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _presenceTimer;
     private int _presenceInFlight;
@@ -74,7 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IRendezvousClient rendezvous,
         ClientEnvironment environment,
         TransportOptions transport,
-        IVideoRecorderFactory? recorderFactory = null)
+        IVideoRecorderFactory? recorderFactory = null,
+        ILoginItem? loginItem = null)
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
@@ -89,6 +92,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _recentDevicesStore = recentDevicesStore;
         // From the container: the platform layer decides whether this machine has a recorder at all.
         _recorderFactory = recorderFactory;
+        // Same idea: only macOS registers a login item, and only macOS needs one — on Windows the unattended host
+        // is the installed service, which the server MSI sets up. Null on Windows hides the whole UI section.
+        _loginItem = loginItem;
+        if (OperatingSystem.IsMacOS())
+        {
+            RefreshLoginItemState();
+        }
 
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;
@@ -152,6 +162,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string? FixedPasswordError { get; set; }
+
+    /// <summary>
+    /// Whether this machine has a login-item concept: macOS, where the client is its own host. On Windows the same
+    /// job is done by the installed service, so the section stays hidden rather than offering a second way to do it.
+    /// </summary>
+    public bool HasLoginItem => OperatingSystem.IsMacOS() && _loginItem is not null;
+
+    /// <summary>State of the login item, as macOS itself reports it (the user may also change it in System Settings).</summary>
+    [ObservableProperty]
+    public partial bool IsLoginItemRegistered { get; set; }
+
+    [ObservableProperty]
+    public partial string LoginItemStatus { get; set; } = "未开启";
+
+    [ObservableProperty]
+    public partial string? LoginItemError { get; set; }
 
     /// <summary>Where the host side runs and what its session agent is doing, when a background service hosts it.</summary>
     [ObservableProperty]
@@ -605,6 +631,53 @@ public sealed partial class MainWindowViewModel : ObservableObject
         await RefreshHostStatusAsync();
     }
 
+    /// <summary>Reads the login-item state macOS reports. Called at start-up and from the status poll, because the user can also change it in System Settings → 登录项.</summary>
+    [SupportedOSPlatform("macos")]
+    private void RefreshLoginItemState()
+    {
+        if (_loginItem is null)
+        {
+            return;
+        }
+
+        IsLoginItemRegistered = _loginItem.IsRegistered;
+        LoginItemStatus = IsLoginItemRegistered ? "已开启：登录时自动启动" : "未开启";
+    }
+
+    [RelayCommand]
+    [SupportedOSPlatform("macos")]
+    private void EnableLoginItem()
+    {
+        LoginItemError = null;
+        try
+        {
+            // SMAppService only accepts a signed .app sitting in /Applications; a bare binary or an ad-hoc build is
+            // refused with exactly that sentence, which is the whole troubleshooting story for this button.
+            _loginItem!.Register();
+            RefreshLoginItemState();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            LoginItemError = ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    [SupportedOSPlatform("macos")]
+    private void DisableLoginItem()
+    {
+        LoginItemError = null;
+        try
+        {
+            _loginItem!.Unregister();
+            RefreshLoginItemState();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            LoginItemError = ex.Message;
+        }
+    }
+
     [RelayCommand]
     private async Task RefreshPasswordAsync()
     {
@@ -951,7 +1024,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
                   + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/deployment.md）。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
-        HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
+        // Windows with the service installed points at it; Windows without one, and the client alone, have nothing
+        // to say (that is the existing blank). macOS always runs the host in this process, so it says so instead —
+        // a blank row reads like a missing value rather than the single model macOS has.
+        HostDetail = status.IsService
+            ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}"
+            : OperatingSystem.IsMacOS()
+                ? "被控端在本进程内运行；开机自启请在「高级设置 → 安全」开启登录项"
+                : null;
+        if (OperatingSystem.IsMacOS())
+        {
+            // Read every poll: the state is one property on a launchd-side object, and the user may have flipped it
+            // in System Settings → 登录项 since the last tick.
+            RefreshLoginItemState();
+        }
         SetIncoming(status.Sessions);
     }
 
