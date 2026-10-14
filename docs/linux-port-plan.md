@@ -649,29 +649,40 @@ set  -> Published ... (28 characters) / Answered a request ... with 28 bytes
 类型）过滤掉容器/loop/snap 挂载，并且**不去问网络挂载有多大**——问一次 NFS 就是等一次服务器，而这是在画列表的
 线程上。两条都有测试。
 
-### P8 — 摄像头（PipeWire 节点，不是 V4L2）🚧 部分完成
+### P8 — 摄像头（PipeWire 节点，不是 V4L2）⚠️ 写完了，但一行都没跑过
 
-**已完成并验证的两件：**
+**这个阶段的代码是完整的，验证是空的**，两者要分开说。
+
+**验证过的部分：**
 
 1. **解码器接受摄像头 JPEG 的格式。** 摄像头给的多数是 JPEG，解出来是 `yuvj420p` / `yuvj422p`——原来的
    `CopyOut` 遇到就抛。现在这两种之外的一律交给 libswscale（它是唯一知道 JPEG 全范围该怎么换算的）。
    4 个测试：两张真实 JPEG（libjpeg 生成的 64×64，一张 4:2:0 一张 4:2:2）解出 NV12、尺寸对，且**亮度仍在
    它被编码时的位置**（源 128 → 解出 130），这一条问的就是范围有没有丢。
-2. **portal 侧的三个调用**（`CameraPresentAsync` / `AccessCameraAsync` / `OpenCameraPipeWireRemoteAsync`），
-   以及 `CallForFdAsync` 多出的 `FdArgument.Options`——摄像头的 `OpenPipeWireRemote` 是 `a{sv}`，**没有
-   session 参数**。
+2. **两张格式请求 pod 的字节**，与编译真实 `spa_pod_builder_add_object` 得到的 golden vector 逐字节一致；
+   `SPA_MEDIA_TYPE_video`=2、`SPA_MEDIA_SUBTYPE_jpeg`=196609、`SPA_VIDEO_FORMAT_YUY2`=4 这些常量也是编译
+   出来打印的。顺带交叉验证了原有的 `SPA_VIDEO_FORMAT_BGRx`=8。
+3. **YUYV → NV12 重排**：亮度逐字节不变、跨行色度平均并进位、两个该拒绝的输入。
+4. **DI 接线**：`ServiceCollectionExtensionsTests` 抓到工厂依赖具体类型 `WaylandCameraEnumerator` 而只注册了
+   `ICameraEnumerator`——这个测试是有价值的。
 
-**尚未完成**：PipeWire 那一侧的取帧（枚举 `media.role=Camera` 的节点、协商 MJPEG/YUYV、把 4:2:2 重排成
-4:2:0 的 NV12），以及 DI 接线。现在 `WaylandCameraEnumerator` 仍然恒返回空列表。
+**没有验证的部分：** 枚举、协商、取帧、把帧交给编码器这一整条，**一次都没有执行过**。本机 `IsCameraPresent`
+是 `false`、没有 `/dev/video*`，所以不可能执行。写它是照着 portal 的接口定义和**已被真机验证过的采集路径**
+（`PipeWireScreenCapturer`）来的，但没有摄像头就没有证据。
 
-**为什么停在这里**：本机 `IsCameraPresent` 是 `false`，也没有 `/dev/video*`，所以这一侧的**每一行都无法执行
-一次**——枚举、协商、格式、重排全都依赖不存在的硬件。已经能验证的部分（解码、portal 调用能不能编译并对上
-签名）做完了；剩下的需要在**一台有摄像头的机器**上写和调，而不是在这里照着屏幕采集的样子盲写 400 行。
-`Interop/PipeWire.cs` 里已有的绑定（thread loop / connect_fd / registry / stream / dequeue）全部可复用，
-`PipeWireScreenCapturer` 是可直接照抄的范本——这些是被真机验证过的。
+**拿到一台有摄像头的机器时要先看这几处**（按可疑程度排）：
+- 节点的可见性：portal 把该 remote 上除 `media.role=Camera` 以外的节点全部隐藏，所以按这个属性过滤是对的，
+  但没试过。
+- `ScanWindow`：读注册表时等 1 秒是**猜的**（没有 `pw_core_sync` 绑定，等不到"这就是全部"）。列表若偶尔
+  为空，先加大这个值。
+- 分辨率表是写死的（读节点的 `EnumFormat` 要绑定 `pw_node_enum_params` 和它的事件）。设备给不了的尺寸会在
+  协商时被拒，是看得见的失败。
+- 色彩：YUYV 那条路**不套矩阵**，亮度色度原样带过去。摄像头按惯例是 BT.601，而这条管线是 BT.709，所以
+  颜色可能偏。真偏了要拿一台真机器的真画面来决定怎么改——不要在没看过画面的情况下改系数。
 
-YUYV → NV12 是**纯重排**（4:2:2 垂直降采样到 4:2:0），不涉及色彩矩阵；但要注意摄像头按惯例是 BT.601，
-而这条管线是 BT.709（见 `ColorConversion` 的类注释），所以颜色会有轻微偏差。这条要在真机上确认。
+**一处已知的设计代价**：`WaylandCameraSource` 与 `PipeWireScreenCapturer` 在"起一条 PipeWire stream"那段
+是重复的（线程循环、connect_fd、建 stream、挂回调）。抽出来要动那个已经被验证过的文件，为一个还没跑过的
+用途去改它不划算；等摄像头能在真机上跑通了再合并。
 
 ### P9 — 音频 ✅ 已完成
 
@@ -866,3 +877,4 @@ PostgresConnectionString, RelayTicketLifetime, ConnectTimeout, TrustedProxies, M
 | portal 授权在部分系统/升级后需重授 | 持久化 restore token；文档说明可能重弹 |
 | `ValidateOnBuild = true` 遇上还没实现的端口 | 端口按阶段注册（P1 起就是这个做法），不铺会抛异常的桩 |
 | Avalonia 在 Linux 上默认走 X11 后端 | 明确接受：XWayland 下客户端是普通 X11 程序，输入按焦点窗口走，对本产品够用。**不要让人误以为客户端跑在原生 Wayland 上** |
+| **摄像头这条路一行都没跑过**（本机无摄像头） | 能验证的都验了（JPEG 解码用真 fixture、pod 字节对 golden vector、4:2:2 重排、DI 接线），剩下的是照已验证的采集路径写的。**拿到有摄像头的机器时按 P8 末尾那张单子逐条看**，别默认它能用 |
