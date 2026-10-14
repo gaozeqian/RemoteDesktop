@@ -20,9 +20,16 @@
 
 | 机器 | 需要什么 |
 |---|---|
-| 服务器 | .NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
-| 被控端 | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
-| 控制端 | Windows 11 / Windows Server 2022+（x64）；同一块 MSI |
+| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
+| 被控端（Windows） | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
+| 被控端（Linux） | 有 Wayland 会话与 portal 的桌面发行版（x64）；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
+| 控制端 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64） |
+
+> **服务器可以混着来。** 信令和中继跟两端跑什么系统无关，一台 Linux 服务器可以同时服务 Windows 和 Linux 的
+> 客户端与被控端。只有「被控端装什么包」是跟系统绑的。
+
+> **Windows 上的 `.deb` 装不了，Linux 上的 MSI 也装不了**——这不是限制，是两个平台各有一套安装方式，
+> 下面每节都写明了哪条路属于哪个平台。
 
 > **为什么不是 Windows 10**：传输层走 QUIC（`System.Net.Quic` / MsQuic），它在 Windows 上依赖 Schannel 的
 > TLS 1.3 加密 API，而这只在 Windows 11、Windows Server 2022 及更新系统里提供。Windows 10 缺这些 API，
@@ -35,10 +42,32 @@
 
 ## 二、部署服务器
 
-### 1. 最省事的一条路：服务端安装包（Windows）
+### 1a. 服务端：Debian 包（Linux）
+
+```sh
+build/debian/server/build-deb.sh
+sudo dpkg -i artifacts/debian/RemoteDesktop-Server-Linux-amd64-<版本>.deb
+```
+
+包把两个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay}`，两个 **system** 单元装到
+`/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
+升级不会覆盖运维改过的东西。这是相对 Windows 的一处有意改进：MSI 只能把 `appsettings.json` 写在
+`Program Files` 里，然后想办法绕开同一件事。
+
+和 Windows 一样，设置由程序自己写（`--configure-system`），`postinst` 只负责说明位置——两个平台因此
+产出同样的文件，走同一段代码。改完配置：
+
+```sh
+sudo dpkg-reconfigure remotedesktop-server     # 或直接编辑 /etc/default/remotedesktop-server 后重跑 postinst
+systemctl status remotedesktop-rendezvous remotedesktop-relay
+curl http://127.0.0.1:5080/health
+```
+
+`postinst` **只在 ufw 处于 active 时**才加防火墙规则，不动 nftables/iptables。
+
+### 1b. 服务端：安装包（Windows）
 
 不想手工发布 + `sc.exe` + `netsh`（也就是下面 2、3、6、8 节那些步骤）的话，用仓库里的服务端安装包。
-它只做 Windows；Linux 用手工发布或 Docker。
 
 ```powershell
 pwsh -File build/installer/server/windows/build-server-installer.ps1
@@ -499,6 +528,76 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 完整说明（怎么买证书、有哪些替代方案、怎么检查签名）见 [`build/signing/README.md`](../build/signing/README.md)；
 本地测试签名用 `build/signing/windows/New-SigningCertificate.ps1` 生成证书、`build/signing/windows/Install-TrustedCertificate.ps1` 让机器信任它。
 
+## 四之二、部署客户端 / 被控端（Debian 包，Linux）
+
+### 1. 构建
+
+两个包各装各的：一台机器按需要选一个，或者两个都装。
+
+```sh
+build/debian/client/build-deb.sh   # 用来控制别人
+build/debian/host/build-deb.sh     # 允许被别人控制
+```
+
+`build-deb.sh` 自包含发布，所以**目标机器不需要装 .NET**，也不需要 `LD_LIBRARY_PATH`——
+`libmsquic` 随包放在可执行文件旁边，那是自包含程序会找的地方、别的程序不会找的地方。
+
+### 2. 服务器地址
+
+Windows 的 MSI 用 `-RendezvousUri` 把地址烤进包里；**Linux 的包不带地址**，装完在客户端的
+「高级设置」里填（它会同时写给客户端和被控端服务），或者直接改
+`~/.local/share/RemoteDesktop/appsettings.json` 里的 `Transport:RendezvousUri`。
+
+不内置是一个选择而不是遗漏：本软件公网和内网都要用，服务器地址往往部署时才定，一个装在用户机器上的包
+内置谁的地址都不对。客户端连不上时会在界面上直说"未连接服务器（地址）"，不会变成"看着正常、就是连不上"。
+
+### 3. 安装
+
+```sh
+sudo dpkg -i RemoteDesktop-Client-Linux-amd64-<版本>.deb
+sudo dpkg -i RemoteDesktop-Host-Linux-amd64-<版本>.deb
+```
+
+装完之后：
+
+- 客户端出现在应用菜单里（`remotedesktop`）。
+- 被控端是一条 `systemd --user` 服务，安装时对**所有用户**启用，用户下次登录时随图形会话启动。
+  **它不在安装时启动**——装包时可能根本没有图形会话，没有人能点 portal 的对话框。
+
+```sh
+systemctl --user status remotedesktop-host
+journalctl --user -u remotedesktop-host -f
+```
+
+- 装完第一次打开客户端，会显示 9 位设备代码和临时密码——两台机器互相输入对方的代码和密码即可连接。
+
+### 4. 第一次连接会弹两个对话框
+
+第一次共享屏幕时，桌面会问一次"允许共享哪块屏"，**答过就记住了**（restore token 存在
+`~/.local/share/RemoteDesktop/secrets`）。第一次要控制时还会再问一次，而且**每次连接都会问**——
+portal 不允许远程桌面会话持久化，这是它的规定而不是本程序的取舍。
+
+所以一台无人值守的 Linux 机器可以**被观看**，但**没人坐在跟前就没法被操作**。要无人值守地操作，
+只能用 Windows 的被控端。
+
+### 5. 设备代码是空的
+
+1. **服务器地址**：「高级设置」里填的是不是另一台机器也能访问到的地址（`127.0.0.1` 只能自己连自己）。
+2. **服务器在不在**：`curl http://<服务器>:5080/health`。
+3. **改完配置要重启**：`systemctl --user restart remotedesktop-host`。
+4. **看日志**：`~/.local/share/RemoteDesktop/logs/`。
+5. **服务起不来**：`journalctl --user -u remotedesktop-host` 和同目录下的 `startup-error.log`。
+
+### 6. 屏幕共享不起来
+
+按顺序查：
+
+1. **有没有 portal**：`ls /usr/share/xdg-desktop-portal/portals`。没有 portal 就什么都共享不了，
+   这是被控端唯一的入口。
+2. **是不是 Wayland 会话**：只在 Wayland 上验证过。
+3. **日志里有没有"合成器没有描述指针"**：那意味着光标位置不会实时更新，画面本身正常。
+4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。
+
 ## 五、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
@@ -521,4 +620,8 @@ Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-
 | 能看到画面但键盘鼠标没反应 | 会话是"观看模式" | 连接时不要勾"观看模式"；被控端也可以把会话降级为仅观看 |
 | 文件/终端/摄像头不可用 | 被控端只有登录界面/UAC（Agent 是 SYSTEM）或权限被收回 | 登录到用户桌面再试；确保会话不是观看模式 |
 | 锁屏后终端断开 | Agent 切换会结束终端会话 | 重新打开终端；文件传输则可以在重连后继续 |
-| 日志出现 "QUIC is not supported on this system" | 系统不支持 QUIC（Windows 10 缺 Schannel 的 TLS 1.3） | 升级到 Windows 11 / Server 2022+；或换用 OpenSSL 版 msquic.dll |
+| 日志出现 "QUIC is not supported on this system" | Windows 10 缺 Schannel 的 TLS 1.3；或 Linux 上开发运行时找不到 libmsquic | Windows：升级到 Windows 11 / Server 2022+，或换 OpenSSL 版 msquic.dll。Linux：装 `.deb` 的话是随包带的，开发运行时用 `native/linux/fetch-libmsquic.sh` 再设 `LD_LIBRARY_PATH` |
+| Linux：控制端每次连接都要重新同意 | portal 不允许远程桌面会话持久化 | 这是规定，不是配置项。无人值守只能靠 Windows 被控端 |
+| Linux：剪贴板不同步 | 尚未实现（portal 拒绝本程序，后备方案未做） | 用文件传输代替；被控端日志会记一条警告 |
+| Linux：摄像头列表是空的 | 尚未实现（P8） | 暂时无解 |
+| Linux：光标位置不更新 | 合成器没有送光标元数据 | 画面本身正常；被控端日志会警告一次 |

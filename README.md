@@ -1,7 +1,12 @@
 # Remote Desktop
 
 跨平台远程桌面软件（类 ToDesk）：远程控制、观看模式、文件传输、远程终端、远程摄像头。
-后端 .NET 10，前端 Avalonia 12。第一阶段仅支持 Windows，macOS / Linux 在后续阶段通过新增平台项目接入。
+后端 .NET 10，前端 Avalonia 12。**支持 Windows 与 Linux**；macOS 尚未接入（平台层的做法见
+[docs/linux-port-plan.md](docs/linux-port-plan.md)）。
+
+两个平台的产品形状不同，因为桌面不同：Windows 上被控端是 LocalSystem 服务加一个用户会话里的 Agent，
+Linux 上是一个跑在图形会话里的 `systemd --user` 服务。**下面凡写着 Windows 专有概念（ConPTY、
+Media Foundation、DPAPI、Session 0）的地方，Linux 的对应物见 [Linux 一节](#linux-支持与限制)。**
 
 ## 📚 项目文档
 
@@ -22,23 +27,111 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
-安装包（Windows MSI，需要 .NET SDK 与网络还原 WiX 包）：
+安装包：
 
 ```
+# Windows MSI（需要 .NET SDK 与网络还原 WiX 包）
 pwsh -File build/installer/client/windows/build-installer.ps1
+pwsh -File build/installer/server/windows/build-server-installer.ps1
+
+# Linux .deb（在 Linux 上构建；自包含发布，目标机器不需要装 .NET）
+build/debian/client/build-deb.sh
+build/debian/host/build-deb.sh
+build/debian/server/build-deb.sh
 ```
+
+## Linux 支持与限制
+
+### 先说不会工作的部分
+
+- **Ctrl+Alt+Del**：Linux 没有对应概念。控制端按下去会得到"此平台不支持"，不会假装成功。
+- **登录界面 / 登录前的远程访问**：GNOME 的登录界面是另一个用户、另一个 VT，私有用户会话既看不见也驱动不了。
+  Windows 上能换 Agent 接管安全桌面，这里**没有对应物**——这是相对 Windows 的真实能力回退。
+- **快速用户切换 / 多用户**：一个服务、一个用户、一个图形会话。
+- **剪贴板**：**尚未实现**。桌面 portal 的剪贴板接口拒绝本程序（详见下），后备方案（在 XWayland 上自己持有
+  selection）还没做。复制会记一条警告，粘贴拿不到内容——不会假装同步了。
+- **摄像头**：**尚未实现**（P8）。摄像头列表恒为空。
+- **H.265**：Windows 上也没实现。
+- **隐私屏**：Windows 上也没实现。
+- **光标形状与位置**：本机实测收不到 portal 的光标元数据（`cursor_mode=Metadata` 授权成功，但 PipeWire 流里
+  始终没有 `SPA_META_Cursor`）。被控端会记一条警告然后照常出帧，控制端只能画自己最后知道的那个指针。
+- **X11 会话**：只在 Wayland 上验证过。portal 路径在 X11 下大概率也能用，但不作承诺。
+
+### 安装
+
+三个包各装各的，一台机器按需要选：
+
+```
+sudo dpkg -i RemoteDesktop-Client-Linux-amd64-<版本>.deb   # 用来控制别人
+sudo dpkg -i RemoteDesktop-Host-Linux-amd64-<版本>.deb     # 允许被别人控制
+sudo dpkg -i RemoteDesktop-Server-Linux-amd64-<版本>.deb   # 信令与中继服务器
+```
+
+客户端会出现在应用菜单里（`remotedesktop`）。被控端是一条 **`systemd --user`** 服务，安装时对所有用户启用，
+用户下次登录时随图形会话启动：
+
+```
+systemctl --user status remotedesktop-host
+journalctl --user -u remotedesktop-host -f
+```
+
+**它不在安装时启动**，因为装包的时候可能根本没有图形会话——没有显示、没有会话总线、也没人能点 portal 的对话框。
+
+### 需要什么
+
+- Wayland 桌面加一个 portal：`xdg-desktop-portal-gnome`（GNOME）、`xdg-desktop-portal-kde`（KDE）或
+  `xdg-desktop-portal-wlr`（wlroots 系）。**没有 portal 就什么都共享不了**——这是被控端唯一的入口。
+- 编码用 `libavcodec`，有 GPU 就用硬件编码器（NVENC / VA-API），没有就回落 x264。装了哪个、有没有回落，
+  都在被控端日志里。
+- 采集走 PipeWire，输入走 libei。两者都随 `.deb` 一起声明为依赖。
+
+### 和 Windows 不同的几件事
+
+| | Windows | Linux |
+| --- | --- | --- |
+| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 一个 `systemd --user` 服务，**没有 Agent**——portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
+| 屏幕 | DXGI Desktop Duplication | portal + PipeWire |
+| 输入 | `SendInput` | libei（**不需要 `/dev/uinput` 这种机器级特权**） |
+| 编解码 | Media Foundation | libavcodec |
+| 终端 | ConPTY + PowerShell / cmd | PTY + 登录 shell |
+| 密钥 | DPAPI | 0600 文件（威胁模型见 [docs/security.md](docs/security.md)） |
+| 防休眠 | `SetThreadExecutionState` | logind `Inhibit` |
+| 登录前的访问 | 支持 | **不支持**（见上） |
+
+### 授权的差别——这条最影响使用
+
+**共享屏幕授权一次就记住了，控制屏幕每次都要重新授权。**
+
+不是实现取舍，是 portal 的规定：远程桌面会话不允许持久化（请求 `persist_mode` 会被整条拒绝，报
+"Remote desktop sessions cannot persist"）。所以一台无人值守的 Linux 机器可以**被观看**，但**没人坐在跟前
+就没法被操作**。这是相对 Windows 的真实差异，做方案时要按这个来。
+
+反过来也有一条好处：**polkit 的提权提示渲染在用户会话里**，所以和 Windows 的安全桌面不同，**它是能被采集到的**。
 
 ## 本地运行（单机两个客户端互连）
 
 ```
 # 1. 服务端（Development 配置里带有开发用的中继共享密钥）
+
+# Windows
 $env:ASPNETCORE_ENVIRONMENT="Development"; dotnet run --project src/Server/RemoteDesktop.Server.Rendezvous
 $env:DOTNET_ENVIRONMENT="Development";     dotnet run --project src/Server/RemoteDesktop.Server.Relay
 
+# Linux
+ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Server/RemoteDesktop.Server.Rendezvous &
+DOTNET_ENVIRONMENT=Development     dotnet run --project src/Server/RemoteDesktop.Server.Relay &
+
 # 2. 两个客户端，使用不同的数据目录（即不同的设备身份）
-dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd1
+dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd1     # Windows
 dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
+
+dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd1    # Linux
+dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd2
 ```
+
+> **在 Linux 上要么把 libmsquic 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它。** 开发时是框架依赖运行，
+> 库不在可执行文件旁，缺它的报错是 `QUIC is not supported on this system`——看着像平台不支持，其实是缺库。
+> `.deb` 里是随包带的，所以装出来的包不会有这个问题。仓库里有 `native/linux/fetch-libmsquic.sh`。
 
 客户端主窗口左侧是三个页面：**主页**（本机设备代码和临时密码、发起连接）、**设备列表**（最近连接过的设备，选中后
 显示它的设备代码和各项功能）、**高级设置**（固定密码、服务器与托管信息、数据目录）。
@@ -54,8 +147,9 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 
 ## 无人值守模式
 
-- **固定密码**：被控端界面支持设置无人值守专用的长效固定密码（至少 8 位字符）。设置后使用 Windows DPAPI 加密持久化存储，机器或服务重启后依然有效。控制端输入设备代码和固定密码即可随时接入，无需被控端现场人员配合。随时可在被控端界面的"高级设置 → 安全"中修改或关闭。
-- **防休眠保护（Keep-Awake）**：被控端在有活跃的远程连接期间，会自动阻止计算机进入睡眠模式（Windows `SetThreadExecutionState`）；所有连接断开后自动恢复默认电源策略，保证远程运维或大文件传输不被闲置睡眠打断。
+- **固定密码**：被控端界面支持设置无人值守专用的长效固定密码（至少 8 位字符）。设置后用平台自己的密钥库持久化存储（Windows 是 DPAPI，Linux 是 0600 文件），机器或服务重启后依然有效。
+  **Linux 上固定密码并不能让控制变成无人值守**——portal 不允许远程桌面会话持久化，控制权限每次连接都要有人在机器前点一次同意（见 [授权的差别](#授权的差别这条最影响使用)）。控制端输入设备代码和固定密码即可随时接入，无需被控端现场人员配合。随时可在被控端界面的"高级设置 → 安全"中修改或关闭。
+- **防休眠保护（Keep-Awake）**：被控端在有活跃的远程连接期间，会自动阻止计算机进入睡眠模式（Windows 用 `SetThreadExecutionState`，Linux 用 logind `Inhibit`）；所有连接断开后自动恢复默认电源策略，保证远程运维或大文件传输不被闲置睡眠打断。
 
 ## 远程桌面窗口的功能
 
@@ -112,7 +206,10 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 - 摄像头由 Agent 以登录用户的身份打开（和文件、终端一样），从不以 SYSTEM 打开；只有登录界面 / UAC 可用时拒绝。打开和关闭写入 Agent 日志（`agent-*.log`）。
   如果摄像头被别的程序占用、被拔掉，或 Windows 的"设置 > 隐私和安全性 > 摄像头"不允许桌面应用使用，控制端会看到原因。
 
-## 后台服务（被控端）
+## 后台服务（被控端，Windows）
+
+> Linux 上不是这个形状：没有 Session 0，portal 只在该会话内应答，所以被控端是一个跑在图形会话里的
+> `systemd --user` 服务，自己就是采集和注入的那一方。见 [Linux 支持与限制](#linux-支持与限制)。
 
 被控端由一个 Windows 服务（LocalSystem）托管，它本身无法采集屏幕或注入输入（Session 0），所以它在当前控制台会话里启动并监督一个 **Agent**
 （`RemoteDesktop.SessionAgent`），屏幕和输入由 Agent 完成，服务只负责连接、鉴权、授权和转发：
@@ -194,12 +291,14 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 | `src/Core/RemoteDesktop.Signaling` | 客户端与服务器之间的信令协议（protobuf）和 UDP 控制包 |
 | `src/Core/RemoteDesktop.Transport` | QUIC 对端连接、证书指纹固定、NAT 打洞、中继回退、Rendezvous 客户端 |
 | `src/Core/RemoteDesktop.Application` | 会话握手与密码鉴权、失败限流、功能模块契约 `IFeatureModule`、按权限分发通道的 `ChannelDispatcher` |
-| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（ConPTY 终端与 VT 模拟器）、Camera（摄像头采集与串流） |
+| `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（终端会话与 VT 模拟器，终端本身由平台层提供）、Camera（摄像头采集与串流） |
 | `src/Media` | 编解码器选择（硬件优先、软件兜底）、BT.709 颜色转换、码率自适应 |
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
+| `src/Platform/RemoteDesktop.Platform.Linux` | Linux 平台实现：portal + PipeWire 屏幕采集、libei 输入注入、libavcodec 编解码（NVENC / VA-API / x264）、PulseAudio、logind 防休眠 |
+| `src/Platform/RemoteDesktop.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
-| `src/Hosts/RemoteDesktop.HostService` | 被控端 Windows 服务：注册设备、鉴权、把屏幕、输入、剪贴板、音频、文件、终端、摄像头通道转发给 Agent、给 UI 提供控制管道 |
-| `src/Hosts/RemoteDesktop.SessionAgent` | 由服务在交互会话（用户桌面或登录界面）里启动的 Agent：屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份） |
+| `src/Hosts/RemoteDesktop.HostService` | 被控端宿主：注册设备、鉴权、分发通道、给 UI 提供控制管道。Windows 上是 LocalSystem 服务并把屏幕/输入转发给 Agent，Linux 上是一个直接干这些的 `systemd --user` 服务 |
+| `src/Hosts/RemoteDesktop.SessionAgent` | **仅 Windows**：由服务在交互会话（用户桌面或登录界面）里启动的 Agent，屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份）。Linux 上没有它——见 [Linux 一节](#linux-支持与限制) |
 | `src/Server/*` | Rendezvous（ID / 信令）与 Relay（UDP 中继）服务器 |
 
 ## 新增功能或平台

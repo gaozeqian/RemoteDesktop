@@ -2,6 +2,41 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Linux 平台支持
+
+### Added
+- **Linux 被控端与客户端**：`RemoteDesktop.Platform.Linux`（屏幕走桌面 portal + PipeWire，输入走 libei，
+  编解码走 libavcodec，音频走 PulseAudio，防休眠走 logind），以及两个类 Unix 系统共用的 `RemoteDesktop.Posix`
+  （PTY、0600 文件密钥库、用户上下文守卫）。
+- **Linux 被控端是一条 `systemd --user` 服务**，不是系统服务：Wayland 的 portal 只在该会话内应答，
+  所以它跑在图形会话里，自己就是采集和注入的那一方——**没有 Agent**，因为不需要拆。
+- **`.deb` 安装包**：`remotedesktop-client`、`remotedesktop-host`、`remotedesktop-server`。都是自包含发布，
+  目标机器不需要装 .NET；`libmsquic` 随包放在可执行文件旁，所以也不需要设 `LD_LIBRARY_PATH`。
+  服务端的配置在 `/etc/remotedesktop-server/`，升级不覆盖。
+- **发布流水线产出 Linux 包**：`release.yml` 多了一个 ubuntu job，三个 `.deb` 和两个 MSI 一起发出。
+
+### Changed
+- **宿主装配按平台分开**：`Platform.Windows` 与 `Platform.Linux` 各自注册同一批端口，业务代码不知道自己在哪个平台上。
+  客户端的结构、文件传输、终端、摄像头在 Linux 上同样可用。
+- `MfVideoRecorderFactory` 从客户端三个 ViewModel 里删掉了——录制工厂本来就由平台层通过 DI 提供，
+  那个 `IsWindows()` 分支只会在非 Windows 上让录制**静默不工作**。
+
+### Fixed
+- **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
+  ——那其实是第一个属性的 key（真实值是 131073）。此前的测试全绿是因为用例字节按同一个错误理解手写。
+  这类错误在真实链路上的表现是"格式协商莫名其妙失败"。
+- **portal 文件描述符的竞态**：`CallForFdAsync` 原本在 `CallMethodAsync` 返回之后才 dup 那个 fd，而 fd 属于
+  message、message 在读取委托返回后就释放了——偶尔 dup 到一个已关闭的编号，报 EBADF，而连接本身好好的。
+  平时不显形，测试并行度上来才出现。
+
+### Linux 上不会工作的事（相对 Windows 的真实回退）
+- **登录界面 / 登录前的远程访问**：GNOME 的登录界面是另一个用户、另一个 VT，私有用户会话够不着。
+  Windows 上能换 Agent 接管安全桌面，这里没有对应物。
+- **无人值守下的操作**：portal 不允许远程桌面会话持久化，所以**控制权限每次连接都要有人在机器前点一次同意**。
+  共享屏幕授权一次就记住了，但无人值守的机器因此**可以被观看、不能被操作**。
+- 剪贴板与摄像头**尚未实现**；Ctrl+Alt+Del、快速用户切换、隐私屏同 Windows 一样不支持。
+- 光标元数据在本机收不到（合成器不送），控制端只能画自己最后知道的那个指针。
+
 ## [0.3.0] - 2026-10-11 · 安装向导与自签名证书
 
 ### Changed
