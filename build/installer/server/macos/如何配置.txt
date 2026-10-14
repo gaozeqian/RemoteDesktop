@@ -1,0 +1,79 @@
+Remote Desktop 服务器（macOS）—— 装好之后怎么改配置
+==================================================
+
+这个目录里放着两个服务器程序（Rendezvous/ 信令、Relay/ 中继）、它们的配置
+（各自目录下的 appsettings.json），以及这个说明。
+
+它们由 launchd 以系统守护进程（LaunchDaemon）的方式运行，开机自启、崩溃自动重启：
+    /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
+    /Library/LaunchDaemons/com.remotedesktop.relay.plist
+
+
+一、改配置的推荐做法：用同目录下的脚本
+--------------------------------------
+
+在**管理员**终端里（sudo）：
+
+    cd /usr/local/remotedesktop-server
+    sudo ./configure-server.sh --postgres 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+
+它会做两件事：把设置写进两个 appsettings.json，然后重启两个守护进程让它们生效。
+只给想改的项就行，没给的保持不动。可用的项（`sudo ./configure-server.sh --help` 也列了）：
+
+    --postgres            PostgreSQL 连接串；传 '' 回到"不用数据库"
+    --relay-endpoint      让客户端去哪里找中继，IP:端口
+    --urls                信令自己绑定的地址，如 https://0.0.0.0:5080
+    --relay-key           中继票据的签名密钥（中继在另一台机器上时两边必须一致）
+    --tls-certificate/--tls-password   用已有的证书文件（.pfx）启用 https
+    --no-restart          写完不重启（下次重启才生效）
+
+执行过什么，都追加记录在同目录的 server-setup.log 里。
+
+
+二、两个必须知道的默认值
+------------------------
+
+1. 不配数据库时，设备代码只存在内存里 —— 信令服务一重启，所有设备代码都会变，
+   被设成无人值守的机器会因此失联。长期使用请给它一个 PostgreSQL。
+
+2. 不配证书时信令走明文 http —— 设备代码、谁在连谁、以及中继票据都在明文里。
+   macOS 上要开 TLS，用仓库里的 build/signing/New-ServerCertificate.ps1 生成一张证书
+   （纯 .NET，macOS 上同样能跑），然后把 .pfx 交给：
+
+       sudo ./configure-server.sh --urls https://0.0.0.0:5080 \
+            --tls-certificate /path/to/rd.lan.pfx --tls-password <口令>
+
+   客户端必须信任这张证书（否则会拒绝连接）：把证书的公开部分装进客户端机器的钥匙串。
+   注意**证书里的名字或地址要和客户端填的地址一致**。
+
+
+三、也可以直接改 appsettings.json
+--------------------------------
+
+两个服务器的配置分别在 Rendezvous/appsettings.json 和 Relay/appsettings.json，
+格式普通，改完重启对应守护进程即可：
+
+    sudo launchctl kickstart -k system/com.remotedesktop.rendezvous
+    sudo launchctl kickstart -k system/com.remotedesktop.relay
+
+appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留。但注意它就在本目录下，
+**本机任何用户都能读**——带口令的数据库连接串放在这里，等于本机所有用户都能看到。
+
+
+四、日志与健康检查
+------------------
+
+    logs/rendezvous.log、logs/relay.log      两个服务器的标准输出
+    curl http://127.0.0.1:5080/health        信令是否活着（返回 Healthy）
+
+
+五、卸载
+--------
+
+    cd /usr/local/remotedesktop-server
+    sudo ./uninstall-server.sh
+
+它会停掉两个守护进程、删掉 plist 和这个目录。加 --keep-settings 只删程序、留下配置和日志。
+
+注意：中继密钥在配置里。如果中继装在另一台机器上，那台机器用的是**这台机器**的密钥；
+在这里删掉它，就等于下次安装时那台机器要重新配置一遍。

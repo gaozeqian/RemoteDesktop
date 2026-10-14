@@ -76,6 +76,46 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；`server-setup.log` 不在安装清单里，
 会留在目录里，删不删随你。
 
+#### macOS
+
+```bash
+build/installer/server/macos/make-pkg.sh --configuration Release
+# 产物：artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-<版本>.pkg
+```
+
+装到 `/usr/local/remotedesktop-server`，并把两个服务器注册成 **launchd 守护进程**
+（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay`，开机自启、崩溃重启）—— 这就是 Windows 那两个服务的对应物。
+
+```bash
+sudo installer -pkg <文件>.pkg -target /
+curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活着
+```
+
+要在**构建时**就定下配置（等于 Windows 安装时传属性），给打包脚本传对应的选项：
+
+| Windows 安装属性 | macOS 打包选项 |
+|---|---|
+| `RENDEZVOUSURL` | `--rendezvous-url` |
+| `RELAYPUBLICENDPOINT` | `--relay-endpoint` |
+| `RELAYSHAREDKEY` | `--relay-key` |
+| `POSTGRESCONNECTIONSTRING` | `--postgres` |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `--tls-certificate` / `--tls-password` |
+| `NOFIREWALL` | 无对应项 —— macOS 没有"按端口加规则"这回事（见下） |
+
+**三件与 Windows 不同的事**：
+
+- **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
+  别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
+- **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist 与目录，
+  `--keep-settings` 可只删程序）。
+- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `configure-server.ps1` 一一对应 ——
+  同样的选项，跑的是同一个 `--configure-system` 步骤。
+
+> 两个平台的服务器是**同一份可执行文件**、同一个 `--configure-system` 步骤，所以写出来的
+> `appsettings.json` 与生成的中继密钥完全一致：换平台不需要换配置方式。
+> macOS 上要开 TLS，用 `build/signing/New-ServerCertificate.ps1` 生成证书（纯 .NET，macOS 上同样能跑），
+> 把 `.pfx` 交给 `configure-server.sh --tls-certificate`。
+
 ### 装完之后改配置
 
 安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The relay as a launchd job. Same shape as the signaling server's — see com.remotedesktop.rendezvous.plist for why
+  this is a LaunchDaemon, why the working directory matters, and why the path is fixed at build time.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.remotedesktop.relay</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/remotedesktop-server/Relay/RemoteDesktop.Server.Relay</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/remotedesktop-server/Relay</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/remotedesktop-server/logs/relay.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/remotedesktop-server/logs/relay.log</string>
+</dict>
+</plist>

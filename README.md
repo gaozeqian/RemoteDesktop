@@ -38,6 +38,9 @@ build/installer/client/macos/make-app.sh --configuration Release
 
 # .pkg（可分发安装包，装到 /Applications；默认未签名）
 build/installer/client/macos/make-pkg.sh --configuration Release
+
+# 服务端 .pkg（两个服务器 + launchd 守护进程，装到 /usr/local/remotedesktop-server）
+build/installer/server/macos/make-pkg.sh --configuration Release
 ```
 
 > macOS 侧最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0`
@@ -61,6 +64,19 @@ $env:DOTNET_ENVIRONMENT="Development";     dotnet run --project src/Server/Remot
 dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd1
 dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory D:\rd2
 ```
+
+macOS 上做同样的联调，不需要 `dotnet run` —— 用上面那个服务端 `.pkg` 把服务端装到本机，再开两个客户端实例：
+
+```
+sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
+curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
+
+# 两个实例直接跑 bundle 里的可执行文件（open --args 送不到参数，见 docs/macos-port-plan.md §3.11⑧）
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd1
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd2
+```
+
+客户端默认连 `ws://127.0.0.1:5080/ws`，所以服务端一装好就能联调：两个窗口互相输入对方的设备代码和临时密码。
 
 客户端主窗口左侧是三个页面：**主页**（本机设备代码和临时密码、发起连接）、**设备列表**（最近连接过的设备，选中后
 显示它的设备代码和各项功能）、**高级设置**（固定密码、服务器与托管信息、数据目录）。

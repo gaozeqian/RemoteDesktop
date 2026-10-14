@@ -79,10 +79,11 @@ jobs:
           echo "==> Signing identities available:"
           security find-identity -v -p codesigning "$KC"
 
-      # 打包成 .pkg（装到 /Applications）。脚本会顺带构建 .app 与原生辅助库。
-      # 有证书就 --distribution（硬化运行时 + 安全时间戳，可公证）；再配了公证凭据就 --notarize
+      # 两个 .pkg：客户端（装到 /Applications）与服务端（两个服务器 + launchd 守护进程）。
+      # 客户端脚本会顺带构建 .app 与原生辅助库。
+      # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize
       # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
-      - name: Build the macOS .pkg
+      - name: Build the macOS installers (.pkg)
         run: |
           set -euo pipefail
           args=(--configuration Release)
@@ -94,22 +95,30 @@ jobs:
               export NOTARY_KEY_PATH="$RUNNER_TEMP/notary_key.p8"
               args+=(--notarize)
             else
-              echo "::warning title=Signed but not notarized::The Developer ID certificates are configured but the notary credentials (MACOS_NOTARY_*) are not, so the .pkg will be signed but not notarized — Gatekeeper still warns on a first run."
+              echo "::warning title=Signed but not notarized::The Developer ID certificates are configured but the notary credentials (MACOS_NOTARY_*) are not, so the .pkg files will be signed but not notarized — Gatekeeper still warns on a first run."
             fi
           else
-            echo "::warning title=Unsigned .pkg::No Developer ID certificates configured (MACOS_APP_CERT_BASE64 / MACOS_INSTALLER_CERT_BASE64). The .pkg will be unsigned and Gatekeeper will report 'unidentified developer' on other machines."
+            echo "::warning title=Unsigned .pkg::No Developer ID certificates configured (MACOS_APP_CERT_BASE64 / MACOS_INSTALLER_CERT_BASE64). The .pkg files will be unsigned and Gatekeeper will report 'unidentified developer' on other machines."
           fi
 
           ./build/installer/client/macos/make-pkg.sh "${args[@]}"
+          ./build/installer/server/macos/make-pkg.sh "${args[@]}"
 
-      - name: Rename the installer for the release
+      # 两个包都落在 artifacts/installer/macos/，按文件名前缀区分（服务端那个带 -Server-）。用循环而不是
+      # `ls | head -1`：后者在两个包都在时会随便挑一个，而且是那种直到发布出去才发现的错。
+      - name: Rename the installers for the release
         run: |
           set -euo pipefail
-          src="$(ls artifacts/installer/macos/*.pkg | head -1)"
-          dst="artifacts/installer/macos/RemoteDesktop-macOS-arm64-${GITHUB_REF_NAME}.pkg"
-          mv "$src" "$dst"
-          echo "macOS installer: $dst"
-      - name: Upload the macOS installer
+          cd artifacts/installer/macos
+          for file in *.pkg; do
+            case "$file" in
+              RemoteDesktop-Server-*) mv "$file" "RemoteDesktop-Server-macOS-arm64-${GITHUB_REF_NAME}.pkg" ;;
+              *)                      mv "$file" "RemoteDesktop-macOS-arm64-${GITHUB_REF_NAME}.pkg" ;;
+            esac
+          done
+          ls -la
+
+      - name: Upload the macOS installers
         uses: actions/upload-artifact@v7
         with:
           name: macos-installer
@@ -286,7 +295,7 @@ jobs:
           name: macos-installer
           path: macos-installer
 
-      # 上传至 GitHub Release：一个版本一个 Release，三个包都放在里面（装的机器不同，版本是同一个）。
+      # 上传至 GitHub Release：一个版本一个 Release，四个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
       # 用官方 gh CLI 取代第三方 softprops/action-gh-release（上游已停维护）；gh 在托管 runner 上预装，
       # github.token 已有 contents:write 权限。
@@ -295,11 +304,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $pkg = Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $pkg) { throw "No macOS installer was downloaded from build-macos." }
+          # 客户端和服务端各一个。少一个就说明 build-macos 只出了一半，而那是发完才会被发现的那种错。
+          $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          if ($packages.Count -ne 2) { throw "Expected the macOS client and server installers from build-macos, got $($packages.Count)." }
 
           gh release create "$env:GITHUB_REF_NAME" `
-            "$env:CLIENT_MSI" "$env:SERVER_MSI" "$($pkg.FullName)" `
+            "$env:CLIENT_MSI" "$env:SERVER_MSI" $packages `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes
