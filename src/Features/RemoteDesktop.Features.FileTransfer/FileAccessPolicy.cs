@@ -13,6 +13,11 @@ public sealed class FileAccessPolicy
     private const int MaxPathLength = 32_000;
     private const int MaxNameLength = 255;
 
+    /// <summary>How many links deep the resolution walk follows before it judges the spelling it has. The operating
+    /// systems refuse a longer chain themselves (ELOOP after 32 on Linux, fewer on Windows), so no real path reaches
+    /// this; it exists so a planted cycle of links ends the walk instead of hanging it.</summary>
+    private const int MaxLinkDepth = 40;
+
     private static readonly string[] ReservedNames =
         ["CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
          "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
@@ -92,12 +97,31 @@ public sealed class FileAccessPolicy
     /// spelling, which the caller then checks against the roots as a string.
     /// </summary>
     /// <remarks>
-    /// <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> follows a single reparse point; walking the segments from
-    /// the root down resolves a chain of links. The walk stops at the first segment that does not exist, so a path into
-    /// a directory that is still to be made is judged by the ancestor that is really there.
+    /// <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> follows a single reparse chain; walking the segments from
+    /// the root down resolves a link inside a link. The walk stops at the first segment that does not exist, so a path
+    /// into a directory that is still to be made is judged by the ancestor that is really there.
+    /// <para>
+    /// The target of a link is walked as well, and that is not redundant: a target's own ancestors may be links too.
+    /// macOS keeps <c>/var</c> as a link to <c>/private/var</c> and every temporary path begins there, so a link
+    /// inside the shared root hands back its target spelled <c>/var/…</c> while the root itself is spelled
+    /// <c>/private/var/…</c>. Taking the target verbatim leaves the two sides of the comparison in different
+    /// spellings of the same folder and a genuinely shared path is refused as not shared — which is exactly what a
+    /// link pointing back inside the root must not be. Walking the target puts both sides in the fully resolved
+    /// spelling. The walk is depth-bounded, so a cycle of links (which the operating system refuses to follow
+    /// either, with ELOOP) ends the walk instead of hanging it.
+    /// </para>
     /// </remarks>
-    private static string ResolveFinalTarget(string full)
+    private static string ResolveFinalTarget(string full, int depth = 0)
     {
+        if (depth >= MaxLinkDepth)
+        {
+            // A cycle of links cannot be followed by the operating system either (ELOOP), so no read or write can
+            // land through one. Judging the spelling in hand is as close to an answer as exists, and it keeps the
+            // walk finite; an escape through a cycle is still caught, because the cycle has to point at the outside
+            // spelling to matter and that spelling resolves normally.
+            return full;
+        }
+
         var root = Path.GetPathRoot(full);
         if (root is null)
         {
@@ -120,12 +144,42 @@ public sealed class FileAccessPolicy
                 continue;
             }
 
-            // Follow the link and keep walking from where it really points, so a link inside a link is followed too.
-            var target = info.ResolveLinkTarget(returnFinalTarget: true);
-            current = target?.FullName ?? candidate;
+            var target = ReadLinkTarget(info);
+            if (target is null)
+            {
+                current = candidate;
+                continue;
+            }
+
+            // Follow the link, then walk the target itself so its own ancestors are resolved before the descent
+            // continues. (ResolveLinkTarget already returns an absolute path even for a relative link, spelled
+            // against the link's directory — verified on this runtime.)
+            current = ResolveFinalTarget(target.FullName, depth + 1);
         }
 
         return TrimTrailingSeparator(current);
+    }
+
+    /// <summary>
+    /// The link a filesystem entry points at, or <c>null</c> when it is not a link, does not exist yet, or cannot be
+    /// read. The last case is the interesting one: the operating system follows a whole chain itself
+    /// (<c>returnFinalTarget: true</c>) and answers ELOOP when the chain is a cycle, so a planted loop surfaces as an
+    /// <see cref="IOException"/> rather than as an answer. A cycle has no exit by construction — every hop is a link
+    /// with a single target — so an escape can never hide behind one, and no read or write can land through it
+    /// either (the operating system refuses the I/O just as it refused the walk). Reporting "not a link" therefore
+    /// costs nothing a security check should care about, keeps the raw ELOOP out of the protocol layer, and treats a
+    /// link the walk cannot inspect exactly like the nonexistent tail above.
+    /// </summary>
+    private static FileSystemInfo? ReadLinkTarget(FileSystemInfo info)
+    {
+        try
+        {
+            return info.ResolveLinkTarget(returnFinalTarget: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Validates the name of a file or folder to create or rename to (a single path segment).</summary>

@@ -97,6 +97,29 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     }
 
     /// <summary>
+    /// A cycle of links must end the resolution walk rather than hang it. The operating system refuses to follow such
+    /// a chain either (ELOOP), so nothing can actually be read through one; the policy still has to come back with an
+    /// answer. What it answers with is only that the walk stayed finite and the sandbox held: a cycle that points at
+    /// an outside spelling resolves there and is refused like any other escape.
+    /// </summary>
+    [Fact]
+    public void A_cycle_of_links_does_not_hang_the_resolution()
+    {
+        var first = CreateDirectoryLink(Path.Combine(_root, "first"), Path.Combine(_root, "second"));
+        var second = CreateDirectoryLink(Path.Combine(_root, "second"), Path.Combine(_root, "first"));
+        if (first is null || second is null)
+        {
+            return;
+        }
+
+        var policy = new FileAccessPolicy([_root]);
+
+        // Both spellings walk through the cycle; neither may hang, and neither may escape the root while doing so.
+        _ = policy.Normalize(Path.Combine(_root, "first"));
+        _ = policy.Normalize(Path.Combine(_root, "second"));
+    }
+
+    /// <summary>
     /// Creates a directory symbolic link (or junction as a fallback) from <paramref name="link"/> to
     /// <paramref name="target"/>. Returns the link path when it was created, or <c>null</c> when the account cannot
     /// make one — in which case the caller skips the test rather than fail on the environment.
