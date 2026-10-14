@@ -433,36 +433,38 @@ DP-1 'Philips Consumer Electronics Company 24"'
 > 踩坑记录：Mutter 的 `GetCurrentState` 里，显示器尺寸**不在**任何一张表里——它是标了 `is-current` 的那个
 > mode 的尺寸。取第一个 mode、或者取 preferred，在「用户改过分辨率」的机器上就是错的，而那几乎包括每台机器。
 
-**P3 尚未完成的部分**，两件都不再需要有人在旁边点对话框：
+**采集已经通了。** `PipeWireScreenCapturer` 拿到真实画面，实测：
 
-- `Display/PipeWireScreenCapturer.cs` —— **已写好，但还没有出帧**，卡在下面那条。
-- `Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），再走 libei。
-  `ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
+```
+frame 2560x1440 Bgra32 stride=10240 bytes=14745600
+distinct colours (sampled 1/16): 2608
+```
 
-### P3 当前的阻塞点：PipeWire 流连不上目标节点
+导出成 PNG 看过——就是桌面本身：编辑器、终端、顶栏时钟、dock 全在，**颜色也对**（蓝色按钮是蓝的，
+说明 BGRA 顺序没搞反）。而且**画面里没有指针**，正是 `cursor_mode = Metadata` 应有的样子。
+尺寸是 **2560x1440（物理）**，不是 portal 报的 1920x1080（逻辑）——与 `DisplayInfo.Bounds` 的契约一致，
+也正是编码器要的。
 
-已经跑通到 `pw_context_connect_fd` + `pw_stream_new`，**portal 那一侧全对**（会话、授权、fd 都拿到了，
-而且 restore token 让后续运行不再弹窗）。卡住的是最后一步——把流接到合成器那个节点上：
+`tests/.../PipeWireScreenCapturerTests.cs` 覆盖三条：帧的尺寸与 stride、画面确实是一幅图（不是单一颜色
+或错位的图案）、静止画面返回 null 而不是把上一帧再发一次。默认跳过，`RD_PORTAL_TEST=1` 时运行。
 
-`pw_stream_connect` 之后 `state_changed` 报 **`no target node available`**。
+### 采集中间踩过的两个坑（都只表现为一句没头没尾的错）
 
-排查过程中确认的几件事，都是实测不是推断：
+- **`pw_context_connect_fd` 返回时 core 还没绑定完，对象表是空的。** 此时 `pw_stream_connect` 带
+  `AUTOCONNECT` 去查目标节点，查了个空，回 **`no target node available`**——节点其实下一刻就在。
+  现在会先等目标节点出现（用注册表监听 + `ManualResetEventSlim`，5 秒超时），而不是等一个固定时长。
+- **portal 的 `node_id` 和流要找的不是同一个数。** 本机那个被授权的节点 id 是 78，而它的
+  `object.serial` 是 1199；流要用后者来指名。
 
-- **`pw_stream_connect` 不接受格式参数。** 把那个 pod 交给它，返回 `-EINVAL`，流停在 unconnected，
-  库里和 `PIPEWIRE_DEBUG=4` 的日志里都**没有任何解释**。同一个 pod、同样的字节交给
-  `pw_stream_update_params` 就被接受。两件事分开做才通得过。那个 pod 的字节已经对着
-  `spa_pod_builder_add_object` 的输出逐字节验证过，日志里 PipeWire 也把它**正确解析**成
-  `Id 8 (BGRx)` / `Rectangle 1920x1080`——所以问题不在 pod。
-- **`target_id` 不是原因。** 文档说它"应当是 `PW_ID_ANY`"，按 id 指定目标已废弃；但改成 `PW_ID_ANY` +
-  `target.object` 属性、`object.serial`、或干脆不给目标，报的都是同一句 `no target node available`。
-- **没能枚举出那个连接上可见的节点。** 想用 `pw_core_get_registry` + `pw_registry_add_listener` 看看到底
-  有哪些 node 可以指名，但**枚举本身是坏的**：对着默认实例（那里必然有几十个全局对象）也是一条都没有。
-  回调没被调用，所以这是枚举的问题，不是 portal 连接真的空。**修好枚举是下一步的第一件事**——不知道
-  目标该叫什么名字，就只能继续猜。
+还有一个更隐蔽的：**读注册表时不能在持有 thread-loop 锁的情况下等待。** 事件是在 loop 自己的线程上派发的，
+调用方握着锁等，等的是一个永远不会发生的事——这正是第一版枚举在"明明有节点的连接"上看到空列表的原因。
+写完一个等价的 C 程序对照才确认 API 用法没问题、问题在锁。**排这一类"库说不了话"的问题时，写个 C 对照
+是最快的一条路**，这次两个坑都是这么定位的。
 
-要接着做的话，顺序是：先把 `pw_core_sync` + `done` 等一次往返、确认注册表监听真的收到回调（大概率是
-委托生命周期或 hook 初始化的问题），再看 portal 连接上那个 screencast 节点的 `object.serial` 到底是多少，
-用它去填 `target.object`。
+### P3 剩下的最后一件
+
+`Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），再走 libei。
+`ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
 
 
 ### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）

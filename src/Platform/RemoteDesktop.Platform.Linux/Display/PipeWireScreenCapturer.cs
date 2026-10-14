@@ -235,8 +235,10 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             // The node to read is named here rather than in the connect call. pw_stream_connect's target_id is
             // documented as "should have the value PW_ID_ANY", naming a target by id there is deprecated, and on
             // PipeWire 1.6 it is refused with -EINVAL and no explanation. The stream takes ownership of this.
+            // Named by serial, and only reachable once the core has bound — see WaitForTarget.
+            var target = WaitForTarget(nodeId);
             var properties = PipeWire.PropertiesNewString(
-                "media.type=Video media.category=Capture media.role=Screen");
+                $"target.object={target} media.type=Video media.category=Capture media.role=Screen");
 
             if (properties == 0)
             {
@@ -574,6 +576,111 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
 
         return new CursorShape((int)bitmap.Width, (int)bitmap.Height, cursor.HotspotX, cursor.HotspotY, bgra);
     }
+
+    /// <summary>
+    /// Waits for the screen the portal granted to appear, and returns the serial to name it by.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>pw_context_connect_fd</c> returns as soon as the descriptor is taken; the core is not yet bound and the
+    /// list of objects it can see is still empty. Connecting the stream before that list arrives is what produced
+    /// <c>no target node available</c> — the node was there a moment later, the look-up had simply happened too
+    /// early. Waiting for the node itself, rather than for a fixed delay, is both correct and quick.
+    /// </para>
+    /// <para>
+    /// What the portal calls a node id and what the stream wants are not the same number. On this machine the
+    /// granted node has id 78 and <c>object.serial</c> 1199. The serial is what the stream is named by, because it
+    /// is the one that stays meaningful across the graph being rebuilt.
+    /// </para>
+    /// </remarks>
+    private unsafe uint WaitForTarget(uint nodeId)
+    {
+        var registry = PipeWire.CoreGetRegistry(_core, PipeWire.RegistryVersion, 0);
+        if (registry == 0)
+        {
+            throw new InvalidOperationException("PipeWire would not give up its registry.");
+        }
+
+        using var found = new ManualResetEventSlim(false);
+        var serial = nodeId;
+
+        TargetLookup lookup = (_, id, _, _, _, props) =>
+        {
+            if (id != nodeId)
+            {
+                return;
+            }
+
+            if (TryGetProperty(props, "object.serial", out var text) && uint.TryParse(text, out var parsed) && parsed != 0)
+            {
+                serial = parsed;
+            }
+
+            found.Set();
+        };
+
+        // Rooted for as long as PipeWire holds the function pointer, which is the whole of this method.
+        var handle = GCHandle.Alloc(lookup);
+        var hook = Marshal.AllocHGlobal(HookSize);
+        new Span<byte>((void*)hook, HookSize).Clear();
+        var events = Marshal.AllocHGlobal(Marshal.SizeOf<PipeWire.PwRegistryEvents>());
+        Marshal.StructureToPtr(
+            new PipeWire.PwRegistryEvents { Version = 0, Global = Marshal.GetFunctionPointerForDelegate(lookup) },
+            events,
+            fDeleteOld: false);
+
+        PipeWire.RegistryAddListener(registry, hook, events, 0);
+
+        // The loop has to be given back while waiting. Events are delivered on the loop's own thread, so a caller
+        // holding the lock waits for something that cannot happen — which is exactly how the first attempt at
+        // reading this registry managed to see nothing on a connection that had a node on it.
+        PipeWire.ThreadLoopUnlock(_loop);
+        var arrived = found.Wait(TimeSpan.FromSeconds(5));
+        PipeWire.ThreadLoopLock(_loop);
+
+        PipeWire.RegistryDestroy(registry);
+        Marshal.FreeHGlobal(events);
+        Marshal.FreeHGlobal(hook);
+        handle.Free();
+
+        if (!arrived)
+        {
+            throw new InvalidOperationException(
+                $"The screen the desktop granted (node {nodeId}) never appeared on the PipeWire connection.");
+        }
+
+        return serial;
+    }
+
+    /// <summary>One property out of an <c>spa_dict</c>.</summary>
+    private static unsafe bool TryGetProperty(nint dict, string key, out string value)
+    {
+        value = string.Empty;
+        if (dict == 0)
+        {
+            return false;
+        }
+
+        var header = Marshal.PtrToStructure<PipeWire.SpaDict>(dict);
+        var size = Marshal.SizeOf<PipeWire.SpaDictItem>();
+
+        for (var i = 0; i < header.ItemCount; i++)
+        {
+            var item = Marshal.PtrToStructure<PipeWire.SpaDictItem>(header.Items + (i * size));
+            if (!string.Equals(Marshal.PtrToStringUTF8(item.Key), key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            value = Marshal.PtrToStringUTF8(item.Value) ?? string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void TargetLookup(nint data, uint id, uint permissions, nint type, uint version, nint props);
 
     /// <summary>Asks the stream why it is unhappy, which it answers in words.</summary>
     private static unsafe string DescribeState(nint stream)
