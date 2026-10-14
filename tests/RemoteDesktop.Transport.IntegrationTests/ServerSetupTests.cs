@@ -366,6 +366,100 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Contains(usage.EnhancedKeyUsages.Cast<Oid>(), oid => oid.Value == "1.3.6.1.5.5.7.3.1"); // serverAuth
     }
 
+    [Fact]
+    public void On_a_system_with_no_certificate_store_the_certificate_is_two_files()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "There is a store on Windows to keep the key in.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            RelayPublicEndpoint = "203.0.113.10:5082",
+            RelaySharedKey = Convert.ToBase64String(new byte[48]),
+            TlsCertificatePath = ServerSetupOptions.GenerateCertificate,
+        });
+
+        var certificates = Configuration(ServerSetup.RendezvousFolder).GetSection("Kestrel:Certificates:Default");
+
+        // Kestrel is pointed at a certificate and a key rather than at a store entry, which is the only form that
+        // works where there is no store.
+        var certificatePath = certificates["Path"]!;
+        var keyPath = certificates["KeyPath"]!;
+        Assert.True(File.Exists(certificatePath), $"Kestrel was pointed at '{certificatePath}', which is not there.");
+        Assert.True(File.Exists(keyPath), $"Kestrel was pointed at '{keyPath}', which is not there.");
+
+        // And none of the store form is left behind: a leftover Subject would take precedence and the server would
+        // not start.
+        Assert.Null(certificates["Subject"]);
+        Assert.Null(certificates["Store"]);
+        Assert.Null(certificates["Location"]);
+        Assert.Null(certificates["AllowInvalid"]);
+
+        Assert.Contains("BEGIN CERTIFICATE", File.ReadAllText(certificatePath), StringComparison.Ordinal);
+        Assert.Contains("BEGIN PRIVATE KEY", File.ReadAllText(keyPath), StringComparison.Ordinal);
+        Assert.NotEmpty(notes);
+    }
+
+    [Fact]
+    public void The_private_key_is_readable_only_by_its_owner()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        var notes = new List<string>();
+        var (certificatePath, keyPath) = SelfSignedCertificate.EnsurePem(Path.Combine(_folder, "tls"), notes);
+
+        // This is the whole of the protection on this side. On Windows the key stays in the machine's store and the
+        // folder being world-readable does not matter; here the key is a file, so its permissions are what stands
+        // between it and every other account on the machine.
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, new FileInfo(keyPath).UnixFileMode);
+
+        // The certificate is public by design: clients are told to fetch it.
+        Assert.True(new FileInfo(certificatePath).UnixFileMode.HasFlag(UnixFileMode.OtherRead));
+    }
+
+    [Fact]
+    public void Generating_again_keeps_the_certificate_that_is_already_there()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Posix file permissions.");
+
+        var tls = Path.Combine(_folder, "tls");
+        var (_, keyPath) = SelfFigned(tls);
+
+        // A client that trusted this certificate yesterday must still trust it today, and upgrading the server runs
+        // this step again.
+        var before = File.ReadAllText(keyPath);
+        var (_, keyPathAgain) = SelfFigned(tls);
+
+        Assert.Equal(keyPath, keyPathAgain);
+        Assert.Equal(before, File.ReadAllText(keyPathAgain));
+
+        static (string Certificate, string Key) SelfFigned(string directory) =>
+            SelfSignedCertificate.EnsurePem(directory, []);
+    }
+
+    [Fact]
+    public void The_generated_certificate_is_one_a_server_could_serve()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The PEM form.");
+
+        var notes = new List<string>();
+        var (certificatePath, _) = SelfSignedCertificate.EnsurePem(Path.Combine(_folder, "tls"), notes);
+
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+
+        Assert.True(certificate.HasPrivateKey == false); // the file holds the public half
+        Assert.True(certificate.NotAfter > DateTime.Now.AddYears(2));
+        Assert.Contains(SelfSignedCertificate.NameForThisMachine, certificate.Subject, StringComparison.Ordinal);
+
+        // It has to be usable for the address clients are given, and its own machine name is in there.
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+        Assert.Contains(Environment.MachineName, names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
+
+        // And Kestrel has to accept it: a certificate it cannot read as a certificate reports as a missing file.
+        Assert.NotEmpty(certificate.RawData);
+        Assert.Contains("self-signed", string.Join(' ', notes), StringComparison.OrdinalIgnoreCase);
+    }
+
     private string WriteCertificate()
     {
         var path = Path.Combine(_folder, "signaling.pfx");

@@ -110,35 +110,68 @@ public static class ServerSetup
 
             if (options.TlsCertificatePath == ServerSetupOptions.GenerateCertificate)
             {
-                // The certificate is made during this run and kept in the machine's store, so the settings name it
-                // rather than point at a file. A path from an earlier run is dropped, or it would win.
-                certificates.Remove("Path");
-                certificates.Remove("Password");
+                // Whatever an earlier run left here is dropped first, or it would win over what is made now: a path
+                // from a file-based run, or the store entry the Windows form writes.
+                foreach (var stale in (string[])["Path", "KeyPath", "Password", "Subject", "Store", "Location", "AllowInvalid"])
+                {
+                    certificates.Remove(stale);
+                }
 
-                // This is the call that makes the certificate, keeps it if it is already there, and writes the public
-                // half out for clients to be given. What it returns is the subject with the CN= on the front, which is
-                // not what goes into the settings: Kestrel looks a certificate up by subject *name*, so the prefixed
-                // form finds nothing. See NameForThisMachine.
-                SelfSignedCertificate.Ensure(installDirectory, notes);
-                certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
-                certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
-                certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
+                if (OperatingSystem.IsWindows())
+                {
+                    // Made during this run and kept in the machine's store, so the settings name it rather than point
+                    // at a file. What Ensure returns is the subject with the CN= on the front, which is not what goes
+                    // into the settings: Kestrel looks a certificate up by subject *name*, so the prefixed form finds
+                    // nothing. See NameForThisMachine.
+                    SelfSignedCertificate.Ensure(installDirectory, notes);
+                    certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
+                    certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
+                    certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
 
-                // Without this the server does not start at all. Kestrel looks a certificate up in the store with
-                // "valid only" unless told otherwise, and a self-signed certificate is not in this machine's trusted
-                // roots — it is not in anybody's — so the lookup finds nothing and the host stops with "The requested
-                // certificate <subject> could not be found in LocalMachine/My with AllowInvalid setting: False",
-                // which is a sentence about a setting rather than about the reason. Trusting it is the client's
-                // business; serving it is the server's, and this is what lets it.
-                certificates["AllowInvalid"] = "true";
+                    // Without this the server does not start at all. Kestrel looks a certificate up in the store with
+                    // "valid only" unless told otherwise, and a self-signed certificate is not in this machine's
+                    // trusted roots — it is not in anybody's — so the lookup finds nothing and the host stops with
+                    // "The requested certificate <subject> could not be found in LocalMachine/My with AllowInvalid
+                    // setting: False", a sentence about a setting rather than about the reason. Trusting it is the
+                    // client's business; serving it is the server's, and this is what lets it.
+                    certificates["AllowInvalid"] = "true";
+                }
+                else
+                {
+                    // Nowhere to keep a certificate on this side, so both halves are files and Kestrel is pointed at
+                    // them. Kestrel reads a PEM certificate from Path and its key from KeyPath; there is no
+                    // equivalent of AllowInvalid because a certificate given as a file is served as it stands.
+                    var (certificatePath, keyPath) = SelfSignedCertificate.EnsurePem(
+                        Path.Combine(installDirectory, SelfSignedCertificate.PublicFolder),
+                        notes);
+
+                    certificates["Path"] = certificatePath;
+                    certificates["KeyPath"] = keyPath;
+                }
 
                 notes.Add("Signaling is served over TLS with the certificate this step created.");
             }
             else
             {
-                certificates["Path"] = options.TlsCertificatePath;
+                // Not "auto" here, but the compiler cannot know it across the IsAuto call above.
+                var certificatePath = options.TlsCertificatePath!;
+                certificates["Path"] = certificatePath;
                 certificates["Password"] = IsAuto(options.TlsCertificatePassword) ? string.Empty : options.TlsCertificatePassword!;
-                notes.Add($"Signaling is served over TLS with {options.TlsCertificatePath}.");
+
+                // A PEM certificate carries no password: its key is a second file, and Kestrel is pointed at it
+                // separately. Looking for the key beside the certificate under the same name is the convention
+                // everything else on the system follows, so an operator who already has a pair has nothing to
+                // configure beyond the certificate's path.
+                if (!OperatingSystem.IsWindows() && KeyBeside(certificatePath) is { } keyPath)
+                {
+                    certificates["KeyPath"] = keyPath;
+                    certificates.Remove("Password");
+                    notes.Add($"Signaling is served over TLS with {certificatePath} and the key beside it ({keyPath}).");
+                }
+                else
+                {
+                    notes.Add($"Signaling is served over TLS with {certificatePath}.");
+                }
             }
         }
 
@@ -363,6 +396,21 @@ public static class ServerSetup
         {
             throw new InvalidOperationException($"{path} is not valid JSON, so it was left alone: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The private key that belongs to a PEM certificate, if it is beside it.
+    /// </summary>
+    /// <returns><c>null</c> for a certificate that is not PEM, or whose key is not where it would be expected.</returns>
+    private static string? KeyBeside(string certificatePath)
+    {
+        if (Path.GetExtension(certificatePath) is not (".crt" or ".pem" or ".cer"))
+        {
+            return null;
+        }
+
+        var keyPath = Path.ChangeExtension(certificatePath, ".key");
+        return File.Exists(keyPath) ? keyPath : null;
     }
 
     private static void Write(string path, JsonObject settings)

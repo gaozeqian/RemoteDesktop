@@ -1,0 +1,37 @@
+[Unit]
+Description=Remote Desktop Relay (UDP forwarding for peers that cannot reach each other)
+Documentation=https://github.com/gaozeqian/RemoteDesktop
+After=network-online.target remotedesktop-rendezvous.service
+Wants=network-online.target
+PartOf=remotedesktop-rendezvous.service
+
+[Service]
+Type=notify
+User=remotedesktop
+Group=remotedesktop
+
+# Same arrangement as the rendezvous unit: the settings come from /etc because that is where the program is started.
+WorkingDirectory=/etc/remotedesktop-server/Relay
+ExecStart=/usr/lib/remotedesktop-server/Relay/RemoteDesktop.Server.Relay
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+StateDirectory=remotedesktop-server
+LogsDirectory=remotedesktop-server
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+ReadWritePaths=/var/lib/remotedesktop-server /var/log/remotedesktop-server
+
+[Install]
+WantedBy=multi-user.target

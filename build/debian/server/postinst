@@ -1,0 +1,102 @@
+#!/bin/sh
+#
+# Configures the two servers after their files are in place: makes the account they run as, turns the settings in
+# /etc/default/remotedesktop-server into the files they actually read, and starts them.
+#
+# The work of writing the settings is not done here. It is done by the server itself, with --configure-system, which
+# is the same step the Windows installer runs — so both platforms produce the same files by the same code, and this
+# script only has to say where things are.
+set -e
+
+INSTALL_DIRECTORY=/etc/remotedesktop-server
+PROGRAM_DIRECTORY=/usr/lib/remotedesktop-server
+SERVICE_USER=remotedesktop
+DEFAULTS=/etc/default/remotedesktop-server
+
+case "$1" in
+    configure)
+        # The servers run as their own account rather than as root. Nothing about them needs root: they listen on
+        # ports above 1024 and keep their state under /var/lib.
+        if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+            adduser --system --group --no-create-home \
+                --home /var/lib/remotedesktop-server \
+                --gecos "Remote Desktop server" \
+                "$SERVICE_USER" >/dev/null
+        fi
+
+        # The settings file is a conffile, so an operator's edits survive an upgrade; on a first install it is
+        # whatever the package shipped.
+        if [ -r "$DEFAULTS" ]; then
+            # shellcheck disable=SC1090
+            . "$DEFAULTS"
+        fi
+
+        RD_URLS=${RD_URLS:-http://0.0.0.0:5080}
+        RD_RELAY_ENDPOINT=${RD_RELAY_ENDPOINT:-auto}
+        RD_RELAY_KEY=${RD_RELAY_KEY:-auto}
+        RD_POSTGRES=${RD_POSTGRES:-}
+        RD_TLS=${RD_TLS:-generate}
+        RD_OPEN_FIREWALL=${RD_OPEN_FIREWALL:-0}
+
+        mkdir -p "$INSTALL_DIRECTORY"
+
+        # --configure-system prints what it did and what an operator has to do next. Both the output and its exit code
+        # matter: a settings file that cannot be written has to fail the installation, while the operator is still
+        # watching, rather than leave a service that will not start.
+        "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" \
+            --configure-system \
+            --install-directory "$INSTALL_DIRECTORY" \
+            --urls "$RD_URLS" \
+            --relay-endpoint "$RD_RELAY_ENDPOINT" \
+            --relay-key "$RD_RELAY_KEY" \
+            --postgres "$RD_POSTGRES" \
+            --tls-certificate "$RD_TLS"
+
+        # A certificate made by the step above was made by root and has its key readable only by its owner, which is
+        # root. The service runs as somebody else, so the key has to change hands — this is what the file permissions
+        # are protecting it from being readable by, and the account that has to read it is this one.
+        if [ -d "$INSTALL_DIRECTORY/tls" ]; then
+            chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIRECTORY/tls"
+            chmod 0755 "$INSTALL_DIRECTORY/tls"
+        fi
+
+        mkdir -p /var/lib/remotedesktop-server /var/log/remotedesktop-server
+        chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/remotedesktop-server /var/log/remotedesktop-server
+
+        # Off by default. A package that changes a machine's firewall is deciding something that belongs to whoever
+        # administers it, so this only happens when the settings file asks for it, and only through ufw — a machine
+        # that manages its rules some other way is left alone.
+        if [ "$RD_OPEN_FIREWALL" = "1" ] && command -v ufw >/dev/null 2>&1; then
+            if ufw status 2>/dev/null | grep -q "^Status: active"; then
+                ufw allow 5080/tcp >/dev/null 2>&1 || true
+                ufw allow 5081/udp >/dev/null 2>&1 || true
+                ufw allow 5082/udp >/dev/null 2>&1 || true
+            fi
+        fi
+
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            deb-systemd-helper enable remotedesktop-relay.service >/dev/null 2>&1 || true
+        else
+            systemctl enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            systemctl enable remotedesktop-relay.service >/dev/null 2>&1 || true
+        fi
+
+        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service >/dev/null 2>&1 || true
+        else
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service >/dev/null 2>&1 || true
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

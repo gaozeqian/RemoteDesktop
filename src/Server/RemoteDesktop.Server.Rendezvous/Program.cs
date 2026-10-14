@@ -10,8 +10,17 @@ if (SetupCommands.TryRun(args, Path.GetDirectoryName(Path.TrimEndingDirectorySep
 // Rendezvous server: device registration and id allocation, presence, signaling and hole-punch coordination.
 var builder = WebApplication.CreateBuilder(args);
 
-// Runs as a console app or as a Windows service (sc.exe create ...); the latter also sends the logs to the event log.
-builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopRendezvous");
+// Runs as a console app, under systemd on Linux, or as a Windows service (sc.exe create ...). Registered only for
+// the platform it is on: both calls are no-ops elsewhere, but naming one that cannot apply says the wrong thing to
+// whoever reads this next.
+if (OperatingSystem.IsWindows())
+{
+    builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopRendezvous");
+}
+else if (OperatingSystem.IsLinux())
+{
+    builder.Host.UseSystemd();
+}
 builder.Services.AddRendezvous(builder.Configuration);
 
 var app = builder.Build();

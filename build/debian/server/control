@@ -1,0 +1,25 @@
+Package: remotedesktop-server
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCHITECTURE@
+Maintainer: Remote Desktop <noreply@example.invalid>
+Homepage: https://github.com/gaozeqian/RemoteDesktop
+Recommends: libmsquic
+Description: Remote Desktop server (signaling and relay)
+ Lets devices find each other and, when they cannot connect directly, forwards
+ their traffic between them.
+ .
+ Two services are installed: the rendezvous server, which registers devices and
+ hands out their codes, and the relay, which carries the traffic of peers whose
+ networks will not let them reach each other directly.
+ .
+ Both are configured from /etc/remotedesktop-server, and the settings are kept
+ there so that upgrading the package does not overwrite them.
+ .
+ libmsquic is only recommended rather than required. It is what System.Net.Quic
+ loads to speak QUIC at all, and without it every client fails with "QUIC is not
+ supported on this system" — which reads like a platform problem rather than a
+ missing package. It comes from Microsoft's own repository, so depending on it
+ would make this package uninstallable on a machine that has not added that
+ repository; the post-install step says so if it is missing.

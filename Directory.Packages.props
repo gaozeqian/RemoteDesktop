@@ -15,6 +15,8 @@
     <!-- Platform tests build a real container, and a port that takes a logger needs a provider to build one -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
+    <!-- The server hosts run under systemd on Linux; the same binary still runs from a console. -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />

@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2、P4、P6、P9 完成；P3 完成不需要授权的部分）
+> 状态：**进行中**（P1、P2、P4、P6、P9 完成；P11 的服务端在 Linux 上完成；P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -445,7 +445,25 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
 把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
 ### P10 — 录制 + 被控端打包
-### P11 — 服务端原生部署
+### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）
+
+**证书在 Windows 之外的形态。** Windows 把证书放进机器证书存储、只把公钥写出来，理由是安装目录人人可读；那套逻辑在这里整个反过来——没有存储可用，**私钥只能是一个文件**，于是文件权限就是私钥与其他人之间唯一的屏障，所以它必须在相信那一点之前先把自己设成 0600。证书本身用的是同一段代码：生成从来不是平台相关的部分，保存才是。
+
+`ServerSetup` 相应分成两支：Windows 写 `Subject`/`Store`/`Location`/`AllowInvalid`，Linux 写 `Path` + `KeyPath`。切过去之前会把两种形态的键都清掉，否则上一次运行留下的一种会压过这次生成的另一种。另外补上了同级私钥的约定：`signaling.crt` 旁边有 `signaling.key` 时自动用 PEM 形态——这是系统上其它东西都遵守的约定，已有证书对的运维不需要额外配置。
+
+**systemd：`AddSystemd()` / `UseSystemd()`，只在 Linux 上注册。** 两个调用在别的平台都是空操作，但登记一个本就不可能适用的管理器，会让下一个读这段代码的人理解错。
+
+**`--configure-system` 本来就是跨平台的**——检查过，`SetupCommands` 里没有任何 Windows 专有代码。所以 `postinst` 调的就是 Windows 安装器调的那一步，两个平台由同一段代码产出同样的文件。这正是当初把它写成纯 .NET 的好处。
+
+**打包**：`build/debian/server/` 出一个 `.deb`，两个服务器装在一起（它们共享一把钥匙、分开放只会多一个能装错的步骤）。程序 self-contained 发布，配置在 `/etc/remotedesktop-server`（**服务的 working directory 就是那里**——.NET 从启动目录读 `appsettings.json`，所以启动在 `/etc` 就等于配置在 `/etc`，而升级只换程序、不碰运维改过的配置）。服务以专用账号运行，`ProtectSystem=strict` 之类能开的都开着。
+
+**计划里的一处被改掉：不用 debconf，用 `/etc/default/remotedesktop-server`。** debconf 是 MSI 向导在 Debian 上最接近的对应物，但它为交互式安装设计；服务器需要的是**无人值守也能装**，而 `/etc/default/<pkg>` 是 Debian 服务配置的标准做法：幂等、可脚本化、是 conffile 所以运维的修改能跨升级保留。`postinst` 从它读设置再调 `--configure-system`。
+
+**防火墙默认不动**。`RD_OPEN_FIREWALL=1` 且 ufw 处于 active 时才加规则；不直接改 nftables/iptables——包去改一台机器的防火墙是在替管理员做决定。
+
+验证（把包解到临时目录、用真实二进制走完整条链路）：`--configure-system` 生成两张 PEM 与两个 appsettings（`Path`/`KeyPath`，无存储键）；**私钥 0600、证书 0644**；服务端真的起来并在 TLS 上应答 `/health` 返回 `Healthy`；证书校验三态都对——**信任且名字匹配 → 200**、不信任 → 拒绝、信任但名字不在证书里 → 拒绝。
+
+### P11（原始计划） — 服务端原生部署
 ### P12 — 客户端打包 + 文档
 
 ---

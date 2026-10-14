@@ -1,0 +1,46 @@
+[Unit]
+Description=Remote Desktop Rendezvous (device registration and signaling)
+Documentation=https://github.com/gaozeqian/RemoteDesktop
+After=network-online.target
+Wants=network-online.target
+
+# The two halves of the server share a key and an address, so the relay is started alongside this one rather than
+# whenever the boot happens to get to it.
+Before=remotedesktop-relay.service
+
+[Service]
+Type=notify
+User=remotedesktop
+Group=remotedesktop
+
+# The settings are the working directory as well as the content root: the program looks for appsettings.json next to
+# where it was started, so starting it in /etc is what makes the settings come from /etc. An upgrade then replaces
+# the program without touching what the operator configured — the Windows installer writes into Program Files and has
+# to work around exactly that.
+WorkingDirectory=/etc/remotedesktop-server/Rendezvous
+ExecStart=/usr/lib/remotedesktop-server/Rendezvous/RemoteDesktop.Server.Rendezvous
+
+Restart=always
+RestartSec=5
+# No start limit: a server being reconfigured should keep coming back, and the default of giving up after five
+# failures in ten seconds is the opposite of what a daemon wants.
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+StateDirectory=remotedesktop-server
+LogsDirectory=remotedesktop-server
+
+# Nothing outside its own state, configuration and logs is writable; the program itself is read-only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+ReadWritePaths=/var/lib/remotedesktop-server /var/log/remotedesktop-server
+
+[Install]
+WantedBy=multi-user.target

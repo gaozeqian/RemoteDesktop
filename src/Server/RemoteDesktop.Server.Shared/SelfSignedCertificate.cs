@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 
 namespace RemoteDesktop.Server.Shared;
@@ -92,6 +93,68 @@ public static class SelfSignedCertificate
         return subject;
     }
 
+    /// <summary>
+    /// The same certificate, kept as two PEM files, for a system that has no certificate store to put it in.
+    /// </summary>
+    /// <param name="tlsDirectory">Where both halves are written.</param>
+    /// <param name="notes">One line per thing that happened, for whoever is watching the installation.</param>
+    /// <returns>The paths Kestrel has to be given.</returns>
+    /// <remarks>
+    /// <para>
+    /// The reasoning that shapes the Windows version is turned around here. There the private key stays in the
+    /// machine's store and only the public half is written out, because the installation folder is readable by every
+    /// account on the machine. With no store to use, the key has to be a file — so the file's permissions are what
+    /// stands between the key and everyone else, and that is the whole of the protection.
+    /// </para>
+    /// <para>
+    /// The certificate itself is made by the same code as on Windows: creating it was never the platform-specific
+    /// part, only keeping it was.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="CryptographicException">The certificate could not be created.</exception>
+    [UnsupportedOSPlatform("windows")]
+    public static (string Certificate, string Key) EnsurePem(string tlsDirectory, List<string> notes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tlsDirectory);
+        ArgumentNullException.ThrowIfNull(notes);
+
+        var certificatePath = Path.Combine(tlsDirectory, PemCertificateFileName);
+        var keyPath = Path.Combine(tlsDirectory, PemKeyFileName);
+
+        if (File.Exists(certificatePath) && File.Exists(keyPath))
+        {
+            // Kept, not replaced: a client that trusted this certificate yesterday must still trust it today, and
+            // reinstalling or upgrading the server runs this step again.
+            notes.Add($"Signaling TLS uses the existing certificate at {certificatePath}.");
+            return (certificatePath, keyPath);
+        }
+
+        Directory.CreateDirectory(tlsDirectory);
+        File.SetUnixFileMode(tlsDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var created = CreateForThisMachine(SubjectForThisMachine);
+
+        // The key is written and tightened before anything else happens, so it is never on disk with permissions
+        // wider than its owner even for a moment.
+        using (var key = created.GetRSAPrivateKey() ?? throw new CryptographicException("The new certificate has no private key."))
+        {
+            File.WriteAllText(keyPath, key.ExportPkcs8PrivateKeyPem());
+        }
+
+        File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        // The public half is readable by everyone: it is a certificate, and clients are told to fetch it.
+        File.WriteAllText(certificatePath, created.ExportCertificatePem());
+        File.SetUnixFileMode(
+            certificatePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        notes.Add($"A self-signed certificate '{SubjectForThisMachine}' was created (valid until {created.NotAfter:yyyy-MM-dd}); the private key is at {keyPath} and readable only by its owner.");
+        notes.Add($"Clients must trust it, or they will refuse the connection: give them {certificatePath} (on a client, copy it into /usr/local/share/ca-certificates and run update-ca-certificates), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
+
+        return (certificatePath, keyPath);
+    }
+
     /// <summary>The names this machine answers to, which is what the certificate has to cover.</summary>
     private static SubjectAlternativeNameBuilder AlternativeNames()
     {
@@ -160,7 +223,13 @@ public static class SelfSignedCertificate
     }
 
     /// <summary>Where the public half goes, next to the settings an operator is already told to look at.</summary>
-    private const string PublicFolder = "tls";
+    public const string PublicFolder = "tls";
 
     private const string PublicFileName = "signaling.cer";
+
+    /// <summary>What the certificate is called where it is a file rather than an entry in a store.</summary>
+    public const string PemCertificateFileName = "signaling.crt";
+
+    /// <summary>The private key's name, which exists only on a system with no store to keep it in.</summary>
+    public const string PemKeyFileName = "signaling.key";
 }
