@@ -79,6 +79,10 @@ journalctl --user -u remotedesktop-host -f
 
 **它不在安装时启动**，因为装包的时候可能根本没有图形会话——没有显示、没有会话总线、也没人能点 portal 的对话框。
 
+服务器地址**写在配置文件里**（Linux 的包不内置地址）：`~/.local/share/RemoteDesktop/appsettings.json` 的
+`Transport:RendezvousUri`，客户端和被控端各有一份。客户端界面里那个「修改服务器地址」只在 Windows 上管用
+——它要提权去改装成 Windows 服务的被控端，Linux 上没有对应物，点了会直接告诉你不行。
+
 ### 需要什么
 
 - Wayland 桌面加一个 portal：`xdg-desktop-portal-gnome`（GNOME）、`xdg-desktop-portal-kde`（KDE）或

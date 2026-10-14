@@ -1,5 +1,7 @@
 using System.Text;
 using RemoteDesktop.Abstractions.Media;
+using Microsoft.Extensions.Logging.Abstractions;
+using RemoteDesktop.Platform.Linux.XdgPortal;
 using RemoteDesktop.Platform.Linux.Camera;
 using RemoteDesktop.Platform.Linux.Video;
 
@@ -113,6 +115,29 @@ public sealed class CameraFrameTests
 
         // Odd, which 4:2:0 cannot express.
         Assert.Throws<ArgumentException>(() => CameraFormats.YuyvToNv12(new byte[3 * 2 * 2], 6, 3, 2, new byte[9], 3));
+    }
+
+    [Fact]
+    public async Task A_machine_with_no_camera_returns_none_without_asking_anybody()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var connection = new PortalConnection();
+        var present = await connection.CameraPresentAsync(cancellationToken);
+        Assert.SkipWhen(present, "This machine has a camera, so listing them would legitimately ask about it.");
+
+        var enumerator = new WaylandCameraEnumerator(
+            NullLoggerFactory.Instance,
+            NullLogger<WaylandCameraEnumerator>.Instance);
+
+        // Bounded, because the failure this guards against is a dialog: without the presence check the call would be
+        // sitting inside AccessCamera waiting for somebody to click something, and an unbounded test would hang
+        // rather than fail.
+        var listing = await Task.Run(enumerator.GetCameras, cancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+
+        Assert.Empty(listing);
     }
 
     private static byte Average(ReadOnlySpan<byte> pixels)

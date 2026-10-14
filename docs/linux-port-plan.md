@@ -58,15 +58,15 @@
 | `ISecretStore` | `DpapiSecretStore` | 0700 目录下的 0600 文件（`FileSecretStore`，在 `Platform.Posix`） | ✅ P1/P6 |
 | `IUserContextGuard` | 判 SYSTEM | 判 `geteuid()==0`（`UnixUserContextGuard`，在 `Platform.Posix`） | ✅ P1/P6 |
 | `ISystemKeepAwake` | `SetThreadExecutionState` | logind `Inhibit`（**系统**总线，持有返回的 fd） | ✅ P2 |
-| `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | P3 |
-| `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | P3 |
-| `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | P3 |
+| `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | ✅ P3 |
+| `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | ✅ P3 |
+| `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | ✅ P3 |
 | `IVideoEncoderFactory` ×3 | Media Foundation ×2 | `h264_nvenc` / `h264_vaapi` / 软件 x264，都经 libavcodec | ✅ P4 |
 | `IVideoDecoderFactory` | Media Foundation | libavcodec | ✅ P4 |
 | `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | ✅ P10 |
-| `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
+| `IClipboard` | Win32 剪贴板 | portal `Clipboard`（两个方向都端到端验证过） | ✅ P5 |
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
-| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd（**是 PipeWire remote，不是 V4L2 设备**）+ PipeWire 节点 | P8 |
+| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd（**是 PipeWire remote，不是 V4L2 设备**）+ PipeWire 节点 | ⚠️ P8 写完了，没在真机上跑过 |
 | `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | PulseAudio，主循环由本侧驱动、状态靠轮询 | ✅ P9 |
 | `IPrivacyScreen` | **未实现** | 不支持（`IsSupported => false`），与 Windows 一致 | — |
 | `IAgentGateway` | 服务 + 会话 Agent | **不需要**，见 §2.1 | — |
@@ -77,13 +77,13 @@
 | --- | --- | --- |
 | `Hosts/RemoteDesktop.Client/Program.cs` | `if (!OperatingSystem.IsWindows()) return 1;` | 放行 Linux |
 | `Hosts/RemoteDesktop.Client/ClientHost.cs` | 类级 `[SupportedOSPlatform("windows")]`，无条件 `AddWindowsPlatform` | 改为按平台选择注册 |
-| `Hosts/RemoteDesktop.Client/StartupFailure.cs` | `MessageBoxW`（user32） | 非 Windows 写 stderr 与 crash.log |
+| `Hosts/RemoteDesktop.Client/StartupFailure.cs` | `MessageBoxW`（user32） | 非 Windows 写 stderr 与 crash.log。**只做了一半**：`UserMessage.Show` 已按平台守卫（非 Windows 什么都不做），crash.log 由 `StartupSettings.Report` 与 `CrashLog` 写；**stderr 那半没做**——Linux 上启动失败只留下退出码 1 和一个没人打印出来的 `crash.log` 路径 |
 | `Hosts/RemoteDesktop.HostService/Program.cs` | 程序集级 `[SupportedOSPlatform("windows")]`，`if (!IsWindows()) throw` | 删掉程序集属性，放宽门禁，拆 `AddHostPlatform` / `AddHostAgent` |
 | `Hosts/RemoteDesktop.HostService/HostControlServer.cs` | `WindowsPipes.CreateServer`（PipeSecurity / SID） | 换成 `$XDG_RUNTIME_DIR` 下的 Unix socket |
 | `Hosts/RemoteDesktop.Client/ClientHost.cs` 数据目录 | `SpecialFolder.ApplicationData` | Linux 下那是 `~/.config`（配置目录，不是数据目录），改走 `LocalApplicationData` |
 | `Hosts/RemoteDesktop.HostService` 数据目录 | `SpecialFolder.CommonApplicationData` | Linux 下那是 `/usr/share`，改走 `$XDG_DATA_HOME/RemoteDesktop` |
 | `ViewModels/*` | 三处硬编码 `new MfVideoRecorderFactory()` 藏在 `IsWindows()` 分支后 | 删掉分支，从 DI 注入 `IVideoRecorderFactory` |
-| `Client/Setup/HostServiceSetup.cs` | `Verb = "runas"` 提权 | 改成写配置 + `systemctl --user restart`，不需要提权 |
+| `Client/Setup/HostServiceSetup.cs` | `Verb = "runas"` 提权 | **没有按计划做。** `HostServiceSetup` 原样留着（仍是 `Verb = "runas"`），改的是调用点：`SaveServerAddressAsync` 在非 Windows 上直接答"只有 Windows 版本可以修改被控端的服务器地址"并返回。所以 Linux 上那个按钮是个明确的"不行"，而不是计划里说的"改成 systemctl --user restart"。**这是一处真实缺口**：Linux 用户要改地址只能手改 `appsettings.json`（文档已按这个更正） |
 | `Server/Server.Shared/SelfSignedCertificate.cs` | `X509Store("My", LocalMachine)`、`MachineKeySet\|PersistKeySet` | Linux 没有证书存储，改写 PEM 文件 |
 | `Server/Server.Shared/ServerSetup.cs` | Kestrel 写 `Subject`/`Store`/`Location`/`AllowInvalid` | 改写 `Path` / `KeyPath` |
 
@@ -315,6 +315,13 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 - `native/linux/fetch-libmsquic.sh`。
 
 结果：**构建 0 警告 0 错误；全仓 486 个测试 0 失败**（起始 449 个里 85 个失败）。
+
+**计划里有、但没有做的一件：`--self-check`。** 原计划写的是 `RemoteDesktop.Client --self-check` 打印
+OS、会话类型、会话总线可达性、msquic 版本、libavcodec 版本、Mutter.DisplayConfig 是否应答；§六 里还写了
+理由——这台机器上五个互相独立的原生子系统，多数失败形式是**没有任何上下文的 `DllNotFoundException`**。
+它没有出现在最初的清单里，一路下来也没人补，所以现在**不存在**：`Program.cs` 不认这个参数，全仓没有
+`SelfCheck` 字样。这是**仍然欠着的一件**，而且是仍然值得做的一件：今天要回答"这台机器上 portal 通不通、
+libavcodec 版本对不对、输入后端就绪没有、摄像头拿不拿得到"，只能把每一项单独写一个探针跑一遍。
 
 ### P2 — 密钥、身份、传输、guard、防休眠（D-Bus 桥落地）✅ 已完成
 
@@ -665,6 +672,11 @@ set  -> Published ... (28 characters) / Answered a request ... with 28 bytes
 3. **YUYV → NV12 重排**：亮度逐字节不变、跨行色度平均并进位、两个该拒绝的输入。
 4. **DI 接线**：`ServiceCollectionExtensionsTests` 抓到工厂依赖具体类型 `WaylandCameraEnumerator` 而只注册了
    `ICameraEnumerator`——这个测试是有价值的。
+5. **"没有摄像头就别问任何人"**：枚举先读 `IsCameraPresent`（属性，不弹窗），为假就直接返回空。这条是
+   **实测的**——本机就是没有摄像头的那种机器，那个测试跑到了这一行并立刻返回。写成先要授权的话，
+   每台没摄像头的笔记本每次启动都会弹一个问它要不要用摄像头的对话框，然后列出零个摄像头。
+   （这个 bug 是写完第一版之后、回头核对 portal 调用有没有人用时发现的：`CameraPresentAsync` 没有任何
+   调用者。）
 
 **没有验证的部分：** 枚举、协商、取帧、把帧交给编码器这一整条，**一次都没有执行过**。本机 `IsCameraPresent`
 是 `false`、没有 `/dev/video*`，所以不可能执行。写它是照着 portal 的接口定义和**已被真机验证过的采集路径**
@@ -745,7 +757,7 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
 
 `postinst` 会在缺库时打印**会缺在哪一步**，而不是让它以后变成一句没头没尾的 `DllNotFoundException`。
 
-还没做：`.desktop` 文件（那是客户端的，属 P12）、`release.yml` 产出 `.deb`（也是 P12）。
+当时留给 P12 的两件（`.desktop` 文件、`release.yml` 产出 `.deb`）后来都做了，见 P12。
 
 ### P10（原始计划） — 录制 + 被控端打包
 ### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）

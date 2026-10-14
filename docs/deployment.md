@@ -544,9 +544,13 @@ build/debian/host/build-deb.sh     # 允许被别人控制
 
 ### 2. 服务器地址
 
-Windows 的 MSI 用 `-RendezvousUri` 把地址烤进包里；**Linux 的包不带地址**，装完在客户端的
-「高级设置」里填（它会同时写给客户端和被控端服务），或者直接改
-`~/.local/share/RemoteDesktop/appsettings.json` 里的 `Transport:RendezvousUri`。
+Windows 的 MSI 用 `-RendezvousUri` 把地址烤进包里；**Linux 的包不带地址**，装完**改配置文件**：
+`~/.local/share/RemoteDesktop/appsettings.json` 里的 `Transport:RendezvousUri`（客户端和被控端各有一份，
+分别在两个程序的数据目录里）。
+
+> **Linux 上客户端里的「高级设置 → 修改服务器地址」是不管用的**，它会直接答"只有 Windows 版本可以修改
+> 被控端的服务器地址"。那条路要提权去改 Windows 上安装成服务的被控端，Linux 上没有对应物——被控端是一条
+> `systemd --user` 服务，改它自己的配置文件就够了。这一点先前这里写错了，写成让 Linux 用户去点那个按钮。
 
 不内置是一个选择而不是遗漏：本软件公网和内网都要用，服务器地址往往部署时才定，一个装在用户机器上的包
 内置谁的地址都不对。客户端连不上时会在界面上直说"未连接服务器（地址）"，不会变成"看着正常、就是连不上"。

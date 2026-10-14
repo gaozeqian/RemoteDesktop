@@ -73,6 +73,7 @@ public sealed partial class WaylandCameraEnumerator(
     private readonly Lock _gate = new();
 
     private PortalConnection? _connection;
+    private bool _granted;
     private DateTime _nextAttempt;
     private DateTime _listedAt;
     private IReadOnlyList<CameraInfo>? _listed;
@@ -96,7 +97,22 @@ public sealed partial class WaylandCameraEnumerator(
 
             try
             {
-                var connection = Granted();
+                var connection = Connection();
+
+                // Whether there is a camera at all is a property, not a request: it can be read without asking
+                // anybody anything, so a machine that has none never puts a dialog in front of anyone. Asking for
+                // permission first — which is the obvious order to write this in — would be a dialog for an empty
+                // list, and on a laptop with no camera, on every start.
+                if (!connection.CameraPresentAsync(CancellationToken.None).GetAwaiter().GetResult())
+                {
+                    LogNone(logger);
+                    _listed = [];
+                    _listedAt = DateTime.UtcNow;
+                    return _listed;
+                }
+
+                Granted(connection);
+
                 var cameras = new List<CameraInfo>();
 
                 foreach (var node in Read(connection))
@@ -142,29 +158,21 @@ public sealed partial class WaylandCameraEnumerator(
         }
     }
 
-    /// <summary>The portal connection with camera access already granted, opening one if there is not one.</summary>
-    private PortalConnection Granted()
+    /// <summary>The portal connection, opening one if there is not one. Asks nobody anything.</summary>
+    private PortalConnection Connection() =>
+        _connection ??= new PortalConnection(loggerFactory.CreateLogger<PortalConnection>());
+
+    /// <summary>Asks the desktop to grant access, once. This is the call that raises a dialog.</summary>
+    private void Granted(PortalConnection connection)
     {
-        if (_connection is not null)
+        if (_granted)
         {
-            return _connection;
+            return;
         }
 
         LogAsking(logger);
-
-        var connection = new PortalConnection(loggerFactory.CreateLogger<PortalConnection>());
-        try
-        {
-            connection.AccessCameraAsync(CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch
-        {
-            connection.Dispose();
-            throw;
-        }
-
-        _connection = connection;
-        return connection;
+        connection.AccessCameraAsync(CancellationToken.None).GetAwaiter().GetResult();
+        _granted = true;
     }
 
     /// <summary>Reads the camera nodes out of the graph the portal opened.</summary>
