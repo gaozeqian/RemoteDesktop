@@ -57,6 +57,56 @@ public class ColorConversionTests
     [Fact]
     public void Odd_dimensions_are_rejected() =>
         Assert.Throws<ArgumentException>(() => ColorConversion.BgraToNv12(new byte[3 * 2 * 4], 12, 3, 2, new byte[9], 3));
+
+    [Fact]
+    public void Yuyv_luma_is_carried_through_untouched()
+    {
+        // 4x2, two groups per row, each one Y0 U Y1 V.
+        var yuyv = new byte[]
+        {
+            10, 100, 20, 110, 30, 120, 40, 130,
+            50, 100, 60, 110, 70, 120, 80, 130,
+        };
+        var nv12 = new byte[4 * 2 * 3 / 2];
+
+        ColorConversion.YuyvToNv12(yuyv, 8, 4, 2, nv12, 4);
+
+        // The luminance is the device's own reading of what the sensor saw, not something this pipeline recomputed,
+        // so it has to come back byte for byte. That is the whole promise of asking a camera for raw pixels: no
+        // matrix, no range, nothing that could be wrong without being visible.
+        Assert.Equal(new byte[] { 10, 20, 30, 40, 50, 60, 70, 80 }, nv12[..8]);
+
+        // Chroma arrives once per two pixels across and becomes one per two pixels each way, so the two rows that
+        // share a sample are averaged — here they agree, so it is the value that went in.
+        Assert.Equal(new byte[] { 100, 110, 120, 130 }, nv12[8..12]);
+    }
+
+    [Fact]
+    public void Yuyv_chroma_from_the_two_rows_is_averaged_and_rounded_up()
+    {
+        var yuyv = new byte[]
+        {
+            0, 100, 0, 100, 0, 100, 0, 100,
+            0, 101, 0, 101, 0, 101, 0, 101,
+        };
+        var nv12 = new byte[4 * 2 * 3 / 2];
+
+        ColorConversion.YuyvToNv12(yuyv, 8, 4, 2, nv12, 4);
+
+        // 201/2 is 101, not 100. Truncating would lean the same way every time, which tints a flat surface — and a
+        // flat surface is most of what a camera is pointed at.
+        Assert.Equal(new byte[] { 101, 101, 101, 101 }, nv12[8..12]);
+    }
+
+    [Fact]
+    public void Yuyv_rejects_a_buffer_that_could_not_hold_the_frame()
+    {
+        // One row where two were promised.
+        Assert.Throws<ArgumentException>(() => ColorConversion.YuyvToNv12(new byte[8], 8, 4, 2, new byte[12], 4));
+
+        // Odd, which 4:2:0 cannot express.
+        Assert.Throws<ArgumentException>(() => ColorConversion.YuyvToNv12(new byte[3 * 2 * 2], 6, 3, 2, new byte[9], 3));
+    }
 }
 
 public class H264BitstreamTests

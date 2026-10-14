@@ -47,6 +47,73 @@ public static unsafe class ColorConversion
         }
     }
 
+    /// <summary>
+    /// 4:2:2 as a camera produces it into the NV12 the rest of the pipeline carries.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This one is a rearrangement rather than a conversion, and that is the point of asking a camera for YUY2: the
+    /// device hands over the luminance and chroma it read off the sensor, and both are carried through untouched.
+    /// The only arithmetic is the chroma, which arrives one sample per two pixels across and has to become one per
+    /// two pixels each way — so the two rows that share a 4:2:0 sample are averaged.
+    /// </para>
+    /// <para>
+    /// <b>No matrix is applied, and one would be a guess.</b> The coefficients above are BT.709; a webcam almost
+    /// certainly means BT.601, which is what its own specification says and what everything that displays it without
+    /// asking assumes. Rewriting the numbers here would be converting from a matrix that was assumed rather than
+    /// known, on frames nobody has looked at. Should a camera turn out to be visibly the wrong colour, this is the
+    /// place, and it would want a real picture from a real device to decide with.
+    /// </para>
+    /// </remarks>
+    /// <param name="yuyv">Source pixels: <c>Y0 U Y1 V</c> per two pixels, rows <paramref name="yuyvStride"/> bytes apart.</param>
+    public static void YuyvToNv12(ReadOnlySpan<byte> yuyv, int yuyvStride, int width, int height, Span<byte> nv12, int nv12Stride)
+    {
+        Validate(width, height);
+        if (yuyv.Length < ((height - 1) * yuyvStride) + (width * 2) || nv12.Length < nv12Stride * height * 3 / 2)
+        {
+            throw new ArgumentException("Buffer too small for the frame size.");
+        }
+
+        fixed (byte* src = yuyv)
+        fixed (byte* dst = nv12)
+        {
+            var source = (nint)src;
+            var destination = (nint)dst;
+            ForEachBand(height, (top, bottom) =>
+                YuyvToNv12Rows((byte*)source, yuyvStride, width, (byte*)destination, nv12Stride, height, top, bottom));
+        }
+    }
+
+    private static void YuyvToNv12Rows(byte* yuyv, int yuyvStride, int width, byte* nv12, int stride, int height, int top, int bottom)
+    {
+        var uvPlane = nv12 + (stride * height);
+        for (var y = top; y < bottom; y += 2)
+        {
+            var row0 = yuyv + (y * yuyvStride);
+            var row1 = row0 + yuyvStride;
+            var luma0 = nv12 + (y * stride);
+            var luma1 = luma0 + stride;
+            var uv = uvPlane + ((y / 2) * stride);
+
+            for (var x = 0; x < width; x += 2)
+            {
+                // One group of four bytes: Y0 U Y1 V.
+                var first = row0 + (x * 2);
+                var second = row1 + (x * 2);
+
+                luma0[x] = first[0];
+                luma0[x + 1] = first[2];
+                luma1[x] = second[0];
+                luma1[x + 1] = second[2];
+
+                // Rounded rather than truncated: a chroma average that always leaned towards the darker row would
+                // tint a flat surface, and flat surfaces are most of what a camera points at.
+                uv[x] = (byte)((first[1] + second[1] + 1) / 2);
+                uv[x + 1] = (byte)((first[3] + second[3] + 1) / 2);
+            }
+        }
+    }
+
     private static void Validate(int width, int height)
     {
         if (width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0)
