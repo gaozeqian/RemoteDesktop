@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
@@ -162,7 +163,14 @@ public sealed partial class PortalConnection : IDisposable
     /// is willing — while control is asked for when it is actually needed, and only then.
     /// </para>
     /// </remarks>
-    public async Task<string> OpenRemoteDesktopAsync(CancellationToken cancellationToken)
+    public async Task<string> OpenRemoteDesktopAsync(CancellationToken cancellationToken) =>
+        await OpenRemoteDesktopAsync(withClipboard: false, cancellationToken).ConfigureAwait(false);
+
+    /// <param name="withClipboard">
+    /// Whether to also ask for the clipboard. It has to be asked for <em>before</em> <c>Start</c>: the portal allows
+    /// it only while the session is still being set up, and refuses afterwards with "Invalid state".
+    /// </param>
+    public async Task<string> OpenRemoteDesktopAsync(bool withClipboard, CancellationToken cancellationToken)
     {
         var session = await CreateSessionAsync(RemoteDesktop, cancellationToken).ConfigureAwait(false);
 
@@ -170,6 +178,11 @@ public sealed partial class PortalConnection : IDisposable
         if (devices != 0)
         {
             throw new PortalException(devices, "The keyboard and pointer were not granted.");
+        }
+
+        if (withClipboard)
+        {
+            await RequestClipboardAsync(session, cancellationToken).ConfigureAwait(false);
         }
 
         // Start is what makes the session usable, and on this path it is also where the dialog appears. A session
@@ -190,11 +203,11 @@ public sealed partial class PortalConnection : IDisposable
     /// there is no match rule to install — the screening decision was already made by <c>Start</c>.
     /// </remarks>
     public Task<SafeFileHandle> OpenPipeWireRemoteAsync(string session, CancellationToken cancellationToken) =>
-        CallForFdAsync(ScreenCast, "OpenPipeWireRemote", session, cancellationToken);
+        CallForFdAsync(ScreenCast, "OpenPipeWireRemote", session, FdArgument.None, text: null, serial: 0, cancellationToken);
 
     /// <summary>The descriptor the input-injection session is spoken over (libei's transport).</summary>
     public Task<SafeFileHandle> ConnectToEisAsync(string session, CancellationToken cancellationToken) =>
-        CallForFdAsync(RemoteDesktop, "ConnectToEIS", session, cancellationToken);
+        CallForFdAsync(RemoteDesktop, "ConnectToEIS", session, FdArgument.None, text: null, serial: 0, cancellationToken);
 
     /// <summary>
     /// Types a character by its keysym, for text that has no key.
@@ -228,22 +241,12 @@ public sealed partial class PortalConnection : IDisposable
             .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Asks for the clipboard of a session, after which its contents can be read and written over that session.
-    /// </summary>
+    /// <summary>Asks for the clipboard to be handled over this session. Must be before <c>Start</c>.</summary>
     /// <remarks>
-    /// <para>
-    /// Called on a session another interface created — the clipboard portal has no way to make one of its own — which
-    /// is why the session handle is an argument here rather than something this returns.
-    /// </para>
-    /// <para>
-    /// <b>This machine refuses it, in every arrangement that was tried.</b> A screen-cast session is turned away with
-    /// "Invalid session type"; a remote-desktop session with "Invalid state", both before and after <c>Start</c>, and
-    /// with and without screen sources selected on it. That matches what the portal's own documentation hints at —
-    /// the clipboard is meant for sandboxed applications — and it is why this platform has no clipboard yet rather
-    /// than one that quietly does nothing. The fallback the port plan names is owning the selection over XWayland,
-    /// which is a different piece of work and has not been attempted.
-    /// </para>
+    /// The portal's own words: "This request must be made before the session starts. The session must be started,
+    /// before using any other method in this interface which take a session." The clipboard is one of the things the
+    /// dialog grants, so it is asked for while the session is still being set up — afterwards the portal answers
+    /// "Invalid state" and there is no second chance on that session.
     /// </remarks>
     public async Task RequestClipboardAsync(string session, CancellationToken cancellationToken = default)
     {
@@ -256,6 +259,122 @@ public sealed partial class PortalConnection : IDisposable
         var message = w.CreateMessage();
 
         _ = await _connection.CallMethodAsync(message, static (Message m, object? _) => true, null).ConfigureAwait(false);
+    }
+
+    /// <summary>Claims ownership of the clipboard for this session, advertising the formats it can supply.</summary>
+    public async Task SetSelectionAsync(string session, IReadOnlyList<string> mimeTypes, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, Clipboard, "SetSelection", "oa{sv}", MessageFlags.None);
+        w.WriteObjectPath(session);
+        w.WriteDictionary(new Dictionary<string, VariantValue>
+        {
+            ["mime_types"] = VariantValue.Array(mimeTypes.ToArray()),
+        });
+        var message = w.CreateMessage();
+
+        _ = await _connection.CallMethodAsync(message, static (Message m, object? _) => true, null).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the current selection in one format. The descriptor is the reading end of a pipe.
+    /// </summary>
+    public Task<SafeFileHandle> SelectionReadAsync(string session, string mimeType, CancellationToken cancellationToken) =>
+        CallForFdAsync(Clipboard, "SelectionRead", session, FdArgument.Text, mimeType, serial: 0, cancellationToken);
+
+    /// <summary>
+    /// Answers a <c>SelectionTransfer</c>: the descriptor is the writing end of a pipe the other side reads from.
+    /// </summary>
+    public Task<SafeFileHandle> SelectionWriteAsync(string session, uint serial, CancellationToken cancellationToken) =>
+        CallForFdAsync(Clipboard, "SelectionWrite", session, FdArgument.Serial, text: null, serial, cancellationToken);
+
+    /// <summary>Says whether a transfer was answered, so the other side is not left waiting on the pipe.</summary>
+    public async Task SelectionWriteDoneAsync(string session, uint serial, bool success, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, Clipboard, "SelectionWriteDone", "oub", MessageFlags.None);
+        w.WriteObjectPath(session);
+        w.WriteUInt32(serial);
+        w.WriteBool(success);
+        var message = w.CreateMessage();
+
+        _ = await _connection.CallMethodAsync(message, static (Message m, object? _) => true, null).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Watches for the clipboard changing, and for the other side asking for its contents.
+    /// </summary>
+    /// <remarks>
+    /// Matched on interface and member only, then filtered by session here. The signals carry their session as the
+    /// first argument rather than being emitted on the session's own path, so there is nothing narrower to match on
+    /// — and the alternative, a match rule per session, would have to be torn down by hand every time one closed.
+    /// </remarks>
+    public async Task WatchClipboardAsync(
+        string session,
+        Action<IReadOnlyList<string>, bool> onOwnerChanged,
+        Action<string, uint> onTransfer,
+        CancellationToken cancellationToken)
+    {
+        await _connection.AddMatchAsync(
+            new MatchRule { Type = MessageType.Signal, Interface = Clipboard, Member = "SelectionOwnerChanged" },
+            static (Message m, object? _) => ReadOwnerChanged(m),
+            (Notification<(string Session, IReadOnlyList<string> Types, bool IsOwner)> notification) =>
+            {
+                if (notification.HasValue && notification.Value.Session == session)
+                {
+                    onOwnerChanged(notification.Value.Types, notification.Value.IsOwner);
+                }
+            },
+            emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+
+        await _connection.AddMatchAsync(
+            new MatchRule { Type = MessageType.Signal, Interface = Clipboard, Member = "SelectionTransfer" },
+            static (Message m, object? _) => ReadTransfer(m),
+            (Notification<(string Session, string MimeType, uint Serial)> notification) =>
+            {
+                if (notification.HasValue && notification.Value.Session == session)
+                {
+                    onTransfer(notification.Value.MimeType, notification.Value.Serial);
+                }
+            },
+            emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+
+        _ = cancellationToken;
+    }
+
+    private static (string Session, IReadOnlyList<string> Types, bool IsOwner) ReadOwnerChanged(Message message)
+    {
+        var reader = message.GetBodyReader();
+        var session = reader.ReadObjectPathAsString();
+        var types = new List<string>();
+        var isOwner = false;
+
+        foreach (var (key, value) in reader.ReadDictionaryOfStringToVariantValue())
+        {
+            if (key == "mime_types" && value.Type == VariantValueType.Array)
+            {
+                for (var i = 0; i < value.Count; i++)
+                {
+                    types.Add(value.GetItem(i).GetString());
+                }
+            }
+            else if (key == "session_is_owner" && value.Type == VariantValueType.Bool)
+            {
+                isOwner = value.GetBool();
+            }
+        }
+
+        return (session, types, isOwner);
+    }
+
+    private static (string Session, string MimeType, uint Serial) ReadTransfer(Message message)
+    {
+        var reader = message.GetBodyReader();
+        return (reader.ReadObjectPathAsString(), reader.ReadString(), reader.ReadUInt32());
     }
 
     public void Dispose() => _connection.Dispose();
@@ -397,16 +516,68 @@ public sealed partial class PortalConnection : IDisposable
         return (result.Response, result.Streams, result.RestoreToken);
     }
 
+    /// <summary>What a descriptor-returning call takes besides the session, which varies by call.</summary>
+    private enum FdArgument
+    {
+        /// <summary>Just the session. <c>OpenPipeWireRemote</c> and <c>ConnectToEIS</c>, both <c>oa{sv}</c>.</summary>
+        None,
+
+        /// <summary>A mime type. <c>SelectionRead</c>, which is <c>os</c>.</summary>
+        Text,
+
+        /// <summary>A transfer serial. <c>SelectionWrite</c>, which is <c>ou</c>.</summary>
+        Serial,
+    }
+
     /// <summary>Makes a call that answers with a file descriptor rather than a request handle.</summary>
+    /// <remarks>
+    /// Each of these four has its own signature, and the portal rejects a message whose signature is not the one it
+    /// declared — <c>InvalidArgs: Type of message, "(osa{sv})", does not match expected type "(os)"</c>. There is no
+    /// writing one shape and hoping, so the shape is chosen here rather than at each call site. It also has to be
+    /// written inline: the writer is a <c>ref struct</c> and cannot be handed to a helper.
+    /// </remarks>
     private async Task<SafeFileHandle> CallForFdAsync(
-        string @interface, string member, string session, CancellationToken cancellationToken)
+        string @interface,
+        string member,
+        string session,
+        FdArgument argument,
+        string? text,
+        uint serial,
+        CancellationToken cancellationToken)
     {
         _ = cancellationToken;
 
         var w = _connection.GetMessageWriter();
-        w.WriteMethodCallHeader(Destination, ObjectPath, @interface, member, "oa{sv}", MessageFlags.None);
+        w.WriteMethodCallHeader(
+            Destination,
+            ObjectPath,
+            @interface,
+            member,
+            argument switch
+            {
+                FdArgument.Text => "os",
+                FdArgument.Serial => "ou",
+                _ => "oa{sv}",
+            },
+            MessageFlags.None);
+
         w.WriteObjectPath(session);
-        w.WriteDictionary(new Dictionary<string, VariantValue>());
+
+        switch (argument)
+        {
+            case FdArgument.Text:
+                w.WriteString(text ?? string.Empty);
+                break;
+
+            case FdArgument.Serial:
+                w.WriteUInt32(serial);
+                break;
+
+            default:
+                w.WriteDictionary(new Dictionary<string, VariantValue>());
+                break;
+        }
+
         var message = w.CreateMessage();
 
         // Duplicated inside the reader, not after the call returns. The descriptor belongs to the message, and the
@@ -427,7 +598,6 @@ public sealed partial class PortalConnection : IDisposable
 
         return new SafeFileHandle(copy, ownsHandle: true);
     }
-
 
     /// <summary>
     /// Turns whatever the subscription reports into either a value or a failure.

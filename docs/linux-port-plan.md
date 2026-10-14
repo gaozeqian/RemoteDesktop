@@ -554,28 +554,38 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 
 **真硬件编码仍需一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器验证**，本机做不到。
 
-### P5 — 剪贴板 🚫 portal 拒绝，需要 X11 后备
+### P5 — 剪贴板 🚧 已实现，读的一侧尚未验证
 
-**spike 做完了，结论是此路不通。** 计划里写的风险（"后端可能拒绝 `RequestClipboard`"）确认成立。四种
-组合全部被拒，错误各不相同，说明卡在不同的检查上：
+**先更正一条**：本文件早先写的"portal 四种组合全部拒绝、此路不通"是**错的**。那个结论里
+"RemoteDesktop 会话 + Start 之前"那一格从来没被真正执行过——那一次运行用的是没重新构建的库
+（这个坑在本文件里已经记过两次，又一次踩在同一个地方）。
 
-| 会话 | 时机 | 结果 |
-| --- | --- | --- |
-| ScreenCast | `Start` 之后 | `Invalid session type` |
-| RemoteDesktop | `Start` 之后 | `Invalid state` |
-| RemoteDesktop | `Start` 之前 | `Invalid state` |
-| RemoteDesktop + `SelectSources` | `Start` 之前 | `Invalid state` |
+**portal 是给剪贴板的。** 实测：
 
-接口本身在总线上、GNOME 后端也实现了（`RequestClipboard` / `SelectionRead` / `SelectionWrite` /
-`SelectionWriteDone` / `SetSelection` 都在），所以不是"没实现"，是**不让这个应用用**——与 portal
-文档里"剪贴板面向沙箱应用"的说法一致。
+```
+CreateSession -> SelectDevices -> RequestClipboard -> Start
+RequestClipboard: GRANTED
+```
 
-计划里写的后备是**在 XWayland 上自己持有 `CLIPBOARD` selection**（libX11 + XFixes）：X11 客户端可以
-持有 selection，合成器会把它镜像到 Wayland 剪贴板。这条路没有试过，是独立的一块工作。
+去读 portal 源码确认了规则（`src/clipboard.c`、`src/remote-desktop.c`）：`RequestClipboard` 必须在
+**`Start` 之前**调用（`REMOTE_DESKTOP_SESSION_STATE_INIT` 才允许），而且它挂在 **RemoteDesktop** 会话上
+——挂在 ScreenCast 会话上会被拒（`Invalid session type`）。这一点原计划写对了。
 
-**当前状态**：`WaylandClipboard` 注册了但不工作——`Get()` 返回空、`Set()` 记一条警告然后什么都不做、
-`Changed` 永不触发（用显式的空 add/remove 表示，而不是留一个没人触发的字段）。这样"剪贴板空"和
-"剪贴板不支持"在日志和文档里能分开，不会让人复制完再粘贴发现什么都没有还以为是偶发。
+顺带修掉两个真 bug：`SelectionRead` 的签名是 `os`、`SelectionWrite` 是 `ou`，都没有 `a{sv}`
+（portal 的报错是 `Type of message, "(osa{sv})", does not match expected type "(os)"`）。
+
+**现在的实现**：`WaylandClipboard` 挂在 `LibEiInputInjector` 共用的那条 RemoteDesktop 会话上
+（`PortalControlSession`，因为 portal 每条会话只允许请求剪贴板一次、且只能在开始之前）。发布走
+`SetSelection` + 应答 `SelectionTransfer`，读取走 `SelectionRead`。读取有超时——另一头不写就会把
+线程永久挂住，在请求剪贴板的那条线程上就是窗口失去响应。
+
+**尚未验证的一侧**：把内容读回来。portal 链路本身是通的（`SelectionRead` 一路走到 Mutter，剪贴板为空时
+它答的是 `No selection owner available`），但**要验证读必须有第二方持有剪贴板**，而本机没有任何 X11
+剪贴板工具、也没有别的程序能自动去复制。所以"被控端复制 → 控制端拿到"这条路**没有端到端验证过**。
+
+另外实测：我们自己 `SetSelection` 之后**没有**收到 `SelectionOwnerChanged`。所以代码不再依赖它——
+按优先级直接试各个格式，而不是等一个可能永远不来的信号。
+
 ### P6 — 终端（PTY 落在共享 `Platform.Posix`）✅ 已完成
 
 `Platform.Posix` 工程建立，`FileSecretStore` 与用户上下文守卫（改名 `UnixUserContextGuard`）搬了进去，

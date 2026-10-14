@@ -56,12 +56,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         services.AddSingleton<IDisplayEnumerator, WaylandDisplayEnumerator>();
         services.AddSingleton<PortalGrant>();
+        services.AddSingleton<PortalControlSession>();
         services.AddSingleton<IScreenCapturerFactory, PipeWireScreenCapturerFactory>();
         services.AddSingleton<IInputInjector, LibEiInputInjector>();
 
-        // Two ports that exist so that the host can be composed at all, and that say plainly what they do not do
-        // yet. Neither is a placeholder for something that works: there is no clipboard because the portal refuses
-        // this application one, and no cameras because enumerating them is P8.
+        // The clipboard rides on the same remote-desktop session as the input, because the portal attaches it there
+        // and allows it to be requested only once and only before that session starts.
         services.AddSingleton<IClipboard, WaylandClipboard>();
         services.AddSingleton<ICameraEnumerator, WaylandCameraEnumerator>();
         services.AddSingleton<ICameraSourceFactory, WaylandCameraSourceFactory>();

@@ -44,13 +44,10 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     /// <summary>One notch of a wheel, which is how Windows counts too — the protocol carries 120ths.</summary>
     private const int WheelNotch = 120;
 
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly PortalControlSession _control;
     private readonly ILogger _logger;
     private readonly IDisplayEnumerator _displays;
     private readonly Lock _gate = new();
-
-    private PortalConnection? _portal;
-    private string? _session;
     private nint _ei;
     // One per capability, because the desktop hands out separate devices rather than one that can do everything:
     // on this machine a pointer with buttons and scroll arrives first, and the keyboard separately. Keeping a single
@@ -63,14 +60,13 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     private Thread? _pump;
     private volatile bool _running;
     private uint _sequence;
-    private DateTime _nextConnectAttempt;
     private IReadOnlyList<DisplayInfo> _cachedDisplays = [];
     private DateTime _cachedAt;
 
-    public LibEiInputInjector(IDisplayEnumerator displays, ILoggerFactory loggerFactory, ILogger<LibEiInputInjector> logger)
+    public LibEiInputInjector(IDisplayEnumerator displays, PortalControlSession control, ILogger<LibEiInputInjector> logger)
     {
         _displays = displays;
-        _loggerFactory = loggerFactory;
+        _control = control;
         _logger = logger;
     }
 
@@ -151,35 +147,29 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
             }
 
             _pointerDevice = _buttonDevice = _keyboardDevice = _scrollDevice = 0;
-            _session = null;
-            _portal?.Dispose();
-            _portal = null;
         }
     }
 
     /// <summary>
-    /// Makes sure the input session is on its way, and says whether input can be sent yet.
+    /// Connects libei to the session that carries control, and says whether input can be sent yet.
     /// </summary>
     /// <remarks>
-    /// Called on every injection while the device is still being set up, so it declines to try again for a while
-    /// after a failure. Without that, a desktop that will not grant control would be asked over and over, and the
-    /// operator would be shown the same dialog as fast as events arrive.
+    /// The session itself belongs to <see cref="PortalControlSession"/>, which asks the desktop for it once and
+    /// shares it with the clipboard — the portal allows the clipboard to be requested once per session and only
+    /// before it starts, so there has to be one session and not one per feature. What is left here is libei's own
+    /// handshake. It returns <c>false</c> the first time even on success: the descriptor is taken and the pump
+    /// started, but the device arrives asynchronously, so there is nothing to send on yet.
     /// </remarks>
     private bool EnsureConnected()
     {
-        if (DateTime.UtcNow < _nextConnectAttempt)
+        if (!_control.EnsureReady())
         {
             return false;
         }
 
-        _nextConnectAttempt = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-
         try
         {
-            _portal = new PortalConnection(_loggerFactory.CreateLogger<PortalConnection>());
-            _session = _portal.OpenRemoteDesktopAsync(CancellationToken.None).GetAwaiter().GetResult();
-
-            using var descriptor = _portal.ConnectToEisAsync(_session, CancellationToken.None).GetAwaiter().GetResult();
+            using var descriptor = _control.ConnectEis();
 
             _ei = LibEi.NewSender(0);
             if (_ei == 0)
@@ -211,9 +201,6 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
         catch (Exception error) when (error is InvalidOperationException or NotSupportedException or PortalException)
         {
             LogCannotInject(_logger, error.Message);
-            _portal?.Dispose();
-            _portal = null;
-            _session = null;
 
             if (_ei != 0)
             {
@@ -462,10 +449,12 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     /// </remarks>
     private nint SendText(string text)
     {
-        if (string.IsNullOrEmpty(text) || _portal is null || _session is null)
+        if (string.IsNullOrEmpty(text))
         {
             return 0;
         }
+
+        var (connection, session) = _control.Current();
 
         foreach (var rune in text.EnumerateRunes())
         {
@@ -473,8 +462,8 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
             // protocol means by a keysym for those.
             var keysym = rune.Value is >= 0x20 and < 0x100 ? (uint)rune.Value : (uint)(0x01000000 | rune.Value);
 
-            _portal.NotifyKeyboardKeysymAsync(_session, keysym, pressed: true).GetAwaiter().GetResult();
-            _portal.NotifyKeyboardKeysymAsync(_session, keysym, pressed: false).GetAwaiter().GetResult();
+            connection.NotifyKeyboardKeysymAsync(session, keysym, pressed: true).GetAwaiter().GetResult();
+            connection.NotifyKeyboardKeysymAsync(session, keysym, pressed: false).GetAwaiter().GetResult();
         }
 
         // Sent over the bus rather than through libei, so there is no device to frame.

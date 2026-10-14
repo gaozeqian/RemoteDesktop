@@ -45,9 +45,10 @@ public sealed class LibEiInputInjectorTests
         // Ctrl+Alt+Del is a Windows idea: a keystroke the system takes before any application sees it, so that only
         // the real system can ask for a password. Wayland has nothing of the kind, and the honest answer is to say
         // so rather than to send the three keys and let somebody believe it worked.
+        using var control = new PortalControlSession(NullLoggerFactory.Instance, NullLogger<PortalControlSession>.Instance);
         using var injector = new LibEiInputInjector(
             new WaylandDisplayEnumerator(NullLogger<WaylandDisplayEnumerator>.Instance),
-            NullLoggerFactory.Instance,
+            control,
             NullLogger<LibEiInputInjector>.Instance);
 
         Assert.Throws<NotSupportedException>(() => injector.SendSecureAttentionSequence());
@@ -75,7 +76,8 @@ public sealed class LibEiInputInjectorTests
             NullLogger<PipeWireScreenCapturerFactory>.Instance);
 
         await using var capturer = capturers.Create(target);
-        using var injector = new LibEiInputInjector(displays, NullLoggerFactory.Instance, NullLogger<LibEiInputInjector>.Instance);
+        using var control = new PortalControlSession(NullLoggerFactory.Instance, NullLogger<PortalControlSession>.Instance);
+        using var injector = new LibEiInputInjector(displays, control, NullLogger<LibEiInputInjector>.Instance);
 
         var before = await FingerprintAsync(capturer);
 
