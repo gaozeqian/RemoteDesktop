@@ -28,7 +28,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/artifacts/native/macos"
 
 if [ -f "$out/libmsquic.dylib" ]; then
-    missing=$(for reference in $(otool -L "$out/libmsquic.dylib" | tail -n +2 | awk '{print $1}' | grep '^@loader_path/' || true); do
+    missing=$(for reference in $(otool -L "$out/libmsquic.dylib" | tail -n +2 | awk '$1 ~ /^@loader_path\// { print $1 }'); do
         [ -f "$out/$(basename "$reference")" ] || echo "$reference"
     done)
     if [ -z "$missing" ]; then
@@ -127,7 +127,9 @@ cp -L "$libmsquic_lib/libmsquic.dylib" "$out/libmsquic.dylib"
 # which is why an already-staged name is skipped rather than fetched again.)
 for round in 1 2 3; do
     for file in "$out"/*.dylib; do
-        for reference in $(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep '^@loader_path/' || true); do
+        # awk, not grep: otool indents each dependency with a tab, so an anchored match finds nothing at all —
+        # which is how a run of this loop can look like it inspected the file and found no references.
+        for reference in $(otool -L "$file" | tail -n +2 | awk '$1 ~ /^@loader_path\// { print $1 }'); do
             name=$(basename "$reference")
             [ -f "$out/$name" ] && continue
             source=$(find "$libmsquic_lib" "$openssl_lib" -maxdepth 1 -name "$name" -print -quit)
