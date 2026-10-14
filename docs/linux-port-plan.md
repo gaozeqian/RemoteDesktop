@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2、P4 完成；P3 完成不需要授权的部分）
+> 状态：**进行中**（P1、P2、P4、P6 完成；P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -55,8 +55,8 @@
 
 | 端口 | Windows 实现 | Linux 方案 | 状态 |
 | --- | --- | --- | --- |
-| `ISecretStore` | `DpapiSecretStore` | 0700 目录下的 0600 文件（`FileSecretStore`） | ✅ P1 |
-| `IUserContextGuard` | 判 SYSTEM | 判 `geteuid()==0`（`LinuxUserContextGuard`） | ✅ P1 |
+| `ISecretStore` | `DpapiSecretStore` | 0700 目录下的 0600 文件（`FileSecretStore`，在 `Platform.Posix`） | ✅ P1/P6 |
+| `IUserContextGuard` | 判 SYSTEM | 判 `geteuid()==0`（`UnixUserContextGuard`，在 `Platform.Posix`） | ✅ P1/P6 |
 | `ISystemKeepAwake` | `SetThreadExecutionState` | logind `Inhibit`（**系统**总线，持有返回的 fd） | ✅ P2 |
 | `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | P3 |
 | `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | P3 |
@@ -65,7 +65,7 @@
 | `IVideoDecoderFactory` | Media Foundation | libavcodec | ✅ P4 |
 | `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | P10 |
 | `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
-| `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | P6 |
+| `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
 | `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd + V4L2 | P8 |
 | `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | `pa_threaded_mainloop` + `pa_stream` | P9 |
 | `IPrivacyScreen` | **未实现** | 不支持（`IsSupported => false`），与 Windows 一致 | — |
@@ -383,7 +383,35 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 **真硬件编码仍需一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器验证**，本机做不到。
 
 ### P5 — 剪贴板
-### P6 — 终端（PTY 落在共享 `Platform.Posix`）
+### P6 — 终端（PTY 落在共享 `Platform.Posix`）✅ 已完成
+
+`Platform.Posix` 工程建立，`FileSecretStore` 与用户上下文守卫（改名 `UnixUserContextGuard`）搬了进去，
+加上 `Interop/LibC.cs` 与 `PosixPtyHost` / `PosixPtySession`。本仓库的 `Platform` 层规则不含 `Platform`
+自身，所以 `Platform.Linux → Platform.Posix` 合法，规则表一行未改。
+
+**子进程用 `posix_spawn` 而不是 `fork`。** .NET 进程 fork 出来的子进程与其余所有线程共享地址空间，而运行时
+的锁处于那些线程留下的任意状态；子进程在 `exec` 之前碰任何一个都可能死锁。`posix_spawn` 是带
+`CLONE_VM|CLONE_VFORK` 的 `clone`，没有第二个地址空间可以处于不一致状态。这也是为什么
+`posix_spawn_file_actions_t` / `posix_spawnattr_t` 是按不透明缓冲传的：它们只由 glibc 填写、由内核执行，
+这个代码一个字段都不读。缓冲区按**宽裕**分配（512 / 128 字节，glibc 2.39 实际需要 336 / 80）——尺寸算错会
+让 glibc 写到缓冲区之外，而分配大一点是免费的。
+
+**常量逐个对着头文件核，不凭记忆**，因为这几个恰好是错了也不报错的那类：
+
+| | glibc | Darwin |
+| --- | --- | --- |
+| `POSIX_SPAWN_SETSID` | **0x80** | 0x0400 |
+| `TIOCSWINSZ` / `TIOCGWINSZ` | **0x5414 / 0x5413** | 0x80087467 / 0x40087468 |
+| `O_NOCTTY` | **0x100** | 0x20000 |
+
+抄错的后果分别是：子进程不在自己的会话里、终端没有控制终端——表现为**一个看起来完全健康但 Ctrl+C 没反应
+的 shell**；以及窗口尺寸永远设不上——表现为全屏程序画成错误的形状。macOS 分支那份 `PosixPtyHost` 里
+`SpawnSetsid` 写的是 `0x0002`，两个平台都不是——这正好说明为什么这一层要共享而不是复制两份。
+
+测试跑的是真实 shell（8 个用例）：`sh` 能起来并跑命令、`stty size` 报出控制器要求的尺寸、**Resize 之后
+`stty size` 跟着变**、**Ctrl+C 真的停掉 shell 正在跑的东西**（这条就是上面那个常量的判据）、退出码传回、
+**关闭会话时后台作业跟着走**（普通 shell 不会把挂断转发给它启动的后台作业，所以只给 shell 发信号会留下
+孤儿进程），以及路径被当作 shell 名时被拒绝（否则 shell 选择器就成了执行任意程序的方式）。
 ### P7 — 文件传输（§1.3 的共享层修复已在 P1 完成，这里是 `LocalFileOperations` 与 `XdgUserDirectories`）
 ### P8 — 摄像头（portal fd + V4L2）
 ### P9 — 音频（`pa_threaded_mainloop`）

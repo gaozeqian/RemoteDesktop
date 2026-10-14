@@ -1,7 +1,7 @@
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Platform;
 
-namespace RemoteDesktop.Platform.Linux;
+namespace RemoteDesktop.Platform.Posix;
 
 /// <summary>
 /// Stores secrets as plain files in a directory only the owner may enter.
@@ -20,12 +20,8 @@ namespace RemoteDesktop.Platform.Linux;
 /// libsecret either blocks on a prompt nobody can answer or fails outright. A secret store that is sometimes
 /// unavailable is worse than one that is always available and marginally weaker.
 /// </para>
-/// <para>
-/// This class works unchanged on any Posix system. It lives here for now and moves to a shared platform project when
-/// the terminal lands, because that is the piece actually worth sharing with a Mac build.
-/// </para>
 /// </remarks>
-[SupportedOSPlatform("linux")]
+[UnsupportedOSPlatform("windows")]
 public sealed class FileSecretStore(string directory) : ISecretStore
 {
     // Only the owner may enter the folder or read the files inside it.

@@ -1,4 +1,4 @@
-using RemoteDesktop.Platform.Linux;
+using RemoteDesktop.Platform.Posix;
 
 namespace RemoteDesktop.Platform.Linux.Tests;
 

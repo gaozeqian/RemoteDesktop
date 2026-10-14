@@ -2,7 +2,10 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
+using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Linux.Video;
+using RemoteDesktop.Platform.Posix;
+using RemoteDesktop.Platform.Posix.Terminal;
 
 namespace RemoteDesktop.Platform.Linux;
 
@@ -20,11 +23,14 @@ public static class ServiceCollectionExtensions
     /// move a failure from "this feature does not work yet" to "the host does not start".
     /// </para>
     /// <para>
+    /// Ports shared with any other Posix system — the secret store, the user-context guard and the terminal — come
+    /// from RemoteDesktop.Posix rather than from here, so that a second Posix platform would not mean a second copy
+    /// of them.
+    ///
     /// Still to come, in the order the port plan schedules them:
-    /// <c>ISystemKeepAwake</c> (logind, with the transport bridge),
     /// <c>IDisplayEnumerator</c> / <c>IScreenCapturerFactory</c> (portal + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
-    /// <c>IClipboard</c>, <c>IPtyHost</c>, <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>,
+    /// <c>IClipboard</c>, <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>,
     /// <c>IAudioCapturerFactory</c> / <c>IAudioPlayerFactory</c>, and <c>IVideoRecorderFactory</c>.
     /// </para>
     /// <para>
@@ -38,9 +44,10 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLinuxPlatform(this IServiceCollection services, string dataDirectory)
     {
         services.AddSingleton<ISecretStore>(new FileSecretStore(Path.Combine(dataDirectory, "secrets")));
-        services.AddSingleton<IUserContextGuard, LinuxUserContextGuard>();
+        services.AddSingleton<IUserContextGuard, UnixUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
+        services.AddSingleton<IPtyHost, PosixPtyHost>();
 
         // Three encoders, mixed together by VideoCodecSelector: hardware first, then by priority, with every failure
         // falling through to the next. The software one is registered last because it is the one that always works.

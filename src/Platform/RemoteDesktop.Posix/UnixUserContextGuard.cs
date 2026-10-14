@@ -1,8 +1,8 @@
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Platform;
-using RemoteDesktop.Platform.Linux.Interop;
+using RemoteDesktop.Platform.Posix.Interop;
 
-namespace RemoteDesktop.Platform.Linux;
+namespace RemoteDesktop.Platform.Posix;
 
 /// <summary>
 /// Refuses to serve files or shells while running as root. The shape of the hazard is the Windows one — a process
@@ -16,8 +16,8 @@ namespace RemoteDesktop.Platform.Linux;
 /// "allowed" in practice, and exists so that a host started the wrong way refuses the dangerous features instead of
 /// quietly offering them.
 /// </remarks>
-[SupportedOSPlatform("linux")]
-public sealed class LinuxUserContextGuard : IUserContextGuard
+[UnsupportedOSPlatform("windows")]
+public sealed class UnixUserContextGuard : IUserContextGuard
 {
     private static readonly bool IsRoot = LibC.GetEffectiveUserId() == 0;
 

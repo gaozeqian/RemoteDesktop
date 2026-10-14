@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using RemoteDesktop.Abstractions.Platform;
-using RemoteDesktop.Platform.Linux.Interop;
+using RemoteDesktop.Platform.Posix.Interop;
 using Tmds.DBus.Protocol;
 
 namespace RemoteDesktop.Platform.Linux;
