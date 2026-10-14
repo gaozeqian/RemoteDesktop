@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.Linux.Display;
+using RemoteDesktop.Platform.Linux.XdgPortal;
 using RemoteDesktop.Platform.Posix;
 
 namespace RemoteDesktop.Platform.Linux.Tests;
@@ -36,16 +37,24 @@ public sealed class PipeWireScreenCapturerTests
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "RemoteDesktop");
 
-    private static PipeWireScreenCapturerFactory CreateFactory() => new(
-        new FileSecretStore(Path.Combine(DataDirectory, "secrets")),
-        NullLoggerFactory.Instance,
-        NullLogger<PipeWireScreenCapturerFactory>.Instance);
+    private static (PortalGrant Grant, PipeWireScreenCapturerFactory Factory) CreateFactory()
+    {
+        var grant = new PortalGrant(
+            new FileSecretStore(Path.Combine(DataDirectory, "secrets")),
+            NullLoggerFactory.Instance,
+            NullLogger<PortalGrant>.Instance);
+
+        return (grant, new PipeWireScreenCapturerFactory(
+            grant,
+            NullLoggerFactory.Instance,
+            NullLogger<PipeWireScreenCapturerFactory>.Instance));
+    }
 
     private static WaylandDisplayEnumerator CreateEnumerator() =>
         new(NullLogger<WaylandDisplayEnumerator>.Instance);
 
     /// <summary>Sets up a capturer for the primary screen, or skips the test with a reason.</summary>
-    private static (PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) Start()
+    private static (PortalGrant Grant, PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) Start()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
         Assert.SkipWhen(!Enabled, NeedsConsent);
@@ -55,22 +64,22 @@ public sealed class PipeWireScreenCapturerTests
         var target = displays.GetDisplays().FirstOrDefault(d => d.IsPrimary)
             ?? throw new InvalidOperationException("No primary screen to capture.");
 
-        var factory = CreateFactory();
+        var (grant, factory) = CreateFactory();
         try
         {
-            return (factory, factory.Create(target));
+            return (grant, factory, factory.Create(target));
         }
         catch
         {
-            factory.Dispose();
+            grant.Dispose();
             throw;
         }
     }
 
-    private static void Stop((PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) pair)
+    private static void Stop((PortalGrant Grant, PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) pair)
     {
         pair.Capturer.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        pair.Factory.Dispose();
+        pair.Grant.Dispose();
     }
 
     [Fact]

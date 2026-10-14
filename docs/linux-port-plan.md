@@ -461,10 +461,64 @@ distinct colours (sampled 1/16): 2608
 写完一个等价的 C 程序对照才确认 API 用法没问题、问题在锁。**排这一类"库说不了话"的问题时，写个 C 对照
 是最快的一条路**，这次两个坑都是这么定位的。
 
-### P3 剩下的最后一件
+### P3 剩下的最后一件：输入注入（已完成）
 
-`Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），再走 libei。
-`ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
+`Input/LibEiInputInjector.cs` 已通过 `ConnectToEIS` + libei 注入输入并实测有效：把指针移到左上角
+（**只移动、不点击**，GNOME 的热区会自己弹出概览），画面随之改变；测试结束时把指针放回中间，
+概览随之关闭。`LibEiInputInjectorTests` 覆盖这一条，并把 `SendSecureAttentionSequence` 的
+`NotSupportedException` 也钉住。
+
+实测日志（说明链路每一环都到位）：
+
+```
+A seat was offered; asked for pointer, buttons, keyboard and scroll.
+The desktop offered a device with: pointer, buttons, scroll.
+Started emulating (0).
+The desktop offered a device with: keyboard.
+Started emulating (0).
+```
+
+四个坑，都是"错了不报错"那类：
+
+- **方法名是 `ConnectToEIS`，不是 `ConnectToEis`。** 大小写不同 → `UnknownMethod`。
+- **RemoteDesktop 会话必须 `Start`。** 只做 `CreateSession` + `SelectDevices` 的话，后面所有调用都回
+  **"Session is not ready"**，包括那个本该把 fd 交出来的 `ConnectToEIS`。
+- **桌面给的是多个设备，不是一个万能的。** 本机先来一个 `pointer, buttons, scroll`，键盘是**另一个**
+  设备。只记一个"当前设备"的话，后到的键盘会覆盖掉指针，指针事件发到键盘设备上被**静默丢弃**——
+  表现为"注入没反应，但也不报错"。现在按能力分别记住，并且**按设备 `frame`**（libei 是按设备提交的）。
+- **`SafeFileHandle` 会把 libei 的 fd 关掉。** `pw`/libei 接管 fd 之后必须 `SetHandleAsInvalid()`，
+  否则 wrapper 析构时关掉一个已经属于 libei、甚至可能已经分配给别人的描述符。
+
+### 一个必须记下来的发现：远程桌面会话不能持久化
+
+本来打算按原计划把采集和控制放在**同一个会话**上（一次授权管两件事）。实测被 portal 拒绝：
+
+```
+org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist
+```
+
+**只要在 RemoteDesktop 会话上请求 `persist_mode`，就会整条失败。** 也就是说**输入控制无法被预先授权**——
+portal 在这件事上是刻意的：看一块屏和操作一台机器不是同一个许可。
+
+所以最终是**两个会话**：
+
+| | 会话 | 能否持久化 | 后果 |
+| --- | --- | --- | --- |
+| 采集 | ScreenCast | ✅ | 授权一次即可，无人值守可用 |
+| 控制 | RemoteDesktop | ❌ | **每次连接都要人在场点一次** |
+
+这是相对 Windows 的真实差异（那边一次登录会话同时拿到画面和输入），**要写进文档**。
+把两个塞进一个会话看似更省事，代价是连"只看不控"也要每次弹窗，对无人值守是倒退。
+
+### 光标元数据在本机收不到
+
+`cursor_mode = Metadata` 的授权是成功的（`AvailableCursorModes = 7` 含 Metadata），但 PipeWire 流里
+**始终没有 `SPA_META_Cursor`**：`PipeWireScreenCapturer` 在若干帧之后会警告一次
+「合成器没有描述指针」，然后照常出帧。这正是风险表里那条"光标元数据可能不送达"。
+
+后果：**控制器只能画自己最后知道的那个指针**，位置不会实时更新。要接着查的话，方向是先确认
+`SPA_PARAM_Meta` 那个 pod 走 `update_params` 有没有被真正应用（connect 时带 Meta 参数是被接受的，
+带 Format 不是——见上），再看 mutter 是否要求别的条件。
 
 
 ### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）

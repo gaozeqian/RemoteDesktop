@@ -60,6 +60,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
     private nint _format;
     private GCHandle _self;
     private int _stride;
+    private int _framesWithoutCursor;
     private int _disposed;
 
     /// <param name="fileDescriptor">
@@ -440,6 +441,19 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             }
 
             var cursor = ReadCursor(spaBuffer);
+            if (cursor is null)
+            {
+                // The compositor is not obliged to describe the pointer, and the answer is to say so once rather than
+                // to ask again every frame. A few frames are allowed first so that a slow start does not trip it.
+                if (Interlocked.Increment(ref _framesWithoutCursor) == 10)
+                {
+                    LogNoCursorMetadata(_logger);
+                }
+            }
+            else
+            {
+                Interlocked.Exchange(ref _framesWithoutCursor, 0);
+            }
             var frame = Copy(plane.Data, chunk);
             if (frame is null)
             {
@@ -729,6 +743,11 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A captured frame could not be read: {Reason}")]
     private static partial void LogFrameUnreadable(ILogger logger, string reason);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "The compositor is not describing the pointer, so the controller will draw whatever it last heard about.")]
+    private static partial void LogNoCursorMetadata(ILogger logger);
 
     [LoggerMessage(
         Level = LogLevel.Warning,

@@ -2,11 +2,14 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Display;
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Linux.Audio;
 using RemoteDesktop.Platform.Linux.Display;
+using RemoteDesktop.Platform.Linux.Input;
+using RemoteDesktop.Platform.Linux.XdgPortal;
 using RemoteDesktop.Platform.Linux.Video;
 using RemoteDesktop.Platform.Posix;
 using RemoteDesktop.Platform.Posix.Terminal;
@@ -32,7 +35,6 @@ public static class ServiceCollectionExtensions
     /// of them.
     ///
     /// Still to come, in the order the port plan schedules them:
-    /// <c>IInputInjector</c> (EIS over the same portal session),
     /// <c>IClipboard</c>, and <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>.
     /// </para>
     /// <para>
@@ -49,7 +51,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IUserContextGuard, UnixUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         services.AddSingleton<IDisplayEnumerator, WaylandDisplayEnumerator>();
+        services.AddSingleton<PortalGrant>();
         services.AddSingleton<IScreenCapturerFactory, PipeWireScreenCapturerFactory>();
+        services.AddSingleton<IInputInjector, LibEiInputInjector>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();

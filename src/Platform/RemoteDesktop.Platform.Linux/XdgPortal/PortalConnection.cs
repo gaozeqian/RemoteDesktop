@@ -114,6 +114,9 @@ public sealed partial class PortalConnection : IDisposable
     /// <param name="onRestoreToken">Called with a fresh token, so the caller can keep it for next time.</param>
     /// <returns>The session handle and the screens the operator agreed to share.</returns>
     /// <exception cref="PortalException">The operator refused, or the portal reported a failure.</exception>
+    /// <remarks>
+    /// The dialog appears at <c>Start</c>. Everything before it is bookkeeping the operator never sees.
+    /// </remarks>
     public async Task<(string SessionHandle, IReadOnlyList<SharedScreen> Streams)> OpenScreenCastAsync(
         string? restoreToken,
         Action<string>? onRestoreToken,
@@ -127,7 +130,7 @@ public sealed partial class PortalConnection : IDisposable
             throw new PortalException(selected, "The screen could not be selected.");
         }
 
-        var (started, streams, token) = await StartAsync(session, cancellationToken).ConfigureAwait(false);
+        var (started, streams, token) = await StartAsync(ScreenCast, session, cancellationToken).ConfigureAwait(false);
         if (started != 0)
         {
             throw new PortalException(started, "Screen sharing was not granted.");
@@ -141,21 +144,40 @@ public sealed partial class PortalConnection : IDisposable
         return (session, streams);
     }
 
-    /// <summary>Opens a remote-control session and asks for the keyboard and the pointer.</summary>
+    /// <summary>
+    /// Opens a remote-control session and asks for the keyboard and the pointer.
+    /// </summary>
     /// <remarks>
-    /// The remote-control interface has its own session rather than sharing the screen-cast one. Both would work on
-    /// one session — the portal deliberately allows it, so that one dialog grants both — but only when they are
-    /// opened through the same handle, and this class keeps the two calls separate so that a screen-cast failure
-    /// cannot leave a session that can also type.
+    /// <para>
+    /// A session of its own rather than sharing the screen-cast one, and the reason is a restriction in the portal
+    /// that was found by trying it: <em>a remote-desktop session cannot persist</em>. Asking for
+    /// <c>persist_mode</c> on this kind of session is refused outright — "Remote desktop sessions cannot persist" —
+    /// so a combined session would mean the operator answering the same dialog on every single connection. Input
+    /// control is the more dangerous half of what this product does, and the portal is deliberate about not letting
+    /// it be granted in advance.
+    /// </para>
+    /// <para>
+    /// Keeping the two apart means screen sharing stays unattended — one grant, remembered, as long as the desktop
+    /// is willing — while control is asked for when it is actually needed, and only then.
+    /// </para>
     /// </remarks>
     public async Task<string> OpenRemoteDesktopAsync(CancellationToken cancellationToken)
     {
         var session = await CreateSessionAsync(RemoteDesktop, cancellationToken).ConfigureAwait(false);
 
-        var response = await SelectDevicesAsync(session, cancellationToken).ConfigureAwait(false);
-        if (response != 0)
+        var devices = await SelectDevicesAsync(session, cancellationToken).ConfigureAwait(false);
+        if (devices != 0)
         {
-            throw new PortalException(response, "The keyboard and pointer could not be selected.");
+            throw new PortalException(devices, "The keyboard and pointer were not granted.");
+        }
+
+        // Start is what makes the session usable, and on this path it is also where the dialog appears. A session
+        // that has been created and had its devices chosen but not started refuses everything else with
+        // "Session is not ready" — including the call that would hand over the descriptor to inject input on.
+        var (started, _, _) = await StartAsync(RemoteDesktop, session, cancellationToken).ConfigureAwait(false);
+        if (started != 0)
+        {
+            throw new PortalException(started, "Control of this screen was not granted.");
         }
 
         return session;
@@ -171,7 +193,39 @@ public sealed partial class PortalConnection : IDisposable
 
     /// <summary>The descriptor the input-injection session is spoken over (libei's transport).</summary>
     public Task<SafeFileHandle> ConnectToEisAsync(string session, CancellationToken cancellationToken) =>
-        CallForFdAsync(RemoteDesktop, "ConnectToEis", session, cancellationToken);
+        CallForFdAsync(RemoteDesktop, "ConnectToEIS", session, cancellationToken);
+
+    /// <summary>
+    /// Types a character by its keysym, for text that has no key.
+    /// </summary>
+    /// <remarks>
+    /// libei's keyboard takes evdev key codes, so an emoji or an input-method result cannot be expressed by pressing
+    /// a key at all. This is the portal's own call for that case: a keysym names the character rather than the key,
+    /// and Unicode is mapped to one by putting the code point under <c>0x01000000</c>.
+    /// </remarks>
+    public async Task NotifyKeyboardKeysymAsync(
+        string session,
+        uint keysym,
+        bool pressed,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, RemoteDesktop, "NotifyKeyboardKeysym", "oa{sv}iu", MessageFlags.None);
+        w.WriteObjectPath(session);
+        w.WriteDictionary(new Dictionary<string, VariantValue>());
+
+        // Keysym, then the state: the portal reads it as an int, 1 for pressed.
+        w.WriteUInt32(keysym);
+        w.WriteUInt32(pressed ? 1u : 0u);
+        var message = w.CreateMessage();
+
+        // Answers with nothing, so there is no body to read.
+        _ = await _connection
+            .CallMethodAsync(message, static (Message m, object? _) => true, null)
+            .ConfigureAwait(false);
+    }
 
     public void Dispose() => _connection.Dispose();
 
@@ -273,7 +327,10 @@ public sealed partial class PortalConnection : IDisposable
         {
             ["handle_token"] = token,
             ["types"] = DevicesKeyboardAndPointer,
-            ["persist_mode"] = PersistPermanently,
+
+            // No persist_mode. A remote-desktop session may not be persisted — asking is refused with
+            // "Remote desktop sessions cannot persist" — which is the portal being deliberate about not letting
+            // control over a machine be granted in advance.
         });
         var message = w.CreateMessage();
 
@@ -286,12 +343,12 @@ public sealed partial class PortalConnection : IDisposable
     }
 
     private async Task<(uint Response, IReadOnlyList<SharedScreen> Streams, string? RestoreToken)> StartAsync(
-        string session, CancellationToken cancellationToken)
+        string @interface, string session, CancellationToken cancellationToken)
     {
         var (token, pending) = await PrepareAsync().ConfigureAwait(false);
 
         var w = _connection.GetMessageWriter();
-        w.WriteMethodCallHeader(Destination, ObjectPath, ScreenCast, "Start", "osa{sv}", MessageFlags.None);
+        w.WriteMethodCallHeader(Destination, ObjectPath, @interface, "Start", "osa{sv}", MessageFlags.None);
         w.WriteObjectPath(session);
         w.WriteString(string.Empty);
         w.WriteDictionary(new Dictionary<string, VariantValue> { ["handle_token"] = token });
