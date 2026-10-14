@@ -1,12 +1,16 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteDesktop.Abstractions.Audio;
+using RemoteDesktop.Abstractions.Camera;
+using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Linux.Audio;
+using RemoteDesktop.Platform.Linux.Camera;
+using RemoteDesktop.Platform.Linux.Clipboard;
 using RemoteDesktop.Platform.Linux.Display;
 using RemoteDesktop.Platform.Linux.Input;
 using RemoteDesktop.Platform.Linux.XdgPortal;
@@ -34,8 +38,8 @@ public static class ServiceCollectionExtensions
     /// from RemoteDesktop.Posix rather than from here, so that a second Posix platform would not mean a second copy
     /// of them.
     ///
-    /// Still to come, in the order the port plan schedules them:
-    /// <c>IClipboard</c>, and <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>.
+    /// The clipboard and the cameras are registered but not implemented — see P5 and P8 in the port plan. They are
+    /// present so that a host can be composed, and they report their absence rather than pretending.
     /// </para>
     /// <para>
     /// <c>IAgentGateway</c> is absent on purpose and will stay absent. On Windows the privileged service cannot see the
@@ -54,6 +58,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PortalGrant>();
         services.AddSingleton<IScreenCapturerFactory, PipeWireScreenCapturerFactory>();
         services.AddSingleton<IInputInjector, LibEiInputInjector>();
+
+        // Two ports that exist so that the host can be composed at all, and that say plainly what they do not do
+        // yet. Neither is a placeholder for something that works: there is no clipboard because the portal refuses
+        // this application one, and no cameras because enumerating them is P8.
+        services.AddSingleton<IClipboard, WaylandClipboard>();
+        services.AddSingleton<ICameraEnumerator, WaylandCameraEnumerator>();
+        services.AddSingleton<ICameraSourceFactory, WaylandCameraSourceFactory>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();

@@ -13,6 +13,7 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.Linux;
 using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Transport;
 
@@ -29,9 +30,12 @@ namespace RemoteDesktop.Client;
 /// separate device identity, which allows two instances on one machine. <c>--HostMode standalone</c> ignores an
 /// installed service; <c>--HostControlPipe name</c> talks to a service started with another pipe name (development).
 /// </remarks>
-[SupportedOSPlatform("windows")]
 internal static class ClientHost
 {
+    // Both, because this is the file that decides which layer to load. Naming only one would silence the analyzer
+    // for the other platform's calls and leave them unchecked at the call sites that actually need the guarantee.
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("linux")]
     public static IHost Build(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -62,8 +66,16 @@ internal static class ClientHost
         var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
                          PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
 
+        if (OperatingSystem.IsWindows())
+        {
+            builder.Services.AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser);
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            builder.Services.AddLinuxPlatform(dataDirectory);
+        }
+
         builder.Services
-            .AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser)
             .AddRemoteDesktopMedia()
             .AddSingleton(new ClientEnvironment(dataDirectory))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and

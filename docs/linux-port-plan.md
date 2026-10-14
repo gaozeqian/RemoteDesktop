@@ -554,7 +554,28 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 
 **真硬件编码仍需一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器验证**，本机做不到。
 
-### P5 — 剪贴板
+### P5 — 剪贴板 🚫 portal 拒绝，需要 X11 后备
+
+**spike 做完了，结论是此路不通。** 计划里写的风险（"后端可能拒绝 `RequestClipboard`"）确认成立。四种
+组合全部被拒，错误各不相同，说明卡在不同的检查上：
+
+| 会话 | 时机 | 结果 |
+| --- | --- | --- |
+| ScreenCast | `Start` 之后 | `Invalid session type` |
+| RemoteDesktop | `Start` 之后 | `Invalid state` |
+| RemoteDesktop | `Start` 之前 | `Invalid state` |
+| RemoteDesktop + `SelectSources` | `Start` 之前 | `Invalid state` |
+
+接口本身在总线上、GNOME 后端也实现了（`RequestClipboard` / `SelectionRead` / `SelectionWrite` /
+`SelectionWriteDone` / `SetSelection` 都在），所以不是"没实现"，是**不让这个应用用**——与 portal
+文档里"剪贴板面向沙箱应用"的说法一致。
+
+计划里写的后备是**在 XWayland 上自己持有 `CLIPBOARD` selection**（libX11 + XFixes）：X11 客户端可以
+持有 selection，合成器会把它镜像到 Wayland 剪贴板。这条路没有试过，是独立的一块工作。
+
+**当前状态**：`WaylandClipboard` 注册了但不工作——`Get()` 返回空、`Set()` 记一条警告然后什么都不做、
+`Changed` 永不触发（用显式的空 add/remove 表示，而不是留一个没人触发的字段）。这样"剪贴板空"和
+"剪贴板不支持"在日志和文档里能分开，不会让人复制完再粘贴发现什么都没有还以为是偶发。
 ### P6 — 终端（PTY 落在共享 `Platform.Posix`）✅ 已完成
 
 `Platform.Posix` 工程建立，`FileSecretStore` 与用户上下文守卫（改名 `UnixUserContextGuard`）搬了进去，

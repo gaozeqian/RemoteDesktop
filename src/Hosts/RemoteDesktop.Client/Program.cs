@@ -8,9 +8,11 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        if (!OperatingSystem.IsWindows())
+        // The two platforms the product is built for. Said out loud rather than left to fail somewhere further in,
+        // and it is also what tells the analyzer that everything below runs where the platform layers are supported.
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
         {
-            Console.Error.WriteLine("Only Windows is supported in phase 1.");
+            Console.Error.WriteLine($"This build runs on Windows and Linux; this is {Environment.OSVersion.Platform}.");
             return 1;
         }
 

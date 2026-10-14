@@ -57,14 +57,10 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _session = session;
         _logger = logger;
         _cameraFactory = cameraFactory;
-        if (recorderFactory is not null)
-        {
-            _recorderFactory = recorderFactory;
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            _recorderFactory = new MfVideoRecorderFactory();
-        }
+        // Straight from the platform layer, which registers one on both platforms — Media Foundation on Windows,
+        // libavcodec here. There used to be a hardcoded Windows one behind an IsWindows() check, which meant
+        // recording silently did nothing on any other platform rather than failing to compile.
+        _recorderFactory = recorderFactory;
         CanUseCamera = session.Context.Grant.Allows(Permissions.Camera) && cameraFactory is not null;
         ShowCameraButton = CanUseCamera;
         Viewer = viewer;

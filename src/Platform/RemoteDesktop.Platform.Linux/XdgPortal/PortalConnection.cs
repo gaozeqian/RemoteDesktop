@@ -52,6 +52,7 @@ public sealed partial class PortalConnection : IDisposable
     private const string ObjectPath = "/org/freedesktop/portal/desktop";
     private const string ScreenCast = "org.freedesktop.portal.ScreenCast";
     private const string RemoteDesktop = "org.freedesktop.portal.RemoteDesktop";
+    private const string Clipboard = "org.freedesktop.portal.Clipboard";
     private const string RequestInterface = "org.freedesktop.portal.Request";
 
     /// <summary>SPA_SOURCE_MONITOR — a whole screen rather than one window.</summary>
@@ -124,7 +125,7 @@ public sealed partial class PortalConnection : IDisposable
     {
         var session = await CreateSessionAsync(ScreenCast, cancellationToken).ConfigureAwait(false);
 
-        var selected = await SelectSourcesAsync(session, restoreToken, cancellationToken).ConfigureAwait(false);
+        var selected = await SelectSourcesAsync(session, restoreToken, persist: true, cancellationToken).ConfigureAwait(false);
         if (selected != 0)
         {
             throw new PortalException(selected, "The screen could not be selected.");
@@ -227,6 +228,36 @@ public sealed partial class PortalConnection : IDisposable
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Asks for the clipboard of a session, after which its contents can be read and written over that session.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called on a session another interface created — the clipboard portal has no way to make one of its own — which
+    /// is why the session handle is an argument here rather than something this returns.
+    /// </para>
+    /// <para>
+    /// <b>This machine refuses it, in every arrangement that was tried.</b> A screen-cast session is turned away with
+    /// "Invalid session type"; a remote-desktop session with "Invalid state", both before and after <c>Start</c>, and
+    /// with and without screen sources selected on it. That matches what the portal's own documentation hints at —
+    /// the clipboard is meant for sandboxed applications — and it is why this platform has no clipboard yet rather
+    /// than one that quietly does nothing. The fallback the port plan names is owning the selection over XWayland,
+    /// which is a different piece of work and has not been attempted.
+    /// </para>
+    /// </remarks>
+    public async Task RequestClipboardAsync(string session, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, Clipboard, "RequestClipboard", "oa{sv}", MessageFlags.None);
+        w.WriteObjectPath(session);
+        w.WriteDictionary(new Dictionary<string, VariantValue>());
+        var message = w.CreateMessage();
+
+        _ = await _connection.CallMethodAsync(message, static (Message m, object? _) => true, null).ConfigureAwait(false);
+    }
+
     public void Dispose() => _connection.Dispose();
 
     /// <summary>
@@ -281,7 +312,7 @@ public sealed partial class PortalConnection : IDisposable
         return handle;
     }
 
-    private async Task<uint> SelectSourcesAsync(string session, string? restoreToken, CancellationToken cancellationToken)
+    private async Task<uint> SelectSourcesAsync(string session, string? restoreToken, bool persist, CancellationToken cancellationToken)
     {
         var (token, pending) = await PrepareAsync().ConfigureAwait(false);
 
@@ -291,11 +322,15 @@ public sealed partial class PortalConnection : IDisposable
             ["types"] = SourceMonitor,
             ["cursor_mode"] = CursorMetadata,
             ["multiple"] = false,
-
-            // Persist across restarts, so that a machine being controlled does not need somebody at the keyboard
-            // every time a controller connects — which is the whole point of unattended access.
-            ["persist_mode"] = PersistPermanently,
         };
+
+        if (persist)
+        {
+            // Persist across restarts, so that a machine being controlled does not need somebody at the keyboard
+            // every time a controller connects — which is the whole point of unattended access. Not allowed on a
+            // remote-desktop session, which is why it is optional.
+            options["persist_mode"] = PersistPermanently;
+        }
 
         if (!string.IsNullOrEmpty(restoreToken))
         {

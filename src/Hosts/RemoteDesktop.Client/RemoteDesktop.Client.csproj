@@ -21,6 +21,9 @@
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
     <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
+    <!-- Both platform assemblies are referenced and one is chosen at run time. The Windows layer builds everywhere,
+         and a build that produced different binaries per operating system would put two of them in CI for no gain. -->
+    <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Linux\RemoteDesktop.Platform.Linux.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" />

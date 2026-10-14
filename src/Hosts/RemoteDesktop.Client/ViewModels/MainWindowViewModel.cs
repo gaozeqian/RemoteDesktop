@@ -88,14 +88,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _loggers = loggers;
         _logger = loggers.CreateLogger<MainWindowViewModel>();
         _recentDevicesStore = recentDevicesStore;
-        if (recorderFactory is not null)
-        {
-            _recorderFactory = recorderFactory;
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            _recorderFactory = new MfVideoRecorderFactory();
-        }
+        // Straight from the platform layer, which registers one on both platforms — Media Foundation on Windows,
+        // libavcodec here. There used to be a hardcoded Windows one behind an IsWindows() check, which meant
+        // recording silently did nothing on any other platform rather than failing to compile.
+        _recorderFactory = recorderFactory;
 
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;
