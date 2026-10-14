@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2、P4、P6、P9 完成；P11 的服务端在 Linux 上完成；P3 完成不需要授权的部分）
+> 状态：**进行中**（P1、P2、P4、P6、P7、P9 完成；P11 服务端完成；P10 的录制完成；P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -63,7 +63,7 @@
 | `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | P3 |
 | `IVideoEncoderFactory` ×3 | Media Foundation ×2 | `h264_nvenc` / `h264_vaapi` / 软件 x264，都经 libavcodec | ✅ P4 |
 | `IVideoDecoderFactory` | Media Foundation | libavcodec | ✅ P4 |
-| `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | P10 |
+| `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | ✅ P10 |
 | `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
 | `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd + V4L2 | P8 |
@@ -444,7 +444,18 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 整个测试进程直接消失且没有任何信息**；助手没有等上下文进入就绪就去加载模块，于是错误地得出「这台机器的
 声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
 把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
-### P10 — 录制 + 被控端打包
+### P10 — 录制 ✅ / 被控端打包 🚫 被 P3 挡住
+
+录制已完成，见上表。**被控端打包现在做不了，而且原因是可核对的，不是时间不够**：一个能启动的
+Linux 被控端需要 `IScreenCapturerFactory`、`IDisplayEnumerator`、`IInputInjector`、`IClipboard`、
+`ICameraEnumerator`、`ICameraSourceFactory` 六个端口，而它们**全部没有注册**——每一个都要 portal
+授权，也就是 P3、P5、P8。宿主用 `ValidateOnBuild = true` 构建容器，缺任何一个都会在启动时失败。
+
+所以为一个跑不起来的程序写 `.deb` 和 systemd 单元，是在打包不存在的东西。**这一段应当跟在 P3 之后**，
+它的形状可以直接沿用服务端那套（`build/debian/server/`），差别只在 systemd **用户**单元
+（`WantedBy=graphical-session.target`、`PartOf=`）与 portal 会话必须惰性建立。
+
+### P10（原始计划） — 录制 + 被控端打包
 ### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）
 
 **证书在 Windows 之外的形态。** Windows 把证书放进机器证书存储、只把公钥写出来，理由是安装目录人人可读；那套逻辑在这里整个反过来——没有存储可用，**私钥只能是一个文件**，于是文件权限就是私钥与其他人之间唯一的屏障，所以它必须在相信那一点之前先把自己设成 0600。证书本身用的是同一段代码：生成从来不是平台相关的部分，保存才是。
