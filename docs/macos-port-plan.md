@@ -983,6 +983,66 @@ if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root)
 `~/Desktop`、`~/Documents`、`~/Downloads` 的首次访问弹窗与拒绝路径，需要真实 `.app` + TCC 授权才能验证，放到 P10 联调。
 代码层已正确（`GetPlaces` 对落在共享根外的候选会 `catch` 掉不提供），不阻塞 P7 收尾。
 
+### 3.16 P7/P3 遗留 TCC 项实测：输入注入与受保护目录（**联调完成**）
+
+§8 挂在"后续联调"的两项，2026-10-14 用 `--self-check` 的两个新探针在真实 `.app` 上闭环。结论先说：
+**两条路径的产品行为都是干净的**——无裸异常漏进协议层，无挂死，控制器拿到的都是可展示的 `FileError`。
+
+#### ① 输入注入：发了，且必须"发了并量到"才算数
+
+`SelfCheck` 的 `input injection` 探针：授予辅助功能后注入一次真实指针事件（`CGEventPost`，向右 120 点，
+避开右边界改向左，事件发到光标所在显示器），用 `CGEventGetLocation` 读回光标位置比对。多轮实测：
+
+```
+input injection    ok — the cursor followed the injected event (x 595 → 715)
+                   ok — the cursor followed the injected event (x 575 → 695)
+                   ok — the cursor followed the injected event (x 674 → 794)
+                   ok — the cursor followed the injected event (x 725 → 845)
+```
+
+未授权时不注入、不花弹窗（与 camera 探针同一规矩），报告
+`skipped — Accessibility is not granted`。
+
+**为什么必须"发+量"**：`CGEventPost` 在没有辅助功能授权时**返回成功但什么都不做**（`CGEventInputInjector`
+的注释早有此警告）。所以注册检查、映射层单测（P3 的全部覆盖）全都报告"健康"，而真实使用零事件送达——
+只有发一次并观察到副作用才能证伪。这也是 §3.12 那类"能注册≠能用"的又一实例。
+
+#### ② 受保护目录：首次弹窗 → 允许 → 拒绝，三条路径
+
+探针走**产品路径**（`LocalFileOperations.List`，不是裸 `Directory` 枚举），报告的即控制器收到的内容：
+
+| 场景 | 报告 |
+|---|---|
+| 首次访问 | 系统弹窗 *"RemoteDesktop.app" 想访问"桌面"文件夹中的文件"*（截图存档），一次允许覆盖三个文件夹 |
+| 允许后 | `Desktop: ok (1 entries); Documents: ok (2 entries); Downloads: ok (2 entries)` |
+| 关掉"桌面文件夹"开关后 | `Desktop: AccessDenied ("Access to that location was denied.") [literal path — the folder stops resolving while access is denied]; Documents: ok; Downloads: ok` |
+
+拒绝路径的两个行为都测到了：
+1. 控制器**点名字面路径**（`/Users/<名>/Desktop`）→ `Directory.Exists` 在 EPERM 下返回 false →
+   `LocalFileOperations` 抛出 `FileError.AccessDenied`（带可展示句子）——不是裸 `UnauthorizedAccessException`；
+2. **`Environment.GetFolderPath` 停止解析**（返回空串）——被拒文件夹从 `GetPlaces()` 的"常用位置"列表
+   静默消失（`Directory.Exists` 同为 false），控制器侧的表现为"那个位置不在列表里"。
+
+#### ③ TCC 归因（本次联调最大的方法论收获）
+
+**从 shell 直跑 `.app` 二进制得到的权限读数全是假的。** 同一份代码两条路径对比例子：
+
+| 读数 | shell 直跑 | LaunchServices（`open`） |
+|---|---|---|
+| ScreenRecording | granted（**假的**） | **NOT GRANTED** |
+| screen capture | ok（**假的**） | **FAILED** —— 直到真的给 App 授权 |
+| keychain round trip | FAILED（沙箱 EPERM） | **ok** |
+
+shell 直跑时，App 是终端/代理进程链的子进程，**继承**了父进程的完全磁盘访问与屏幕录制授权；
+而测试里那 2 条 keychain 假阴性方向相反——是沙箱 deny，与 App 自身无关（§3.7 的定性在 App 身份下复测为 ok）。
+**结论：凡涉及 TCC 的验证必须经 LaunchServices 启动 `.app`**（`open`），否则测到的是调用方的权限。
+
+`open --args` 不送参数（§3.11⑧），因此给 `--self-check` 加了环境变量触发器：
+`launchctl setenv RD_SELF_CHECK 1` + `RD_SELF_CHECK_OUTPUT=<报告路径>`，LauncherServices 启动的 App 会
+跑自检并写报告后退出。**注意用完 `launchctl unsetenv`**——不清理的话该构建此后每次启动都只跑自检。
+（`launchctl setenv` 只能由用户在自己的终端执行；提权 shell / 子进程会话里会报
+"Not privileged to set domain environment"。）
+
 ## 4. 可复用 / 需新增 清单
 
 **完全复用（零改动或近乎零改动）**  
@@ -1414,12 +1474,20 @@ if (!_allowedRoots.Any(root => IsSameOrInside(resolved, ResolveFinalTarget(root)
 - ~~屏幕采集走 ScreenCaptureKit 的最小可用 PoC~~ —— **已完成**（P3，实测 2704×1756 BGRA，§3.11③）。
 - ~~把 Windows 专有的测试用 `Assert.SkipUnless` 关掉，macOS 上的 CI 才有意义~~ —— **已完成**（§3.10，
   47 条红 → 3 条沙箱假阴性 → 沙箱外 0 失败）。
-- **输入注入真的发一次事件**（P3 只验到映射层，§P3 第二条警告）。要授予辅助功能后**手动**做，
-  放在后续联调（不在 P1–P10 范围内）。
-- 受保护目录 TCC 行为的实际表现（P7）—— 需真实 `.app` + TCC 授权才能验证，
-  放在后续联调（不在 P1–P10 范围内）。
+- ~~**输入注入真的发一次事件**~~ —— **已完成**（§3.16）。`--self-check` 的 `input injection` 探针在授予
+  辅助功能后发一次真实 `CGEventPost` 并用 `CGEventGetLocation` 量光标位移：实测
+  `ok — the cursor followed the injected event (x 595 → 715)`（多轮复测 575→695、674→794、725→845）。
+  无授权时 `CGEventPost` 静默成功但什么都不发生——这正是探针存在的理由（P3 只验到映射层的那条警告到此关闭）。
+- ~~受保护目录 TCC 行为的实际表现（P7）~~ —— **已完成**（§3.16）：
+  **首次弹窗**实测到（LaunchServices 启动后枚举 Desktop 触发系统授权框）；
+  **允许路径**三轮报告均 `Desktop/Documents/Downloads: ok`；
+  **拒绝路径**（设置里关掉"桌面文件夹"开关）报告
+  `Desktop: AccessDenied ("Access to that location was denied.") [literal path — the folder stops resolving while access is denied]`
+  —— 控制器点名字面路径时拿到的是干净的 `FileError.AccessDenied`，不是裸异常；同时
+  `Environment.GetFolderPath` 会停止解析（返回空），即被拒文件夹从"常用位置"列表静默消失。
 - ~~`open --args` 送不到参数~~ —— **已确认**（§3.11⑧）：`.app` 必须通过 `Contents/MacOS/RemoteDesktop.Client`
-  直接执行才能传入参数；`open --args` 确实送不到。已在 P10 `--self-check` 验证中使用直接执行路径。
+  直接执行才能传入参数；`open --args` 确实送不到。P10 的 `--self-check` 验证使用直接执行路径；
+  §3.16 起亦可经 `RD_SELF_CHECK` 环境变量走 LaunchServices（TCC 归因属于 App 自身的唯一路径）。
 - ~~录制与登录项端到端~~ —— **已完成**（P10）。`--self-check` 在 `.app` 内验证：
   `video recording ok`（8653 bytes 有效 MP4）、`login item not registered`。
 - ~~沙箱外重跑一次完整套件~~ —— **已完成**（P8/P9 时拿到，78/0/0，见附录 A）。

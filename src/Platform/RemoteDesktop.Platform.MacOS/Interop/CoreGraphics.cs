@@ -127,6 +127,22 @@ internal static unsafe partial class CoreGraphics
     [LibraryImport(NativeLibraries.CoreGraphics)]
     internal static partial void CGEventPost(int tap, nint @event);
 
+    /// <summary>
+    /// An event with no source, which is not something to post but a snapshot of live state: its location is where
+    /// the cursor is right now. That is how a probe proves an injected event landed, which matters because
+    /// <see cref="CGEventPost"/> reports success whether or not this process actually has the Accessibility grant.
+    /// </summary>
+    [LibraryImport(NativeLibraries.CoreGraphics)]
+    internal static partial nint CGEventCreate(nint source);
+
+    /// <summary>Where the cursor was when the event was created.</summary>
+    [LibraryImport(NativeLibraries.CoreGraphics)]
+    internal static partial CGPoint CGEventGetLocation(nint @event);
+
+    /// <summary>Whether the display is asleep. Cursor movement cannot be observed while it is.</summary>
+    [LibraryImport(NativeLibraries.CoreGraphics)]
+    internal static partial byte CGDisplayIsAsleep(uint display);
+
     [LibraryImport(NativeLibraries.CoreGraphics)]
     internal static partial void CGWarpMouseCursorPosition(CGPoint newCursorPosition);
 

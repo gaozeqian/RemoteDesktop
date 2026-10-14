@@ -18,9 +18,24 @@ internal static class Program
 
         // Reports what the platform layer can do, from inside whatever this binary was launched from. A windowed
         // program has nowhere to print, so it is a separate mode rather than a log.
-        if (args.Contains("--self-check", StringComparer.Ordinal))
+        //
+        // The environment variable is what makes the mode reachable through LaunchServices: `open --args` discards
+        // its arguments (macOS-port-plan.md 3.11⑧), so `open -a RemoteDesktop.app` could never start it, and the
+        // launch services path is the only one whose TCC attribution is the app's own rather than the terminal's.
+        // Set it with launchctl (launchctl setenv RD_SELF_CHECK 1) so it lands in the session environment every
+        // launched app inherits, and unset it again afterwards — with it set, every launch of this build reports
+        // and exits instead of opening a window.
+        if (args.Contains("--self-check", StringComparer.Ordinal)
+            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RD_SELF_CHECK")))
         {
-            return SelfCheck.Run(args);
+            var reported = new List<string>(args);
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RD_SELF_CHECK_OUTPUT")))
+            {
+                reported.Add("--output");
+                reported.Add(Environment.GetEnvironmentVariable("RD_SELF_CHECK_OUTPUT")!);
+            }
+
+            return SelfCheck.Run([.. reported]);
         }
 
         IHost host;

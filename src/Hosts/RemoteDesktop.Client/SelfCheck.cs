@@ -17,6 +17,9 @@ using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.MacOS;
 using RemoteDesktop.Platform.MacOS.Clipboard;
+using RemoteDesktop.Platform.MacOS.Input;
+using RemoteDesktop.Protocol.File;
+using RemoteDesktop.Features.FileTransfer;
 
 namespace RemoteDesktop.Client;
 
@@ -32,10 +35,13 @@ namespace RemoteDesktop.Client;
 /// matters. It writes to stdout and returns a process exit code, so it can also be used from a script or CI.
 /// </para>
 /// <para>
-/// <c>--output &lt;path&gt;</c> mirrors the whole report to a file as well. That is how to inspect the result of the
-/// one launch path that cannot be faked from a shell: <c>open -a RemoteDesktop.app --args --self-check --output …</c>
-/// starts the app through LaunchServices, which is the only way to run it outside the caller's sandbox, and
-/// LaunchServices discards stdout.
+/// <c>--output &lt;path&gt;</c> mirrors the whole report to a file as well. Together with the <c>RD_SELF_CHECK</c>
+/// environment variable it is what makes the LaunchServices launch usable: <c>open -a RemoteDesktop.app --args …</c>
+/// discards its arguments, but <c>launchctl setenv RD_SELF_CHECK 1</c> lands in the session environment every
+/// launched app inherits, and <c>RD_SELF_CHECK_OUTPUT</c> says where to write the report (LaunchServices discards
+/// stdout). That path matters beyond convenience: it is the only launch whose TCC attribution is the app's own
+/// rather than the calling terminal's, so a run started from a shell can pass a protected-folder probe on the
+/// terminal's Full Disk Access and prove nothing about the app.
 /// </para>
 /// </remarks>
 internal static class SelfCheck
@@ -211,6 +217,8 @@ internal static class SelfCheck
             var loginItemState = LoginItemState(provider);
             Probe("login item", () => loginItemState, ref exitCode);
         }
+        Probe("input injection", () => InputInjection(provider), ref exitCode);
+        Probe("protected folders", () => ProtectedFolders(), ref exitCode);
         Probe("shells offered", () => string.Join(", ", provider.GetRequiredService<IPtyHost>().GetAvailableShells()), ref exitCode);
         Probe("files and shells allowed", () => provider.GetRequiredService<IUserContextGuard>().GetRefusalReason() ?? "yes", ref exitCode);
 
@@ -615,6 +623,148 @@ internal static class SelfCheck
         }
 
         return loginItem.IsRegistered ? "registered" : "not registered";
+    }
+
+    /// <summary>
+    /// Posts one real pointer event and checks that the cursor followed it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the check that separates a working injector from one that drops everything: without the Accessibility
+    /// grant <c>CGEventPost</c> returns success and does nothing, so a registration check (or a mapping-level test)
+    /// would report a healthy port that silently never delivers an event. Only a posted-and-measured move can tell
+    /// those apart, which is why the P3 notes left this one for a machine with the grant given.
+    /// </para>
+    /// <para>
+    /// The move is 120 points to the right of wherever the cursor is, or to the left when that would run past the
+    /// right edge, so the target is unmistakable on screen and stays on the display on any arrangement. The event
+    /// goes to the display the cursor is on rather than to a fixed one, so a second monitor does not yank it away.
+    /// </para>
+    /// </remarks>
+    private static string InputInjection(IServiceProvider provider)
+    {
+        // The behaviour section runs on every platform the client builds for, and Windows has no CGEvent to post.
+        if (!OperatingSystem.IsMacOS())
+        {
+            return "not applicable on this platform";
+        }
+
+        if (!CGEventInputInjector.HasAccessibilityPermission)
+        {
+            // No prompt is spent on purpose — the camera probe keeps the same rule. The permissions section above
+            // says where to grant it, and this line is what a run before granting looks like.
+            return "skipped — Accessibility is not granted (see the permissions section above)";
+        }
+
+        if (MacDiagnostics.IsDisplayAsleep())
+        {
+            return "skipped — the display is asleep, so no cursor movement could be observed";
+        }
+
+        var displays = provider.GetRequiredService<IDisplayEnumerator>().GetDisplays();
+        var before = MacDiagnostics.CurrentCursorLocation();
+        if (displays.Count == 0 || before is null)
+        {
+            return "nothing to measure against (no display, or the cursor position is unreadable)";
+        }
+
+        // The display the cursor is actually on, so the event and the measurement agree about coordinates.
+        var display = displays.FirstOrDefault(d =>
+                before.Value.X >= d.Bounds.X && before.Value.X < d.Bounds.X + d.Bounds.Width &&
+                before.Value.Y >= d.Bounds.Y && before.Value.Y < d.Bounds.Y + d.Bounds.Height)
+            ?? displays.FirstOrDefault(d => d.IsPrimary)
+            ?? displays[0];
+
+        var targetX = before.Value.X + 120;
+        if (targetX > display.Bounds.X + display.Bounds.Width - 8)
+        {
+            targetX = before.Value.X - 120;
+        }
+
+        // The wire carries normalized coordinates, so the target is expressed the way the injector itself maps them
+        // back to a point (PointerCoordinates.FromNormalized): bounds.X + x * (width - 1). Inverting that keeps this
+        // probe honest on a Retina display, where a pixel is not a point.
+        var x = Math.Clamp((targetX - display.Bounds.X) / Math.Max(display.Bounds.Width - 1, 1), 0, 1);
+        var y = Math.Clamp((before.Value.Y - display.Bounds.Y) / Math.Max(display.Bounds.Height - 1, 1), 0, 1);
+        provider.GetRequiredService<IInputInjector>().Inject(new PointerMoveEvent(display.Id, x, y));
+
+        // The window server processes the event off this thread; reading back immediately would race it.
+        Thread.Sleep(150);
+
+        var after = MacDiagnostics.CurrentCursorLocation();
+        return after is not null && Math.Abs(after.Value.X - targetX) <= 4
+            ? $"ok — the cursor followed the injected event (x {before.Value.X:F0} → {after.Value.X:F0})"
+            : $"FAILED — the event was posted but the cursor did not follow (x {before.Value.X:F0} → {(after is null ? "unreadable" : $"{after.Value.X:F0}")})";
+    }
+
+    /// <summary>
+    /// Lists the three folders macOS protects from other applications, through the very call the host answers a
+    /// controller's browse with — not a raw directory enumeration, so the answer is what the other side receives.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The first access is also the moment macOS asks the question, and that is the behaviour the P7 notes deferred
+    /// to a real machine. Both outcomes are a correct result: after Allow the folders list, and after Don't Allow the
+    /// controller sees <see cref="FileError.AccessDenied"/> with a sentence it can show — no crash, no dropped
+    /// channel, no hang. What would be a defect is a raw <see cref="UnauthorizedAccessException"/> reaching the
+    /// protocol layer, and this line is where that would first be visible.
+    /// </para>
+    /// <para>
+    /// Unlike the camera probe this one spends the prompt, deliberately: watching the question appear and seeing
+    /// what the answer does to the listing is the entire point. The prompt is per-folder, so a folder already
+    /// answered does not ask again.
+    /// </para>
+    /// <para>
+    /// A denied folder also stops resolving: <see cref="Environment.GetFolderPath(Environment.SpecialFolder)"/>
+    /// answers with an empty string rather than with a path it cannot read. That is the denial signature, but it
+    /// says nothing about a controller that names the well-known path anyway, so the literal spelling is
+    /// enumerated as a fallback and the report says which one produced the answer.
+    /// </para>
+    /// </remarks>
+    private static string ProtectedFolders()
+    {
+        // macOS is where the three folders are protected; on any other platform the enumeration simply answers.
+        if (!OperatingSystem.IsMacOS())
+        {
+            return "not applicable on this platform";
+        }
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var operations = new LocalFileOperations(FileAccessPolicy.Unrestricted);
+
+        // Desktop and Documents have a SpecialFolder each, which follows a folder the user has moved somewhere;
+        // ~/Downloads has none, so it is always spelled out.
+        var results = new List<string>();
+        foreach (var (label, name, special) in new[]
+        {
+            ("Desktop", "Desktop", Environment.SpecialFolder.Desktop),
+            ("Documents", "Documents", Environment.SpecialFolder.MyDocuments),
+            ("Downloads", "Downloads", (Environment.SpecialFolder?)null),
+        })
+        {
+            // Only a folder that has a SpecialFolder can be denied: ~/Downloads never resolves through one, so an
+            // empty answer there is the normal case and must not be reported as a denial.
+            var resolved = special is { } folder ? Environment.GetFolderPath(folder) : string.Empty;
+            var denied = special is not null && resolved.Length == 0;
+            var path = resolved.Length > 0 ? resolved : Path.Combine(home, name);
+
+            string outcome;
+            try
+            {
+                outcome = $"ok ({operations.List(path).Entries.Count} entries)";
+            }
+            catch (FileOperationException ex)
+            {
+                // Reported rather than failed: a folder the user chose not to share is a choice, not a defect.
+                outcome = $"{ex.Error} (\"{ex.Message}\")";
+            }
+
+            results.Add(denied
+                ? $"{label}: {outcome} [literal path — the folder stops resolving while access is denied]"
+                : $"{label}: {outcome}");
+        }
+
+        return string.Join("; ", results);
     }
 
     /// <summary>
