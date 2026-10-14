@@ -1,8 +1,10 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
+using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
+using RemoteDesktop.Platform.Linux.Audio;
 using RemoteDesktop.Platform.Linux.Video;
 using RemoteDesktop.Platform.Posix;
 using RemoteDesktop.Platform.Posix.Terminal;
@@ -31,7 +33,7 @@ public static class ServiceCollectionExtensions
     /// <c>IDisplayEnumerator</c> / <c>IScreenCapturerFactory</c> (portal + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
     /// <c>IClipboard</c>, <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>,
-    /// <c>IAudioCapturerFactory</c> / <c>IAudioPlayerFactory</c>, and <c>IVideoRecorderFactory</c>.
+    /// and <c>IVideoRecorderFactory</c>.
     /// </para>
     /// <para>
     /// <c>IAgentGateway</c> is absent on purpose and will stay absent. On Windows the privileged service cannot see the
@@ -48,6 +50,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
+        services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();
+        services.AddSingleton<IAudioPlayerFactory, PulseAudioPlayerFactory>();
 
         // Three encoders, mixed together by VideoCodecSelector: hardware first, then by priority, with every failure
         // falling through to the next. The software one is registered last because it is the one that always works.

@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2、P4、P6 完成；P3 完成不需要授权的部分）
+> 状态：**进行中**（P1、P2、P4、P6、P9 完成；P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -67,7 +67,7 @@
 | `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
 | `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd + V4L2 | P8 |
-| `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | `pa_threaded_mainloop` + `pa_stream` | P9 |
+| `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | PulseAudio，主循环由本侧驱动、状态靠轮询 | ✅ P9 |
 | `IPrivacyScreen` | **未实现** | 不支持（`IsSupported => false`），与 Windows 一致 | — |
 | `IAgentGateway` | 服务 + 会话 Agent | **不需要**，见 §2.1 | — |
 
@@ -414,7 +414,36 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 孤儿进程），以及路径被当作 shell 名时被拒绝（否则 shell 选择器就成了执行任意程序的方式）。
 ### P7 — 文件传输（§1.3 的共享层修复已在 P1 完成，这里是 `LocalFileOperations` 与 `XdgUserDirectories`）
 ### P8 — 摄像头（portal fd + V4L2）
-### P9 — 音频（`pa_threaded_mainloop`）
+### P9 — 音频 ✅ 已完成
+
+**计划里的一处被改掉：不是 `pa_threaded_mainloop` + 回调，而是 `pa_mainloop` 由本侧驱动、状态靠轮询。**
+回调式绑定要给每个事件配一个托管入口点，每个都在 PulseAudio 的线程上跑、都要说清自己来自哪里；轮询那几个
+真正关心的状态机械少得多，也少几个能藏生命周期 bug 的地方。唯一保留的回调（读默认输出名字）是在
+`pa_mainloop_iterate` 内部、调用方线程上跑的，所以它连同步都不需要。
+
+**跟随用户的耳机**用的是「隔一段时间问一次默认输出叫什么」，不是订阅事件。订阅是显而易见的做法，也是第一版
+实现，但它需要事件的类别编号——本机没有头文件可核，猜错的方向是**采集在任何事件发生时立刻结束，包括采集
+流自己创建时产生的那个事件**。改成问名字就不需要那个编号，而且答案本来就是我们要看的东西。
+
+**静音门控是契约履行，不是优化。** 接口上写着「设备在放静音时不会有数据到达」——Windows 的环回设备天然
+如此，而 PulseAudio 的 monitor 源**永远**在送数据，包括数字静音。照单全收会让被控端在一台没人用的机器上、
+在整个连接期间，持续以满码率编码并发送静音。
+
+两个被测试抓出来的错误，都是「从记忆里写的常量」：
+
+- **上下文和流的状态枚举不是同一个枚举，编号也不一样**：`PA_CONTEXT_READY = 4`，而 `PA_STREAM_READY = 2`。
+  只用一套常量会让流永远等一个不会出现的值。表现是「流一直没就绪」，而实际上它早就绪了。
+- `pa_sample_format_t` 的 `FLOAT32LE = 5` 本机无法核对，所以改成**运行期验证**：调
+  `pa_sample_size_of_format(5)`，它必须回答 4。这一条把「猜的值」变成了「代码在相信它之前先验证的值」。
+
+测试（9 个，跑在真实的 pipewire-pulse 上）：格式常量自证、静音判定、**采集连上并干净运行**、**播放连上并
+接受音频、能报告积压**、**塞入远超设备能承受的数据不会长出队列**（否则声音会永久落后于画面且无法追上）、
+以及**切换默认输出会让采集结束**（用机器上已有的两个输出在模拟与 HDMI 之间切，并在 `finally` 里切回原值）。
+
+写测试时踩到并修掉的：助手用 `GCHandle` 传回调的上下文，释放句柄后原生代码仍可能回调——**use-after-free，
+整个测试进程直接消失且没有任何信息**；助手没有等上下文进入就绪就去加载模块，于是错误地得出「这台机器的
+声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
+把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
 ### P10 — 录制 + 被控端打包
 ### P11 — 服务端原生部署
 ### P12 — 客户端打包 + 文档
