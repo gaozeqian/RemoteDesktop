@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Remote Desktop
+Name[zh_CN]=远程桌面
+Comment=Control another computer
+Comment[zh_CN]=远程控制另一台电脑
+Exec=/usr/bin/remotedesktop
+Icon=remotedesktop
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=remote;desktop;vnc;rdp;
+Keywords[zh_CN]=远程;桌面;控制;
+StartupNotify=true
+# The window some desktops match against; it has to be the name the process actually sets, or the icon in the dock and
+# the one in this file are two different pictures.
+StartupWMClass=RemoteDesktop.Client

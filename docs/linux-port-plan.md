@@ -690,7 +690,32 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
 验证（把包解到临时目录、用真实二进制走完整条链路）：`--configure-system` 生成两张 PEM 与两个 appsettings（`Path`/`KeyPath`，无存储键）；**私钥 0600、证书 0644**；服务端真的起来并在 TLS 上应答 `/health` 返回 `Healthy`；证书校验三态都对——**信任且名字匹配 → 200**、不信任 → 拒绝、信任但名字不在证书里 → 拒绝。
 
 ### P11（原始计划） — 服务端原生部署
-### P12 — 客户端打包 + 文档 ⏳ 客户端已能在 Linux 上运行；`.deb` 产出与 `release.yml` 未做
+### P12 — 客户端打包 ✅ / `release.yml` ✅ / 文档 ⏳
+
+三个 `.deb` 都能出，实测都构建通过：
+
+| 包 | 内容 |
+| --- | --- |
+| `remotedesktop-client` | 程序、**八种尺寸的图标**、`.desktop`、`/usr/bin/remotedesktop` 符号链接、随包 `libmsquic` |
+| `remotedesktop-host` | 程序、systemd **用户**单元、随包 `libmsquic` |
+| `remotedesktop-server` | rendezvous + relay 两个程序、两个 systemd **系统**单元 |
+
+客户端和宿主**从装好的目录里直接跑起来了**（解包到临时目录、运行、确认窗口出现），没有 `LD_LIBRARY_PATH`。
+
+两条实测出来的事实，不是抄的：
+
+- **窗口类是 `RemoteDesktop.Client`**——`xprop` 查出来的，所以 `.desktop` 里的 `StartupWMClass` 是照着
+  这个填的。填错的话 dock 上的图标会是另一张图。
+- **客户端的依赖是 `ldconfig`/`/proc/<pid>/maps` 数出来的**：X11 那七八个、OpenGL、fontconfig/freetype、
+  PulseAudio、libavcodec。它们全是**运行时按名字加载**的，`dpkg-shlibdeps` 看不见——漏写的结果是程序装得上、
+  窗口打得开、然后什么都不显示。
+
+`release.yml` 加了 `linux-packages` job（ubuntu），产出三个包，由原来的 Windows job 取回来一起发。
+**Linux 用 `amd64`、Windows 用 `x64`，各随各的约定**，不为了让发布列表整齐而互相将就。
+
+还没做：`ci.yml` 里没有构建 `.deb`（只在 release 时构建，所以构建脚本坏了要等到发版才知道）；
+`README.md` / `docs/architecture.md` / `docs/deployment.md` 还没按 Linux 更新。
+
 
 ---
 
