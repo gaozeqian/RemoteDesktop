@@ -54,6 +54,7 @@ public sealed partial class PortalConnection : IDisposable
     private const string ScreenCast = "org.freedesktop.portal.ScreenCast";
     private const string RemoteDesktop = "org.freedesktop.portal.RemoteDesktop";
     private const string Clipboard = "org.freedesktop.portal.Clipboard";
+    private const string Camera = "org.freedesktop.portal.Camera";
     private const string RequestInterface = "org.freedesktop.portal.Request";
 
     /// <summary>SPA_SOURCE_MONITOR — a whole screen rather than one window.</summary>
@@ -208,6 +209,70 @@ public sealed partial class PortalConnection : IDisposable
     /// <summary>The descriptor the input-injection session is spoken over (libei's transport).</summary>
     public Task<SafeFileHandle> ConnectToEisAsync(string session, CancellationToken cancellationToken) =>
         CallForFdAsync(RemoteDesktop, "ConnectToEIS", session, FdArgument.None, text: null, serial: 0, cancellationToken);
+
+    /// <summary>
+    /// Whether this machine has a camera at all.
+    /// </summary>
+    /// <remarks>
+    /// A property, not a request: reading it asks nobody anything and raises no dialog, so it is safe to ask on a
+    /// machine that may have no camera — which is the only reason the enumerator can answer honestly without
+    /// putting a question in front of somebody.
+    /// </remarks>
+    public async Task<bool> CameraPresentAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, "org.freedesktop.DBus.Properties", "Get", "ss", MessageFlags.None);
+        w.WriteString(Camera);
+        w.WriteString("IsCameraPresent");
+        var message = w.CreateMessage();
+
+        return await _connection.CallMethodAsync(
+            message,
+            static (Message m, object? _) => m.GetBodyReader().ReadVariantValue().GetBool(),
+            null).ConfigureAwait(false);
+    }
+
+    /// <summary>Asks the desktop to let this program at the cameras. A question for a person.</summary>
+    /// <remarks>
+    /// Separate from opening one on purpose: the portal's own documentation puts the ask here and the descriptor in
+    /// <see cref="OpenCameraPipeWireRemoteAsync"/>, so the dialog happens once and the descriptor can then be taken
+    /// as often as the program likes.
+    /// </remarks>
+    public async Task AccessCameraAsync(CancellationToken cancellationToken)
+    {
+        var (token, pending) = await PrepareAsync().ConfigureAwait(false);
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(Destination, ObjectPath, Camera, "AccessCamera", "a{sv}", MessageFlags.None);
+        w.WriteDictionary(new Dictionary<string, VariantValue> { ["handle_token"] = token });
+        var message = w.CreateMessage();
+
+        // The request object, which is not what is being waited for — the answer is the signal.
+        _ = await _connection
+            .CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadObjectPathAsString(), null)
+            .ConfigureAwait(false);
+
+        var result = await AwaitAsync(pending, "AccessCamera", cancellationToken).ConfigureAwait(false);
+        if (result.Response != 0)
+        {
+            throw new PortalException(result.Response, "The desktop did not grant access to the camera.");
+        }
+    }
+
+    /// <summary>
+    /// The PipeWire remote the camera nodes are on.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not a camera device.</b> The interface defined in <c>org.freedesktop.portal.Camera</c> says the descriptor
+    /// "should be used to create a <c>pw_core</c> object, by using <c>pw_context_connect_fd()</c>": the cameras are
+    /// nodes in a PipeWire graph, reached exactly the way a captured screen is, and there are no V4L2 ioctls
+    /// anywhere in this. The portal hides every other node on that remote, so what is reached through it is the
+    /// cameras and nothing else.
+    /// </remarks>
+    public Task<SafeFileHandle> OpenCameraPipeWireRemoteAsync(CancellationToken cancellationToken) =>
+        CallForFdAsync(Camera, "OpenPipeWireRemote", session: string.Empty, FdArgument.Options, text: null, serial: 0, cancellationToken);
 
     /// <summary>
     /// Types a character by its keysym, for text that has no key.
@@ -522,6 +587,12 @@ public sealed partial class PortalConnection : IDisposable
         /// <summary>Just the session. <c>OpenPipeWireRemote</c> and <c>ConnectToEIS</c>, both <c>oa{sv}</c>.</summary>
         None,
 
+        /// <summary>
+        /// No session at all. The camera's <c>OpenPipeWireRemote</c>, which is <c>a{sv}</c>: the cameras belong to
+        /// the machine and to the person in front of it, and are not part of anything that was granted per session.
+        /// </summary>
+        Options,
+
         /// <summary>A mime type. <c>SelectionRead</c>, which is <c>os</c>.</summary>
         Text,
 
@@ -555,13 +626,17 @@ public sealed partial class PortalConnection : IDisposable
             member,
             argument switch
             {
+                FdArgument.Options => "a{sv}",
                 FdArgument.Text => "os",
                 FdArgument.Serial => "ou",
                 _ => "oa{sv}",
             },
             MessageFlags.None);
 
-        w.WriteObjectPath(session);
+        if (argument != FdArgument.Options)
+        {
+            w.WriteObjectPath(session);
+        }
 
         switch (argument)
         {

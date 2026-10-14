@@ -66,7 +66,7 @@
 | `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | ✅ P10 |
 | `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
-| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd + V4L2 | P8 |
+| `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd（**是 PipeWire remote，不是 V4L2 设备**）+ PipeWire 节点 | P8 |
 | `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | PulseAudio，主循环由本侧驱动、状态靠轮询 | ✅ P9 |
 | `IPrivacyScreen` | **未实现** | 不支持（`IsSupported => false`），与 Windows 一致 | — |
 | `IAgentGateway` | 服务 + 会话 Agent | **不需要**，见 §2.1 | — |
@@ -267,8 +267,12 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
   active seat 上的用户加 `uaccess` ACL）。被控端是 `systemd --user` 服务、以该用户身份运行且有 logind
   seat，所以通常无需加组；只有无登录会话的 system/systemd 服务 / 纯 headless 场景才需要加入
   `render`（通常还有 `video`）组。
-- `video` 与 `input` 两个组在本机**都存在但为空**，当前用户不在其中。所以摄像头要走 portal 的 fd，
-  直接开 `/dev/video0` 开箱即败。
+- `video` 与 `input` 两个组在本机**都存在但为空**，当前用户不在其中。所以摄像头要走 portal。
+  **去读了接口定义之后更正一处**：`Camera.OpenPipeWireRemote` 给的是一个 **PipeWire remote 的 fd**
+  （"should be used to create a `pw_core` object, by using `pw_context_connect_fd()`"），**不是**在
+  摄像设备上打开的 fd，所以并不存在"之后 V4L2 ioctl 照常"这回事。摄像头在 PipeWire 图里是一个
+  `media.role=Camera` 的节点，取帧与采集屏幕是同一套 stream 机制——`Interop/PipeWire.cs` 里已有的
+  绑定全部可复用。本机 `IsCameraPresent` 读出来是 `false`，也没有 `/dev/video*`。
 - `/etc/hosts` 把主机名映射到 `127.0.1.1`，`Dns.GetHostName()` / `Environment.MachineName` 可解析。
 
 ### 3.4 在本机跑测试套件（两个会白费半小时的坑）
