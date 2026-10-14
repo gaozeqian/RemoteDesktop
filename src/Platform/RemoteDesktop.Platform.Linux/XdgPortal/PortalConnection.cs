@@ -409,24 +409,17 @@ public sealed partial class PortalConnection : IDisposable
         w.WriteDictionary(new Dictionary<string, VariantValue>());
         var message = w.CreateMessage();
 
-        var fd = await _connection
-            .CallMethodAsync(message, static (Message m, object? _) => m.GetBodyReader().ReadHandleRaw(), null)
+        // Duplicated inside the reader, not after the call returns. The descriptor belongs to the message, and the
+        // message is disposed as soon as this delegate has run — so duplicating afterwards is a race that usually
+        // works and occasionally duplicates a number that has already been closed, which reads as EBADF on a
+        // connection that is perfectly healthy.
+        var copy = await _connection
+            .CallMethodAsync(
+                message,
+                static (Message m, object? _) => LibC.DuplicateFileDescriptor((int)m.GetBodyReader().ReadHandleRaw()),
+                null)
             .ConfigureAwait(false);
 
-        return ForcedFd((int)fd);
-    }
-
-    /// <summary>
-    /// Takes ownership of a descriptor the connection would otherwise close.
-    /// </summary>
-    /// <remarks>
-    /// The descriptor belongs to the message, which is disposed as soon as the reply has been read — so it is
-    /// duplicated first. Without that the stream would be reading from a descriptor that had already been closed,
-    /// which fails as a read error rather than as anything that points at the cause.
-    /// </remarks>
-    private static SafeFileHandle ForcedFd(int fd)
-    {
-        var copy = LibC.DuplicateFileDescriptor(fd);
         if (copy < 0)
         {
             throw new PortalException($"The portal's descriptor could not be duplicated (errno {Marshal.GetLastPInvokeError()}).");
@@ -434,6 +427,7 @@ public sealed partial class PortalConnection : IDisposable
 
         return new SafeFileHandle(copy, ownsHandle: true);
     }
+
 
     /// <summary>
     /// Turns whatever the subscription reports into either a value or a failure.

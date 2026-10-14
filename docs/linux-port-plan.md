@@ -662,10 +662,32 @@ session agent 里；这里没有 Session 0，Wayland 的 portal 只在该会话�
 **用户**单元、`WantedBy=graphical-session.target`、`PartOf=`、`Restart=on-failure`）与 `.desktop` 文件。
 形状可以直接沿用 `build/debian/server/`。
 
-**下一步真正的验证是端到端**：起一个本地 rendezvous（`RemoteDesktop.Server.Rendezvous` 就在仓库里），
-被控端用 systemd 用户服务跑，控制器用另一个 `DataDirectory` 跑，走 `docs/deployment.md` 的本地回环流程。
-这才是"能不能真的看到并控制另一台机器"的答案——目前画面与输入各自验证过了，但**还没有在一条会话里
-串起来过**。
+### 端到端已经跑通 ✅
+
+`SessionEndToEndTests` 把真实的被控端、真实的控制器和真实的 rendezvous（loopback）凑到一起，走完整的
+链路。实测输出：
+
+```
+host is device 838004535, password t8saruyidhck
+connected over Direct
+the controller can see 1 display(s)
+moved the pointer to the top-left corner through the session
+THE PICTURE CHANGED — input reached the screen through the session
+[h264_vaapi] No usable encoding entrypoint found for profile VAProfileH264Main (6).
+```
+
+也就是说：信令 → QUIC 直连 → 口令握手 → 会话授权 → **portal 采集真实屏幕 → x264 编码 → 传输 → 解码**，
+并且**反向**：控制器注入 → libei → 真实指针移动 → 画面变化被解码验证。顺带确认了硬件编码器探测在
+这块没有 VCE 的 GPU 上**干净地回落到软件**（正是风险表里本机作为试验台的那条）。
+
+有一条容易被忽略但很要命的细节：端到端的用例必须把自己数据目录里的 restore token 从**已授权**的那个
+目录拷过去。授权是**按数据目录**记的，测试用自己的空目录就会卡在一个没人应答的对话框上，表现成超时。
+第一版就是这么挂的。
+
+**顺带修掉一个真 race**：`CallForFdAsync` 原本在 `CallMethodAsync` **返回之后**才 dup 那个 fd，而 fd 属于
+message、message 在读取委托返回后就被释放——于是偶尔 dup 到一个已经关掉的编号，报 EBADF，而连接本身好
+好的。平时不显形，直到测试并行度上来。现在 dup 在读取委托**内部**做，与 `VariantValue`、`Reader` 那两条
+是同一类错误：**值必须在它还活着的时候取出来**。
 
 ### P10（原始计划） — 录制 + 被控端打包
 ### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）
