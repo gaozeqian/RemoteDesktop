@@ -32,7 +32,7 @@ public sealed class VideoDecoderTests
         using var source = Frame(0x80);
         var accessUnit = encoder.Encode(source, forceKeyFrame: true).Single();
 
-        using var decoder = new FfmpegH264Decoder("h264", Width, Height);
+        using var decoder = new FfmpegVideoDecoder("h264", Width, Height);
         using var decoded = decoder.Decode(accessUnit);
 
         Assert.NotNull(decoded);
@@ -51,7 +51,7 @@ public sealed class VideoDecoderTests
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         using var encoder = new FfmpegH264Encoder("libx264", Options);
-        using var decoder = new FfmpegH264Decoder("h264", Width, Height);
+        using var decoder = new FfmpegVideoDecoder("h264", Width, Height);
 
         var brightLuma = DecodeFlatLuma(encoder, decoder, 0xE0);
         var darkLuma = DecodeFlatLuma(encoder, decoder, 0x20);
@@ -67,7 +67,7 @@ public sealed class VideoDecoderTests
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         using var encoder = new FfmpegH264Encoder("libx264", Options);
-        using var decoder = new FfmpegH264Decoder("h264", Width, Height);
+        using var decoder = new FfmpegVideoDecoder("h264", Width, Height);
         using var dark = Frame(0x10);
         using var bright = Frame(0xE0);
 
@@ -94,12 +94,12 @@ public sealed class VideoDecoderTests
 
         // What happens after a packet loss: the controller throws the decoder away and starts a new session from the
         // next key frame, which has to work without anything that came before it.
-        using (var first = new FfmpegH264Decoder("h264", Width, Height))
+        using (var first = new FfmpegVideoDecoder("h264", Width, Height))
         {
             Assert.NotNull(first.Decode(keyFrame));
         }
 
-        using var second = new FfmpegH264Decoder("h264", Width, Height);
+        using var second = new FfmpegVideoDecoder("h264", Width, Height);
         Assert.NotNull(second.Decode(keyFrame));
     }
 
@@ -108,7 +108,7 @@ public sealed class VideoDecoderTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        using var decoder = new FfmpegH264Decoder("h264", Width, Height);
+        using var decoder = new FfmpegVideoDecoder("h264", Width, Height);
 
         // Not a start code, not a NAL, not a picture. Reporting this lets the host ask for a key frame; returning
         // null would look the same as a decoder that simply needs more input, and the picture would never come back.
@@ -121,11 +121,11 @@ public sealed class VideoDecoderTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        var refused = Assert.Throws<NotSupportedException>(() => new FfmpegH264Decoder("h264_from_the_future", Width, Height));
+        var refused = Assert.Throws<NotSupportedException>(() => new FfmpegVideoDecoder("h264_from_the_future", Width, Height));
         Assert.Contains("h264_from_the_future", refused.Message, StringComparison.Ordinal);
     }
 
-    private static byte DecodeFlatLuma(FfmpegH264Encoder encoder, FfmpegH264Decoder decoder, byte luma)
+    private static byte DecodeFlatLuma(FfmpegH264Encoder encoder, FfmpegVideoDecoder decoder, byte luma)
     {
         using var source = Frame(luma);
 

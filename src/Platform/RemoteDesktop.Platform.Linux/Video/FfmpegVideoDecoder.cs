@@ -6,9 +6,15 @@ using RemoteDesktop.Platform.Linux.Interop;
 namespace RemoteDesktop.Platform.Linux.Video;
 
 /// <summary>
-/// H.264 decoding through libavcodec, giving back NV12 frames.
+/// Video decoding through libavcodec, giving back NV12 frames.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Named for what it does rather than for H.264, because it decodes by name and a camera needs it to: a webcam that
+/// hands over JPEG rather than raw pixels is decoded by the very same class, opened as <c>mjpeg</c>. That is not a
+/// coincidence to be tidied away — MJPEG is a sequence of stills, each one a key frame, which is the same shape as
+/// the low-delay stream this was written for.
+/// </para>
 /// <para>
 /// Every frame handed out is a fresh copy. The decoder reuses one picture internally, so returning that would mean
 /// the caller's frame changing under it on the next call — and the caller is a renderer that keeps the previous
@@ -17,12 +23,13 @@ namespace RemoteDesktop.Platform.Linux.Video;
 /// <para>
 /// The decoder is asked for NV12 and its answer is checked rather than trusted. H.264 decoders normally produce
 /// planar YUV, and a decoder that quietly kept doing so would hand back frames that look almost right — the colour
-/// would be wrong in a way that is easy to mistake for a colour-space problem. YUV420P is converted; anything else
-/// is refused with the format named.
+/// would be wrong in a way that is easy to mistake for a colour-space problem. The two layouts that arrive in
+/// practice are handled directly; anything else — JPEG's <c>YUVJ420P</c> and <c>YUVJ422P</c> among them — goes
+/// through libswscale, which is the only thing that knows how to convert the full range JPEG is coded in.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed unsafe class FfmpegH264Decoder : IVideoDecoder
+public sealed unsafe class FfmpegVideoDecoder : IVideoDecoder
 {
     private AVCodecContext* _context;
     private AVFrame* _frame;
@@ -33,7 +40,7 @@ public sealed unsafe class FfmpegH264Decoder : IVideoDecoder
     /// <param name="width">The stream's expected width; used to check what comes out.</param>
     /// <param name="height">The stream's expected height.</param>
     /// <exception cref="NotSupportedException">The decoder is not in this build.</exception>
-    public FfmpegH264Decoder(string decoderName, int width, int height)
+    public FfmpegVideoDecoder(string decoderName, int width, int height)
     {
         FfmpegLibraries.EnsureResolved();
 
@@ -184,11 +191,74 @@ public sealed unsafe class FfmpegH264Decoder : IVideoDecoder
                 break;
 
             default:
-                output.Dispose();
-                throw new InvalidDataException($"The decoder produced {format}, which this pipeline cannot carry.");
+                // Anything else goes through libswscale. A webcam's JPEG does not decode to either layout above:
+                // it comes back as YUVJ420P or YUVJ422P, which are the same layouts carrying the full range JPEG
+                // is coded in. That range is the part worth not doing by hand — writing the planes out unchanged
+                // would give a picture that is washed out rather than obviously broken, which is the worst kind of
+                // wrong. swscale knows, so it is asked.
+                Convert(width, height, format, output);
+                break;
         }
 
         return output;
+    }
+
+    /// <summary>Converts a picture this class does not handle directly into the NV12 the pipeline carries.</summary>
+    private void Convert(int width, int height, AVPixelFormat format, MemoryVideoFrame output)
+    {
+        var context = ffmpeg.sws_getContext(
+            width, height, format,
+            width, height, AVPixelFormat.AV_PIX_FMT_NV12,
+            (int)SwsFlags.SWS_BILINEAR,
+            null, null, null);
+
+        if (context is null)
+        {
+            output.Dispose();
+            throw new InvalidDataException($"libswscale would not convert {format} to NV12.");
+        }
+
+        try
+        {
+            var source = new byte*[4];
+            var sourceStride = new int[4];
+            for (var i = 0; i < 4; i++)
+            {
+                // The bindings' fixed-size arrays index by uint, unlike a C# array.
+                source[i] = _frame->data[(uint)i];
+                sourceStride[i] = _frame->linesize[(uint)i];
+            }
+
+            var target = output.Buffer;
+            var destination = new byte*[4];
+            var destinationStride = new int[4];
+
+            fixed (byte* pixels = target)
+            {
+                // The two planes of NV12, one after the other: the whole luminance picture, then the half-height
+                // interleaved chroma. This is the layout MemoryVideoFrame documents, and swscale writes into it
+                // with one call.
+                destination[0] = pixels;
+                destination[1] = pixels + (width * height);
+                destination[2] = null;
+                destination[3] = null;
+                destinationStride[0] = width;
+                destinationStride[1] = width;
+                destinationStride[2] = 0;
+                destinationStride[3] = 0;
+
+                var converted = ffmpeg.sws_scale(context, source, sourceStride, 0, height, destination, destinationStride);
+                if (converted < height)
+                {
+                    output.Dispose();
+                    throw new InvalidDataException($"libswscale converted only {converted} of {height} rows of {format}.");
+                }
+            }
+        }
+        finally
+        {
+            ffmpeg.sws_freeContext(context);
+        }
     }
 
     private static void CopyPlane(byte* source, int sourceStride, Span<byte> destination, int width, int rows)

@@ -65,7 +65,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IClipboard, WaylandClipboard>();
         services.AddSingleton<ICameraEnumerator, WaylandCameraEnumerator>();
         services.AddSingleton<ICameraSourceFactory, WaylandCameraSourceFactory>();
-        services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
+        services.AddSingleton<IVideoDecoderFactory, FfmpegVideoDecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();
         services.AddSingleton<IAudioPlayerFactory, PulseAudioPlayerFactory>();

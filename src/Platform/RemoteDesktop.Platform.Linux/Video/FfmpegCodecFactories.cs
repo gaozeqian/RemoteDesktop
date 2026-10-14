@@ -170,7 +170,7 @@ public sealed class NvencH264EncoderFactory : IVideoEncoderFactory
 
 /// <summary>The H.264 decoder, which needs no hardware and no device.</summary>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegH264DecoderFactory : IVideoDecoderFactory
+public sealed class FfmpegVideoDecoderFactory : IVideoDecoderFactory
 {
     private readonly Lazy<bool> _available = new(() =>
     {
@@ -191,6 +191,6 @@ public sealed class FfmpegH264DecoderFactory : IVideoDecoderFactory
 
     public IVideoDecoder Create(VideoCodec codec, int width, int height) =>
         codec == VideoCodec.H264
-            ? new FfmpegH264Decoder("h264", width, height)
+            ? new FfmpegVideoDecoder("h264", width, height)
             : throw new NotSupportedException($"This decoder does not do {codec}.");
 }
