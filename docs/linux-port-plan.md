@@ -756,7 +756,7 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
 验证（把包解到临时目录、用真实二进制走完整条链路）：`--configure-system` 生成两张 PEM 与两个 appsettings（`Path`/`KeyPath`，无存储键）；**私钥 0600、证书 0644**；服务端真的起来并在 TLS 上应答 `/health` 返回 `Healthy`；证书校验三态都对——**信任且名字匹配 → 200**、不信任 → 拒绝、信任但名字不在证书里 → 拒绝。
 
 ### P11（原始计划） — 服务端原生部署
-### P12 — 客户端打包 ✅ / `release.yml` ✅ / 文档 ⏳
+### P12 — 客户端打包 ✅ / `release.yml` ✅ / 文档 ✅
 
 三个 `.deb` 都能出，实测都构建通过：
 
@@ -779,8 +779,9 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
 `release.yml` 加了 `linux-packages` job（ubuntu），产出三个包，由原来的 Windows job 取回来一起发。
 **Linux 用 `amd64`、Windows 用 `x64`，各随各的约定**，不为了让发布列表整齐而互相将就。
 
-还没做：`ci.yml` 里没有构建 `.deb`（只在 release 时构建，所以构建脚本坏了要等到发版才知道）；
-`README.md` / `docs/architecture.md` / `docs/deployment.md` 还没按 Linux 更新。
+文档（`README.md` / `docs/architecture.md` / `docs/deployment.md`）已按 Linux 更新；
+`ci.yml` 现在每次 PR 都构建三个 `.deb` 并检查包里的主程序与手写的依赖行（此前只在 release 时构建，
+构建脚本坏了要等到发版才知道）。
 
 
 ---
