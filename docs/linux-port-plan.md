@@ -637,17 +637,35 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 整个测试进程直接消失且没有任何信息**；助手没有等上下文进入就绪就去加载模块，于是错误地得出「这台机器的
 声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
 把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
-### P10 — 录制 ✅ / 被控端打包 ⏳ P3 已完成，不再被挡
+### P10 — 录制 ✅ / 被控端宿主 ✅ / 打包 ⏳
 
-录制已完成，见上表。**P3 完成后，被控端打包剩下的障碍比原先少了两个**：`IDisplayEnumerator`、
-`IScreenCapturerFactory`（P3）、`IInputInjector`（P3）都已注册。还差 **`IClipboard`、`ICameraEnumerator`、
-`ICameraSourceFactory`**——其中剪贴板是 P5、摄像头是 P8。宿主用 `ValidateOnBuild = true` 构建容器，
-缺任何一个都会在启动时失败。
+**被控端现在能在 Linux 上跑起来了**，宿主装配这一段补完了（原先 Client 与 HostService 都还硬编码
+Windows，平台层其实没有宿主）。实测：
 
-所以要么先做 P5/P8，要么给这三个端口写**惰性**实现（构造函数不抛异常，用到时才报告不可用）——
-后者能让宿主先跑起来、把画面与输入这条主链路真正端到端验证一遍。形状可以直接沿用服务端那套
-（`build/debian/server/`），差别只在 systemd **用户**单元
-（`WantedBy=graphical-session.target`、`PartOf=`）与 portal 会话必须惰性建立。
+```
+[ERR] QUIC is not supported on this system; incoming connections are disabled.   ← 第一次没带 LD_LIBRARY_PATH
+[WRN] Rendezvous connection lost: Unable to connect to the remote server.        ← 没起服务端，按退避重试
+```
+
+带上 `LD_LIBRARY_PATH` 之后 QUIC 那条消失；控制 socket 出现在
+`$XDG_RUNTIME_DIR/remotedesktop/RemoteDesktop.HostControl.sock` 并且**能接受连接**（目录是 0700，
+socket 本身受目录保护）。
+
+装配上最大的差别是**没有 agent**：Windows 的特权服务在 Session 0，看不见桌面，所以画面与输入在它监管的
+session agent 里；这里没有 Session 0，Wayland 的 portal 只在该会话内应答，所以宿主以登录用户身份跑在图形
+会话里，**它自己就是采集和注入的那一方**。`IAgentGateway` 不注册，四个 `Add…Feature()` 直接上。
+
+两个为让宿主能装配而补的端口（`WaylandClipboard`、`WaylandCameraEnumerator`）都在上面各自的小节里
+说明了自己不做什么。
+
+**打包还差最后一步**，而且不再是"被挡住"，是"还没做"：`build/debian/host/`（`.deb` + systemd
+**用户**单元、`WantedBy=graphical-session.target`、`PartOf=`、`Restart=on-failure`）与 `.desktop` 文件。
+形状可以直接沿用 `build/debian/server/`。
+
+**下一步真正的验证是端到端**：起一个本地 rendezvous（`RemoteDesktop.Server.Rendezvous` 就在仓库里），
+被控端用 systemd 用户服务跑，控制器用另一个 `DataDirectory` 跑，走 `docs/deployment.md` 的本地回环流程。
+这才是"能不能真的看到并控制另一台机器"的答案——目前画面与输入各自验证过了，但**还没有在一条会话里
+串起来过**。
 
 ### P10（原始计划） — 录制 + 被控端打包
 ### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）
@@ -669,7 +687,7 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 验证（把包解到临时目录、用真实二进制走完整条链路）：`--configure-system` 生成两张 PEM 与两个 appsettings（`Path`/`KeyPath`，无存储键）；**私钥 0600、证书 0644**；服务端真的起来并在 TLS 上应答 `/health` 返回 `Healthy`；证书校验三态都对——**信任且名字匹配 → 200**、不信任 → 拒绝、信任但名字不在证书里 → 拒绝。
 
 ### P11（原始计划） — 服务端原生部署
-### P12 — 客户端打包 + 文档
+### P12 — 客户端打包 + 文档 ⏳ 客户端已能在 Linux 上运行
 
 ---
 

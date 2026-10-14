@@ -1,9 +1,14 @@
 using System.Globalization;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.HostService;
+using RemoteDesktop.Features.Camera;
+using RemoteDesktop.Features.Desktop;
+using RemoteDesktop.Features.FileTransfer;
+using RemoteDesktop.Features.Terminal;
+using RemoteDesktop.Media;
+using RemoteDesktop.Platform.Linux;
 using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Platform.Windows.Agent;
 using RemoteDesktop.Transport;
@@ -13,17 +18,25 @@ using Serilog;
 // Windows-only, which silences CA1416 everywhere — including on the calls that are genuinely Windows-only and now sit
 // next to code that runs on Linux. Without it the analyzer checks each of those call sites instead.
 
-// Composition root of the host side: the privileged, always-on service that accepts connections and authorizes
-// sessions. Screen and input live in the session agent it supervises; the service only relays their channels.
-if (!OperatingSystem.IsWindows())
+// Composition root of the host side. What that means differs by platform, and the difference is the whole of the
+// branch below:
+//
+//   Windows  the privileged service runs in session 0, which cannot see a desktop. Screen and input live in a session
+//            agent it supervises, and this process only relays their channels.
+//   elsewhere  there is no session 0 to be blinded by. A Wayland session's portals answer only inside that session,
+//            so the host runs as the signed-in user inside their graphical session and is itself the thing that
+//            captures and injects. Nothing is relayed and there is nobody to supervise.
+if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
 {
-    throw new PlatformNotSupportedException("Only Windows is supported in phase 1.");
+    Console.Error.WriteLine($"This build runs on Windows and Linux; this is {Environment.OSVersion.Platform}.");
+    return 1;
 }
 
-const string ServiceName = SetupCommands.ServiceName;
+const string ServiceName = "RemoteDesktopHost";
 
 // The installer runs this executable for its setup and cleanup steps; the service itself is not started then.
-if (SetupCommands.TryRun(
+if (OperatingSystem.IsWindows() &&
+    SetupCommands.TryRun(
         args,
         AppContext.BaseDirectory,
         DataDirectory.ForMachine(),
@@ -50,9 +63,6 @@ if (transport is null)
     return StartupSettings.InvalidSettingsExitCode;
 }
 
-var agent = builder.Configuration.GetSection("Agent").Get<AgentGatewayOptions>() ?? new AgentGatewayOptions();
-agent.DataDirectory = dataDirectory;
-
 // A service has no console; keep a rolling log next to the identity.
 builder.Logging.ClearProviders().AddSerilog(
     new LoggerConfiguration()
@@ -62,15 +72,37 @@ builder.Logging.ClearProviders().AddSerilog(
         .CreateLogger(),
     dispose: true);
 
-builder.Services
-    .AddWindowsService(options => options.ServiceName = ServiceName)
-    .AddWindowsPlatform(dataDirectory, DataProtectionScope.LocalMachine)
-    .AddWindowsAgentGateway(agent)
-    .AddQuicTransport(transport)
-    .AddRemoteDesktopApplication()
-    .AddAgentForwardedDesktop()
-    .AddLocalHostControl(isService: true)
-    .AddHostedService<HostControlServer>();
+if (OperatingSystem.IsWindows())
+{
+    var agent = builder.Configuration.GetSection("Agent").Get<AgentGatewayOptions>() ?? new AgentGatewayOptions();
+    agent.DataDirectory = dataDirectory;
+
+    builder.Services
+        .AddWindowsService(options => options.ServiceName = ServiceName)
+        .AddWindowsPlatform(dataDirectory, DataProtectionScope.LocalMachine)
+        .AddWindowsAgentGateway(agent)
+        .AddQuicTransport(transport)
+        .AddRemoteDesktopApplication()
+        .AddAgentForwardedDesktop()
+        .AddLocalHostControl(isService: true)
+        .AddHostedService<HostControlServer>();
+}
+else if (OperatingSystem.IsLinux())
+{
+    // The features are registered directly rather than forwarded through an agent, which is what AddDesktopFeature
+    // and its siblings do here — the same list the client uses when it hosts incoming sessions itself.
+    builder.Services
+        .AddLinuxPlatform(dataDirectory)
+        .AddQuicTransport(transport)
+        .AddRemoteDesktopApplication()
+        .AddRemoteDesktopMedia()
+        .AddDesktopFeature()
+        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
+        .AddTerminalFeature()
+        .AddCameraFeature()
+        .AddLocalHostControl(isService: true)
+        .AddHostedService<HostControlServer>();
+}
 
 await builder.Build().RunAsync().ConfigureAwait(false);
 return 0;
