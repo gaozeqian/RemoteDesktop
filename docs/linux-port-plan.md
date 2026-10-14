@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1 完成，P2 起未开始）
+> 状态：**进行中**（P1、P2 完成，P3 起未开始）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -57,7 +57,7 @@
 | --- | --- | --- | --- |
 | `ISecretStore` | `DpapiSecretStore` | 0700 目录下的 0600 文件（`FileSecretStore`） | ✅ P1 |
 | `IUserContextGuard` | 判 SYSTEM | 判 `geteuid()==0`（`LinuxUserContextGuard`） | ✅ P1 |
-| `ISystemKeepAwake` | `SetThreadExecutionState` | logind `Inhibit`（会话总线之外的**系统**总线） | P2 |
+| `ISystemKeepAwake` | `SetThreadExecutionState` | logind `Inhibit`（**系统**总线，持有返回的 fd） | ✅ P2 |
 | `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | P3 |
 | `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | P3 |
 | `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | P3 |
@@ -293,11 +293,38 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 
 结果：**构建 0 警告 0 错误；全仓 486 个测试 0 失败**（起始 449 个里 85 个失败）。
 
-### P2 — 密钥、身份、传输、guard、防休眠（D-Bus 桥落地）
+### P2 — 密钥、身份、传输、guard、防休眠（D-Bus 桥落地）✅ 已完成
 
 顺序上的一个关键调整：**不要**把「防休眠」放到后面。logind `Inhibit` 是整个移植里最简单的 D-Bus 调用，
-只读的 `Mutter.DisplayConfig.GetCurrentState` 是第二个。用它俩把 D-Bus 桥打通并验证，到 P3 开始时
-传输层已确认可用，新东西只剩 portal 的 request/session 状态机。
+用它把 D-Bus 桥打通并验证，到 P3 开始时传输层已确认可用，新东西只剩 portal 的 request/session 状态机。
+
+落地内容：
+
+- `LogindKeepAwake` 实现 `ISystemKeepAwake`。logind 的 inhibitor **就是一个文件描述符**：要一个就是开始
+  抑制、关掉它就是结束，没有单独的调用。所以这个类持有的是一个描述符而不是一个标志位——也因此必须把
+  描述符从回复里 **dup** 出来，连接拥有消息里那一个并在读完后立刻关掉，不 dup 的话抑制会立刻失效。
+  测试断言的不是这个类自己的标志位，而是 **logind 自己报告的**抑制列表（`ListInhibitors`），因为描述符
+  被悄悄关掉从类内部看和正常一模一样。
+- 宿主控制通道换成 `$XDG_RUNTIME_DIR/remotedesktop/` 下的 Unix socket（`HostControlEndpoint` +
+  `HostControlSocketListener`）。`IHostControl` / `HostControlHandler` 未动——它们本来就是对 `Stream`
+  抽象的。安全模型说明写进了 `HostControlEndpoint` 的注释：Windows 上任意已认证本地用户都能问服务要设备码，
+  这里只有拥有那个运行时目录的账号能，实际就是宿主本来就运行的那个账号。
+- `DeviceIdentity` 的三处 PKCS#12 加载统一走一个 `Import` 辅助方法并加 `X509KeyStorageFlags.Exportable`
+  ——MsQuic 要把私钥取出来交给 TLS 层，取不出来时报的错与证书毫无关系。macOS 分支已证实这是必需的。
+- `DataDirectory.ForUser()` / `ForMachine()`。`Environment.SpecialFolder` 在 Linux 上会给出一个**看起来
+  合理但错误**的答案：`ApplicationData` 是 `~/.config`（那是配置目录），`CommonApplicationData` 是
+  `/usr/share`（那是发行版的地盘）。非 Windows 下两者返回同一个目录——被控端以登录用户身份运行在该用户的
+  会话里，没有第二个账号的状态需要分开存放。
+- 删掉了 `HostService` 的 `[assembly: SupportedOSPlatform("windows")]`。它让 CA1416 对**整个程序**闭嘴；
+  删掉之后分析器立刻指出了 `HostControlServer` 里三处 Windows 专有调用没有守卫，这正是它应该做的。
+
+安装 `Tmds.DBus.Protocol` 时的一个观察：**计划里说的「薄包装让 portal 代码看不到 Tmds 类型」达不到它想要
+的目的**——读取回复必须传 `Message`/`Reader`，那些类型**就是**这个 API，包装一层并不缩小爆炸半径。改为
+按约定把 Tmds 的使用限制在少数几个文件里，并在 `Directory.Packages.props` 里注明上游仍是 0.x。
+
+验证：全仓 **499 个测试 0 失败**；`KeepAwakeTests` 通过 `ListInhibitors` 观察到抑制器真的出现与消失，
+即 .NET 经 D-Bus 传递文件描述符已端到端验证；`HostControlTests` 现在跑在真实的 Unix socket 传输上
+（此前它用 `NamedPipeServerStream` 搭假服务端，与新的客户端传输对不上，这也是一处真实的移植影响）。
 
 ### P3 — Wayland 采集与输入（核心，风险最高）
 

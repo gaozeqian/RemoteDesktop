@@ -9,7 +9,9 @@ using RemoteDesktop.Platform.Windows.Agent;
 using RemoteDesktop.Transport;
 using Serilog;
 
-[assembly: SupportedOSPlatform("windows")]
+// No [assembly: SupportedOSPlatform("windows")] here on purpose. It would tell the analyzer that the whole program is
+// Windows-only, which silences CA1416 everywhere — including on the calls that are genuinely Windows-only and now sit
+// next to code that runs on Linux. Without it the analyzer checks each of those call sites instead.
 
 // Composition root of the host side: the privileged, always-on service that accepts connections and authorizes
 // sessions. Screen and input live in the session agent it supervises; the service only relays their channels.
@@ -24,7 +26,7 @@ const string ServiceName = SetupCommands.ServiceName;
 if (SetupCommands.TryRun(
         args,
         AppContext.BaseDirectory,
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktop"),
+        DataDirectory.ForMachine(),
         Console.Out,
         out var setupExitCode))
 {
@@ -34,8 +36,7 @@ if (SetupCommands.TryRun(
 var builder = Host.CreateApplicationBuilder(args);
 builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
 
-var dataDirectory = builder.Configuration["DataDirectory"]
-    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktop");
+var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForMachine();
 
 // A service has no console and no window: if the settings cannot be read, the reason goes to a file in the log folder
 // an operator is already told to look at, and the service exits with its own code rather than an unexplained crash.

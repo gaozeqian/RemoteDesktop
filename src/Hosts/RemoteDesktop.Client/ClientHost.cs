@@ -41,8 +41,7 @@ internal static class ClientHost
         });
         builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
 
-        var dataDirectory = builder.Configuration["DataDirectory"]
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RemoteDesktop");
+        var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForUser();
         CrashLog.Register(dataDirectory);
 
         // Read before anything is built: a mistyped address used to end in an exception nobody saw, because a windowed

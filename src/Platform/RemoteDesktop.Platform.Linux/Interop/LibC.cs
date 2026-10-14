@@ -16,4 +16,12 @@ internal static partial class LibC
     /// </summary>
     [LibraryImport("libc", EntryPoint = "geteuid")]
     internal static partial uint GetEffectiveUserId();
+
+    /// <summary>
+    /// Duplicates a file descriptor. Needed whenever a descriptor arrives over D-Bus: the connection owns the one in
+    /// the message and closes it once the reply has been read, so a descriptor meant to be held afterwards has to be
+    /// taken out of its hands first.
+    /// </summary>
+    [LibraryImport("libc", EntryPoint = "dup", SetLastError = true)]
+    internal static partial int DuplicateFileDescriptor(int descriptor);
 }

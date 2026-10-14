@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<ISecretStore>(new FileSecretStore(Path.Combine(dataDirectory, "secrets")));
         services.AddSingleton<IUserContextGuard, LinuxUserContextGuard>();
+        services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         return services;
     }
 }

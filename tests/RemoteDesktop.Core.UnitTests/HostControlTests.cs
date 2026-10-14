@@ -4,7 +4,7 @@ using RemoteDesktop.Application.Hosting;
 
 namespace RemoteDesktop.Core.UnitTests;
 
-/// <summary>The UI ↔ service pipe: the UI's client against the service's handler over a real named pipe.</summary>
+/// <summary>The UI ↔ service channel: the UI's client against the service's handler over the real transport.</summary>
 public class HostControlTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -130,8 +130,7 @@ public class HostControlTests
 
     private static async Task<bool> GetsAnswerAsync(string pipeName, byte[] request)
     {
-        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(5000, Ct);
+        await using var pipe = await HostControlEndpoint.ConnectAsync(HostControlEndpoint.Resolve(pipeName), TimeSpan.FromSeconds(5), Ct);
         try
         {
             await pipe.WriteAsync(request, Ct);
@@ -143,16 +142,32 @@ public class HostControlTests
         }
     }
 
-    /// <summary>Accepts one connection after another, like the service's control server.</summary>
+    /// <summary>
+    /// Accepts one connection after another, like the service's control server — and over the same transport, so that
+    /// what is exercised here is the pair that ships rather than two halves that happen to meet on one platform. The
+    /// address is resolved the same way on both ends; only the socket itself differs.
+    /// </summary>
     private static async Task Serve(string pipeName, IHostControl control, CancellationToken stop)
     {
         try
         {
-            while (!stop.IsCancellationRequested)
+            if (OperatingSystem.IsWindows())
             {
-                await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-                await pipe.WaitForConnectionAsync(stop);
-                await HostControlHandler.HandleAsync(pipe, control, NullLogger.Instance, stop);
+                while (!stop.IsCancellationRequested)
+                {
+                    await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                    await pipe.WaitForConnectionAsync(stop);
+                    await HostControlHandler.HandleAsync(pipe, control, NullLogger.Instance, stop);
+                }
+            }
+            else
+            {
+                await using var listener = new HostControlSocketListener(HostControlEndpoint.Resolve(pipeName));
+                while (!stop.IsCancellationRequested)
+                {
+                    await using var stream = await listener.AcceptAsync(stop);
+                    await HostControlHandler.HandleAsync(stream, control, NullLogger.Instance, stop);
+                }
             }
         }
         catch (OperationCanceledException)

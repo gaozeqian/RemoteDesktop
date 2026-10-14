@@ -22,14 +22,22 @@ public sealed class ServiceCollectionExtensionsTests : IDisposable
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         var services = new ServiceCollection();
+        // Hosts always add logging, and a port that takes a logger cannot be built without a provider.
+        services.AddLogging();
+        // Only what the platform adds is resolved below: AddLogging registers open generics such as IOptions<> that
+        // cannot be asked for by their open type, and those are not this test's business.
+        var alreadyPresent = services.Select(d => (d.ServiceType, d.ServiceKey)).ToHashSet();
+
         services.AddLinuxPlatform(_dataDirectory);
+        var added = services.Where(d => !alreadyPresent.Contains((d.ServiceType, d.ServiceKey))).ToList();
+        Assert.NotEmpty(added);
 
         using var provider = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 
         // ValidateOnBuild only proves the graph can be described; resolving proves each one can be built. A port whose
         // constructor throws would otherwise pass registration and fail the first time a host starts.
-        foreach (var descriptor in services)
+        foreach (var descriptor in added)
         {
             Assert.NotNull(provider.GetRequiredService(descriptor.ServiceType));
         }
@@ -41,6 +49,8 @@ public sealed class ServiceCollectionExtensionsTests : IDisposable
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         var services = new ServiceCollection();
+        // Hosts always add logging, and a port that takes a logger cannot be built without a provider.
+        services.AddLogging();
         services.AddLinuxPlatform(_dataDirectory);
 
         using var provider = services.BuildServiceProvider();
@@ -55,6 +65,8 @@ public sealed class ServiceCollectionExtensionsTests : IDisposable
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         var services = new ServiceCollection();
+        // Hosts always add logging, and a port that takes a logger cannot be built without a provider.
+        services.AddLogging();
         services.AddLinuxPlatform(_dataDirectory);
 
         using var provider = services.BuildServiceProvider();

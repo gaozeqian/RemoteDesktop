@@ -12,6 +12,8 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <!-- Platform tests build a real container, and a port that takes a logger needs a provider to build one -->
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
@@ -22,6 +24,11 @@
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
     <PackageVersion Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <!-- Linux platform: the desktop portals are D-Bus services, and this is the only maintained managed D-Bus stack.
+         Handing the portal's file descriptors around is why a package is needed at all: OpenPipeWireRemote and
+         ConnectToEIS both return a descriptor (D-Bus type 'h'), and the command-line tools cannot carry one out.
+         Still on 0.x upstream, so it is kept behind one file's worth of wrapper rather than used across the layer. -->
+    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.95.1" />
     <!-- File transfer integrity check -->
     <PackageVersion Include="System.IO.Hashing" Version="10.0.12" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->
