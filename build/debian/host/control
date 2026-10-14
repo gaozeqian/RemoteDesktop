@@ -1,0 +1,28 @@
+Package: remotedesktop-host
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCHITECTURE@
+Maintainer: Remote Desktop <noreply@example.invalid>
+Homepage: https://github.com/gaozeqian/RemoteDesktop
+Depends: libpipewire-0.3-0t64 | libpipewire-0.3-0, libei1, libpulse0, libavcodec62, libavformat62, libswscale9
+Recommends: xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr
+Description: Remote Desktop host (lets this machine be controlled)
+ Lets somebody at another computer see this machine's screen and control its
+ keyboard and pointer, after this machine's owner agrees.
+ .
+ It runs as a user service inside the graphical session, because that is the
+ only place a Wayland desktop will let it in. Screen sharing and control are
+ asked for through the desktop's own portal, so the answer is a dialog your
+ desktop shows rather than a permission granted in advance.
+ .
+ Sharing a screen is remembered once you agree to it; control is asked for
+ every time. That is the portal's decision rather than this package's — a
+ remote-desktop session cannot be persisted — and it means an unattended
+ machine can be watched but not typed into without somebody at the keyboard.
+ .
+ The libraries above are loaded by name at run time, so nothing in the package
+ metadata would notice them missing: the failure is a DllNotFoundException the
+ first time a screen is captured. libavcodec62 is the one that matters most —
+ it is the encoder, and a system where it was built without libx264 falls back
+ to whatever else is available or refuses to stream, saying so in the log.

@@ -637,57 +637,38 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 整个测试进程直接消失且没有任何信息**；助手没有等上下文进入就绪就去加载模块，于是错误地得出「这台机器的
 声音服务不支持 null sink」。以及第一版测试为了有个第二输出**加载了 null sink 模块，两次在测试中途挂掉时
 把它留在了机器上**——改成用已有的两个输出，不再改动用户的声音配置。
-### P10 — 录制 ✅ / 被控端宿主 ✅ / 打包 ⏳
+### P10 — 录制 ✅ / 被控端宿主 ✅ / 打包 ✅
 
-**被控端现在能在 Linux 上跑起来了**，宿主装配这一段补完了（原先 Client 与 HostService 都还硬编码
-Windows，平台层其实没有宿主）。实测：
-
-```
-[ERR] QUIC is not supported on this system; incoming connections are disabled.   ← 第一次没带 LD_LIBRARY_PATH
-[WRN] Rendezvous connection lost: Unable to connect to the remote server.        ← 没起服务端，按退避重试
-```
-
-带上 `LD_LIBRARY_PATH` 之后 QUIC 那条消失；控制 socket 出现在
-`$XDG_RUNTIME_DIR/remotedesktop/RemoteDesktop.HostControl.sock` 并且**能接受连接**（目录是 0700，
-socket 本身受目录保护）。
-
-装配上最大的差别是**没有 agent**：Windows 的特权服务在 Session 0，看不见桌面，所以画面与输入在它监管的
-session agent 里；这里没有 Session 0，Wayland 的 portal 只在该会话内应答，所以宿主以登录用户身份跑在图形
-会话里，**它自己就是采集和注入的那一方**。`IAgentGateway` 不注册，四个 `Add…Feature()` 直接上。
-
-两个为让宿主能装配而补的端口（`WaylandClipboard`、`WaylandCameraEnumerator`）都在上面各自的小节里
-说明了自己不做什么。
-
-**打包还差最后一步**，而且不再是"被挡住"，是"还没做"：`build/debian/host/`（`.deb` + systemd
-**用户**单元、`WantedBy=graphical-session.target`、`PartOf=`、`Restart=on-failure`）与 `.desktop` 文件。
-形状可以直接沿用 `build/debian/server/`。
-
-### 端到端已经跑通 ✅
-
-`SessionEndToEndTests` 把真实的被控端、真实的控制器和真实的 rendezvous（loopback）凑到一起，走完整的
-链路。实测输出：
+`build/debian/host/` 出了一个 `.deb`，实测构建通过（32.5 MB，自包含）：
 
 ```
-host is device 838004535, password t8saruyidhck
-connected over Direct
-the controller can see 1 display(s)
-moved the pointer to the top-left corner through the session
-THE PICTURE CHANGED — input reached the screen through the session
-[h264_vaapi] No usable encoding entrypoint found for profile VAProfileH264Main (6).
+RemoteDesktop-Host-Linux-amd64-0.3.0.deb
+  ./usr/lib/remotedesktop-host/RemoteDesktop.HostService
+  ./usr/lib/remotedesktop-host/libmsquic.so.2 -> libmsquic.so.2.6.2
+  ./usr/lib/systemd/user/remotedesktop-host.service
 ```
 
-也就是说：信令 → QUIC 直连 → 口令握手 → 会话授权 → **portal 采集真实屏幕 → x264 编码 → 传输 → 解码**，
-并且**反向**：控制器注入 → libei → 真实指针移动 → 画面变化被解码验证。顺带确认了硬件编码器探测在
-这块没有 VCE 的 GPU 上**干净地回落到软件**（正是风险表里本机作为试验台的那条）。
+**并且从装好的目录里直接跑起来了，没有 `LD_LIBRARY_PATH`，也没有出现 "QUIC is not supported"** ——
+这验证了 §3.1 那条：自包含发布时，库放在可执行文件旁就够了。这条以前只是推断，现在是打包形态下的实测。
 
-有一条容易被忽略但很要命的细节：端到端的用例必须把自己数据目录里的 restore token 从**已授权**的那个
-目录拷过去。授权是**按数据目录**记的，测试用自己的空目录就会卡在一个没人应答的对话框上，表现成超时。
-第一版就是这么挂的。
+打包上的三个决定：
 
-**顺带修掉一个真 race**：`CallForFdAsync` 原本在 `CallMethodAsync` **返回之后**才 dup 那个 fd，而 fd 属于
-message、message 在读取委托返回后就被释放——于是偶尔 dup 到一个已经关掉的编号，报 EBADF，而连接本身好
-好的。平时不显形，直到测试并行度上来。现在 dup 在读取委托**内部**做，与 `VariantValue`、`Reader` 那两条
-是同一类错误：**值必须在它还活着的时候取出来**。
+- **systemd 用户单元，不是系统单元**，因为桌面在会话里。`WantedBy=graphical-session.target` +
+  `PartOf=` + `Requisite=`；`postinst` 用 `systemctl --global enable`（`deb-systemd-helper` 只认系统单元）。
+  **什么也不启动**——包被配置时可能根本没有会话，没有显示、没有会话总线、没人能点 portal 的对话框。
+- **加固只留 `NoNewPrivileges=yes`。** 服务端那套 `ProtectHome` / `PrivateTmp` / `RestrictAddressFamilies`
+  看着更体面，但**恰好是会让它跑不起来的那几条**：状态在用户 home 里，桌面要走会话总线和
+  `$XDG_RUNTIME_DIR` 里的 Unix socket。
+- **`libmsquic` 随包发，不作为依赖。** 它放在可执行文件旁——自包含程序会看那里，别的程序不会看那里，
+  所以这个包既不会误给别的程序 QUIC，也不会被别的程序弄坏。
+
+依赖那条要更正计划里的一个说法：计划担心 `libx264` 只在 `libavcodec-extra` 里。本机实测
+**`libavcodec62` 本身就 Depends `libx264-165`**，而 `libavcodec-extra62` 声明 `Provides: libavcodec62`——
+所以写 `Depends: libavcodec62` 两种装法都满足，不需要 `-extra`。
+
+`postinst` 会在缺库时打印**会缺在哪一步**，而不是让它以后变成一句没头没尾的 `DllNotFoundException`。
+
+还没做：`.desktop` 文件（那是客户端的，属 P12）、`release.yml` 产出 `.deb`（也是 P12）。
 
 ### P10（原始计划） — 录制 + 被控端打包
 ### P11 — 服务端原生部署 ✅ 已完成（Linux 侧）
@@ -709,7 +690,7 @@ message、message 在读取委托返回后就被释放——于是偶尔 dup 到
 验证（把包解到临时目录、用真实二进制走完整条链路）：`--configure-system` 生成两张 PEM 与两个 appsettings（`Path`/`KeyPath`，无存储键）；**私钥 0600、证书 0644**；服务端真的起来并在 TLS 上应答 `/health` 返回 `Healthy`；证书校验三态都对——**信任且名字匹配 → 200**、不信任 → 拒绝、信任但名字不在证书里 → 拒绝。
 
 ### P11（原始计划） — 服务端原生部署
-### P12 — 客户端打包 + 文档 ⏳ 客户端已能在 Linux 上运行
+### P12 — 客户端打包 + 文档 ⏳ 客户端已能在 Linux 上运行；`.deb` 产出与 `release.yml` 未做
 
 ---
 
