@@ -69,4 +69,42 @@ public sealed class LinuxSelfCheckTests
 
         Assert.Equal(first, second);
     }
+
+    [Fact]
+    public void The_report_has_a_line_for_every_check_and_a_verdict_at_the_end()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var directory = Directory.CreateTempSubdirectory("rd-selfcheck-").FullName;
+        var output = new StringWriter();
+
+        int exit;
+        string text;
+        try
+        {
+            exit = LinuxSelfCheck.RunReport(output, directory);
+            text = output.ToString();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
+        // Every check appears, including the two that belong to a host rather than to the platform — the report is
+        // the whole answer, not just the Linux part of it.
+        Assert.Contains("Data folder", text, StringComparison.Ordinal);
+        Assert.Contains("QUIC", text, StringComparison.Ordinal);
+        foreach (var probe in LinuxSelfCheck.Run())
+        {
+            Assert.Contains(probe.Name, text, StringComparison.Ordinal);
+        }
+
+        // A verdict, either way, and an exit code that agrees with it: the point of the exit code is that a script
+        // can gate on it, so it may not disagree with what was printed.
+        var passed = text.Contains("checks passed.", StringComparison.Ordinal);
+        var failed = text.Contains("checks failed:", StringComparison.Ordinal);
+        Assert.True(passed ^ failed, $"The report neither passed nor failed:\n{text}");
+
+        Assert.Equal(passed ? 0 : 1, exit);
+    }
 }

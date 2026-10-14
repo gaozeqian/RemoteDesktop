@@ -352,6 +352,10 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 [ ok ] H.264 encoders       usable: libavcodec software H.264 (x264); not available: NVENC, VA-API
 ```
 
+**两个包都带这个开关**，不只是计划里写的客户端：报告在平台层（`LinuxSelfCheck.RunReport`），两个宿主各自
+调用它。**被控端更需要它**——portal、PipeWire、libei 和显示都是被控端在用，而一台只装被控端的机器上未必有
+客户端可跑；一个只随控制端发布的诊断，是给那台本来就没坏的机器准备的。
+
 三处设计上的选择：
 
 - **跑在任何东西被构建之前**，所以程序起不来的机器上它照样答得出来——而那正是会去跑它的机器。

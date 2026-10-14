@@ -1,3 +1,4 @@
+using System.Net.Quic;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -54,6 +55,100 @@ public static class LinuxSelfCheck
         Ffmpeg(),
         Encoders(),
     ];
+
+    /// <summary>
+    /// Runs everything and writes the report.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Here rather than in either host because <b>both</b> need it, and the one that needs it more is the
+    /// controlled end: the portal, PipeWire, libei and the display are all things it reaches for, and a machine
+    /// somebody is setting up as a controlled end may well have nothing else installed. A diagnostic that only
+    /// ships with the controller is a diagnostic for the machine that was already working.
+    /// </para>
+    /// <para>
+    /// The folder is passed in rather than worked out here: the two hosts keep their state in different
+    /// directories on Windows, and only they know which one applies.
+    /// </para>
+    /// </remarks>
+    /// <returns>Zero when everything required is present, otherwise one — so it can gate a script.</returns>
+    public static int RunReport(TextWriter output, string dataDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(dataDirectory);
+
+        List<Probe> probes = [DataFolder(dataDirectory), Quic()];
+        try
+        {
+            probes.AddRange(Run());
+        }
+        catch (Exception error)
+        {
+            // The probes are ordinary code, and one of them may be the thing that is broken. Reporting that is
+            // more use than a stack trace out of the diagnostic.
+            probes.Add(new Probe("Linux platform", false, true, $"{error.GetType().Name}: {error.Message}"));
+        }
+
+        output.WriteLine($"Remote Desktop self-check — {RuntimeInformation.OSDescription} ({RuntimeInformation.ProcessArchitecture}), .NET {Environment.Version}");
+        output.WriteLine();
+
+        foreach (var probe in probes)
+        {
+            output.WriteLine($"[{Mark(probe)}] {probe.Name,-20} {probe.Detail}");
+        }
+
+        var failed = probes.Where(probe => !probe.Ok && probe.Required).ToList();
+        output.WriteLine();
+
+        if (failed.Count == 0)
+        {
+            output.WriteLine($"All {probes.Count} checks passed.");
+            return 0;
+        }
+
+        output.WriteLine($"{failed.Count} of {probes.Count} checks failed: "
+            + string.Join(", ", failed.Select(probe => probe.Name)));
+        return 1;
+    }
+
+    /// <summary>Where the product keeps its state, and whether it can be written to at all.</summary>
+    private static Probe DataFolder(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+
+            // Written rather than looked at: a folder that exists but belongs to somebody else fails later, when
+            // the identity is being saved, and reads as a problem with the identity rather than with the folder.
+            var probe = Path.Combine(directory, ".writable");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+
+            return new Probe("Data folder", true, true, directory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return new Probe("Data folder", false, true, $"{directory} — {error.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Whether this machine can speak QUIC, which every connection needs.
+    /// </summary>
+    /// <remarks>
+    /// The failure this catches is quiet: <c>System.Net.Quic</c> is a managed wrapper over a native library that
+    /// Windows gets from the runtime and Linux does not, and without it every connection fails with "QUIC is not
+    /// supported on this system" — a sentence that reads like a network problem and is not one.
+    /// </remarks>
+    private static Probe Quic() => QuicListener.IsSupported
+        ? new Probe("QUIC", true, true, "System.Net.Quic is supported")
+        : new Probe(
+            "QUIC",
+            false,
+            true,
+            "libmsquic.so.2 is missing — install libmsquic, or the .deb, which carries its own copy");
+
+    private static string Mark(Probe probe) => probe.Ok ? " ok " : probe.Required ? "FAIL" : "warn";
 
     /// <summary>Which kind of desktop this is. The portal only answers inside a graphical session of the right kind.</summary>
     private static Probe Session()

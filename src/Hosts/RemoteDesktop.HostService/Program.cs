@@ -32,6 +32,15 @@ if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
     return 1;
 }
 
+// Before anything is built, so that it still answers on a machine where the service cannot start — which is the
+// machine somebody runs it on. This end is where the portal, PipeWire and libei are actually reached for, so it is
+// the end that has the most to say and the one most likely to be installed on its own.
+if (OperatingSystem.IsLinux() &&
+    args.Any(argument => string.Equals(argument, "--self-check", StringComparison.OrdinalIgnoreCase)))
+{
+    return LinuxSelfCheck.RunReport(Console.Out, DataDirectory.ForMachine());
+}
+
 const string ServiceName = "RemoteDesktopHost";
 
 // The installer runs this executable for its setup and cleanup steps; the service itself is not started then.

@@ -92,9 +92,13 @@ journalctl --user -u remotedesktop-host -f
 remotedesktop --self-check
 ```
 
-它把十件事一次问完——数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、
-显示布局、PipeWire、libei、libavcodec 版本、可用的 H.264 编码器——每一项都是**只读**，不弹任何对话框，
+它把该问的一次问完：数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、
+显示布局、PipeWire、libei、libavcodec 版本、可用的 H.264 编码器。每一项都是**只读**，不弹任何对话框，
 所以在一台还没授权过、甚至起不来的机器上照样能跑。有必需项不通过时退出码是 1。
+
+两个包都带这个开关：客户端是 `remotedesktop --self-check`，被控端是
+`/usr/lib/remotedesktop-host/RemoteDesktop.HostService --self-check`。**被控端更需要它**——portal、PipeWire、
+libei 和显示都是它在用，而只装被控端的机器上未必有客户端可跑。
 
 ### 需要什么
 
