@@ -123,18 +123,19 @@ public sealed class CameraFrameTests
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var connection = new PortalConnection();
 
         bool present;
         try
         {
+            // Both the connection and the question, because the connection itself is where a machine without a
+            // session bus refuses. What this test is about is the behaviour of a machine whose portal answers —
+            // which is the machine the product runs on — so a headless runner is the environment being unavailable,
+            // not a failure.
+            using var connection = new PortalConnection();
             present = await connection.CameraPresentAsync(cancellationToken);
         }
         catch (PortalException error)
         {
-            // A machine with no session bus, or with no portal on it, cannot answer the question at all. What this
-            // test is about is the behaviour of a machine whose portal does answer — that is the machine the
-            // product runs on — so a headless runner is the environment being unavailable, not a failure.
             Assert.Skip($"The portals cannot be reached: {error.Message}");
             return;
         }
