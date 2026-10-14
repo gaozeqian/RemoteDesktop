@@ -48,6 +48,18 @@ internal static class ClientHost
         var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForUser();
         CrashLog.Register(dataDirectory);
 
+        // On Linux the settings the package ships live beside the program under /usr/lib, which belongs to root. The
+        // address in there is a default, and a default nobody can change is not a setting: this layers the person's
+        // own file on top of it, absent until they write one. No file, no watcher — a reloading one costs an inotify
+        // instance per host, and enough of those exhaust the desktop's own supply.
+        if (OperatingSystem.IsLinux())
+        {
+            builder.Configuration.AddJsonFile(
+                System.IO.Path.Combine(dataDirectory, "appsettings.json"),
+                optional: true,
+                reloadOnChange: false);
+        }
+
         // Read before anything is built: a mistyped address used to end in an exception nobody saw, because a windowed
         // program that dies while starting up has nowhere to say why. The reason goes to the crash log and to the
         // message box the entry point shows.

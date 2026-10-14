@@ -51,6 +51,17 @@ builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProvider
 
 var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForMachine();
 
+// The same layering the client does, and the same file: on Linux the controlled end runs as the person whose
+// desktop it serves, so there is one settings file between them rather than the two accounts Windows has. What the
+// package shipped beside the program under /usr/lib stays the defaults; this is what the person can change.
+if (OperatingSystem.IsLinux())
+{
+    builder.Configuration.AddJsonFile(
+        Path.Combine(dataDirectory, "appsettings.json"),
+        optional: true,
+        reloadOnChange: false);
+}
+
 // A service has no console and no window: if the settings cannot be read, the reason goes to a file in the log folder
 // an operator is already told to look at, and the service exits with its own code rather than an unexplained crash.
 var transport = StartupSettings.TryReadTransport(

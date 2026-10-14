@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Win32;
+using RemoteDesktop.Domain;
 
 namespace RemoteDesktop.Platform.Windows.Setup;
 
@@ -98,28 +99,14 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     /// </remarks>
     public static bool TryParseRendezvousUri(string? address, out Uri parsed)
     {
+        if (RendezvousAddress.TryParse(address, out var rendezvous))
+        {
+            parsed = rendezvous.Value;
+            return true;
+        }
+
         parsed = null!;
-        if (string.IsNullOrWhiteSpace(address))
-        {
-            return false;
-        }
-
-        if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out var candidate)
-            || candidate.Scheme is not ("ws" or "wss")
-            || candidate.Host.Length == 0)
-        {
-            return false;
-        }
-
-        // The brackets around an IPv6 literal are not part of the address grammar this check is about.
-        if (candidate.HostNameType != UriHostNameType.IPv6
-            && !candidate.Host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-'))
-        {
-            return false;
-        }
-
-        parsed = candidate;
-        return true;
+        return false;
     }
 
     /// <summary>Sets <c>Transport:RendezvousUri</c> in the appsettings.json of an install directory.</summary>

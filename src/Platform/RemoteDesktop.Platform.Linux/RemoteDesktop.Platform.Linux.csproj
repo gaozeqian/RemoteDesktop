@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Domain\RemoteDesktop.Domain.csproj" />
     <ProjectReference Include="..\RemoteDesktop.Posix\RemoteDesktop.Posix.csproj" />
   </ItemGroup>
   <ItemGroup>

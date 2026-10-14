@@ -18,6 +18,7 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.Linux.Setup;
 using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Platform.Windows.Setup;
 using RemoteDesktop.Transport;
@@ -456,17 +457,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveServerAddressAsync()
     {
-        // There is no installed service to reconfigure anywhere but Windows. The guard is also what tells the platform
-        // analyzer that the Windows-only parsing below is reached on Windows only.
-        if (!OperatingSystem.IsWindows())
-        {
-            ServerAddressError = "只有 Windows 版本可以修改被控端的服务器地址";
-            return;
-        }
-
         // Parsed here, before anything is started as administrator, and by the same rule the service applies when it
-        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt.
-        if (!SystemSetup.TryParseRendezvousUri(NewServerAddress, out var rendezvous))
+        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt. The rule lives in
+        // the domain because both platforms need it: two validators would be two answers to the same question, and
+        // the interesting failures are the addresses where they disagree.
+        if (!RendezvousAddress.TryParse(NewServerAddress, out var rendezvous))
         {
             ServerAddressError = "地址要写成 ws://主机:端口/ws 或 wss://主机/ws";
             return;
@@ -474,25 +469,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            var exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe");
-            if (!System.IO.File.Exists(exePath))
+            if (OperatingSystem.IsWindows())
             {
-                ServerAddressError = "找不到后台服务程序，可能客户端未作为服务安装。";
-                return;
-            }
-
-            // The service executable is asked directly, as administrator, to write the address and restart itself.
-            var startInfo = HostServiceSetup.BuildStartInfo(exePath, rendezvous);
-
-            using var process = System.Diagnostics.Process.Start(startInfo);
-            if (process != null)
-            {
-                await process.WaitForExitAsync();
-                if (process.ExitCode != 0)
+                if (!await ApplyOnWindowsAsync(rendezvous))
                 {
-                    ServerAddressError = "由于权限拒绝或配置失败，无法修改信令服务器地址。";
                     return;
                 }
+            }
+            else if (OperatingSystem.IsLinux())
+            {
+                // One file, read by this program and by the controlled end: on Linux the two run as the same person
+                // in the same session, unlike the two accounts Windows keeps apart. See LinuxSetup for why the file
+                // is the person's own rather than the one the package ships.
+                // Named in full because this class has a DataDirectory of its own, and the setting is not the
+                // client's: it is the machine's, which on Linux is the same folder and is also where the
+                // controlled end reads it from.
+                LinuxSetup.SetRendezvousUri(
+                    Application.Hosting.DataDirectory.ForMachine(),
+                    rendezvous.AbsoluteUri);
+                LinuxSetup.RestartHostServiceIfInstalled();
             }
 
             IsEditingServerAddress = false;
@@ -509,6 +504,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             ServerAddressError = $"无法应用配置：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Hands the address to the installed service, which writes it and restarts itself.
+    /// </summary>
+    /// <remarks>
+    /// A separate method rather than a branch inside the one above so that the platform attribute covers every
+    /// Windows-only call in it: the analyzer rejects that attribute on an async method, and without it these calls
+    /// would be unchecked rather than checked-and-correct.
+    /// </remarks>
+    /// <returns><c>false</c> when the address was not applied, with the reason left in <see cref="ServerAddressError"/>.</returns>
+    [SupportedOSPlatform("windows")]
+    private async Task<bool> ApplyOnWindowsAsync(RendezvousAddress rendezvous)
+    {
+        var exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe");
+        if (!System.IO.File.Exists(exePath))
+        {
+            ServerAddressError = "找不到后台服务程序，可能客户端未作为服务安装。";
+            return false;
+        }
+
+        // The service executable is asked directly, as administrator, to write the address and restart itself.
+        var startInfo = HostServiceSetup.BuildStartInfo(exePath, rendezvous.Value);
+
+        using var process = System.Diagnostics.Process.Start(startInfo);
+        if (process != null)
+        {
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0)
+            {
+                ServerAddressError = "由于权限拒绝或配置失败，无法修改信令服务器地址。";
+                return false;
+            }
+        }
+
+        return true;
     }
 
     [RelayCommand]
