@@ -30,10 +30,17 @@ internal static class Program
         }
         catch (StartupFailure failure)
         {
-            // Nothing has been created yet, so a window is not available: the system's own message box is.
-            UserMessage.Show(
-                $"{failure.Message}{Environment.NewLine}{Environment.NewLine}详情见：{failure.ReportPath}",
-                "Remote Desktop 无法启动");
+            var message = $"{failure.Message}{Environment.NewLine}{Environment.NewLine}详情见：{failure.ReportPath}";
+
+            // Nothing has been created yet, so a window is not available: the system's own message box is. Where
+            // there is no such thing, the same sentence goes to standard error instead — without it a program that
+            // dies while starting up leaves an exit code and a file nobody has been told the name of.
+            UserMessage.Show(message, "Remote Desktop 无法启动");
+            if (!OperatingSystem.IsWindows())
+            {
+                Console.Error.WriteLine(message);
+            }
+
             return 1;
         }
 
