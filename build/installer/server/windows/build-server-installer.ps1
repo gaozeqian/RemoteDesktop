@@ -100,10 +100,13 @@ Set-StrictMode -Version Latest
 # every path that means "next to this script" is resolved here instead. Running a release build with the PowerShell
 # that ships with Windows is common enough that it has to work there as well as in PowerShell 7.
 $installerDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $PublishDirectory) { $PublishDirectory = Join-Path $installerDirectory 'artifacts\publish' }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $installerDirectory 'artifacts' }
-
 $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..\..')
+
+# Same single artifacts/ root as the client installer, same <kind>/<os>/ shape — see the longer note in
+# build/installer/client/windows/build-installer.ps1. The role directory is what keeps the two servers' publish
+# outputs apart; the MSIs share one directory because their names already say which is which.
+if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts\app\windows\server' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'artifacts\installer\windows' }
 
 # The license text is the product's, shared by every package (the agreement covers running the server components too),
 # and it lives one level above the packages, next to the script that turns it into the RTF an MSI license page needs.

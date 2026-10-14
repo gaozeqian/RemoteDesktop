@@ -1,10 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <!-- On Windows the subsystem and the manifest are what make it a windowed program with the right DPI behaviour, and
+       the icon is embedded in the .exe. None of the three means anything on macOS: there the .app bundle's Info.plist
+       plays that role, so the binary itself stays an ordinary executable.
+       Note the two different icons: ApplicationIcon embeds the .exe's icon on Windows, while the windows themselves
+       use Icon="/Assets/icon-256.png" — PNG rather than the .ico next to it, because .ico is a Windows container that
+       the cross-platform decoder does not reliably read. The Dock/Finder icon on macOS comes from neither: it is the
+       bundle's CFBundleIconFile, built from these same PNGs by build/installer/client/macos/make-icns.sh. -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
     <!-- The client's own logic (recording file names, message wording) is worth testing where it lives. -->
@@ -20,10 +32,13 @@
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
     <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <!-- Every platform project, unconditionally: this host picks one at run time (ClientPlatformRegistration), and
+         that is only possible because they all target plain net10.0 rather than a platform-specific TFM. A build that
+         produced different binaries per operating system would put three of them in CI for no gain, and the trimmer
+         folds the OS checks away when publishing, dropping the assemblies that cannot run on the target. -->
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
-    <!-- Both platform assemblies are referenced and one is chosen at run time. The Windows layer builds everywhere,
-         and a build that produced different binaries per operating system would put two of them in CI for no gain. -->
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Linux\RemoteDesktop.Platform.Linux.csproj" />
+    <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.MacOS\RemoteDesktop.Platform.MacOS.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" />

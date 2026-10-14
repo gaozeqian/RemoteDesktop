@@ -10,7 +10,9 @@
 | 本目录 | 跨平台的脚本。`New-ServerCertificate.ps1` 给信令服务器生成 TLS 证书，用的是纯 .NET API，因此在 **Linux/macOS 的 pwsh 上同样能跑**——服务端将来在那边部署时，Kestrel 用的就是它生成的 `.pfx` |
 | `certificates/` | 生成的证书和私钥（已 gitignore，永远不进仓库） |
 
-将来 macOS（`codesign` + `notarytool`）和 Linux（gpg / dpkg-sig）的签名脚本各自建文件夹，`windows/` 不动。
+macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，它属于打包流程，落在
+`build/installer/client/macos/make-app.sh`（签 `.app`）与 `make-pkg.sh`（签 `.pkg` + 公证）里，见本文末尾的
+"macOS"一节。Linux（gpg / dpkg-sig）将来再建文件夹。
 签名脚本的默认输出目录是"脚本自己旁边"，所以跨平台脚本的证书落在 `certificates/`，Windows 那两个的落在 `windows/certificates/`。
 
 安装包和程序都需要**代码签名**：没有签名时 Windows SmartScreen 会提示"未知发布者"，企业策略和杀毒软件也更可能拦截。
@@ -213,11 +215,67 @@ pwsh -File build/installer/client/windows/build-installer.ps1 -TimestampServer h
 
 ```powershell
 # 安装包
-Get-AuthenticodeSignature .\build\installer\client\windows\artifacts\RemoteDesktop-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
 
 # 装好的程序
 Get-AuthenticodeSignature 'C:\Program Files\RemoteDesktop\RemoteDesktop.Client.exe' | Format-List Status, SignerCertificate
 
 # 用 signtool（装了 SDK 时）
 signtool verify /pa /v .\artifacts\RemoteDesktop-0.3.0.0-x64.msi
+```
+
+## macOS（Developer ID + 公证）
+
+macOS 的签名不走本目录的脚本，而在打包流程里：`make-app.sh` 签 `.app`，`make-pkg.sh` 签 `.pkg` 并（可选）公证。
+两者都由 `--distribution` 驱动。
+
+### 两种证书，各管一段
+
+| 证书 | 签什么 | 没有它会怎样 |
+|---|---|---|
+| **Developer ID Application** | `.app` 及其内的二进制（硬化运行时 + 安全时间戳） | 无法公证；Gatekeeper 提示"身份不明的开发者" |
+| **Developer ID Installer** | `.pkg` 本身 | 同上 |
+
+两者都要**付费 Apple Developer Program 账号**（$99/年）才能签发。开发用的 "Apple Development" 证书**不能**用于
+分发——`make-app.sh --distribution` 会直接拒绝它（只对本地开发有意义）。
+
+### GitHub Secrets
+
+| Secret | 内容 |
+|---|---|
+| `MACOS_APP_CERT_BASE64` / `MACOS_APP_CERT_PASSWORD` | Developer ID Application 的 `.p12`（base64 单行）与口令 |
+| `MACOS_INSTALLER_CERT_BASE64` / `MACOS_INSTALLER_CERT_PASSWORD` | Developer ID Installer 的 `.p12` 与口令 |
+| `MACOS_NOTARY_KEY_BASE64` / `MACOS_NOTARY_KEY_ID` / `MACOS_NOTARY_ISSUER_ID` | App Store Connect API Key（`.p8`，base64）、Key ID、Issuer ID |
+
+导出与编码（本机）：
+
+```bash
+security export -k login.keychain-db -t identities -f pkcs12 -o app.p12 -P <口令>
+base64 -i app.p12 | tr -d '\n'                    # 粘进 Secret
+base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
+```
+
+**四个证书 Secret 都在** → 签名；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
+警告**（`::warning`），绝不静默出一个半成品。
+
+> 公证也支持 Apple ID + 专用密码（`NOTARY_APPLE_ID` / `NOTARY_PASSWORD` / `NOTARY_TEAM_ID`），但 CI 里 API Key
+> 更省事：没有 2FA，也不用为每台机器轮换专用密码。
+
+### 本地签名 / 公证
+
+```bash
+# 签名（证书在钥匙串里，自动找；多于一张时用 --app-identity / --identity 指定）
+build/installer/client/macos/make-pkg.sh --distribution
+
+# 签名 + 公证（公证会把 .pkg 上传到 Apple，通常几分钟）
+NOTARY_KEY_PATH=AuthKey.p8 NOTARY_KEY_ID=XXXXXXXXXX NOTARY_ISSUER_ID=<uuid> \
+  build/installer/client/macos/make-pkg.sh --distribution --notarize
+```
+
+### 验证
+
+```bash
+pkgutil --check-signature <pkg>     # 签名状态
+spctl -a -vvv -t install <pkg>      # Gatekeeper 会不会放行；公证过会显示 source=Notarized Developer ID
+xcrun stapler validate <pkg>        # 公证票据是否已钉在包上
 ```

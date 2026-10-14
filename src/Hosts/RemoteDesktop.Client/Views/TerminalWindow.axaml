@@ -5,7 +5,7 @@
         x:Class="RemoteDesktop.Client.Views.TerminalWindow"
         x:DataType="vm:TerminalWindowViewModel"
         Title="远程终端"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="1000" Height="640" MinWidth="480" MinHeight="300">
   <DockPanel>

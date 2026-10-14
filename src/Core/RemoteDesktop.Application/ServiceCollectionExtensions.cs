@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Agent;
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Hosting;
@@ -28,7 +29,9 @@ public static class ServiceCollectionExtensions
             var store = sp.GetService<ISecretStore>();
             return new HostCredentials(sp.GetRequiredService<TimeProvider>())
             {
-                AllowedPermissions = store is not null ? HostPolicy.Load(store) : HostPolicy.Default,
+                // The policy says what this host is willing to allow; the mask says what it is able to. The mask is
+                // what keeps Ctrl+Alt+Del off sessions against a host that cannot raise it.
+                AllowedPermissions = (store is not null ? HostPolicy.Load(store) : HostPolicy.Default) & SupportedPermissions(sp),
                 FixedPassword = store is not null ? FixedPasswordPolicy.Load(store) : null,
             };
         });
@@ -39,6 +42,26 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<HostSessionService>());
         return services;
     }
+
+    /// <summary>
+    /// The permissions this composition can actually serve, as a mask to intersect the host's policy with.
+    /// </summary>
+    /// <remarks>
+    /// A fact about the composition rather than about the operating system. On Windows the in-process injector cannot
+    /// raise Ctrl+Alt+Del either — only a service may — so <see cref="Permissions.SecureAttention"/> is kept exactly
+    /// when an agent gateway is present (the agent asks that service) or when the injector in this process says it can.
+    /// macOS has no such sequence at all. Intersecting the policy with this leaves the permission absent on such a
+    /// host, and the controller's UI reads the grant to decide whether to offer the button.
+    /// <para>
+    /// A mask, not a set of permissions to add: intersecting with <see cref="Permissions.None"/> would leave nothing
+    /// at all, which is the opposite of what "this host cannot do Ctrl+Alt+Del" is supposed to mean.
+    /// </para>
+    /// </remarks>
+    private static Permissions SupportedPermissions(IServiceProvider services) =>
+        services.GetService<IAgentGateway>() is not null
+            || services.GetService<IInputInjector>()?.SupportsSecureAttention == true
+                ? Permissions.All
+                : Permissions.All & ~Permissions.SecureAttention;
 
     /// <summary>
     /// Serves the desktop channels (screen, input, clipboard, audio) through the session agent instead of in this process. Used by

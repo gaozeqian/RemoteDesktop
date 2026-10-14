@@ -1,0 +1,73 @@
+#!/bin/bash
+#
+# Runs at the end of the server package's installation, as root.
+#
+# Two jobs: write the servers' settings, and hand the launchd jobs to the system so they start now and at every boot.
+#
+# The settings are written by the server's own `--configure-system` step — the same code the Windows package runs
+# through its installer — so both platforms produce identical appsettings.json files and generate the relay key the
+# same way. The package's build put the operator's answers in setup-options; they are passed through as-is.
+#
+set -e
+
+INSTALL_DIR="/usr/local/remotedesktop-server"
+RENDEZVOUS="$INSTALL_DIR/Rendezvous/RemoteDesktop.Server.Rendezvous"
+OPTIONS="$INSTALL_DIR/setup-options"
+
+echo "Remote Desktop Server: finishing the installation"
+
+mkdir -p "$INSTALL_DIR/logs"
+
+# --- settings ----------------------------------------------------------------------------------
+
+# setup-options is one "name=value" per line, split on the *first* = so a value may contain more of them (a Postgres
+# connection string does). Comments and blank lines are ignored.
+set --
+if [ -f "$OPTIONS" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        set -- "$@" "${line%%=*}" "${line#*=}"
+    done < "$OPTIONS"
+fi
+
+echo "  writing the settings of both servers"
+# A failure here is reported, not fatal: the servers are installed and the settings can be fixed afterwards with
+# configure-server.sh. What went wrong is in server-setup.log either way, because the step writes it there.
+if [ "$#" -gt 0 ]; then
+    "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "$@" || echo "  warning: the settings step reported a problem; see $INSTALL_DIR/server-setup.log" >&2
+else
+    "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" || echo "  warning: the settings step reported a problem; see $INSTALL_DIR/server-setup.log" >&2
+fi
+
+# It may hold a certificate password, and it has now been used.
+rm -f "$OPTIONS"
+
+# --- launchd -----------------------------------------------------------------------------------
+
+# bootstrap wants the file owned by root and not writable by anyone else; the package installs it that way already,
+# and this makes that true even if something loosened it.
+echo "  starting the servers"
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay; do
+    plist="/Library/LaunchDaemons/$label.plist"
+    chown root:wheel "$plist"
+    chmod 644 "$plist"
+
+    # Installing over an existing copy: the old job is still loaded and bootstrap would fail with "already loaded".
+    launchctl bootout system "$plist" 2>/dev/null || true
+
+    if ! launchctl bootstrap system "$plist"; then
+        echo "  warning: could not start $label; run 'sudo launchctl bootstrap system $plist' to see why" >&2
+        continue
+    fi
+
+    # bootstrap loads it, enable makes that survive a reboot. Both are needed: a job that was disabled earlier stays
+    # disabled otherwise, and it would look like the package had not installed anything.
+    launchctl enable "system/$label" 2>/dev/null || true
+done
+
+echo "Remote Desktop Server: installed in $INSTALL_DIR"
+echo "  health:  curl http://127.0.0.1:5080/health"
+echo "  logs:    $INSTALL_DIR/logs/rendezvous.log and relay.log"
+echo "  settings: $INSTALL_DIR/如何配置.txt"
+
+exit 0

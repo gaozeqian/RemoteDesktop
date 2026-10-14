@@ -42,7 +42,8 @@ public sealed class DataDirectoryTests
     [Fact]
     public void The_data_home_the_desktop_advertises_is_preferred()
     {
-        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Posix layout.");
+        // XDG is the Linux convention; macOS has its own folder (Application Support) and no XDG_DATA_HOME to honour.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "XDG is the Linux convention.");
 
         var previous = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
         var home = Directory.CreateTempSubdirectory("rd-xdg-").FullName;

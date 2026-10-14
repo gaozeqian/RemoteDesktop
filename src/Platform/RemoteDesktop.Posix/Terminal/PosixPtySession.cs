@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
-using Microsoft.Win32.SafeHandles;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Posix.Interop;
 
@@ -14,12 +13,23 @@ namespace RemoteDesktop.Platform.Posix.Terminal;
 /// <para>
 /// The child is started with <c>posix_spawn</c> rather than <c>fork</c>. A forked child of a .NET process shares its
 /// address space with every other thread while the runtime's locks are in whatever state those threads left them,
-/// and anything the child runs before <c>exec</c> can deadlock on one of them. <c>posix_spawn</c> is a
-/// <c>clone</c> with <c>CLONE_VM|CLONE_VFORK</c>, so there is no second address space to be in an inconsistent state.
+/// and anything the child runs before <c>exec</c> can deadlock on one of them. <c>posix_spawn</c> is a clone with
+/// <c>CLONE_VM|CLONE_VFORK</c> behind it, so there is no second address space to be in an inconsistent state — and
+/// the file actions and attributes below are the structured way to say what should differ in the child.
 /// </para>
 /// <para>
-/// That is why the file actions and attributes are passed as opaque buffers: they exist only for glibc to fill in
-/// and for the kernel to act on, and this code never reads a field out of either.
+/// The controlling terminal is arranged the way <c>forkpty</c> would have: the child is made a session leader, then
+/// opens the replica without <c>O_NOCTTY</c>, so that <em>that open</em> is what claims the terminal. Inheriting an
+/// open descriptor does not claim it — the association is made when a session leader opens a terminal — which is why
+/// the replica is opened once more in the child even though its descriptor is already being handed over. Without
+/// this the shell looks completely healthy and ignores Ctrl+C: the tty driver has nobody to deliver the interrupt
+/// to.
+/// </para>
+/// <para>
+/// Everything here is shared by the two Posix systems, and the differences are confined to <see cref="LibC"/>: the
+/// constants (<c>TIOCSWINSZ</c>, <c>O_NOCTTY</c>, <c>POSIX_SPAWN_SETSID</c>) and the two entry points Darwin keeps
+/// a non-variadic stub for. Those are exactly the differences that fail quietly, which is the argument for one
+/// implementation rather than two.
 /// </para>
 /// </remarks>
 [UnsupportedOSPlatform("windows")]
@@ -29,25 +39,27 @@ public sealed class PosixPtySession : IPtySession
 
     private readonly int _master;
     private readonly int _processId;
-    private readonly FileStream _input;
-    private readonly FileStream _output;
+    private readonly Stream _input;
+    private readonly Stream _output;
     private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly int[] _size = new int[2];
     private bool _disposed;
 
-    private PosixPtySession(int master, int processId, int columns, int rows)
+    private PosixPtySession(int master, int processId)
     {
         _master = master;
         _processId = processId;
-        _size[0] = columns;
-        _size[1] = rows;
 
-        // Two descriptors, one for each direction, so that disposing one stream does not take the other with it —
-        // the terminal channel closes its input and output independently.
-        _output = new FileStream(new SafeFileHandle(LibC.DuplicateFileDescriptor(master), ownsHandle: true), FileAccess.Read, bufferSize: 0);
-        _input = new FileStream(new SafeFileHandle(LibC.DuplicateFileDescriptor(master), ownsHandle: true), FileAccess.Write, bufferSize: 0);
+        // Two objects over the same descriptor, one for each direction, because the terminal module reads and writes
+        // from different tasks at the same time. Neither owns the descriptor — the session closes it once — so which
+        // of them is disposed first does not matter.
+        _output = new PtyStream(master, write: false);
+        _input = new PtyStream(master, write: true);
 
-        _ = Task.Run(WaitForExit);
+        _ = Task.Factory.StartNew(
+            WaitForExit,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
     }
 
     public Stream Output => _output;
@@ -76,36 +88,69 @@ public sealed class PosixPtySession : IPtySession
                 throw new IOException($"Could not prepare the pseudo-terminal (errno {Marshal.GetLastPInvokeError()}).");
             }
 
-            slave = OpenSlave(master);
-            ApplyWindowSize(slave, columns, rows);
+            var slaveName = GetSlaveName(master);
 
-            var processId = Spawn(shellPath, arguments, directory, slave);
-            return new PosixPtySession(master, processId, columns, rows);
+            // The replica is opened here, in the parent, so that the window size can be applied before the shell
+            // exists and without a second open racing the spawn. This very descriptor is then handed to the child,
+            // which keeps a replica open at every instant and so keeps the size from being discarded.
+            unsafe
+            {
+                fixed (byte* name = slaveName)
+                {
+                    // O_NOCTTY: this open is not allowed to make the terminal this process's controlling one. It
+                    // becomes the shell's, in the child, which is where that belongs.
+                    slave = LibC.Open(name, LibC.ORdWr | LibC.ONoCtty);
+                }
+            }
+
+            if (slave < 0)
+            {
+                throw new IOException($"Could not open the terminal (errno {Marshal.GetLastPInvokeError()}).");
+            }
+
+            // Best effort: a terminal whose size could not be reported is still perfectly usable, and failing here
+            // would turn a cosmetic problem into a session that will not start.
+            _ = LibC.TrySetWindowSize(slave, columns, rows);
+
+            var processId = Spawn(shellPath, arguments, directory, slave, slaveName);
+            return new PosixPtySession(master, processId);
         }
         catch
         {
             if (slave >= 0)
             {
                 _ = LibC.Close(slave);
+                slave = -1;
             }
 
             _ = LibC.Close(master);
             throw;
+        }
+        finally
+        {
+            if (slave >= 0)
+            {
+                // The child holds its own copy now, so this one is done. Closing it is also what lets the master see
+                // end-of-file once the shell and everything it started have gone.
+                _ = LibC.Close(slave);
+            }
         }
     }
 
     /// <summary>
     /// Reports the terminal's size to the shell, which is what lets full-screen programs draw to the right shape.
     /// </summary>
+    /// <remarks>
+    /// Applied to the master rather than by re-opening the replica: the master is held for the whole session and
+    /// forwards the size to the terminal, and it is accepted for as long as any replica descriptor is open, which the
+    /// shell's standard streams guarantee. Changing the reported size is enough on its own — the kernel sends
+    /// SIGWINCH to the foreground process group, so the shell and anything it is running find out without being told.
+    /// </remarks>
     public void Resize(int columns, int rows)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        // Changing the reported size is enough: the kernel sends SIGWINCH to the foreground process group, so the
-        // shell and anything it is running find out without being told.
-        _size[0] = columns;
-        _size[1] = rows;
-        ApplyWindowSize(_master, columns, rows);
+        _ = LibC.TrySetWindowSize(_master, columns, rows);
     }
 
     public Task<int> WaitForExitAsync(CancellationToken cancellationToken) =>
@@ -123,10 +168,10 @@ public sealed class PosixPtySession : IPtySession
         await _input.DisposeAsync().ConfigureAwait(false);
         await _output.DisposeAsync().ConfigureAwait(false);
 
-        // Hang up on the whole process group rather than the shell alone, so that whatever the shell started goes
-        // with it instead of being left running with nothing attached to it.
+        // The shell is a session and process-group leader, so signalling the group is what reaches the shell and
+        // everything it started in the same group. Signalling the shell alone leaves background jobs running: an
+        // ordinary shell does not pass the hangup on to them.
         _ = LibC.SignalProcessGroup(_processId, LibC.SignalHangup);
-
         _ = LibC.Close(_master);
 
         // Give the child a moment to go, then stop waiting: a shell that ignores the hangup must not hold up whoever
@@ -141,29 +186,29 @@ public sealed class PosixPtySession : IPtySession
         }
     }
 
-    private static unsafe int OpenSlave(int master)
+    /// <summary>The slave's name as a null-terminated C string, from the library's own answer.</summary>
+    private static byte[] GetSlaveName(int master)
     {
         var buffer = new byte[SlaveNameCapacity];
-        fixed (byte* name = buffer)
+        var result = 0;
+        unsafe
         {
-            if (LibC.GetSlaveName(master, name, SlaveNameCapacity) != 0)
+            fixed (byte* name = buffer)
             {
-                throw new IOException($"Could not find the terminal's name (errno {Marshal.GetLastPInvokeError()}).");
+                result = LibC.GetSlaveName(master, name, SlaveNameCapacity);
             }
-
-            // O_NOCTTY: the slave is opened without becoming this process's controlling terminal. It becomes the
-            // shell's, in the child, which is where that belongs.
-            var slave = LibC.Open(name, LibC.ORdWr | LibC.ONoCtty);
-            if (slave < 0)
-            {
-                throw new IOException($"Could not open the terminal (errno {Marshal.GetLastPInvokeError()}).");
-            }
-
-            return slave;
         }
+
+        if (result != 0)
+        {
+            throw new IOException($"Could not find the terminal's name (errno {Marshal.GetLastPInvokeError()}).");
+        }
+
+        var length = Array.IndexOf(buffer, (byte)0);
+        return [.. buffer[..(length < 0 ? buffer.Length : length + 1)]];
     }
 
-    private static unsafe int Spawn(string shellPath, IReadOnlyList<string> arguments, string? directory, int slave)
+    private static unsafe int Spawn(string shellPath, IReadOnlyList<string> arguments, string? directory, int slave, byte[] slaveName)
     {
         var path = Encoding.UTF8.GetBytes(shellPath + "\0");
         var command = new string[arguments.Count + 1];
@@ -173,8 +218,10 @@ public sealed class PosixPtySession : IPtySession
             command[i + 1] = arguments[i];
         }
 
-        var actions = stackalloc byte[LibC.SpawnFileActionsSize];
-        var attributes = stackalloc byte[LibC.SpawnAttributesSize];
+        // The opaque spawn objects, in the form this system's C library expects — see LibC.AllocateSpawnStorage for
+        // the one place the two designs are reconciled.
+        var actions = LibC.AllocateSpawnStorage(LibC.SpawnFileActionsSize);
+        var attributes = LibC.AllocateSpawnStorage(LibC.SpawnAttributesSize);
         var actionsInitialised = false;
         var attributesInitialised = false;
 
@@ -204,6 +251,18 @@ public sealed class PosixPtySession : IPtySession
             if (slave > 2 && LibC.SpawnFileActionsAddClose(actions, slave) != 0)
             {
                 throw new IOException($"Could not arrange the shell's standard streams (errno {Marshal.GetLastPInvokeError()}).");
+            }
+
+            // Inheriting a descriptor does not make the terminal the controlling one — only opening it does. So the
+            // child opens the replica once on a spare descriptor, which claims the terminal, and closes it again: the
+            // association belongs to the session, not to the descriptor.
+            fixed (byte* name = slaveName)
+            {
+                if (LibC.SpawnFileActionsAddOpen(actions, 3, name, LibC.ORdWr, 0) != 0 ||
+                    LibC.SpawnFileActionsAddClose(actions, 3) != 0)
+                {
+                    throw new IOException($"Could not arrange the shell's controlling terminal (errno {Marshal.GetLastPInvokeError()}).");
+                }
             }
 
             if (!string.IsNullOrEmpty(directory))
@@ -262,6 +321,9 @@ public sealed class PosixPtySession : IPtySession
             {
                 _ = LibC.SpawnFileActionsDestroy(actions);
             }
+
+            NativeMemory.Free(actions);
+            NativeMemory.Free(attributes);
         }
     }
 
@@ -302,15 +364,6 @@ public sealed class PosixPtySession : IPtySession
         }
 
         return [.. variables];
-    }
-
-    private static unsafe void ApplyWindowSize(int descriptor, int columns, int rows)
-    {
-        var size = new LibC.WinSize { Columns = (ushort)columns, Rows = (ushort)rows };
-
-        // Best effort: a terminal whose size could not be reported is still perfectly usable, and failing here would
-        // turn a cosmetic problem into a session that will not start.
-        _ = LibC.SetWindowSize(descriptor, LibC.TiocSetWindowSize, &size);
     }
 
     private unsafe void WaitForExit()
@@ -365,5 +418,143 @@ public sealed class PosixPtySession : IPtySession
         }
 
         Marshal.FreeHGlobal((nint)array);
+    }
+
+    /// <summary>One direction of a pseudo-terminal descriptor.</summary>
+    private sealed unsafe class PtyStream(int fd, bool write) : Stream
+    {
+        /// <summary>
+        /// How long a cancellable read waits before looking at the token again. A hundred milliseconds is short
+        /// enough that tearing a session down feels immediate and long enough that an idle terminal wakes ten times
+        /// a second, which costs nothing.
+        /// </summary>
+        private const int PollIntervalMilliseconds = 100;
+
+        public override bool CanRead => !write;
+
+        public override bool CanWrite => write;
+
+        public override bool CanSeek => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadCore(buffer.AsSpan(offset, count), CancellationToken.None);
+
+        public override int Read(Span<byte> buffer) => ReadCore(buffer, CancellationToken.None);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return ValueTask.FromCanceled<int>(cancellationToken);
+            }
+
+            // Handing a blocking read to a pool thread would look asynchronous and not be: the caller's token could
+            // not reach the thread parked inside the kernel, so a session being torn down would leave the read
+            // outstanding for as long as the shell stayed quiet. Waiting on the descriptor in slices is what lets
+            // the token be honoured, and costs nothing while output is flowing because the wait returns at once.
+            return new ValueTask<int>(Task.Run(
+                () => ReadCore(buffer.Span, cancellationToken),
+                cancellationToken));
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteCore(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer) => WriteCore(buffer);
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return ValueTask.FromCanceled(cancellationToken);
+            }
+
+            return new ValueTask(Task.Run(
+                () => WriteCore(buffer.Span),
+                cancellationToken));
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        private int ReadCore(Span<byte> buffer, CancellationToken cancellationToken)
+        {
+            WaitForOutput(cancellationToken);
+
+            fixed (byte* p = buffer)
+            {
+                var read = LibC.Read(fd, p, (nuint)buffer.Length);
+                if (read < 0)
+                {
+                    throw new IOException($"Could not read from the terminal (errno {Marshal.GetLastPInvokeError()}).");
+                }
+
+                return (int)read;
+            }
+        }
+
+        /// <summary>
+        /// Blocks until the descriptor has something to say, or until the caller gives up.
+        /// </summary>
+        /// <remarks>
+        /// A descriptor that has been hung up counts as ready: the read that follows returns zero, which is the
+        /// end-of-file the callers are waiting for.
+        /// </remarks>
+        private void WaitForOutput(CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var descriptor = new LibC.PollFileDescriptor { FileDescriptor = fd, Events = LibC.PollIn };
+                var ready = LibC.Poll(
+                    &descriptor,
+                    count: 1,
+                    timeout: cancellationToken.CanBeCanceled ? PollIntervalMilliseconds : -1);
+
+                if (ready > 0)
+                {
+                    return;
+                }
+
+                if (ready < 0 && Marshal.GetLastPInvokeError() != LibC.Interrupted)
+                {
+                    throw new IOException($"Could not wait for the terminal (errno {Marshal.GetLastPInvokeError()}).");
+                }
+            }
+        }
+
+        private void WriteCore(ReadOnlySpan<byte> buffer)
+        {
+            fixed (byte* p = buffer)
+            {
+                var written = 0;
+                while (written < buffer.Length)
+                {
+                    var count = LibC.Write(fd, p + written, (nuint)(buffer.Length - written));
+                    if (count < 0)
+                    {
+                        throw new IOException($"Could not write to the terminal (errno {Marshal.GetLastPInvokeError()}).");
+                    }
+
+                    written += (int)count;
+                }
+            }
+        }
     }
 }

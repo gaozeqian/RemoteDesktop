@@ -51,10 +51,14 @@ public sealed class DeviceIdentity : IDisposable
     /// <summary>
     /// Loads a PKCS#12 the way the QUIC stack needs it: the private key has to be exportable, because MsQuic takes
     /// the key out of the certificate to hand it to the TLS layer, and a key that cannot be exported fails there with
-    /// an error that says nothing about certificates. On some systems the default lands the key in a store that will
-    /// not give it up — macOS and its keychain is the documented case — and asking up front costs nothing anywhere
-    /// else, including Windows, where it is ignored.
+    /// an error that says nothing about certificates.
     /// </summary>
+    /// <remarks>
+    /// macOS is the documented case: loading a PKCS#12 there stores the private key in the keychain as non-exportable
+    /// by default, and the handshake then fails with <c>AppleCommonCryptoCryptographicException: The contents of this
+    /// item cannot be retrieved.</c> On Windows the flag only changes whether the key can be re-exported, which
+    /// SChannel does not care about, so the one code path serves both.
+    /// </remarks>
     private static X509Certificate2 Import(byte[] pfx) =>
         X509CertificateLoader.LoadPkcs12(pfx, password: null, X509KeyStorageFlags.Exportable);
 

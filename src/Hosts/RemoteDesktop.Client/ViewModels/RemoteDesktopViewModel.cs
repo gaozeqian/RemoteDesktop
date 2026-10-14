@@ -10,7 +10,6 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Protocol.Desktop;
 using RemoteDesktop.Transport;
 
@@ -57,9 +56,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _session = session;
         _logger = logger;
         _cameraFactory = cameraFactory;
-        // Straight from the platform layer, which registers one on both platforms — Media Foundation on Windows,
-        // libavcodec here. There used to be a hardcoded Windows one behind an IsWindows() check, which meant
-        // recording silently did nothing on any other platform rather than failing to compile.
+        // Null means this platform has no recorder, which the recording command reports rather than hides behind
+        // a button that cannot work. It comes from the container, so the platform layer decides — not this class —
+        // and every platform layer registers one: Media Foundation on Windows, VideoToolbox on macOS, libavcodec on
+        // Linux. There used to be a hardcoded Windows one behind an IsWindows() check, which meant recording
+        // silently did nothing on any other platform rather than failing to compile.
         _recorderFactory = recorderFactory;
         CanUseCamera = session.Context.Grant.Allows(Permissions.Camera) && cameraFactory is not null;
         ShowCameraButton = CanUseCamera;
@@ -70,6 +71,9 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         CanControl = input is not null;
         CanTransferFiles = session.Context.Grant.Allows(Permissions.FileTransfer);
         CanUseTerminal = session.Context.Grant.Allows(Permissions.Terminal);
+        // Deliberately not derived from the controller's own injector the way CanControl is: whether Ctrl+Alt+Del
+        // exists at all is a property of the host, and the host says so by granting or withholding the permission.
+        CanSendSecureAttention = session.Context.Grant.Allows(Permissions.SecureAttention);
         HasAudio = audio is not null;
         UpdateTitle();
 
@@ -101,6 +105,14 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     /// <summary>False in watch mode, and from the moment the host switches the session to watch-only: input is neither captured nor sent.</summary>
     [ObservableProperty]
     public partial bool CanControl { get; set; }
+
+    /// <summary>
+    /// Whether this session may raise Ctrl+Alt+Del on the host. False against a host that cannot do it — which is not
+    /// the same question as the controller's platform: a Windows controller connected to a macOS host hides the button
+    /// too, and a macOS controller connected to a service-hosted Windows machine shows it.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool CanSendSecureAttention { get; set; }
 
     /// <summary>Whether the host lets this session reach its files. Goes false when the host takes it away mid-session.</summary>
     [ObservableProperty]
@@ -504,6 +516,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             {
                 await input.DisposeAsync();
             }
+        }
+
+        if (!grant.Allows(Permissions.SecureAttention))
+        {
+            CanSendSecureAttention = false;
         }
 
         if (!grant.Allows(Permissions.FileTransfer))

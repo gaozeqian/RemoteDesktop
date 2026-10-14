@@ -325,6 +325,11 @@ public sealed class LocalFileOperationsTests : IDisposable
     [Fact]
     public void A_policy_with_roots_also_limits_operations_and_places()
     {
+        // Runs on every OS now: FileAccessPolicy resolves configured roots the same way it resolves the incoming path,
+        // so a root that sits behind a symlink (macOS keeps /var as a symlink to /private/var, and every temp path
+        // begins there) still matches the paths beneath it. Before P7 the unresolved root never matched the
+        // link-resolved path and a genuinely shared folder was refused as "not shared".
+
         var inside = Directory.CreateDirectory(Path.Combine(_root, "inside")).FullName;
         var ops = new LocalFileOperations(new FileAccessPolicy([inside]));
 
@@ -364,5 +369,28 @@ public sealed class PartialFileTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "doc (1).txt"), "");
         Directory.CreateDirectory(Path.Combine(_root, "doc (2).txt"));
         Assert.Equal(Path.Combine(_root, "doc (3).txt"), PartialFile.FreeName(path));
+    }
+}
+
+public sealed class RemoteFileSourceCombineTests
+{
+    [Theory]
+    [InlineData("C:\\Share", "file.txt", "C:\\Share\\file.txt")]
+    [InlineData("C:\\Share\\", "file.txt", "C:\\Share\\file.txt")]
+    [InlineData("/Volumes/Data", "file.txt", "/Volumes/Data/file.txt")]
+    [InlineData("/Volumes/Data/", "file.txt", "/Volumes/Data/file.txt")]
+    public void Combine_keeps_the_separator_of_the_remote_folder(string folder, string name, string expected) =>
+        Assert.Equal(expected, RemoteFileSource.CombinePaths(folder, name));
+
+    [Fact]
+    public void Combine_empty_folder_returns_the_name() =>
+        Assert.Equal("report.txt", RemoteFileSource.CombinePaths(string.Empty, "report.txt"));
+
+    [Fact]
+    public void Combine_without_a_separator_in_the_folder_uses_the_local_OS_separator()
+    {
+        // A bare drive root like "C:" carries no separator; fall back to the local OS convention. Either slash is
+        // tolerated by the host's own path parsing, so only "the local separator" is asserted.
+        Assert.Equal($"C:{Path.DirectorySeparatorChar}Users", RemoteFileSource.CombinePaths("C:", "Users"));
     }
 }

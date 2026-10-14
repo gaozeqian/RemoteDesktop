@@ -1,9 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.Versioning;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using RemoteDesktop.Domain;
 
 namespace RemoteDesktop.Platform.Linux.Setup;
 
@@ -17,7 +14,8 @@ namespace RemoteDesktop.Platform.Linux.Setup;
 /// installs by hand, and there is no policy bit to set.
 /// </para>
 /// <para>
-/// What is left is the one setting a person has to change after installing: which server to talk to.
+/// What is left is making the controlled end pick up a settings change. The address itself is written by
+/// <c>UserSettings</c>, which is where both this side and macOS keep it.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
@@ -25,42 +23,6 @@ public static class LinuxSetup
 {
     /// <summary>The unit the package registers for the controlled end.</summary>
     public const string HostServiceUnit = "remotedesktop-host";
-
-    /// <summary>
-    /// Sets <c>Transport:RendezvousUri</c> in the person's own settings file.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The file it writes is the one the programs layer on top of the settings they shipped with. That layering is
-    /// the point: the shipped <c>appsettings.json</c> lives beside the program under <c>/usr/lib</c>, where it
-    /// belongs to root — so on a machine where nobody is root, the address it carries would be a default that
-    /// cannot be changed at all. What is written here is only what is being changed; everything else keeps coming
-    /// from the shipped file, which is also why an upgrade can replace that file without touching this one.
-    /// </para>
-    /// <para>
-    /// The controlled end reads the same file. On Windows there are two settings files because the service runs as
-    /// another account; here it is the same person in the same session, so one file drives both.
-    /// </para>
-    /// </remarks>
-    /// <exception cref="ArgumentException">The address is not a <c>ws://</c> or <c>wss://</c> address.</exception>
-    public static void SetRendezvousUri(string dataDirectory, string uri)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(dataDirectory);
-        if (!RendezvousAddress.TryParse(uri, out var parsed))
-        {
-            throw new ArgumentException(
-                "The rendezvous server must be given as ws://host:port/ws or wss://host/ws.",
-                nameof(uri));
-        }
-
-        var path = Path.Combine(dataDirectory, "appsettings.json");
-        var root = Read(path);
-        var transport = root["Transport"] as JsonObject ?? [];
-        transport["RendezvousUri"] = parsed.AbsoluteUri;
-        root["Transport"] = transport;
-
-        Write(path, root);
-    }
 
     /// <summary>
     /// Restarts the controlled end so it picks up a new address, if this machine is running one.
@@ -106,36 +68,5 @@ public static class LinuxSetup
         {
             // No systemctl on this machine, or no systemd to talk to.
         }
-    }
-
-    /// <summary>The settings file, or an empty one. Comments are tolerated because operators edit this by hand.</summary>
-    private static JsonObject Read(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return [];
-        }
-
-        try
-        {
-            return JsonNode.Parse(
-                File.ReadAllText(path),
-                documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip }) as JsonObject ?? [];
-        }
-        catch (JsonException)
-        {
-            // A settings file somebody has broken by hand is replaced rather than argued with: the only thing this
-            // ever writes is one address, and refusing to save it would leave them with no way to fix it from here.
-            return [];
-        }
-    }
-
-    /// <summary>Written beside the target and moved into place, so an interrupted save leaves no half a file.</summary>
-    private static void Write(string path, JsonObject settings)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = path + ".tmp";
-        File.WriteAllText(temporary, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporary, path, overwrite: true);
     }
 }

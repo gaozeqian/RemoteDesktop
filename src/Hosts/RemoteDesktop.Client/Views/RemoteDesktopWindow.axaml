@@ -4,7 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.RemoteDesktopWindow"
         x:DataType="vm:RemoteDesktopViewModel"
         Title="{Binding Title}"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Width="1280" Height="760" Background="{DynamicResource RdVideoBackdropBrush}">
   <DockPanel>
     <Border DockPanel.Dock="Top" Classes="toolbar">
@@ -40,8 +40,9 @@
           <Button Content="文件" Command="{Binding OpenFilesCommand}" IsVisible="{Binding CanTransferFiles}" VerticalAlignment="Center" />
           <Button Content="终端" Command="{Binding OpenTerminalCommand}" IsVisible="{Binding CanUseTerminal}" VerticalAlignment="Center" />
           <Button Content="摄像头" Command="{Binding OpenCameraCommand}" IsVisible="{Binding CanUseCamera}" VerticalAlignment="Center" />
-          <!-- Only the host service can raise Ctrl+Alt+Del, so it is a button instead of a key combination. -->
-          <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanControl}" VerticalAlignment="Center" />
+          <!-- Only a host that can raise Ctrl+Alt+Del grants the permission, so the button follows the host rather than
+               the controller's platform: it is absent for a macOS host and for a Windows client hosting by itself. -->
+          <Button Content="Ctrl+Alt+Del" Command="{Binding SendSecureAttentionCommand}" IsVisible="{Binding CanSendSecureAttention}" VerticalAlignment="Center" />
 
           <Border Classes="toolbarSeparator" />
 

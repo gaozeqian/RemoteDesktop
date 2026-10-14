@@ -18,7 +18,11 @@
 * [**设备列表与存储 (device-list-storage.md)**](device-list-storage.md)
   * 客户端本地存储结构及账号系统同步升级预留接口。
 
-### 3. 平台移植 (Ports)
+### 3. 平台移植 (Platform Ports)
+* [**macOS (arm64) 移植实现计划 (macos-port-plan.md)**](macos-port-plan.md)
+  * P1–P10 的分阶段计划、本机实测记录（原生互操作、TCC、打包签名、VideoToolbox 等）与风险清单。
+* [**macOS (arm64) 移植评审 (macos-port-review.md)**](macos-port-review.md)
+  * 架构与技术选型评估、对原体系的影响评估、遗留技术债与改进建议。
 * [**Linux 平台移植计划 (linux-port-plan.md)**](linux-port-plan.md)
   * 端口清单、进程模型与权限模型的差异、本机实测结论（MsQuic、portal 能力、显示枚举）与实施阶段。
 

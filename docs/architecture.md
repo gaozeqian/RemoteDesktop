@@ -36,20 +36,25 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 *位于外层，组合下层模块以实现独立功能，可按需热插拔。*
 *   **`Desktop`**: 桌面协同（视频流、输入注入、本地/远程鼠标指针合并）。
 *   **`FileTransfer`**: 文件管理器（断点续传、文件校验、限速管理）。
-*   **`Terminal`**: 远程终端（纯文本交互和 VT 序列解析；终端本身由平台层提供——Windows 是 ConPTY，Linux 是 PTY）。
+*   **`Terminal`**: 远程终端（纯文本交互和 VT 序列解析；终端本身由平台层提供——Windows 是 ConPTY，macOS 与 Linux 是共享 `Posix` 层的 PTY）。
 *   **`Camera`**: 摄像头画面劫持与推送。
 
 ### 5. 具体实现层 (Implementations & Platforms)
 *   **`RemoteDesktop.Media`**: 编解码算法落地。智能调度硬件编解码（H.264）或 CPU 回退方案，负责画面缩放、色彩空间转换 (BT.709) 等。
 *   **`RemoteDesktop.Platform.Windows`**: 对 `Abstractions` 的 Windows 原生实现。调用 DXGI 进行超低延迟截屏、使用 SendInput 模拟键鼠、对接 Media Foundation、读写 Windows DPAPI。
+*   **`RemoteDesktop.Platform.MacOS`**: 对 `Abstractions` 的 macOS (Apple Silicon) 原生实现。调用 ScreenCaptureKit 截屏与环回音频、CGEvent 模拟键鼠、VideoToolbox 编解码、AVFoundation 摄像头、AVAssetWriter 录制、Keychain 存密钥、`SMAppService` 开机自启。平台项目同样保持 `net10.0`（**不是** `net10.0-macos`），C 框架直连 P/Invoke，ObjC-only 框架经一个小型辅助库（`native/macos` → `libRemoteDesktopMacNative.dylib`）暴露扁平 C ABI。详见 [macos-port-plan.md](macos-port-plan.md)。
 *   **`RemoteDesktop.Platform.Linux`**: 对 `Abstractions` 的 Linux 原生实现。屏幕走桌面 portal + PipeWire，输入走 libei（**不需要 `/dev/uinput` 那种机器级特权**），编解码走 libavcodec（NVENC / VA-API / x264 回落），音频走 PulseAudio，防休眠走 logind，密钥是 0600 文件。
 *   **`RemoteDesktop.Posix`**: 两个类 Unix 系统语义相同的部分——PTY（`posix_spawn`，不用 `fork`——多线程 .NET 进程里 fork 会死锁）、0600 文件密钥库、Unix 用户上下文守卫。
 
 ### 6. 宿主与程序入口 (Hosts)
-*   **`RemoteDesktop.Client`**: 基于 Avalonia 12 编写的图形客户端，运行在 Windows 与 Linux 上。
-*   **`RemoteDesktop.HostService`**: （被控端核心）守护进程：注册设备、鉴权、分发通道、对接信令服务器。**形态按平台不同**——Windows 上它是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上它是一个跑在图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方。
-*   **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 没有 Session 0，portal 只在该会话内应答，所以没有需要拆出去的那一半——不是没做，是不需要。
+*   **`RemoteDesktop.Client`**: 基于 Avalonia 12 编写的跨平台图形客户端，**同一份代码在 Windows、macOS 与 Linux 上构建运行**（`ClientPlatformRegistration` 在运行时按 OS 选择平台层，ILLink 按目标 OS 裁掉其余分支）。
+*   **`RemoteDesktop.HostService`**: （被控端核心）守护进程：注册设备、鉴权、分发通道、对接信令服务器。**形态按平台不同**——Windows 上它是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上它是一个跑在图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方；macOS 上不用它：客户端进程自己就是被控端。
+*   **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有 Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
 *   **`RemoteDesktop.Server.*`**: 包含 Rendezvous（信令协调）和 Relay（流量中继）服务器。可以部署在 Linux/Docker 上。
+
+> **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，因此
+> Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的**同一个 `.app`**
+> （自带托管能力），开机自启用 `SMAppService` 登录项而非系统服务。见 [macos-port-plan.md §2.1](macos-port-plan.md)。
 
 ## 防御性编程与权限设计
 *   **最低权限原则**：一切文件传输、终端操作默认以当前登录用户 (Agent 所属用户 / Linux 上的会话用户) 的权限执行，而非服务宿主 (System)。

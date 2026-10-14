@@ -71,7 +71,7 @@ curl http://127.0.0.1:5080/health
 
 ```powershell
 pwsh -File build/installer/server/windows/build-server-installer.ps1
-# 产物：build/installer/server/windows/artifacts/RemoteDesktop.Server-<版本>-x64.msi
+# 产物：artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
 ```
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
@@ -112,6 +112,46 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；`server-setup.log` 不在安装清单里，
 会留在目录里，删不删随你。
 
+#### macOS
+
+```bash
+build/installer/server/macos/make-pkg.sh --configuration Release
+# 产物：artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-<版本>.pkg
+```
+
+装到 `/usr/local/remotedesktop-server`，并把两个服务器注册成 **launchd 守护进程**
+（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay`，开机自启、崩溃重启）—— 这就是 Windows 那两个服务的对应物。
+
+```bash
+sudo installer -pkg <文件>.pkg -target /
+curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活着
+```
+
+要在**构建时**就定下配置（等于 Windows 安装时传属性），给打包脚本传对应的选项：
+
+| Windows 安装属性 | macOS 打包选项 |
+|---|---|
+| `RENDEZVOUSURL` | `--rendezvous-url` |
+| `RELAYPUBLICENDPOINT` | `--relay-endpoint` |
+| `RELAYSHAREDKEY` | `--relay-key` |
+| `POSTGRESCONNECTIONSTRING` | `--postgres` |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `--tls-certificate` / `--tls-password` |
+| `NOFIREWALL` | 无对应项 —— macOS 没有"按端口加规则"这回事（见下） |
+
+**三件与 Windows 不同的事**：
+
+- **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
+  别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
+- **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist 与目录，
+  `--keep-settings` 可只删程序）。
+- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `configure-server.ps1` 一一对应 ——
+  同样的选项，跑的是同一个 `--configure-system` 步骤。
+
+> 两个平台的服务器是**同一份可执行文件**、同一个 `--configure-system` 步骤，所以写出来的
+> `appsettings.json` 与生成的中继密钥完全一致：换平台不需要换配置方式。
+> macOS 上要开 TLS，用 `build/signing/New-ServerCertificate.ps1` 生成证书（纯 .NET，macOS 上同样能跑），
+> 把 `.pfx` 交给 `configure-server.sh --tls-certificate`。
+
 ### 装完之后改配置
 
 安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
@@ -137,11 +177,12 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 ### 2. 手工构建
 
 ```
-dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/rendezvous
-dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/relay
+dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/rendezvous
+dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/relay
 ```
 
-（Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等即可，服务端是跨平台的。）
+（Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等，并把 `artifacts/app/windows/` 里的 `windows`
+换成对应平台 —— 服务端是跨平台的。产物目录的约定见 [CONTRIBUTING.md](../CONTRIBUTING.md) 的"构建产物布局"。）
 
 ### 3. 配置
 
@@ -610,10 +651,43 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 3. **日志里有没有"合成器没有描述指针"**：那意味着光标位置不会实时更新，画面本身正常。
 4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。
 
+## 四之三、部署客户端 / 被控端（.pkg，macOS）
+
+### 1. 构建与安装
+
+
+macOS 侧是**单进程**的：同一个 `.app` 既能当控制端、也能当被控端（没有 Windows 那种服务 + Agent 的拆分，
+因为 macOS 的守护进程拿不到屏幕录制权限）。安装包由 `build/installer/client/macos/make-pkg.sh` 产出，
+装到 `/Applications`。
+
+```
+build/installer/client/macos/make-pkg.sh --configuration Release
+# 产物：artifacts/installer/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
+```
+
+**安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。
+
+三件必须知道的事：
+
+- **包默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
+  "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
+  有证书时加 `--distribution` 与 `--notarize` 做签名 + 公证，下载即开；证书与凭据的配置见
+  [build/signing/README.md](../build/signing/README.md) 的 macOS 一节。
+- **被控端需要手动授权两项权限**：装完后打开应用，在「系统设置 → 隐私与安全性」里给它开
+  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。macOS 会在首次使用时弹窗；授权后可能要重启应用。
+- **无人值守**：在应用里开启登录项（`SMAppService`）。它按**已签名并位于 `/Applications` 的应用**记账，
+  所以别把 `.app` 拷到别处运行。
+
+服务器地址同样可以内置：`make-pkg.sh` 会复用 `make-app.sh` 产出的 `.app`，而后者读的是构建时的配置；
+也可装完后在客户端界面用「修改服务器地址」填 `wss://<主机>:5080/ws`。
+
+> **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
+> （见 `docs/macos-port-plan.md` §3.4）。`.pkg` 只面向 Apple Silicon（arm64）。
+
 ## 五、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
-- **临时密码**可以随时刷新；**固定密码**适合无人值守，由 DPAPI 强加密持久化存储，无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。
+- **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。
 - **中继带宽**：直连打洞成功时不走中继。`RelayEndpoint` 配错会让所有连接都失败。
 - **多台服务器**：目前 Rendezvous 不共享状态，设备要连到同一台服务器才能互相发现。
 - **日志**：服务器是标准输出（服务方式运行时进 Windows 事件日志或用 `--console` 重定向）；被控端在

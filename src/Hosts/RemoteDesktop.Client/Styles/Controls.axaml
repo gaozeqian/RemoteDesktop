@@ -211,10 +211,11 @@
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
-  <!-- The rail's icons come from the Windows icon font, so they inherit the item's foreground. -->
-  <Style Selector="TextBlock.navIcon">
-    <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
-    <Setter Property="FontSize" Value="17" />
+  <!-- The rail's icons are PathIcons (Styles/Icons.axaml): they take the item's foreground like text would, but they
+       need a size rather than a font. There is deliberately no icon font anywhere — see that file for why. -->
+  <Style Selector="PathIcon.navIcon">
+    <Setter Property="Width" Value="17" />
+    <Setter Property="Height" Value="17" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 

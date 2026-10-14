@@ -101,7 +101,18 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
     public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken) =>
         OperationAsync(new FileRequest { Delete = new DeleteRequest { Path = path, Recursive = recursive } }, cancellationToken);
 
-    public string Combine(string folder, string name)
+    // The folder came from the remote host, so its own separator is the one to use: a macOS controller may be
+    // browsing a Windows host, and a Windows controller a macOS one. Reading the separator off the path we were just
+    // given keeps us aligned with how the host writes paths, instead of assuming one OS on either end.
+    public string Combine(string folder, string name) => CombinePaths(folder, name);
+
+    /// <summary>Joins a remote folder and an item name the way the host writes paths.</summary>
+    /// <remarks>
+    /// The separator is taken from <paramref name="folder"/> because that string arrived from the host (a listing or a
+    /// place), so it already carries the host's convention. A bare drive root like <c>C:</c> carries none — either
+    /// slash is tolerated by a Windows host, so it falls back to the local OS separator.
+    /// </remarks>
+    public static string CombinePaths(string folder, string name)
     {
         if (string.IsNullOrEmpty(folder))
         {
@@ -117,10 +128,28 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
     /// driving a Windows host has to build <c>C:\dir\name</c> and a Windows controller driving a Posix host
     /// <c>/home/u/name</c>, and neither side is told what the other runs. The folder the host just handed over is the
     /// evidence — and it is reliable, because an absolute Windows path always starts with a drive letter or a UNC
-    /// prefix, and nothing else does.
+    /// prefix, and nothing else does. That test comes first on purpose: a Posix directory name may legally contain a
+    /// backslash, so "the folder contains a backslash somewhere" would read such a name as a Windows path.
     /// </summary>
-    private static char SeparatorOf(string folder) =>
-        folder.Length >= 2 && folder[1] == ':' || folder.StartsWith(@"\\", StringComparison.Ordinal) ? '\\' : '/';
+    private static char SeparatorOf(string folder)
+    {
+        // The UNC form — everything is in the prefix already.
+        if (folder.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return '\\';
+        }
+
+        if (folder.Length >= 2 && folder[1] == ':')
+        {
+            // A drive-letter path: Windows with either slash (it accepts both), or a bare "C:" with nothing to copy.
+            return folder.Contains('\\') ? '\\'
+                : folder.Contains('/') ? '/'
+                : Path.DirectorySeparatorChar;
+        }
+
+        // Posix, including a folder whose name contains a literal backslash.
+        return '/';
+    }
 
     public async ValueTask DisposeAsync()
     {

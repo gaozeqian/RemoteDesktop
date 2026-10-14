@@ -13,9 +13,7 @@ public static class DataDirectory
     /// <summary>
     /// The signed-in user's copy: the client's identity, remembered devices and logs.
     /// </summary>
-    public static string ForUser() => OperatingSystem.IsWindows()
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ProductName)
-        : PosixDataHome();
+    public static string ForUser() => Path.Combine(UserDataRoot(), ProductName);
 
     /// <summary>
     /// The machine's copy: what the always-on side keeps, so that it survives signing out.
@@ -27,15 +25,29 @@ public static class DataDirectory
     /// </remarks>
     public static string ForMachine() => OperatingSystem.IsWindows()
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProductName)
-        : PosixDataHome();
+        : ForUser();
 
-    private static string PosixDataHome()
+    /// <summary>
+    /// The per-user root, which each system spells differently — and on one of them the obvious member is the wrong
+    /// kind of folder.
+    /// </summary>
+    /// <remarks>
+    /// On Windows <c>ApplicationData</c> is <c>%APPDATA%</c> — roaming, which is where the identity should travel
+    /// with the account — and on macOS it is <c>~/Library/Application Support</c>, the folder a Mac's own tools and
+    /// backups expect application state to be in (verified on the machine the port was written on). On Linux the
+    /// same member is <c>~/.config</c> — configuration, not data — so Linux reads the desktop's own convention
+    /// instead: <c>$XDG_DATA_HOME</c>, defaulting to <c>~/.local/share</c>.
+    /// </remarks>
+    private static string UserDataRoot()
     {
-        // XDG_DATA_HOME is what the desktop expects application data to be under, and ~/.local/share is the value it
-        // defaults to when unset.
+        if (!OperatingSystem.IsLinux())
+        {
+            return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        }
+
         var dataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
         return string.IsNullOrEmpty(dataHome)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", ProductName)
-            : Path.Combine(dataHome, ProductName);
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share")
+            : dataHome;
     }
 }

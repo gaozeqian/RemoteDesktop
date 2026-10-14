@@ -5,7 +5,7 @@
         x:Class="RemoteDesktop.Client.Views.FileManagerWindow"
         x:DataType="vm:FileManagerViewModel"
         Title="文件传输"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="1100" Height="720" MinWidth="760" MinHeight="480">
   <Grid RowDefinitions="*,Auto,Auto,180" Margin="12" RowSpacing="{DynamicResource RdSpaceMd}">

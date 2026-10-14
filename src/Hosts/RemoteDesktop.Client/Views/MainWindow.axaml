@@ -4,7 +4,7 @@
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Remote Desktop"
-        Icon="/Assets/icon.ico"
+        Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="860" Height="560" MinWidth="860" MinHeight="560">
 
@@ -27,8 +27,9 @@
              the code is what the person on the other end needs, and it is worth having on screen at all times. -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="10" Margin="18,18,18,12">
           <Border Width="38" Height="38" CornerRadius="10" Background="{DynamicResource RdAccentSurfaceBrush}">
-            <TextBlock Text="&#xE7F4;" Classes="navIcon" Foreground="{DynamicResource RdAccentBrush}"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <PathIcon Data="{StaticResource RdIconMachine}" Width="20" Height="20"
+                      Foreground="{DynamicResource RdAccentBrush}"
+                      HorizontalAlignment="Center" VerticalAlignment="Center" />
           </Border>
           <StackPanel VerticalAlignment="Center">
             <TextBlock Text="本机" FontWeight="SemiBold" />
@@ -43,19 +44,19 @@
         <ListBox x:Name="NavList" Classes="navList" SelectedIndex="{Binding SelectedPageIndex}">
           <ListBoxItem AutomationProperties.Name="主页">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE80F;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconHome}" Classes="navIcon" />
               <TextBlock Text="主页" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>
           <ListBoxItem AutomationProperties.Name="设备列表">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE8FD;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconDevices}" Classes="navIcon" />
               <TextBlock Text="设备列表" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>
           <ListBoxItem AutomationProperties.Name="高级设置">
             <StackPanel Orientation="Horizontal" Spacing="11">
-              <TextBlock Text="&#xE713;" Classes="navIcon" />
+              <PathIcon Data="{StaticResource RdIconSettings}" Classes="navIcon" />
               <TextBlock Text="高级设置" VerticalAlignment="Center" />
             </StackPanel>
           </ListBoxItem>
@@ -329,7 +330,7 @@
                   <StackPanel Spacing="{DynamicResource RdSpaceMd}">
                     <TextBlock Text="固定密码（无人值守）" Classes="sectionHeader" />
                     <TextBlock Classes="caption"
-                               Text="设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。" />
+                               Text="{x:Static vm:MainWindowViewModel.FixedPasswordStorageNote}" />
 
                     <StackPanel Spacing="{DynamicResource RdSpaceSm}">
                       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}"
@@ -356,6 +357,24 @@
                           </StackPanel>
                         </StackPanel>
                       </Border>
+                    </StackPanel>
+
+                    <!-- 无人值守的另一半：固定密码管"用什么密码进"，这里管"开机后谁在等"。macOS 独占——Windows 的
+                         无人值守由服务端 MSI 装的服务提供，所以 HasLoginItem 在 Windows 上为 false，整节隐藏。 -->
+                    <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{Binding HasLoginItem}">
+                      <TextBlock Text="开机自启（无人值守）" Classes="sectionHeader" />
+                      <TextBlock Classes="caption"
+                                 Text="开启后，每次登录 macOS 都会自动启动本应用并保持被控在线，不需要有人先登录。" />
+                      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                        <TextBlock Text="{Binding LoginItemStatus}" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource RdAccentBrush}" />
+                        <Button Content="开启" Command="{Binding EnableLoginItemCommand}"
+                                IsVisible="{Binding !IsLoginItemRegistered}" />
+                        <Button Content="关闭" Command="{Binding DisableLoginItemCommand}"
+                                IsVisible="{Binding IsLoginItemRegistered}" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding LoginItemError}" Classes="danger"
+                                 IsVisible="{Binding LoginItemError, Converter={x:Static ObjectConverters.IsNotNull}}" />
                     </StackPanel>
                   </StackPanel>
                 </Border>
@@ -400,7 +419,7 @@
                     </Grid>
 
                     <TextBlock Classes="caption"
-                               Text="两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。" />
+                               Text="{x:Static vm:MainWindowViewModel.ServerAddressNote}" />
                   </StackPanel>
                 </Border>
               </TabItem>
@@ -434,7 +453,7 @@
                                Text="设备身份、记住的密码和最近连接列表都在这个目录里。客户端没有文件日志，只在崩溃时写 crash.log——平时的问题看界面提示。" />
 
                     <TextBlock Classes="caption" TextWrapping="Wrap"
-                               Text="「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。" />
+                               Text="{x:Static vm:MainWindowViewModel.ClientCodeNote}" />
                   </StackPanel>
                 </Border>
               </TabItem>

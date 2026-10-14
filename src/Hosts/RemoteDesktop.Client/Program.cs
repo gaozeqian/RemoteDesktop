@@ -8,19 +8,37 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // The two platforms the product is built for. Said out loud rather than left to fail somewhere further in,
+        // The three platforms the product is built for. Said out loud rather than left to fail somewhere further in,
         // and it is also what tells the analyzer that everything below runs where the platform layers are supported.
-        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
         {
-            Console.Error.WriteLine($"This build runs on Windows and Linux; this is {Environment.OSVersion.Platform}.");
+            Console.Error.WriteLine($"This build runs on Windows, macOS and Linux; this is {Environment.OSVersion.Platform}.");
             return 1;
         }
 
-        // Before anything is built, so that it still answers on a machine where the program cannot start — which is
-        // the machine somebody runs it on.
-        if (args.Any(argument => string.Equals(argument, "--self-check", StringComparison.OrdinalIgnoreCase)))
+        // Reports what the platform layer can do, from inside whatever this binary was launched from. A windowed
+        // program has nowhere to print, so it is a separate mode rather than a log. It runs before anything is
+        // built, so that it still answers on a machine where the program cannot start — which is the machine
+        // somebody runs it on.
+        //
+        // The environment variable is for launches that discard their arguments or their output. macOS's
+        // LaunchServices is the concrete case: `open -a RemoteDesktop.app --args …` drops the arguments
+        // (macOS-port-plan.md 3.11⑧), and that is also the only launch whose TCC attribution is the app's own
+        // rather than the calling terminal's — so it is the run whose answers mean anything. Set it with
+        // `launchctl setenv RD_SELF_CHECK 1` so it lands in the session environment every launched app inherits,
+        // and RD_SELF_CHECK_OUTPUT says where the report goes; unset both afterwards, because with the variable set
+        // every launch of this build reports and exits instead of opening a window.
+        if (args.Any(argument => string.Equals(argument, "--self-check", StringComparison.OrdinalIgnoreCase))
+            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RD_SELF_CHECK")))
         {
-            return SelfCheck.Run(Console.Out);
+            var reported = new List<string>(args);
+            if (Environment.GetEnvironmentVariable("RD_SELF_CHECK_OUTPUT") is { Length: > 0 } reportPath)
+            {
+                reported.Add("--output");
+                reported.Add(reportPath);
+            }
+
+            return SelfCheck.Run([.. reported]);
         }
 
         IHost host;

@@ -25,8 +25,11 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
 
         Assert.Equal(ConnectionPath.Direct, session.Path);
 
-        // All capabilities including the camera are granted for standard control.
-        Assert.Equal(Permissions.All, session.Context.Grant.Permissions);
+        // Everything this host can actually serve: all capabilities including the camera are granted for standard
+        // control, minus the one it is not able to provide. This device registers no input injector and no agent
+        // gateway, so it cannot raise Ctrl+Alt+Del, and the host does not claim otherwise — the grant is the host's
+        // statement of what the session may do, and a capability the machine does not have is not one it can hand out.
+        Assert.Equal(Permissions.All & ~Permissions.SecureAttention, session.Context.Grant.Permissions);
         var hostSide = await started.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(controller.Id, hostSide.Connection.RemoteDevice);
         Assert.Equal(ConnectionPath.Direct, hostSide.Connection.Path);

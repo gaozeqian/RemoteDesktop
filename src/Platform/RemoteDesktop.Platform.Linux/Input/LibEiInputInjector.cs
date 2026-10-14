@@ -126,6 +126,9 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     /// application can see it, so that only the real system can ask for a password. Wayland has no equivalent, and
     /// a session lock is a different user's session that this process cannot see or reach.
     /// </remarks>
+    /// <summary>False: a Wayland session has no secure attention sequence for an application to raise.</summary>
+    public bool SupportsSecureAttention => false;
+
     public void SendSecureAttentionSequence() =>
         throw new NotSupportedException("A Wayland session has no secure attention sequence to send.");
 

@@ -26,7 +26,10 @@ public sealed class TerminalControl : Control
     private const double FontSize = 14;
     private const int MaxCachedGlyphs = 4096;
 
-    private static readonly FontFamily Family = new("Cascadia Mono, Cascadia Code, Consolas, Courier New");
+    // The first three are Windows fonts and the last three are macOS ones; Avalonia takes the first family that is
+    // installed. Before Menlo/Monaco were listed, macOS fell through to Courier New — still monospaced, so the grid
+    // held, but not the typeface anyone meant.
+    private static readonly FontFamily Family = new("Cascadia Mono, Cascadia Code, Consolas, Menlo, Monaco, Courier New");
 
     private readonly Dictionary<uint, SolidColorBrush> _brushes = [];
     private readonly Dictionary<(int Character, uint Color, bool Bold, bool Italic), FormattedText> _glyphs = [];

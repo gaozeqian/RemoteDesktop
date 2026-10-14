@@ -310,10 +310,11 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_certificate_this_step_generates_is_written_so_that_the_server_can_load_it()
     {
-        // The generated certificate is kept in the machine's certificate store, which is a Windows thing: elsewhere
-        // the same step has to write PEM files and point Kestrel at them with Path/KeyPath instead. That form lands
-        // with the rest of the server packaging; until then this test covers what exists.
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "The machine certificate store is Windows only.");
+        // The platform check has to come first. WindowsIdentity.GetCurrent() throws PlatformNotSupportedException off
+        // Windows, so evaluating the elevation test below on macOS failed the run instead of skipping it. What this
+        // covers where there is a store is the store form; elsewhere the same step writes PEM files and points
+        // Kestrel at them with Path/KeyPath — that form has its own tests below.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "The generated certificate goes into the Windows certificate store.");
         Assert.SkipUnless(
             new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
                 .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator),

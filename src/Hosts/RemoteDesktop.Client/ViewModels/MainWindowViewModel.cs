@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Setup;
@@ -19,8 +20,6 @@ using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Linux.Setup;
-using RemoteDesktop.Platform.Windows.Recording;
-using RemoteDesktop.Platform.Windows.Setup;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -58,6 +57,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IRecentDevicesStore _recentDevicesStore;
     private readonly IRendezvousClient _rendezvous;
     private readonly IVideoRecorderFactory? _recorderFactory;
+    private readonly ILoginItem? _loginItem;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _presenceTimer;
     private int _presenceInFlight;
@@ -76,7 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IRendezvousClient rendezvous,
         ClientEnvironment environment,
         TransportOptions transport,
-        IVideoRecorderFactory? recorderFactory = null)
+        IVideoRecorderFactory? recorderFactory = null,
+        ILoginItem? loginItem = null)
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
@@ -89,10 +90,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _loggers = loggers;
         _logger = loggers.CreateLogger<MainWindowViewModel>();
         _recentDevicesStore = recentDevicesStore;
-        // Straight from the platform layer, which registers one on both platforms — Media Foundation on Windows,
-        // libavcodec here. There used to be a hardcoded Windows one behind an IsWindows() check, which meant
-        // recording silently did nothing on any other platform rather than failing to compile.
+        // From the container: the platform layer decides whether this machine has a recorder at all — Media
+        // Foundation on Windows, VideoToolbox on macOS, libavcodec on Linux. There used to be a hardcoded Windows
+        // one behind an IsWindows() check, which meant recording silently did nothing on any other platform rather
+        // than failing to compile.
         _recorderFactory = recorderFactory;
+        // Same idea: only macOS registers a login item, and only macOS needs one — on Windows the unattended host is
+        // the installed service, which the server MSI sets up. Null where the platform layer registers none, and
+        // that null hides the whole UI section.
+        _loginItem = loginItem;
+        if (OperatingSystem.IsMacOS())
+        {
+            RefreshLoginItemState();
+        }
 
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;
@@ -157,6 +167,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? FixedPasswordError { get; set; }
 
+    /// <summary>
+    /// Whether this machine has a login-item concept: macOS, where the client is its own host. On Windows the same
+    /// job is done by the installed service, so the section stays hidden rather than offering a second way to do it.
+    /// </summary>
+    public bool HasLoginItem => OperatingSystem.IsMacOS() && _loginItem is not null;
+
+    /// <summary>State of the login item, as macOS itself reports it (the user may also change it in System Settings).</summary>
+    [ObservableProperty]
+    public partial bool IsLoginItemRegistered { get; set; }
+
+    [ObservableProperty]
+    public partial string LoginItemStatus { get; set; } = "未开启";
+
+    [ObservableProperty]
+    public partial string? LoginItemError { get; set; }
+
     /// <summary>Where the host side runs and what its session agent is doing, when a background service hosts it.</summary>
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
@@ -203,6 +229,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>The sidebar's version line, built from <see cref="ClientVersion"/> so the two cannot disagree.</summary>
     public string ClientVersionLabel => $"Remote Desktop {ClientVersion}";
+
+    // The three captions below describe how this build actually behaves, and Windows and macOS differ in all three:
+    // where a fixed password is kept (DPAPI / keychain), what changing the server address costs (elevation and a
+    // service restart / neither), and what the controlled side even is (an installed service / this process).
+    //
+    // Static, because nothing about them depends on the instance — the view reaches them with {x:Static}.
+
+    /// <summary>The caption under 固定密码, naming the store this platform actually uses.</summary>
+    public static string FixedPasswordStorageNote => OperatingSystem.IsWindows()
+        ? "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。"
+        : "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。";
+
+    /// <summary>The caption under 服务器地址.</summary>
+    public static string ServerAddressNote => OperatingSystem.IsWindows()
+        ? "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。"
+        : "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。";
+
+    /// <summary>The caption explaining 本机控制端代码.</summary>
+    public static string ClientCodeNote => OperatingSystem.IsWindows()
+        ? "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。"
+        : "「本机控制端代码」是这台机器连出去时用的身份。macOS 上客户端与被控端是同一个进程，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。";
+
+    /// <summary>
+    /// The sentence for "the host did not answer", which has to name the thing that is actually unreachable: an
+    /// installed service on Windows, this process's own host state on macOS.
+    /// </summary>
+    private static string HostUnreachable => OperatingSystem.IsWindows() ? "无法联系后台服务" : "无法读取本机被控状态";
 
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
     /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
@@ -457,10 +510,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveServerAddressAsync()
     {
-        // Parsed here, before anything is started as administrator, and by the same rule the service applies when it
-        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt. The rule lives in
-        // the domain because both platforms need it: two validators would be two answers to the same question, and
-        // the interesting failures are the addresses where they disagree.
+        // Parsed here, before anything is started as administrator, and by the same rule the host applies when it
+        // writes the setting — so a rejected address costs the user a sentence, not a UAC prompt or a restart that
+        // comes back broken. The rule lives in the domain because every platform needs it: two validators would be
+        // two answers to the same question, and the interesting failures are the addresses where they disagree.
         if (!RendezvousAddress.TryParse(NewServerAddress, out var rendezvous))
         {
             ServerAddressError = "地址要写成 ws://主机:端口/ws 或 wss://主机/ws";
@@ -469,8 +522,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
+            // Where the address has to go depends on who is being controlled and on what the installation looks
+            // like. Everywhere but Windows it is the person's own settings file — this program reads it, and on
+            // Linux, where the controlled end runs as the same person in the same session, so does it. See
+            // UserSettings for the whole story.
             if (OperatingSystem.IsWindows())
             {
+                // Windows keeps the two halves under different accounts, so the installed service owns the address
+                // in its own appsettings.json and only an elevated run can write it.
                 if (!await ApplyOnWindowsAsync(rendezvous))
                 {
                     return;
@@ -478,27 +537,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
             else if (OperatingSystem.IsLinux())
             {
-                // One file, read by this program and by the controlled end: on Linux the two run as the same person
-                // in the same session, unlike the two accounts Windows keeps apart. See LinuxSetup for why the file
-                // is the person's own rather than the one the package ships.
-                // Named in full because this class has a DataDirectory of its own, and the setting is not the
-                // client's: it is the machine's, which on Linux is the same folder and is also where the
-                // controlled end reads it from.
-                LinuxSetup.SetRendezvousUri(
-                    Application.Hosting.DataDirectory.ForMachine(),
-                    rendezvous.AbsoluteUri);
+                UserSettings.SaveRendezvousUri(DataDirectory, rendezvous);
                 LinuxSetup.RestartHostServiceIfInstalled();
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                // No service on macOS: this process is the controlled side, so the address is written down for this
+                // process and the app restarts to pick it up.
+                UserSettings.SaveRendezvousUri(DataDirectory, rendezvous);
             }
 
             IsEditingServerAddress = false;
 
             // Restart the client application so it picks up the new address for outbound connections.
-            var clientExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-            if (!string.IsNullOrEmpty(clientExe))
-            {
-                System.Diagnostics.Process.Start(clientExe);
-                Environment.Exit(0);
-            }
+            RestartClient();
         }
         catch (Exception ex)
         {
@@ -510,9 +562,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// Hands the address to the installed service, which writes it and restarts itself.
     /// </summary>
     /// <remarks>
-    /// A separate method rather than a branch inside the one above so that the platform attribute covers every
-    /// Windows-only call in it: the analyzer rejects that attribute on an async method, and without it these calls
-    /// would be unchecked rather than checked-and-correct.
+    /// This is the only place where something the user typed reaches a process running as administrator, which is
+    /// why the address is parsed before this and passed as its own argument rather than folded into a command line.
+    /// A method of its own so that the platform attribute covers every Windows-only call in it.
     /// </remarks>
     /// <returns><c>false</c> when the address was not applied, with the reason left in <see cref="ServerAddressError"/>.</returns>
     [SupportedOSPlatform("windows")]
@@ -540,6 +592,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         return true;
+    }
+
+    /// <summary>Starts a fresh copy of this process and leaves, so a changed address takes effect immediately.</summary>
+    private static void RestartClient()
+    {
+        var clientExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+        if (!string.IsNullOrEmpty(clientExe))
+        {
+            System.Diagnostics.Process.Start(clientExe);
+            Environment.Exit(0);
+        }
     }
 
     [RelayCommand]
@@ -585,6 +648,53 @@ public sealed partial class MainWindowViewModel : ObservableObject
         await RefreshHostStatusAsync();
     }
 
+    /// <summary>Reads the login-item state macOS reports. Called at start-up and from the status poll, because the user can also change it in System Settings → 登录项.</summary>
+    [SupportedOSPlatform("macos")]
+    private void RefreshLoginItemState()
+    {
+        if (_loginItem is null)
+        {
+            return;
+        }
+
+        IsLoginItemRegistered = _loginItem.IsRegistered;
+        LoginItemStatus = IsLoginItemRegistered ? "已开启：登录时自动启动" : "未开启";
+    }
+
+    [RelayCommand]
+    [SupportedOSPlatform("macos")]
+    private void EnableLoginItem()
+    {
+        LoginItemError = null;
+        try
+        {
+            // SMAppService only accepts a signed .app sitting in /Applications; a bare binary or an ad-hoc build is
+            // refused with exactly that sentence, which is the whole troubleshooting story for this button.
+            _loginItem!.Register();
+            RefreshLoginItemState();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            LoginItemError = ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    [SupportedOSPlatform("macos")]
+    private void DisableLoginItem()
+    {
+        LoginItemError = null;
+        try
+        {
+            _loginItem!.Unregister();
+            RefreshLoginItemState();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            LoginItemError = ex.Message;
+        }
+    }
+
     [RelayCommand]
     private async Task RefreshPasswordAsync()
     {
@@ -594,7 +704,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
         {
-            StatusMessage = "无法联系后台服务。";
+            StatusMessage = $"{HostUnreachable}。";
         }
 
         await RefreshHostStatusAsync();
@@ -898,7 +1008,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             LocalDeviceId = "--- --- ---";
             TemporaryPassword = string.Empty;
-            ServerStatus = "○ 无法联系后台服务";
+            ServerStatus = $"○ {HostUnreachable}";
             SetIncoming([]);
             HostDetail = null;
             ServerHint = null;
@@ -920,13 +1030,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
 
         // The device code comes from the server, so a machine that cannot reach it has no code to give out. Saying so
-        // here is the difference between "it is broken" and "the server address is wrong".
+        // here is the difference between "it is broken" and "the server address is wrong". The remedy named is the one
+        // that platform actually has: Windows installs the address into the service at install time, macOS has no
+        // service and goes through the box in 高级设置.
         ServerHint = online
             ? null
-            : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
-              + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。";
+            : OperatingSystem.IsWindows()
+                ? "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
+                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/deployment.md）。"
+                : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
+                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/deployment.md）。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
-        HostDetail = status.IsService ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}" : null;
+        // Windows with the service installed points at it; Windows without one, and the client alone, have nothing
+        // to say (that is the existing blank). macOS always runs the host in this process, so it says so instead —
+        // a blank row reads like a missing value rather than the single model macOS has.
+        HostDetail = status.IsService
+            ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}"
+            : OperatingSystem.IsMacOS()
+                ? "被控端在本进程内运行；开机自启请在「高级设置 → 安全」开启登录项"
+                : null;
+        if (OperatingSystem.IsMacOS())
+        {
+            // Read every poll: the state is one property on a launchd-side object, and the user may have flipped it
+            // in System Settings → 登录项 since the last tick.
+            RefreshLoginItemState();
+        }
         SetIncoming(status.Sessions);
     }
 

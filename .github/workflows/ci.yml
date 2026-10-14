@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+
   build:
     # Each platform builds and tests on its own runner; the test steps themselves live in a shared action so that the
     # retry policy and the summary table cannot drift between them.
@@ -64,7 +65,6 @@ jobs:
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-linux
-
       # The three .deb packages are built here as well as at release time, and that is the whole point of the step.
       # The scripts under build/debian/ otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a version that stops being
@@ -125,3 +125,38 @@ jobs:
           check artifacts/debian/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
           check artifacts/debian/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
           check artifacts/debian/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous
+
+  build-macos:
+    # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
+    # minos 26.0 and dyld refuses to load them on anything older (docs/macos-port-plan.md 3.4). That is also what makes
+    # this job possible at all: on macos-latest (macos-14/15) every transport test would fail with "Unable to load
+    # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
+      # this. It stages artifacts/native/macos, and RemoteDesktop.Transport copies that directory next to every
+      # executable that references it -- the test hosts included. It has to run before the build, because that copy is
+      # an MSBuild glob over a directory that would otherwise not exist yet.
+      - name: Stage the native MsQuic library
+        run: ./native/macos/fetch-libmsquic.sh
+      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      - name: Audit packages for known vulnerabilities
+        shell: pwsh
+        run: |
+          $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+          $report
+          if ($report -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found; the report is above."
+          }
+      - uses: ./.github/actions/run-test-suite
+        with:
+          artifact-name: test-results-macos
+
+  # release.yml has per-platform packaging jobs of its own: each one builds and tests its port, packages the MSIs,
+  # the .pkg and the three .deb files, and hands them to a single release job. The jobs here stay the place every
+  # port is exercised on each push and pull request; the release jobs are the place each one is shipped.

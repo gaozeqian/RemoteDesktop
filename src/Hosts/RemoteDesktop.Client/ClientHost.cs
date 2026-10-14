@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,8 +12,6 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Linux;
-using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client;
@@ -29,13 +26,18 @@ namespace RemoteDesktop.Client;
 /// <c>--DataDirectory D:\rd2 --Transport:RendezvousUri ws://10.0.0.5:5080/ws</c>. A separate data directory gives a
 /// separate device identity, which allows two instances on one machine. <c>--HostMode standalone</c> ignores an
 /// installed service; <c>--HostControlPipe name</c> talks to a service started with another pipe name (development).
+/// <para>
+/// The three <see cref="SupportedOSPlatformAttribute"/> attributes are the declaration that this host runs on Windows,
+/// macOS and Linux — and nothing else. They are what lets one registration call load whichever platform layer belongs
+/// to the running system while keeping the platform-compatibility analyzer satisfied: the calls that matter sit behind
+/// matching <c>OperatingSystem.Is…</c> checks, which narrow the set to exactly one OS.
+/// </para>
 /// </remarks>
+[SupportedOSPlatform("windows")]
+[SupportedOSPlatform("macos")]
+[SupportedOSPlatform("linux")]
 internal static class ClientHost
 {
-    // Both, because this is the file that decides which layer to load. Naming only one would silence the analyzer
-    // for the other platform's calls and leave them unchecked at the call sites that actually need the guarantee.
-    [SupportedOSPlatform("windows")]
-    [SupportedOSPlatform("linux")]
     public static IHost Build(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -48,16 +50,13 @@ internal static class ClientHost
         var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForUser();
         CrashLog.Register(dataDirectory);
 
-        // On Linux the settings the package ships live beside the program under /usr/lib, which belongs to root. The
-        // address in there is a default, and a default nobody can change is not a setting: this layers the person's
-        // own file on top of it, absent until they write one. No file, no watcher — a reloading one costs an inotify
-        // instance per host, and enough of those exhaust the desktop's own supply.
-        if (OperatingSystem.IsLinux())
+        // The person's own settings file, off Windows: layered over the shipped one and beneath the environment and
+        // the command line, so an installed client can be repointed without editing files it does not own. On Windows
+        // the installed service owns the address in its own appsettings.json instead — see UserSettings for the whole
+        // story. No file, no watcher: a reloading source costs an inotify instance, and desktops run out of them.
+        if (!OperatingSystem.IsWindows())
         {
-            builder.Configuration.AddJsonFile(
-                System.IO.Path.Combine(dataDirectory, "appsettings.json"),
-                optional: true,
-                reloadOnChange: false);
+            UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
         }
 
         // Read before anything is built: a mistyped address used to end in an exception nobody saw, because a windowed
@@ -73,21 +72,12 @@ internal static class ClientHost
             throw new StartupFailure(settingsError, reportPath);
         }
 
-
         var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
         var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
                          PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
 
-        if (OperatingSystem.IsWindows())
-        {
-            builder.Services.AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser);
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            builder.Services.AddLinuxPlatform(dataDirectory);
-        }
-
         builder.Services
+            .AddClientPlatform(dataDirectory)
             .AddRemoteDesktopMedia()
             .AddSingleton(new ClientEnvironment(dataDirectory))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and

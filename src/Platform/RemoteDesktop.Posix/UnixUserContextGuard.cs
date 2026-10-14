@@ -12,9 +12,10 @@ namespace RemoteDesktop.Platform.Posix;
 /// <remarks>
 /// On Windows the trigger is a service in Session 0 that owns the login screen. Here there is no equivalent session,
 /// so the only way to arrive at root is to have been started as root, which the packaging never does: the controlled
-/// end runs as a <c>systemd --user</c> service under the signed-in account. The guard is therefore expected to answer
-/// "allowed" in practice, and exists so that a host started the wrong way refuses the dangerous features instead of
-/// quietly offering them.
+/// end runs under the signed-in account — a <c>systemd --user</c> service on Linux, a launchd agent inside the user's
+/// session on macOS. The guard is therefore expected to answer "allowed" in practice, and exists so that a host
+/// started the wrong way (a hand-started <c>sudo</c> run, say) refuses the dangerous features instead of quietly
+/// offering them.
 /// </remarks>
 [UnsupportedOSPlatform("windows")]
 public sealed class UnixUserContextGuard : IUserContextGuard

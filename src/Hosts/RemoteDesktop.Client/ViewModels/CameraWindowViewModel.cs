@@ -9,7 +9,6 @@ using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Media;
-using RemoteDesktop.Platform.Windows.Recording;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client.ViewModels;
@@ -50,9 +49,10 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         _codecs = codecs;
         _time = time;
         _logger = logger;
-        // Straight from the platform layer, which registers one on both platforms — Media Foundation on Windows,
-        // libavcodec here. There used to be a hardcoded Windows one behind an IsWindows() check, which meant
-        // recording silently did nothing on any other platform rather than failing to compile.
+        // From the container, like the desktop window's: the platform layer decides whether this machine has a
+        // recorder at all — Media Foundation on Windows, VideoToolbox on macOS, libavcodec on Linux. There used to
+        // be a hardcoded Windows one behind an IsWindows() check, which meant recording silently did nothing on any
+        // other platform rather than failing to compile.
         _recorderFactory = recorderFactory;
 
         _recordingTimer.Tick += (_, _) => UpdateRecordingDuration();

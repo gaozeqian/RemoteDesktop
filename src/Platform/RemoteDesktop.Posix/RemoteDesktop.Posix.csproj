@@ -13,6 +13,9 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux" />
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.MacOS" />
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux.Tests" />
+    <!-- The window-size regression test: it pins the ioctl calling convention straight against the interop layer. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.MacOS.Tests" />
   </ItemGroup>
 </Project>

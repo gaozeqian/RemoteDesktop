@@ -93,9 +93,9 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     /// through is never one the service refuses, and the two can not drift apart.
     /// </summary>
     /// <remarks>
-    /// The host is held to what a DNS name or an IP literal can contain. That is stricter than <see cref="Uri"/>
-    /// needs to be: the value is typed by hand into a box whose content ends up in a process running as
-    /// administrator, and a "host" carrying quotes or semicolons is somebody's fragment of something else.
+    /// The grammar itself lives in <see cref="RendezvousAddress"/>, shared because every end of the product has to
+    /// agree on what an address is: the installer hands one to the service, the client validates whatever somebody
+    /// typed into the box, and macOS has no service at all. This method stays as the Windows-facing name for it.
     /// </remarks>
     public static bool TryParseRendezvousUri(string? address, out Uri parsed)
     {

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Stays net10.0 (not -macos) so the cross-platform hosts can reference it, exactly like the Windows project;
+         every entry point is guarded by [SupportedOSPlatform("macos")] and the CA1416 analyzer forces callers to
+         check the OS. Apple's frameworks are reached through hand-written P/Invoke plus one small Objective-C
+         helper library (native/macos) for the frameworks that are Objective-C only. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+    <!-- The pseudo-terminal: the BSD pty is the same mechanism as glibc's, and the differences (ioctl numbers,
+         O_NOCTTY, POSIX_SPAWN_SETSID, Darwin's non-variadic open/ioctl stubs) are confined to the shared interop
+         layer rather than copied into a second implementation of the session logic. -->
+    <ProjectReference Include="..\RemoteDesktop.Posix\RemoteDesktop.Posix.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.MacOS.Tests" />
+  </ItemGroup>
+  <!-- The Objective-C helper is built by native/macos/build-native.sh into artifacts/native; it is embedded into the
+       .app bundle by the packaging script. Keep it out of the compile set. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\native\macos\**\*" LinkBase="native" />
+  </ItemGroup>
+
+  <!-- The helper has to exist before the build copies it, and it has to be copied next to the assembly because that
+       is where MacNativeLibraryResolver looks for it. Two things make this fiddlier than the libmsquic glob in
+       RemoteDesktop.Transport.csproj: the file is produced by this build rather than downloaded once, and MSBuild
+       expands item globs during evaluation — before any target runs — so a glob here would find nothing on a clean
+       checkout. Hence a target that builds and then *adds* the item, hooked before AssignTargetPaths so the item
+       exists by the time the copy list is computed. The script does its own up-to-date check, so a rebuild costs one
+       process launch and no compilation. -->
+  <Target Name="BuildMacNativeHelper"
+          BeforeTargets="AssignTargetPaths"
+          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)..\..\..\native\macos\build-native.sh&quot;"
+          StandardOutputImportance="low" />
+    <ItemGroup>
+      <None Include="$(MSBuildThisFileDirectory)..\..\..\artifacts\native\macos\libRemoteDesktopMacNative.dylib"
+            Link="libRemoteDesktopMacNative.dylib"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+</Project>

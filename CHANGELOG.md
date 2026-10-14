@@ -2,32 +2,69 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [未发布] · Linux 平台支持
+## [未发布] · macOS (Apple Silicon) 与 Linux 平台支持
+
+新增 `RemoteDesktop.Platform.MacOS` 与 `RemoteDesktop.Platform.Linux` 两个平台项目（`net10.0`，与 Windows 侧
+同形），实现全部平台端口，使同一份客户端代码可在三个系统上构建运行；两个移植共享新增的 `RemoteDesktop.Posix`
+层（伪终端、0600 文件密钥库、用户上下文守卫）。核心层（`Domain` / `Application` / `Media` / `Protocol` /
+`Signaling`）**零改动**，依赖规则（`ArchitectureTests`）无需修改。
 
 ### Added
-- **Linux 被控端与客户端**：`RemoteDesktop.Platform.Linux`（屏幕走桌面 portal + PipeWire，输入走 libei，
-  编解码走 libavcodec，音频走 PulseAudio，防休眠走 logind），以及两个类 Unix 系统共用的 `RemoteDesktop.Posix`
-  （PTY、0600 文件密钥库、用户上下文守卫）。
+
+#### macOS
+- [Platform] **屏幕采集与输入注入**：ScreenCaptureKit 截屏（含光标）、CGEvent 键鼠注入，统一坐标换算
+  （虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1）。
+- [Platform] **视频编解码**：VideoToolbox H.264（硬件优先 + 软件兜底），线上 Annex-B、内部 AVCC 显式互转。
+- [Platform] **音频**：ScreenCaptureKit 环回采集（复用屏幕录制授权，**不新增麦克风权限**）+ AudioQueue 播放。
+- [Platform] **摄像头**：AVFoundation 枚举与采集。
+- [Platform] **录制**：AVAssetWriter（H.264 + MP4），复用共享 `Media` 层录制契约。
+- [Platform] **无人值守**：`SMAppService` 登录项（新增 `ILoginItem` 端口）。
+- [Platform] **剪贴板 / 防休眠 / 远程终端 / 密钥**：NSPasteboard、IOKit 电源断言、BSD 伪终端（`posix_spawn`）、
+  Keychain。
+- [Build] **`.app` 打包脚本** `build/installer/client/macos/make-app.sh`（自包含、`codesign --deep`、身份钉住）
+  与原生辅助库构建 `native/macos/build-native.sh`（扁平 C ABI，44 个导出入口）。
+- [CI] 新增 `build-macos` job（`macos-26`，arm64）。
+
+#### Linux
+- [Platform] **Linux 被控端与客户端**：屏幕走桌面 portal + PipeWire，输入走 libei，编解码走 libavcodec，
+  音频走 PulseAudio，防休眠走 logind。
 - **Linux 被控端是一条 `systemd --user` 服务**，不是系统服务：Wayland 的 portal 只在该会话内应答，
   所以它跑在图形会话里，自己就是采集和注入的那一方——**没有 Agent**，因为不需要拆。
 - **`.deb` 安装包**：`remotedesktop-client`、`remotedesktop-host`、`remotedesktop-server`。都是自包含发布，
   目标机器不需要装 .NET；`libmsquic` 随包放在可执行文件旁，所以也不需要设 `LD_LIBRARY_PATH`。
   服务端的配置在 `/etc/remotedesktop-server/`，升级不覆盖。
-- **发布流水线产出 Linux 包**：`release.yml` 多了一个 ubuntu job，三个 `.deb` 和两个 MSI 一起发出。
-  CI 也在每个 PR 上构建它们并检查包内容——不检查的话，构建脚本坏了要等到发版才知道。
-- **`--self-check`**：一条命令问完这台机器能不能用（数据目录、QUIC、会话类型、会话总线、运行时目录、
-  portal、显示布局、PipeWire、libei、libavcodec 版本、可用的 H.264 编码器）。全部只读、不弹对话框，
-  所以在一台起不来的机器上照样能跑；有必需项不通过时退出码 1。
 - **Linux 上的配置分两层**：随包装在 `/usr/lib` 下的那份提供默认值，用户自己的
-  `~/.local/share/RemoteDesktop/appsettings.json` 叠在上面。此前只有前者，而它属于 root——普通用户
-  **改不了服务器地址**（而文档把路径写成了一个当时并不存在的文件）。现在客户端里那个「修改服务器地址」
-  在 Linux 上也能用了，写的就是这一份，客户端和被控端共用。
+  `~/.local/share/RemoteDesktop/appsettings.json` 叠在上面。客户端里那个「修改服务器地址」在 Linux 上也能用，
+  写的就是这一份，客户端和被控端共用。
+
+#### 两端共通
+- **`--self-check`**：一条命令问完这台机器能不能用。macOS 的版本在 bundle 内逐一验证每个平台端口与行为探针；
+  Linux 的版本检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal、显示布局、PipeWire、libei、
+  libavcodec 版本与可用的 H.264 编码器。全部只读、不弹对话框，在一台起不来的机器上照样能跑；
+  有必需项不通过时退出码 1。**两个包都带**，不只客户端——只装被控端的机器更需要它。
+- **发布流水线产出三平台产物**：`release.yml` 现在有四个打包 job，两个 MSI、两个 `.pkg` 和三个 `.deb`
+  一起发出；CI 在每个 PR 上构建三平台并检查包内容——不检查的话，构建脚本坏了要等到发版才知道。
 
 ### Changed
-- **宿主装配按平台分开**：`Platform.Windows` 与 `Platform.Linux` 各自注册同一批端口，业务代码不知道自己在哪个平台上。
-  客户端的结构、文件传输、终端、摄像头在 Linux 上同样可用。
-- `MfVideoRecorderFactory` 从客户端三个 ViewModel 里删掉了——录制工厂本来就由平台层通过 DI 提供，
-  那个 `IsWindows()` 分支只会在非 Windows 上让录制**静默不工作**。
+- **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
+  业务代码不知道自己在哪个平台上；客户端由 `ClientPlatformRegistration` 在运行时选层。
+- [Posix] **伪终端一份实现服务两个系统**：原先 macOS 与 Linux 各写了一份（会话、等待退出、清理在内约 455 行
+  相同逻辑）。现在差异（`TIOCSWINSZ`、`O_NOCTTY`、`POSIX_SPAWN_SETSID`、Darwin 的非变参 `__open` / `__ioctl`）
+  全部封在共享 `LibC` 里。顺带修掉一个真 bug：Darwin 上的 spawn flag 曾用 `0x0002`——那是
+  `POSIX_SPAWN_SETPGROUP`（进程组，不是会话）——shell 因此拿不到控制终端；现按 Apple 头文件用 `0x0400`。
+- [Platform] **`UserContextGuard` 与"用户自己的设置文件"统一到共享层**：macOS 与 Linux 用同一份实现与同一个
+  文件格式（`<数据目录>/appsettings.json`，由 `UserSettings` 读写），不再各写一份；数据目录也按平台修正
+  （Linux `~/.local/share`、macOS `~/Library/Application Support`，Windows 不变）。
+- [Transport] `DeviceIdentity` 加载 PKCS#12 时加 `X509KeyStorageFlags.Exportable`（macOS 上不加则私钥
+  不可导出、MsQuic 握手失败；Windows 不受影响，一个代码路径服务三平台）。
+- [FileTransfer] 修掉两个"假设被控端是 Windows"的真 bug：`RemoteFileSource.Combine` 不再硬编码 `\`（分隔符
+  从被控端返回的路径字符串上读）；`FileAccessPolicy` 按平台区分路径规则（大小写、保留名、内核路径），
+  并让根与入参同做链接解析（修 macOS `/var→/private/var` 误判）。
+- [Hosts] `ClientHost` / `Program` 去掉 Windows 硬编码；录制器改由 DI 注入——
+  `MfVideoRecorderFactory` 从客户端三个 ViewModel 里删掉，那个 `IsWindows()` 分支只会在非 Windows 上让录制
+  **静默不工作**。
+- [Tests] Windows 专有用例改为 `SkipUnless` 跳过（其他平台上不再计为失败）；`SystemSetupTests` 里与注册表
+  无关的用例现在在三个平台都真跑。
 
 ### Fixed
 - **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
@@ -39,13 +76,23 @@
 - **Linux 上启动失败不再一声不吭**：`StartupFailure` 原本只在 Windows 弹消息框，非 Windows 什么都不做，
   于是失败只留下退出码 1 和一个**没人打印出路径**的 `crash.log`。现在同一句话也写到标准错误。
 - **没有摄像头的机器不再白弹一次授权窗**：枚举先读 `IsCameraPresent`（属性，不弹窗），为假就直接返回空。
+- [FileTransfer/macOS] **符号链接目标要再解析**：macOS 上根内合法链接曾被误拒（`/var` 是 `/private/var`
+  的链接）。
 
-### Linux 上不会工作的事（相对 Windows 的真实回退）
+### 平台上的边界与未验证项
+
+**macOS**
+- 最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
+  （见 `docs/macos-port-plan.md` §3.4）。降低下限需改走"从源码构建 MsQuic"。
+- 已知未覆盖（需人工授权，自动化测试无法验证）：辅助功能授权下的真实输入注入、受保护目录
+  （`~/Desktop` / `~/Documents` / `~/Downloads`）的 TCC 弹窗路径。
+
+**Linux**
 - **登录界面 / 登录前的远程访问**：GNOME 的登录界面是另一个用户、另一个 VT，私有用户会话够不着。
   Windows 上能换 Agent 接管安全桌面，这里没有对应物。
 - **无人值守下的操作**：portal 不允许远程桌面会话持久化，所以**控制权限每次连接都要有人在机器前点一次同意**。
   共享屏幕授权一次就记住了，但无人值守的机器因此**可以被观看、不能被操作**。
-- **剪贴板已实现并双向验证**（走 portal：在远程桌面会话开始前申请，发布用 `SetSelection`、读取用
+- 剪贴板已实现并双向验证（走 portal：在远程桌面会话开始前申请，发布用 `SetSelection`、读取用
   `SelectionRead`，本机程序复制的内容也能触发同步）。摄像头已实现（走 portal 授权 + PipeWire 节点，
   JPEG 与 4:2:2 都支持），但**本机没有摄像头，那条路一次都没跑过**，请当成未验证。
   Ctrl+Alt+Del、快速用户切换、隐私屏同 Windows 一样不支持。

@@ -24,6 +24,9 @@ public sealed class AgentInputInjector(IInputInjector inner, AgentLink link) : I
         }
     }
 
+    /// <summary>True: this is the one injector that can, because it asks the service rather than trying to raise it itself.</summary>
+    public bool SupportsSecureAttention => true;
+
     public void SendSecureAttentionSequence() =>
         link.RequestSecureAttentionAsync(CancellationToken.None).GetAwaiter().GetResult();
 }

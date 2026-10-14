@@ -35,24 +35,26 @@ public sealed class InstallerPackageTests
             return File.Exists(given) ? given : null;
         }
 
-        // The repository root is the folder with the solution file; the installer ends up in its artifacts folder.
+        // The repository root is the folder with the solution file; installers land under its single artifacts/ root
+        // (see CONTRIBUTING.md, "构建产物布局"). The client and the server share one directory because the role is
+        // already in the file name.
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))
         {
             directory = directory.Parent;
         }
 
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "build", "installer", "client", "windows", "artifacts");
+        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
         return artifacts is null || !Directory.Exists(artifacts)
             ? null
-            : Directory.GetFiles(artifacts, "*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            : Directory.GetFiles(artifacts, "RemoteDesktop-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
     }
 
     [Fact]
     public void The_package_contains_the_payload_the_service_and_the_machine_setup_actions()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\build-installer.ps1).");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\client\\windows\\build-installer.ps1).");
         using var package = new MsiPackage(Msi!);
 
         // --- payload ---------------------------------------------------------------------------------------------

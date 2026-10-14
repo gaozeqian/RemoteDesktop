@@ -1,12 +1,13 @@
 # Remote Desktop
 
 跨平台远程桌面软件（类 ToDesk）：远程控制、观看模式、文件传输、远程终端、远程摄像头。
-后端 .NET 10，前端 Avalonia 12。**支持 Windows 与 Linux**；macOS 尚未接入（平台层的做法见
-[docs/linux-port-plan.md](docs/linux-port-plan.md)）。
+后端 .NET 10，前端 Avalonia 12。**支持 Windows、macOS (Apple Silicon) 与 Linux**；平台层的做法分别见
+[docs/macos-port-plan.md](docs/macos-port-plan.md) 与 [docs/linux-port-plan.md](docs/linux-port-plan.md)。
 
-两个平台的产品形状不同，因为桌面不同：Windows 上被控端是 LocalSystem 服务加一个用户会话里的 Agent，
-Linux 上是一个跑在图形会话里的 `systemd --user` 服务。**下面凡写着 Windows 专有概念（ConPTY、
-Media Foundation、DPAPI、Session 0）的地方，Linux 的对应物见 [Linux 一节](#linux-支持与限制)。**
+三个平台的产品形状不同，因为桌面不同：Windows 上被控端是 LocalSystem 服务加一个用户会话里的 Agent；
+macOS 上客户端自己就是被控端（没有服务/Agent 拆分）；Linux 上是一个跑在图形会话里的 `systemd --user`
+服务。**下面凡写着 Windows 专有概念（ConPTY、Media Foundation、DPAPI、Session 0）的地方，其他平台的
+对应物见 [macOS 一节](#macosapple-silicon) 与 [Linux 一节](#linux-支持与限制)。**
 
 ## 📚 项目文档
 
@@ -17,6 +18,8 @@ Media Foundation、DPAPI、Session 0）的地方，Linux 的对应物见 [Linux 
   - **[网络通信协议 (Protocol)](docs/protocol.md)**
   - **[安全机制说明 (Security)](docs/security.md)**
   - **[设备列表存储设计 (Storage)](docs/device-list-storage.md)**
+  - **[macOS 移植计划 (macOS Port Plan)](docs/macos-port-plan.md)**
+  - **[macOS 移植评审 (macOS Port Review)](docs/macos-port-review.md)**
 - **[🤝 贡献指南 (Contributing)](CONTRIBUTING.md)**：包含代码提交流程、环境要求与架构依赖规则。
 - **[📜 更新日志 (Changelog)](CHANGELOG.md)**：记录各里程碑的新增特性与修复。
 
@@ -39,6 +42,54 @@ build/debian/client/build-deb.sh
 build/debian/host/build-deb.sh
 build/debian/server/build-deb.sh
 ```
+
+## macOS (Apple Silicon)
+
+安装与打包（需要 Xcode Command Line Tools；打包为**自包含**应用）：
+
+
+```
+# .app（bundle 目录，用 Apple Development 身份签名，便于本机开发调试）
+build/installer/client/macos/make-app.sh --configuration Release
+
+# .pkg（可分发安装包，装到 /Applications；默认未签名）
+build/installer/client/macos/make-pkg.sh --configuration Release
+
+# 服务端 .pkg（两个服务器 + launchd 守护进程，装到 /usr/local/remotedesktop-server）
+build/installer/server/macos/make-pkg.sh --configuration Release
+```
+
+> macOS 侧最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0`
+> 决定。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；首次构建前需运行
+> `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。平台细节与实测记录见
+> [docs/macos-port-plan.md](docs/macos-port-plan.md)，选型评审见 [docs/macos-port-review.md](docs/macos-port-review.md)。
+>
+> `.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
+> "unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID 签名 + 硬化运行时）
+> 和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开——证书与公证凭据的配置见
+> [build/signing/README.md](build/signing/README.md) 的 macOS 一节。
+
+### 先说不会工作的部分
+
+- **Ctrl+Alt+Del**：macOS 没有对应概念，被控端不报告这个能力，控制端看不到这个按钮（不会假装成功）。
+- **登录界面 / 登录前的远程访问**：没有对应物。
+- **快速用户切换 / 多用户**：一个进程、一个用户、一个图形会话。
+- **H.265、隐私屏**：Windows 上也没实现。
+- **屏幕录制 / 辅助功能 / 摄像头授权**：首次使用要在「系统设置 → 隐私与安全性」里人工授予，
+  而授权是按签名身份记录的——开发构建换了签名就要重新授权一次。
+
+### 和 Windows 不同的几件事
+
+| | Windows | macOS |
+| --- | --- | --- |
+| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 客户端进程自己（没有服务，也就没有登录前访问） |
+| 屏幕 | DXGI Desktop Duplication | ScreenCaptureKit |
+| 输入 | `SendInput` / `SendSAS` | CGEvent（Ctrl+Alt+Del 不可用） |
+| 编解码 | Media Foundation | VideoToolbox |
+| 终端 | ConPTY + PowerShell / cmd | PTY（`posix_spawn`）+ 登录 shell |
+| 密钥 | DPAPI | Keychain |
+| 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 |
+| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService` 登录项 + 固定密码（仅登录后） |
 
 ## Linux 支持与限制
 
@@ -155,6 +206,18 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd2
 > **在 Linux 上要么把 libmsquic 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它。** 开发时是框架依赖运行，
 > 库不在可执行文件旁，缺它的报错是 `QUIC is not supported on this system`——看着像平台不支持，其实是缺库。
 > `.deb` 里是随包带的，所以装出来的包不会有这个问题。仓库里有 `native/linux/fetch-libmsquic.sh`。
+macOS 上做同样的联调，不需要 `dotnet run` —— 用上面那个服务端 `.pkg` 把服务端装到本机，再开两个客户端实例：
+
+```
+sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
+curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
+
+# 两个实例直接跑 bundle 里的可执行文件（open --args 送不到参数，见 docs/macos-port-plan.md §3.11⑧）
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd1
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd2
+```
+
+客户端默认连 `ws://127.0.0.1:5080/ws`，所以服务端一装好就能联调：两个窗口互相输入对方的设备代码和临时密码。
 
 客户端主窗口左侧是三个页面：**主页**（本机设备代码和临时密码、发起连接）、**设备列表**（最近连接过的设备，选中后
 显示它的设备代码和各项功能）、**高级设置**（固定密码、服务器与托管信息、数据目录）。
@@ -244,8 +307,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd2
 
 ```
 # 管理员 PowerShell
-dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
-.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\host -RendezvousUri ws://<服务器>:5080/ws
+dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/windows/host
+.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
 .\build\service\windows\uninstall-service.ps1
 ```
 
@@ -268,7 +331,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 
 脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名（见下）→
 **不安装就直接检查包内容**（`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
-自定义操作和属性，缺什么就报错）。产物在 `build/installer/client/windows/artifacts/`，约 49 MB。
+自定义操作和属性，缺什么就报错）。产物在 `artifacts/installer/windows/`，约 49 MB。
 
 - 装到 `%ProgramFiles%\RemoteDesktop`，注册为自动启动的服务 `RemoteDesktopHost`（崩溃后 5 秒自动重启；
   连续三次之后不再自动重启，稳定运行一天后重新计数），
@@ -317,11 +380,12 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/host
 | `src/Features/*` | 各功能模块：Desktop（视频、输入、剪贴板、音频）、FileTransfer（文件浏览与传输）、Terminal（终端会话与 VT 模拟器，终端本身由平台层提供）、Camera（摄像头采集与串流） |
 | `src/Media` | 编解码器选择（硬件优先、软件兜底）、BT.709 颜色转换、码率自适应 |
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
+| `src/Platform/RemoteDesktop.Platform.MacOS` | macOS (Apple Silicon) 平台实现：ScreenCaptureKit 采集、CGEvent 输入注入、VideoToolbox 编解码、AVFoundation 摄像头、ScreenCaptureKit/AudioQueue 音频、AVAssetWriter 录制、Keychain 密钥、SMAppService 登录项（原生辅助库见 `native/macos`） |
 | `src/Platform/RemoteDesktop.Platform.Linux` | Linux 平台实现：portal + PipeWire 屏幕采集、libei 输入注入、libavcodec 编解码（NVENC / VA-API / x264）、PulseAudio、logind 防休眠 |
 | `src/Platform/RemoteDesktop.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
-| `src/Hosts/RemoteDesktop.HostService` | 被控端宿主：注册设备、鉴权、分发通道、给 UI 提供控制管道。Windows 上是 LocalSystem 服务并把屏幕/输入转发给 Agent，Linux 上是一个直接干这些的 `systemd --user` 服务 |
-| `src/Hosts/RemoteDesktop.SessionAgent` | **仅 Windows**：由服务在交互会话（用户桌面或登录界面）里启动的 Agent，屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份）。Linux 上没有它——见 [Linux 一节](#linux-支持与限制) |
+| `src/Hosts/RemoteDesktop.HostService` | 被控端宿主：注册设备、鉴权、分发通道、给 UI 提供控制管道。Windows 上是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上是一个直接干这些的 `systemd --user` 服务；macOS 上不用它——客户端进程自己就是被控端 |
+| `src/Hosts/RemoteDesktop.SessionAgent` | **仅 Windows**：由服务在交互会话（用户桌面或登录界面）里启动的 Agent，屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份）。Linux 与 macOS 上都没有它——见 [Linux 一节](#linux-支持与限制) |
 | `src/Server/*` | Rendezvous（ID / 信令）与 Relay（UDP 中继）服务器 |
 
 ## 新增功能或平台

@@ -13,6 +13,11 @@ public sealed class FileAccessPolicy
     private const int MaxPathLength = 32_000;
     private const int MaxNameLength = 255;
 
+    /// <summary>How many links deep the resolution walk follows before it judges the spelling it has. The operating
+    /// systems refuse a longer chain themselves (ELOOP after 32 on Linux, fewer on Windows), so no real path reaches
+    /// this; it exists so a planted cycle of links ends the walk instead of hanging it.</summary>
+    private const int MaxLinkDepth = 40;
+
     private static readonly bool IsWindows = OperatingSystem.IsWindows();
 
     /// <summary>Windows compares paths without regard to case; a Unix filesystem does not.</summary>
@@ -113,7 +118,11 @@ public sealed class FileAccessPolicy
         {
             // A path may sit inside a root as a string yet resolve, through a symbolic link or junction, to somewhere
             // outside it. The string check alone would let a planted link turn a "shared" path into an escape: follow
-            // the links that exist and judge the real destination instead.
+            // the links that exist and judge the real destination instead. Both sides of the comparison are in the
+            // fully resolved spelling — the roots are put into it once at construction (see the constructor) — so a
+            // root that itself lives behind a link still matches the paths beneath it. Without that, a genuinely
+            // shared folder is refused as "not shared" (macOS keeps /var as a link to /private/var, and every
+            // temporary path begins there).
             if (!_allowedRoots.Any(root => IsSameOrInside(resolved, root)))
             {
                 throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
@@ -129,12 +138,31 @@ public sealed class FileAccessPolicy
     /// spelling, which the caller then checks against the roots as a string.
     /// </summary>
     /// <remarks>
-    /// <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> follows a single reparse point; walking the segments from
-    /// the root down resolves a chain of links. The walk stops at the first segment that does not exist, so a path into
-    /// a directory that is still to be made is judged by the ancestor that is really there.
+    /// <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> follows a single reparse chain; walking the segments from
+    /// the root down resolves a link inside a link. The walk stops at the first segment that does not exist, so a path
+    /// into a directory that is still to be made is judged by the ancestor that is really there.
+    /// <para>
+    /// The target of a link is walked as well, and that is not redundant: a target's own ancestors may be links too.
+    /// macOS keeps <c>/var</c> as a link to <c>/private/var</c> and every temporary path begins there, so a link
+    /// inside the shared root hands back its target spelled <c>/var/…</c> while the root itself is spelled
+    /// <c>/private/var/…</c>. Taking the target verbatim leaves the two sides of the comparison in different
+    /// spellings of the same folder and a genuinely shared path is refused as not shared — which is exactly what a
+    /// link pointing back inside the root must not be. Walking the target puts both sides in the fully resolved
+    /// spelling. The walk is depth-bounded, so a cycle of links (which the operating system refuses to follow
+    /// either, with ELOOP) ends the walk instead of hanging it.
+    /// </para>
     /// </remarks>
-    private static string ResolveFinalTarget(string full)
+    private static string ResolveFinalTarget(string full, int depth = 0)
     {
+        if (depth >= MaxLinkDepth)
+        {
+            // A cycle of links cannot be followed by the operating system either (ELOOP), so no read or write can
+            // land through one. Judging the spelling in hand is as close to an answer as exists, and it keeps the
+            // walk finite; an escape through a cycle is still caught, because the cycle has to point at the outside
+            // spelling to matter and that spelling resolves normally.
+            return full;
+        }
+
         var root = Path.GetPathRoot(full);
         if (root is null)
         {
@@ -157,20 +185,42 @@ public sealed class FileAccessPolicy
                 continue;
             }
 
-            // Follow the link and keep walking from where it really points, so a link inside a link is followed too.
-            // A link that points at itself (directly or around a loop) makes the resolver throw; that is an unusable
-            // path rather than a reason to fail the whole request with an unhandled exception.
-            try
+            var target = ReadLinkTarget(info);
+            if (target is null)
             {
-                current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? candidate;
+                current = candidate;
+                continue;
             }
-            catch (IOException)
-            {
-                throw Invalid($"'{candidate}' is a symbolic link that cannot be resolved.");
-            }
+
+            // Follow the link, then walk the target itself so its own ancestors are resolved before the descent
+            // continues. (ResolveLinkTarget already returns an absolute path even for a relative link, spelled
+            // against the link's directory — verified on this runtime.)
+            current = ResolveFinalTarget(target.FullName, depth + 1);
         }
 
         return TrimTrailingSeparator(current);
+    }
+
+    /// <summary>
+    /// The link a filesystem entry points at, or <c>null</c> when it is not a link, does not exist yet, or cannot be
+    /// read. The last case is the interesting one: the operating system follows a whole chain itself
+    /// (<c>returnFinalTarget: true</c>) and answers ELOOP when the chain is a cycle, so a planted loop surfaces as an
+    /// <see cref="IOException"/> rather than as an answer. A cycle has no exit by construction — every hop is a link
+    /// with a single target — so an escape can never hide behind one, and no read or write can land through it
+    /// either (the operating system refuses the I/O just as it refused the walk). Reporting "not a link" therefore
+    /// costs nothing a security check should care about, keeps the raw ELOOP out of the protocol layer, and treats a
+    /// link the walk cannot inspect exactly like the nonexistent tail above.
+    /// </summary>
+    private static FileSystemInfo? ReadLinkTarget(FileSystemInfo info)
+    {
+        try
+        {
+            return info.ResolveLinkTarget(returnFinalTarget: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Validates the name of a file or folder to create or rename to (a single path segment).</summary>
@@ -195,9 +245,15 @@ public sealed class FileAccessPolicy
     }
 
     /// <summary>Whether <paramref name="path"/> is one of the configured roots or a drive root: things that must not be deleted or renamed.</summary>
-    public bool IsProtectedRoot(string normalizedPath) =>
-        _allowedRoots.Any(root => string.Equals(root, normalizedPath, PathComparison)) ||
-        string.Equals(Path.GetPathRoot(normalizedPath), normalizedPath, PathComparison);
+    public bool IsProtectedRoot(string normalizedPath)
+    {
+        // The roots are stored in the fully resolved spelling (see the constructor) while the path arrives in the
+        // caller's; resolving this side the same way puts the two in one spelling, so a root reached through a link is
+        // still recognised when it is named by either its link or its target.
+        var resolved = TryResolveSpelling(normalizedPath);
+        return _allowedRoots.Any(root => string.Equals(root, resolved, PathComparison)) ||
+            string.Equals(Path.GetPathRoot(resolved), resolved, PathComparison);
+    }
 
     /// <summary>
     /// Windows device names. Nothing is reserved on Unix — "CON" and "NUL" there are ordinary file names, and the
@@ -213,6 +269,19 @@ public sealed class FileAccessPolicy
         // "CON", "con.txt" and "CON .txt" all open the device on Windows.
         var stem = segment.Split('.')[0].TrimEnd();
         return ReservedNames.Contains(stem, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The path in the same resolved spelling the roots are stored in; a path that cannot be resolved is left as it is.</summary>
+    private static string TryResolveSpelling(string path)
+    {
+        try
+        {
+            return ResolveFinalTarget(TrimTrailingSeparator(Path.GetFullPath(path)));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path;
+        }
     }
 
     private static bool IsSameOrInside(string path, string root) =>

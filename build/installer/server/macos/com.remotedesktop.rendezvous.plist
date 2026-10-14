@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The signaling server as a launchd job.
+
+  LaunchDaemon (system domain) rather than LaunchAgent (per user): a server has to come up at boot and keep running
+  whether or not anybody is logged in, which is exactly what the Windows package gets from a service with start=auto.
+
+  The path is fixed at build time. It has to be: launchd reads these files from /Library/LaunchDaemons and the
+  executable next to the settings is what it starts, so a package that installed somewhere else would need a different
+  plist. make-pkg.sh writes the payload to match.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.remotedesktop.rendezvous</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/remotedesktop-server/Rendezvous/RemoteDesktop.Server.Rendezvous</string>
+    </array>
+
+    <!-- appsettings.json is read from the working directory, so it has to be the folder the executable sits in. This
+         is the macOS equivalent of what the Windows installer does with the service's working directory. -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/remotedesktop-server/Rendezvous</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, like `sc failure ... restart`. ThrottleInterval keeps a server that cannot start from
+         spinning: launchd waits at least this long between attempts. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/remotedesktop-server/logs/rendezvous.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/remotedesktop-server/logs/rendezvous.log</string>
+</dict>
+</plist>

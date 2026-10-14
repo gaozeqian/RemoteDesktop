@@ -1,0 +1,27 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    Navigation icons, as geometry rather than glyphs from an icon font.
+
+    These used to be private-use code points drawn with "Segoe Fluent Icons, Segoe MDL2 Assets". Those two fonts ship
+    with Windows and exist nowhere else, and the fallback list named no font that a Mac has, so on macOS the text
+    resolved against the default font — which has no glyph for a private-use code point. The result was that every
+    icon in the window rendered blank, with no error anywhere.
+
+    Geometry has no such dependency: one path draws the same shape on every platform, at any DPI, with no font to be
+    missing. Each path is authored in a 24x24 box and PathIcon scales it to the Width/Height it is given.
+  -->
+
+  <!-- A house: roof down to the eaves, walls below, a doorway cut out of the base. -->
+  <StreamGeometry x:Key="RdIconHome">M12 3 3 11h2v9h5v-5h4v5h5v-9h2z</StreamGeometry>
+
+  <!-- A bulleted list: three rows, each a square bullet and a bar. -->
+  <StreamGeometry x:Key="RdIconDevices">M3 5h2.5v2.5H3zM8 5h13v2.5H8zM3 10.75h2.5v2.5H3zM8 10.75h13v2.5H8zM3 16.5h2.5v2.5H3zM8 16.5h13v2.5H8z</StreamGeometry>
+
+  <!-- Sliders: three tracks, each with its knob at a different position. -->
+  <StreamGeometry x:Key="RdIconSettings">M3 6.5h18v2H3zM7 5h3v5H7zM3 11.5h18v2H3zM14 10h3v5h-3zM3 16.5h18v2H3zM10 15h3v5h-3z</StreamGeometry>
+
+  <!-- A display on a stand, drawn as an outline (even-odd). This machine's mark in the sidebar. -->
+  <StreamGeometry x:Key="RdIconMachine">M2.5 4.5h19v12.5h-19zM5 7h14v7.5H5zM9.5 19h5v2h-5zF0</StreamGeometry>
+</ResourceDictionary>
