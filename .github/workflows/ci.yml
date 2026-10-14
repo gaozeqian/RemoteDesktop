@@ -33,7 +33,11 @@ jobs:
           artifact-name: test-results-windows
 
   build-linux:
-    runs-on: ubuntu-latest
+    # The distro this port targets, and the one its tests were written against: FFmpeg 8 (libavcodec.so.62) and the
+    # portal stack are what Ubuntu 26.04 ships. Pinned rather than ubuntu-latest, which still meant 24.04 when this
+    # job was written -- where the library major version the video bindings load by soname does not exist -- and
+    # which migrates on GitHub's own schedule rather than this repository's.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -52,6 +56,28 @@ jobs:
           sudo dpkg -i /tmp/packages-microsoft-prod.deb
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libmsquic
+
+      # What the platform tests reach for beyond .NET: the FFmpeg 8 libraries the video bindings load by soname (the
+      # recorder converts pixel formats through swscale as well), and the PulseAudio client for the audio ones. A
+      # desktop machine has these through its own packages; a runner does not, and their absence would read as twenty
+      # broken code paths rather than as a machine without ffmpeg.
+      - name: Install the native libraries the platform tests need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec62 libavformat62 libavutil60 libswresample6 libswscale9 libpulse0
+
+      # A sound server for the audio tests, and a sink for them to talk about: a runner has the client library but
+      # nobody to talk to. Nothing here needs hardware -- the tests exercise the client protocol, and the ones that
+      # need a real device skip themselves when none is present. The null sink also gives the capturer the monitor
+      # source it watches.
+      - name: Start a sound server for the audio tests
+        run: |
+          sudo apt-get install -y --no-install-recommends pulseaudio
+          pulseaudio --daemonize --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=remote-desktop-test
+          pactl set-default-sink remote-desktop-test
+          pactl info
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       - name: Audit packages for known vulnerabilities

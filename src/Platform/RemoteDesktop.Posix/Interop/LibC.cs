@@ -310,6 +310,10 @@ internal static unsafe partial class LibC
     [LibraryImport("libc", EntryPoint = "killpg", SetLastError = true)]
     internal static partial int SignalProcessGroup(int group, int signal);
 
+    /// <summary>Signals one process, used when a session has to be swept after its leader is gone.</summary>
+    [LibraryImport("libc", EntryPoint = "kill", SetLastError = true)]
+    internal static partial int SignalProcess(int process, int signal);
+
     /// <summary>Waits for one of the descriptors to become ready, or for the timeout to run out.</summary>
     /// <param name="timeout">Milliseconds, or -1 to wait indefinitely.</param>
     /// <remarks>

@@ -23,6 +23,27 @@ runs:
     - name: Test
       shell: pwsh
       run: |
+        # macOS: the test hosts are framework-dependent, and System.Net.Quic resolves libmsquic relative to the
+        # assembly that declares the P/Invoke -- the shared framework directory in that deployment shape. The loader
+        # tries that directory before anything else (CoreCLR's LoadNativeLibraryBySearch probes the assembly
+        # directory first), so the staged dylibs are simply put there, into the runner's own .NET install. This is
+        # the same directory the .app gets for free when it is published self-contained, which is the configuration
+        # the port was written and verified against.
+        #
+        # The dyld path is set as well, for the bare-name fallback: setting it with env: on the step does not
+        # survive, because macOS strips DYLD_* whenever a restricted binary (Apple's /bin/sh, /usr/bin/env) is
+        # spawned anywhere in the chain -- doing it here, inside the already-running shell, is the one place it
+        # sticks.
+        if ($IsMacOS -and (Test-Path "artifacts/native/macos")) {
+            foreach ($runtime in Get-ChildItem "$HOME/.dotnet/shared/Microsoft.NETCore.App" -Directory) {
+                Copy-Item artifacts/native/macos/*.dylib $runtime.FullName -Force
+                Write-Host "Staged the MsQuic libraries into $($runtime.FullName)"
+            }
+
+            $env:DYLD_LIBRARY_PATH = "$PWD/artifacts/native/macos:$env:DYLD_LIBRARY_PATH"
+            Write-Host "DYLD_LIBRARY_PATH=$env:DYLD_LIBRARY_PATH"
+        }
+
         dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
         if ($LASTEXITCODE -eq 0) { exit 0 }
 

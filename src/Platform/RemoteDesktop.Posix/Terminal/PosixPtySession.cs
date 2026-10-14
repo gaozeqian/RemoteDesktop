@@ -184,6 +184,71 @@ public sealed class PosixPtySession : IPtySession
         {
             _ = LibC.SignalProcessGroup(_processId, LibC.SignalKill);
         }
+
+        // What the shell left behind in process groups of its own — a job-control shell puts every job in one — is
+        // still the session's, and the group signals above cannot reach it. Where the session can be enumerated it is
+        // swept now, so that "closing the terminal ends what it started" holds for shells that do not pass the hangup
+        // on to their jobs (dash, for one, does not).
+        SweepSession(_processId);
+    }
+
+    /// <summary>Sends a kill to every process still in the session, where the session can be enumerated.</summary>
+    /// <remarks>
+    /// Linux only. macOS has no <c>/proc</c>, and its shells do pass the hangup on to their jobs (both bash and zsh
+    /// do), so the group signals above are the whole of what is available there.
+    /// <para>
+    /// The session id is the pid of the leader that was spawned, so a member is found by reading the session field of
+    /// every <c>/proc</c> entry. A process whose own pid equals that session id is deliberately skipped: once the
+    /// leader is gone, that can only be an unrelated process that has since been handed the recycled pid — its
+    /// session would be itself — while every real member has a pid of its own.
+    /// </para>
+    /// </remarks>
+    private static void SweepSession(int sessionId)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories("/proc"))
+        {
+            var name = Path.GetFileName(directory);
+            if (!int.TryParse(name, out var pid) || pid == sessionId || pid == Environment.ProcessId)
+            {
+                continue;
+            }
+
+            if (ReadSessionId(pid) == sessionId)
+            {
+                _ = LibC.SignalProcess(pid, LibC.SignalKill);
+            }
+        }
+    }
+
+    /// <summary>The session a process belongs to, from <c>/proc/&lt;pid&gt;/stat</c>, or <c>-1</c> when it cannot be read.</summary>
+    private static int ReadSessionId(int pid)
+    {
+        string stat;
+        try
+        {
+            stat = File.ReadAllText($"/proc/{pid}/stat");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // The process is gone, or not ours to look at; either way it is not ours to signal.
+            return -1;
+        }
+
+        // The second field is the command name in parentheses and may itself contain spaces and parentheses, so
+        // everything before the *last* ')' is skipped. What follows is: state ppid pgrp session …
+        var close = stat.LastIndexOf(')');
+        if (close < 0)
+        {
+            return -1;
+        }
+
+        var fields = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return fields.Length >= 4 && int.TryParse(fields[3], out var session) ? session : -1;
     }
 
     /// <summary>The slave's name as a null-terminated C string, from the library's own answer.</summary>
