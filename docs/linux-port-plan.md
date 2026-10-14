@@ -271,6 +271,25 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
   直接开 `/dev/video0` 开箱即败。
 - `/etc/hosts` 把主机名映射到 `127.0.1.1`，`Dns.GetHostName()` / `Environment.MachineName` 可解析。
 
+### 3.4 在本机跑测试套件（两个会白费半小时的坑）
+
+```bash
+native/linux/fetch-libmsquic.sh                       # 只需一次
+LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop.slnx -c Release
+```
+
+- **必须带 `LD_LIBRARY_PATH`。** 测试是框架依赖发布的，`libmsquic.so.2` 不在共享框架目录里；缺它时每一个
+  开 QUIC 连接的用例都失败，错误是 `QUIC is not supported on this system`——看起来像平台不支持，
+  其实是缺库。自包含发布不需要这一条（库就在可执行文件旁），测试需要。
+- **`--nologo` 不能传给 `dotnet test`**（见 CI action 里的注释），它会转发给测试程序并以退出码 5 拒绝整次运行。
+- **inotify 实例上限。** `fs.inotify.max_user_instances` 默认 128，而一个普通的 GNOME 桌面
+  （VSCode 的 Roslyn、1Password、wireplumber、gvfs…）自己就用掉 90 多个。`TestDevice` 原本用
+  `Host.CreateApplicationBuilder()`，它会为 `appsettings.json` 装一个**reload 型**文件监视器，
+  每个 host 占一个 inotify 实例——而那个项目里根本没有 `appsettings.json`。141 个用例并发起 host 时
+  就会撞上限，报 `IOException: ... inotify instances has been reached`，在**构造 host 时**失败，
+  看起来与代码无关。已改为 `DisableDefaults = true` + 手动加回内容根与环境变量
+  （`TestRendezvous` 早就在用 slim builder 规避同一件事）。
+
 ---
 
 ## 4. 实施阶段
@@ -328,9 +347,20 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 
 ### P3 — Wayland 采集与输入（核心，风险最高）🚧 进行中
 
-**portal 会话流程已实测跑通**（2026-10-14，真机授权一次）：`CreateSession -> 0`、`SelectSources -> 0`、
-`Start -> 0`（拿到 `streams`）、`OpenPipeWireRemote -> fd=60`。三个把前几版实现卡住的坑，都是
-"错了不报错、只表现为连接断开或进程消失"的那类，记在这里免得重踩：
+**portal 会话流程已在真实实现里跑通**（2026-10-14，真机授权一次）。
+`XdgPortal/PortalConnection.cs` + `XdgPortal/PortalResponse.cs` 完成
+`CreateSession` → `SelectSources` → `Start` → `OpenPipeWireRemote`，实测输出：
+
+```
+session=/org/freedesktop/portal/desktop/session/1_1407/rdSession1393a5fe
+  node=82 at (0,0) 1920x1080
+pipewire fd=98
+```
+
+另有 `tests/RemoteDesktop.Platform.Linux.Tests/PortalScreenCastTests.cs` 两个用例覆盖同一流程，
+默认跳过、`RD_PORTAL_TEST=1` 时运行（要有人在真实桌面上点一次「共享」）。
+
+**五个把前几版实现卡住的坑**，全是"错了不报错、只表现为连接断开、进程消失或干脆挂死"的那类：
 
 - **`MessageWriter` 是 `ref struct`，绝不能穿过委托。** 把"写方法体"这件事交给一个
   `Action<MessageWriter, string>` 去做——那是与跑通的版本**唯一**的差别——连接立刻断开、进程核心转储。
@@ -341,10 +371,29 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
   发回去，总线因为收到非法路径而**直接断开这个连接**——错误表现是"连接被对端关闭"，与真正的原因隔着
   好几层。必须在消息还活着的时候用 `GetObjectPathAsString()` / `GetString()` 取出来；消息一过手，
   那些值也成了悬垂引用。
+- **同一个值，portal 文档写 `o`，GNOME 后端发 `s`。** `session_handle` 实测 `Type = String`，
+  对它调 `GetObjectPathAsString()` 抛 `InvalidOperationException`；`GetString()` 才拿到干净的路径。
+  按文档类型去断言并不会让值变成那个类型，只决定能不能读到。`PortalResponse.ReadText` 两种都收。
+- **订阅里的读取器一旦抛异常，就等于这个请求永远没有应答。** Tmds 不会把读取器抛出的异常交给
+  observer，**一个通知都不会发**——于是调用方一直等到自己的超时，然后被告知"portal 没有回答"，
+  而 portal 其实**当场就回答了**。上面那条 `GetObjectPathAsString()` 就是这么表现的：`CreateSession`
+  的应答 3ms 就到了，代码却挂了 5 分钟。所以 `PortalRequestResult.Read` 写成**不抛**的：整个函数体包在
+  `try/catch` 里，失败作为结果的一个字段返回，由 `AwaitAsync` 明确报出来。
+
+  这条是花时间最久的，因为三个"证据"全都指向别处：`dbus-monitor` 显示总线**接受了**我们的 `AddMatch`、
+  portal **确实**在订阅的那个路径上发了 `Response` 信号、目的地址就是我们的连接。总线这一侧完全正确，
+  问题在客户端的派发。**下次再遇到"订阅不到"，先怀疑读取器，而不是先怀疑规则和路径。**
 
 另外记下与计划一致的接口事实：`ScreenCast.version = 5`、`AvailableCursorModes = 7`（Metadata 可用）、
 `RemoteDesktop.version = 2`（有 `ConnectToEIS`）、`AvailableDeviceTypes = 7`。
 `CreateSession` 与 `SelectSources` 都没有弹窗（后者直接返回 0），**授权对话框出现在 `Start`**。
+
+**`persist_mode = 2` + restore token 确实有效**：token 存在 `ISecretStore` 里，第一次授权之后再跑
+（probe 和测试都试过）**不再弹窗**。这是无人值守访问能成立的前提，值得确认。失败时（拒绝/取消）
+portal 返回非 0，`OpenScreenCastAsync` 抛 `PortalException`，其中拒绝是 2、取消是 1。
+
+**风险表里那条未验证项现在有答案了**：portal 给的 `size` 是**逻辑（合成器）坐标**——本机物理模式
+2560×1440 / scale 4/3，portal 报的是 **1920×1080**。`DisplayGeometry` 的单测钉的正是这组数字，方向对的。
 
 **先做 spike**：用 shell + `busctl` 把整个 portal 流程手写一遍并看它工作，再写 C#。
 
@@ -363,9 +412,17 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
   按**它自己的**缩放算的，所以混合 DPI 桌面上两台显示器之间的距离不是处处相同的设备像素数。
   测试直接钉本机实测的数字（2560×1440 物理 / 1920×1080 逻辑 / scale 4/3）。
 
-**仍需 portal 授权、尚未做的部分**：`PortalSession` / `ScreenCastSession`（`CreateSession` → `SelectSources`
-→ `Start` → `OpenPipeWireRemote`）、`PipeWireScreenCapturer`、`MutterDisplayConfig`、`LibEiInputInjector`。
-这一段需要有人在真实桌面上点一次 GNOME 的共享屏幕对话框，因此单独安排。
+**P3 尚未完成的部分**：portal 会话这一层（`PortalConnection`）已经通了，剩下的是消费它的三件事，都不再
+需要有人在旁边点对话框：
+
+- `Display/PipeWireScreenCapturer.cs` —— 在拿到的 fd 上跑 `pw_stream`，把缓冲解成 BGRA 交给
+  `IVideoCapturer`。格式请求 `BGRx` 并钉死尺寸。
+- `Display/MutterDisplayConfig.cs` + `WaylandDisplayEnumerator` —— 无授权的显示枚举；**portal 会话存在时
+  以 `Streams` 为准**（只有它知道用户实际授权了哪些屏），Mutter 的 `GetCurrentState` 作为无会话时的来源。
+  注意两者坐标系不同：portal 给的是逻辑坐标，`DisplayInfo.Bounds` 的契约是物理像素。
+- `Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），
+  再走 libei。`ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
+
 
 ### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）
 
