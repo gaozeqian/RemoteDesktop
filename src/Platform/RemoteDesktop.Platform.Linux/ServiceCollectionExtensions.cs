@@ -1,6 +1,8 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
+using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
+using RemoteDesktop.Platform.Linux.Video;
 
 namespace RemoteDesktop.Platform.Linux;
 
@@ -22,7 +24,6 @@ public static class ServiceCollectionExtensions
     /// <c>ISystemKeepAwake</c> (logind, with the transport bridge),
     /// <c>IDisplayEnumerator</c> / <c>IScreenCapturerFactory</c> (portal + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
-    /// <c>IVideoEncoderFactory</c> ×3 and <c>IVideoDecoderFactory</c> (libavcodec),
     /// <c>IClipboard</c>, <c>IPtyHost</c>, <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>,
     /// <c>IAudioCapturerFactory</c> / <c>IAudioPlayerFactory</c>, and <c>IVideoRecorderFactory</c>.
     /// </para>
@@ -39,6 +40,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISecretStore>(new FileSecretStore(Path.Combine(dataDirectory, "secrets")));
         services.AddSingleton<IUserContextGuard, LinuxUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
+        services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
+
+        // Three encoders, mixed together by VideoCodecSelector: hardware first, then by priority, with every failure
+        // falling through to the next. The software one is registered last because it is the one that always works.
+        services.AddSingleton<IVideoEncoderFactory, NvencH264EncoderFactory>();
+        services.AddSingleton<IVideoEncoderFactory, VaapiH264EncoderFactory>();
+        services.AddSingleton<IVideoEncoderFactory, SoftwareH264EncoderFactory>();
         return services;
     }
 }

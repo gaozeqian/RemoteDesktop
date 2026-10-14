@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2 完成，P3 完成不需要授权的部分）
+> 状态：**进行中**（P1、P2、P4 完成；P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -61,8 +61,8 @@
 | `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | P3 |
 | `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | P3 |
 | `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | P3 |
-| `IVideoEncoderFactory` ×3 | Media Foundation ×2 | `h264_nvenc` / `h264_vaapi` / 软件 x264，都经 libavcodec | P4 |
-| `IVideoDecoderFactory` | Media Foundation | libavcodec | P4 |
+| `IVideoEncoderFactory` ×3 | Media Foundation ×2 | `h264_nvenc` / `h264_vaapi` / 软件 x264，都经 libavcodec | ✅ P4 |
+| `IVideoDecoderFactory` | Media Foundation | libavcodec | ✅ P4 |
 | `IVideoRecorderFactory` | MF Sink Writer | libavformat（MP4 封装） | P10 |
 | `IClipboard` | Win32 剪贴板 | portal `Clipboard` 优先，退到 XWayland X11 | P5 |
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | P6 |
@@ -349,16 +349,38 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 → `Start` → `OpenPipeWireRemote`）、`PipeWireScreenCapturer`、`MutterDisplayConfig`、`LibEiInputInjector`。
 这一段需要有人在真实桌面上点一次 GNOME 的共享屏幕对话框，因此单独安排。
 
-### P4 — 视频编解码
+### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）
 
-三个编码工厂（NVENC / VA-API / 软件 x264）都经 libavcodec。要镜像 Windows 侧的配置：CBR、`bf=0`、
-`GOP = frameRate × 10`、Main profile、NV12 进、Annex-B 出、每个 IDR 带内联 SPS/PPS。
-`h264_vaapi` 用 `pict_type=AV_PICTURE_TYPE_I` 强制 IDR，`h264_nvenc` 还必须 `forced_idr=1`，
-否则出的是非随机访问点的 I 帧。
+三个编码工厂（NVENC / VA-API / 软件 x264）都经 libavcodec，配置镜像 Windows 侧：CBR、`bf=0`、
+`GOP = frameRate × 10`、Main profile、NV12 进、**Annex-B 出**（不设 `AV_CODEC_FLAG_GLOBAL_HEADER`，
+否则 SPS/PPS 会跑进 extradata，控制器永远看不到）、每个 IDR 带内联 SPS/PPS。
 
-`h264_vaapi` **不支持运行时重配码率**（NVENC 支持），而 `BitrateController` 拥塞时每 ~500ms 就可能变一次。
-缓解：只重建 `AVCodecContext`，复用 hw device / hw frames context——宿主在编码器重建时本来就强制关键帧、
-重发 `StreamInfo`，这条路径已存在。
+**用 `FFmpeg.AutoGen` 8.0.0**（按头文件生成的绑定），不是手写 P/Invoke。理由：`AVCodecContext` 是个每
+个版本都在长的结构体，**偏移写错是破坏内存而不是报错**。生成的绑定把这个风险整类消掉，而且版本选择与
+「按主版本 soname 绑定」的既有决定一致——绑定就是 ffmpeg 8 / libavcodec 62，`FfmpegLibraries` 去找的
+也正是 `libavcodec.so.62`，找不到就带版本号大声报错。Windows 侧对 Direct3D 用的 Vortice 是同一个取舍。
+`AVFrame`/`AVPacket` 的头部字段本可手写（自 FFmpeg 2.x 起位置未变），但既然引了绑定就没必要两套。
+
+**计划里的一处被改掉**：原计划让 `IsSupported` 调 `vaInitialize` + `vaQueryConfigEntrypoints(EncSlice)`
+来判断设备能不能编码。实际动手时本机没装 libva 头文件，**那几个 entrypoint 常量我无法就地核对**，而抄错
+的方向恰好是「有能力编码的机器被判成不能」——静默永远用软件。改成**直接在设备上开一个编码器来试**：
+这正是宿主真正关心的问题，而且它不可能答错。代价是一台机器上每个 render node 开一次编码器（毫秒级，
+每进程一次），结果记在 `Lazy` 里（包括否定的结果）。
+
+**计划里的启动自检也不再需要**：它本来是用来防 ABI 漂移的，而版本锁定 + 生成的绑定已经把那类风险移走了；
+真出问题时宿主既有的 `allowHardware=false` 降级路径会接住。
+
+实测（本机 Oland/GCN1，无 VCE）：
+
+- 编码器产出 Annex-B、**关键帧只在被要求时出现**（GOP 是 10 秒，所以没有周期性 I 帧）、`bf` 读回来是 0、
+  码率可以在不重建编码器的情况下上下移动。
+- 编解码往返：关键帧解出 640×480 的 NV12、亮帧解出来比暗帧亮、**先解出的帧不会被后续解码改掉**
+  （解码器内部复用一张图，直接交出它意味着渲染器正在显示的帧会在下一次解码时变掉）。
+- **VA-API 工厂在本机正确判定为不可用并让位给软件**，这正是这台机器作为反面测试的价值。
+- 一个反证：`h264_vaapi`、`h264_nvenc`、`libx264` 在本机的 FFmpeg 构建里**都存在**。存在不等于可用，
+  这就是为什么探测要去开一个编码器而不是问「有没有这个编码器」。
+
+**真硬件编码仍需一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器验证**，本机做不到。
 
 ### P5 — 剪贴板
 ### P6 — 终端（PTY 落在共享 `Platform.Posix`）

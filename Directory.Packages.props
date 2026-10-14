@@ -29,6 +29,13 @@
          ConnectToEIS both return a descriptor (D-Bus type 'h'), and the command-line tools cannot carry one out.
          Still on 0.x upstream, so it is kept behind one file's worth of wrapper rather than used across the layer. -->
     <PackageVersion Include="Tmds.DBus.Protocol" Version="0.95.1" />
+    <!-- Linux platform: libavcodec bindings, generated from the FFmpeg headers of the version named here (8.0, i.e.
+         libavcodec 62 — the same major version the project binds by soname, and what Ubuntu 26.04 ships). Generated
+         rather than hand-written on purpose: AVCodecContext is a large struct that grows every release, and getting
+         an offset wrong there corrupts memory rather than failing. The Windows side made the same call with Vortice
+         instead of hand-writing Direct3D. It also means the library's major version is a hard requirement, which
+         FfmpegLibraries checks for rather than discovering later. -->
+    <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0" />
     <!-- File transfer integrity check -->
     <PackageVersion Include="System.IO.Hashing" Version="10.0.12" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->

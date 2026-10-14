@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Tmds.DBus.Protocol" />
+    <PackageReference Include="FFmpeg.AutoGen" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux.Tests" />
