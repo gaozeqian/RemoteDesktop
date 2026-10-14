@@ -642,8 +642,37 @@ set  -> Published ... (28 characters) / Answered a request ... with 28 bytes
 `stty size` 跟着变**、**Ctrl+C 真的停掉 shell 正在跑的东西**（这条就是上面那个常量的判据）、退出码传回、
 **关闭会话时后台作业跟着走**（普通 shell 不会把挂断转发给它启动的后台作业，所以只给 shell 发信号会留下
 孤儿进程），以及路径被当作 shell 名时被拒绝（否则 shell 选择器就成了执行任意程序的方式）。
-### P7 — 文件传输（§1.3 的共享层修复已在 P1 完成，这里是 `LocalFileOperations` 与 `XdgUserDirectories`）
-### P8 — 摄像头（portal fd + V4L2）
+### P7 — 文件传输 ✅ 已完成
+
+`XdgUserDirectories`（读 `~/.config/user-dirs.dirs`，因为中文桌面上 `SpecialFolder` 答的 `~/Desktop` 根本不存在）
+与 `LocalFileOperations` 的两处：`GetPlaces` 在 Unix 上改用 XDG 目录；`ListDrives` 按 `DriveFormat`（即文件系统
+类型）过滤掉容器/loop/snap 挂载，并且**不去问网络挂载有多大**——问一次 NFS 就是等一次服务器，而这是在画列表的
+线程上。两条都有测试。
+
+### P8 — 摄像头（PipeWire 节点，不是 V4L2）🚧 部分完成
+
+**已完成并验证的两件：**
+
+1. **解码器接受摄像头 JPEG 的格式。** 摄像头给的多数是 JPEG，解出来是 `yuvj420p` / `yuvj422p`——原来的
+   `CopyOut` 遇到就抛。现在这两种之外的一律交给 libswscale（它是唯一知道 JPEG 全范围该怎么换算的）。
+   4 个测试：两张真实 JPEG（libjpeg 生成的 64×64，一张 4:2:0 一张 4:2:2）解出 NV12、尺寸对，且**亮度仍在
+   它被编码时的位置**（源 128 → 解出 130），这一条问的就是范围有没有丢。
+2. **portal 侧的三个调用**（`CameraPresentAsync` / `AccessCameraAsync` / `OpenCameraPipeWireRemoteAsync`），
+   以及 `CallForFdAsync` 多出的 `FdArgument.Options`——摄像头的 `OpenPipeWireRemote` 是 `a{sv}`，**没有
+   session 参数**。
+
+**尚未完成**：PipeWire 那一侧的取帧（枚举 `media.role=Camera` 的节点、协商 MJPEG/YUYV、把 4:2:2 重排成
+4:2:0 的 NV12），以及 DI 接线。现在 `WaylandCameraEnumerator` 仍然恒返回空列表。
+
+**为什么停在这里**：本机 `IsCameraPresent` 是 `false`，也没有 `/dev/video*`，所以这一侧的**每一行都无法执行
+一次**——枚举、协商、格式、重排全都依赖不存在的硬件。已经能验证的部分（解码、portal 调用能不能编译并对上
+签名）做完了；剩下的需要在**一台有摄像头的机器**上写和调，而不是在这里照着屏幕采集的样子盲写 400 行。
+`Interop/PipeWire.cs` 里已有的绑定（thread loop / connect_fd / registry / stream / dequeue）全部可复用，
+`PipeWireScreenCapturer` 是可直接照抄的范本——这些是被真机验证过的。
+
+YUYV → NV12 是**纯重排**（4:2:2 垂直降采样到 4:2:0），不涉及色彩矩阵；但要注意摄像头按惯例是 BT.601，
+而这条管线是 BT.709（见 `ColorConversion` 的类注释），所以颜色会有轻微偏差。这条要在真机上确认。
+
 ### P9 — 音频 ✅ 已完成
 
 **计划里的一处被改掉：不是 `pa_threaded_mainloop` + 回调，而是 `pa_mainloop` 由本侧驱动、状态靠轮询。**
