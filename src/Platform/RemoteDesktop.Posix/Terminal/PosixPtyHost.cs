@@ -97,12 +97,22 @@ public sealed class PosixPtyHost : IPtyHost
         return string.IsNullOrEmpty(name) ? null : name;
     }
 
-    /// <summary>Where a name is on this machine, or <c>null</c> when it is not.</summary>
+    /// <summary>Where a name is on this machine, or <c>null</c> when it is not one of the offered shells.</summary>
     private static string? ResolveShell(string name)
     {
         // A path is not a name. Accepting one would turn the shell picker into a way to run anything at all, and the
         // controller is the one supplying it.
         if (name.Contains('/', StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // And a name the picker did not offer is not one either. Without this test, anything that happens to exist in
+        // a search directory would run — /usr/bin/nc is on every macOS, so a controller could ask for netcat by name
+        // even though no list ever showed it. The controller picks from GetAvailableShells, which offers the login
+        // shell and the four names below, so nothing legitimate is excluded by insisting on exactly those.
+        if (!ShellNames.Contains(name, StringComparer.Ordinal) &&
+            !string.Equals(name, LoginShellName(), StringComparison.Ordinal))
         {
             return null;
         }

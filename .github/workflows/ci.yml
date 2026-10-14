@@ -33,7 +33,11 @@ jobs:
           artifact-name: test-results-windows
 
   build-linux:
-    runs-on: ubuntu-latest
+    # The distro this port targets, and the one its tests were written against: FFmpeg 8 (libavcodec.so.62) and the
+    # portal stack are what Ubuntu 26.04 ships. Pinned rather than ubuntu-latest, which still meant 24.04 when this
+    # job was written -- where the library major version the video bindings load by soname does not exist -- and
+    # which migrates on GitHub's own schedule rather than this repository's.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -52,6 +56,15 @@ jobs:
           sudo dpkg -i /tmp/packages-microsoft-prod.deb
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libmsquic
+
+      # What the platform tests reach for beyond .NET: the FFmpeg 8 libraries the video bindings load by soname, and
+      # the PulseAudio client for the audio ones. A desktop machine has these through its own packages; a runner does
+      # not, and their absence would read as twenty broken code paths rather than as a machine without ffmpeg.
+      - name: Install the native libraries the platform tests need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec62 libavformat62 libavutil60 libswresample6 libpulse0
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       - name: Audit packages for known vulnerabilities

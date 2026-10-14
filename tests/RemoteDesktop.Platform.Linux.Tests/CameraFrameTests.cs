@@ -124,7 +124,21 @@ public sealed class CameraFrameTests
 
         var cancellationToken = TestContext.Current.CancellationToken;
         using var connection = new PortalConnection();
-        var present = await connection.CameraPresentAsync(cancellationToken);
+
+        bool present;
+        try
+        {
+            present = await connection.CameraPresentAsync(cancellationToken);
+        }
+        catch (PortalException error)
+        {
+            // A machine with no session bus, or with no portal on it, cannot answer the question at all. What this
+            // test is about is the behaviour of a machine whose portal does answer — that is the machine the
+            // product runs on — so a headless runner is the environment being unavailable, not a failure.
+            Assert.Skip($"The portals cannot be reached: {error.Message}");
+            return;
+        }
+
         Assert.SkipWhen(present, "This machine has a camera, so listing them would legitimately ask about it.");
 
         var enumerator = new WaylandCameraEnumerator(

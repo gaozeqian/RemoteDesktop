@@ -207,9 +207,17 @@ public static class LinuxSelfCheck
     /// <remarks>
     /// <c>IsCameraPresent</c> is a property: reading it raises no dialog, which is why it is the thing this pokes
     /// the portal with. That it doubles as the camera answer is a bonus rather than the point.
+    /// <para>
+    /// One name for every outcome, on purpose: this check is about the portal and the camera together — the camera
+    /// question is asked through the portal because it is the one that can answer without a dialog — and a name that
+    /// changed with the answer would look like a different check to the test that guards the list, and to anybody
+    /// comparing two machines side by side.
+    /// </para>
     /// </remarks>
     private static Probe Portal()
     {
+        const string Name = "Portal and camera";
+
         try
         {
             using var connection = new PortalConnection();
@@ -218,16 +226,16 @@ public static class LinuxSelfCheck
             // A camera belongs here because its absence is not a fault and its presence is not a promise: the path
             // that would use one has never been run against real hardware.
             return camera
-                ? new Probe("Desktop portal", true, true, "answered; a camera is present (the camera path is unverified)")
-                : new Probe("Portal and camera", true, true, "answered; no camera on this machine");
+                ? new Probe(Name, true, true, "answered; a camera is present (the camera path is unverified)")
+                : new Probe(Name, true, true, "answered; no camera on this machine");
         }
         catch (Exception error) when (error is PortalException or InvalidOperationException)
         {
-            return new Probe("Desktop portal", false, true, error.Message);
+            return new Probe(Name, false, true, error.Message);
         }
         catch (Exception error) when (error is DllNotFoundException or TypeInitializationException)
         {
-            return new Probe("Desktop portal", false, true, $"{error.GetType().Name}: {error.Message}");
+            return new Probe(Name, false, true, $"{error.GetType().Name}: {error.Message}");
         }
     }
 

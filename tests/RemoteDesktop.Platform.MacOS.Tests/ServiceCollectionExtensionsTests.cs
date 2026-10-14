@@ -75,12 +75,23 @@ public class ServiceCollectionExtensionsTests
         var cameras = provider.GetRequiredService<ICameraSourceFactory>();
 
         Assert.NotSame(players.Create(), players.Create());
-        Assert.NotSame(cameras.Open(FirstCameraOrNull(provider)), cameras.Open(FirstCameraOrNull(provider)));
+
+        // The camera half needs a camera to open, and a machine without one (a mini, a runner) cannot show it —
+        // opening the id of a camera that is not there throws, which says nothing about independence. What such a
+        // machine can still show is the refusal, so that is what is asserted instead.
+        var first = FirstCameraOrNull(provider);
+        if (first is null)
+        {
+            Assert.Throws<CameraUnavailableException>(() => cameras.Open("missing"));
+            return;
+        }
+
+        Assert.NotSame(cameras.Open(first), cameras.Open(first));
     }
 
-    private static string FirstCameraOrNull(IServiceProvider provider)
+    private static string? FirstCameraOrNull(IServiceProvider provider)
     {
         var cameras = provider.GetRequiredService<ICameraEnumerator>().GetCameras();
-        return cameras.Count > 0 ? cameras[0].Id : "missing";
+        return cameras.Count > 0 ? cameras[0].Id : null;
     }
 }
