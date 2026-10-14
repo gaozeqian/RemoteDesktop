@@ -33,7 +33,9 @@ file="pool/main/libm/libmsquic/libmsquic_${version}_amd64.deb"
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/artifacts/native/linux"
 
-if [ -f "$out/libmsquic.so" ]; then
+# Named with the version, because that is what is actually staged further down: this asked for "libmsquic.so", which
+# nothing here ever creates, so the guard never fired and every run downloaded the package again.
+if [ -f "$out/libmsquic.so.$version" ]; then
     echo "Already staged in $out"
     exit 0
 fi
