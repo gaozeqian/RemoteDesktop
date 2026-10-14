@@ -328,6 +328,24 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 
 ### P3 — Wayland 采集与输入（核心，风险最高）🚧 进行中
 
+**portal 会话流程已实测跑通**（2026-10-14，真机授权一次）：`CreateSession -> 0`、`SelectSources -> 0`、
+`Start -> 0`（拿到 `streams`）、`OpenPipeWireRemote -> fd=60`。三个把前几版实现卡住的坑，都是
+"错了不报错、只表现为连接断开或进程消失"的那类，记在这里免得重踩：
+
+- **`MessageWriter` 是 `ref struct`，绝不能穿过委托。** 把"写方法体"这件事交给一个
+  `Action<MessageWriter, string>` 去做——那是与跑通的版本**唯一**的差别——连接立刻断开、进程核心转储。
+  方法体必须写在持有写入器的那个方法里，一个请求一段。
+- **`AddMatchAsync` 必须 `await`，不能阻塞等待。** 用 `.GetAwaiter().GetResult()` 会死锁：应答要靠
+  连接自己的读循环推进。
+- **`VariantValue.ToString()` 不是值本身**，它会给对象路径加上 ` [String]`。把这个字符串当作对象路径
+  发回去，总线因为收到非法路径而**直接断开这个连接**——错误表现是"连接被对端关闭"，与真正的原因隔着
+  好几层。必须在消息还活着的时候用 `GetObjectPathAsString()` / `GetString()` 取出来；消息一过手，
+  那些值也成了悬垂引用。
+
+另外记下与计划一致的接口事实：`ScreenCast.version = 5`、`AvailableCursorModes = 7`（Metadata 可用）、
+`RemoteDesktop.version = 2`（有 `ConnectToEIS`）、`AvailableDeviceTypes = 7`。
+`CreateSession` 与 `SelectSources` 都没有弹窗（后者直接返回 0），**授权对话框出现在 `Start`**。
+
 **先做 spike**：用 shell + `busctl` 把整个 portal 流程手写一遍并看它工作，再写 C#。
 
 **已完成的是不需要 portal 授权的那一半**（可以纯单元测试，不碰真实桌面）：
