@@ -1,10 +1,12 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteDesktop.Abstractions.Audio;
+using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
 using RemoteDesktop.Platform.Linux.Audio;
+using RemoteDesktop.Platform.Linux.Display;
 using RemoteDesktop.Platform.Linux.Video;
 using RemoteDesktop.Platform.Posix;
 using RemoteDesktop.Platform.Posix.Terminal;
@@ -30,7 +32,7 @@ public static class ServiceCollectionExtensions
     /// of them.
     ///
     /// Still to come, in the order the port plan schedules them:
-    /// <c>IDisplayEnumerator</c> / <c>IScreenCapturerFactory</c> (portal + PipeWire),
+    /// <c>IScreenCapturerFactory</c> (portal session + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
     /// <c>IClipboard</c>, and <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>.
     /// </para>
@@ -47,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISecretStore>(new FileSecretStore(Path.Combine(dataDirectory, "secrets")));
         services.AddSingleton<IUserContextGuard, UnixUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
+        services.AddSingleton<IDisplayEnumerator, WaylandDisplayEnumerator>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();

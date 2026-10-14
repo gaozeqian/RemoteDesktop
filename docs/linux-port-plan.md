@@ -365,6 +365,12 @@ pipewire fd=98
 - **`MessageWriter` 是 `ref struct`，绝不能穿过委托。** 把"写方法体"这件事交给一个
   `Action<MessageWriter, string>` 去做——那是与跑通的版本**唯一**的差别——连接立刻断开、进程核心转储。
   方法体必须写在持有写入器的那个方法里，一个请求一段。
+- **同一条规则的另一半：`Reader` 不能交给另一个方法，`ref` 也不行。** 把「读一个 `a{sv}`」抽成
+  `ReadVariants(ref Reader reader)` 看起来天经地义，实测结果是**每个字典都返回空、调用方的读取位置还留在
+  原地**——于是后面几百字节的地方报 `unexpected end of data` 或 `invalid UTF-8`，而真正的原因隔着一整段
+  栈。Mutter 的 `GetCurrentState`（`ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv}`）整个遍历
+  因此写在 `Parse` 一个方法里。**只有 `VariantValue` 能跨方法**，因为它自带字节。这是那个库的
+  `ref struct` 游标的性质，不是这条消息的性质——排查时先怀疑它。
 - **`AddMatchAsync` 必须 `await`，不能阻塞等待。** 用 `.GetAwaiter().GetResult()` 会死锁：应答要靠
   连接自己的读循环推进。
 - **`VariantValue.ToString()` 不是值本身**，它会给对象路径加上 ` [String]`。把这个字符串当作对象路径
@@ -412,16 +418,29 @@ portal 返回非 0，`OpenScreenCastAsync` 抛 `PortalException`，其中拒绝�
   按**它自己的**缩放算的，所以混合 DPI 桌面上两台显示器之间的距离不是处处相同的设备像素数。
   测试直接钉本机实测的数字（2560×1440 物理 / 1920×1080 逻辑 / scale 4/3）。
 
-**P3 尚未完成的部分**：portal 会话这一层（`PortalConnection`）已经通了，剩下的是消费它的三件事，都不再
-需要有人在旁边点对话框：
+**已完成**：`Display/MutterDisplayConfig.cs` + `Display/WaylandDisplayEnumerator.cs`（已注册为
+`IDisplayEnumerator`）。本机实测输出：
 
-- `Display/PipeWireScreenCapturer.cs` —— 在拿到的 fd 上跑 `pw_stream`，把缓冲解成 BGRA 交给
-  `IVideoCapturer`。格式请求 `BGRx` 并钉死尺寸。
-- `Display/MutterDisplayConfig.cs` + `WaylandDisplayEnumerator` —— 无授权的显示枚举；**portal 会话存在时
-  以 `Streams` 为准**（只有它知道用户实际授权了哪些屏），Mutter 的 `GetCurrentState` 作为无会话时的来源。
-  注意两者坐标系不同：portal 给的是逻辑坐标，`DisplayInfo.Bounds` 的契约是物理像素。
-- `Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），
-  再走 libei。`ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
+```
+DP-1 'Philips Consumer Electronics Company 24"'
+  logical 1920x1080  scale 1.3333333730697632  physical 2560x1440  primary=True
+```
+
+物理 2560x1440 与 `busctl` 一致，逻辑 1920x1080 与 portal 报的一致——**两套坐标系的换算在两条独立来源上
+对上了**，这比单测更说明问题。`DisplayInfo.Bounds` **必须是物理像素**、`Scale` 单独带出来，因为客户端
+再画一个逻辑矩形的话，在 scale=1 的屏上完全看不出来、在别的屏上全错。
+
+> 踩坑记录：Mutter 的 `GetCurrentState` 里，显示器尺寸**不在**任何一张表里——它是标了 `is-current` 的那个
+> mode 的尺寸。取第一个 mode、或者取 preferred，在「用户改过分辨率」的机器上就是错的，而那几乎包括每台机器。
+
+**P3 尚未完成的部分**，两件都不再需要有人在旁边点对话框：
+
+- `Display/PipeWireScreenCapturer.cs` —— 在 `OpenPipeWireRemote` 拿到的 fd 上跑 `pw_stream`，把缓冲解成
+  BGRA 交给 `IScreenCapturer`。格式请求 `BGRx` 并钉死尺寸；光标走 `SPA_META_Cursor`。**portal 会话存在时
+  以 `Streams` 为准**（只有它知道用户实际勾选了哪些屏），`DisplayInfo.Id` 是连接器名，按逻辑位置换算成
+  物理后与 stream 匹配。
+- `Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），再走 libei。
+  `ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
 
 
 ### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）
