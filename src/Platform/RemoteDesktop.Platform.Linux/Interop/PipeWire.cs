@@ -71,6 +71,16 @@ internal static unsafe partial class PipeWire
     /// <summary>PW_STREAM_FLAG_MAP_BUFFERS — mmap the buffers, so <c>data</c> is a usable pointer.</summary>
     internal const uint StreamFlagMapBuffers = 1 << 2;
 
+    /// <summary>
+    /// PW_ID_ANY — no particular target.
+    /// </summary>
+    /// <remarks>
+    /// What <c>pw_stream_connect</c> expects. Naming a target by its id there is deprecated, and on PipeWire 1.6 it
+    /// is refused outright: the call comes back as <c>-EINVAL</c> with the stream still unconnected and no reason
+    /// given. The target is named in the stream's properties instead.
+    /// </remarks>
+    internal const uint IdAny = 0xffffffff;
+
     /// <summary>PW_STREAM_STATE_STREAMING — pictures are arriving.</summary>
     internal const int StreamStateStreaming = 3;
 
@@ -185,6 +195,32 @@ internal static unsafe partial class PipeWire
         public ulong Time;
     }
 
+    /// <summary><c>spa_dict_item</c>: two pointers.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SpaDictItem
+    {
+        public nint Key;
+        public nint Value;
+    }
+
+    /// <summary><c>spa_dict</c>: the property bag a global carries.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SpaDict
+    {
+        public uint Flags;
+        public uint ItemCount;
+        public nint Items;
+    }
+
+    /// <summary><c>pw_registry_events</c>, 24 bytes.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PwRegistryEvents
+    {
+        public uint Version;
+        public nint Global;
+        public nint GlobalRemove;
+    }
+
     /// <summary>
     /// <c>pw_stream_events</c>, 96 bytes: the callbacks, as function pointers.
     /// </summary>
@@ -252,17 +288,43 @@ internal static unsafe partial class PipeWire
     [LibraryImport(Library, EntryPoint = "pw_context_destroy")]
     internal static partial void ContextDestroy(nint context);
 
+    [LibraryImport(Library, EntryPoint = "pw_context_connect", SetLastError = true)]
+    internal static partial nint ContextConnect(nint context, nint properties, nuint userDataSize);
+
     [LibraryImport(Library, EntryPoint = "pw_context_connect_fd", SetLastError = true)]
     internal static partial nint ContextConnectFd(nint context, int fd, nint properties, nuint userDataSize);
 
+    /// <summary>
+    /// Builds a properties object from <c>"key=value key=value"</c>.
+    /// </summary>
+    /// <remarks>
+    /// The result is handed to <see cref="StreamNew"/>, which takes ownership of it — freeing it here would leave
+    /// the stream reading released memory.
+    /// </remarks>
+    [LibraryImport(Library, EntryPoint = "pw_properties_new_string")]
+    internal static partial nint PropertiesNewString([MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+
+    /// <summary>Creates a stream. <paramref name="properties"/> is taken ownership of.</summary>
     [LibraryImport(Library, EntryPoint = "pw_stream_new")]
     internal static partial nint StreamNew(nint core, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, nint properties);
 
     [LibraryImport(Library, EntryPoint = "pw_stream_add_listener")]
     internal static partial void StreamAddListener(nint stream, nint listener, nint events, nint data);
 
+    /// <summary>PW_VERSION_REGISTRY — the version to ask for when getting the registry.</summary>
+    internal const int RegistryVersion = 3;
+
+    [LibraryImport(Library, EntryPoint = "pw_core_get_registry")]
+    internal static partial nint CoreGetRegistry(nint core, int version, nuint userDataSize);
+
+    [LibraryImport(Library, EntryPoint = "pw_registry_add_listener")]
+    internal static partial void RegistryAddListener(nint registry, nint listener, nint events, nint data);
+
+    [LibraryImport(Library, EntryPoint = "pw_registry_destroy")]
+    internal static partial void RegistryDestroy(nint registry);
+
     [LibraryImport(Library, EntryPoint = "pw_stream_connect")]
-    internal static partial int StreamConnect(nint stream, int direction, uint targetId, uint flags, nint* parameters, uint parameterCount);
+    internal static partial int StreamConnect(nint stream, int direction, uint targetId, uint flags, nint parameters, uint parameterCount);
 
     [LibraryImport(Library, EntryPoint = "pw_stream_disconnect")]
     internal static partial int StreamDisconnect(nint stream);
@@ -270,8 +332,13 @@ internal static unsafe partial class PipeWire
     [LibraryImport(Library, EntryPoint = "pw_stream_destroy")]
     internal static partial void StreamDestroy(nint stream);
 
+    /// <summary>State, and the reason for it written into <paramref name="error"/> — <c>const char **</c>.</summary>
+    /// <summary>Replaces the stream's parameters after it is connected.</summary>
+    [LibraryImport(Library, EntryPoint = "pw_stream_update_params")]
+    internal static partial int StreamUpdateParams(nint stream, nint parameters, uint parameterCount);
+
     [LibraryImport(Library, EntryPoint = "pw_stream_get_state")]
-    internal static partial int StreamGetState(nint stream, nint* error);
+    internal static partial int StreamGetState(nint stream, byte** error);
 
     [LibraryImport(Library, EntryPoint = "pw_stream_dequeue_buffer")]
     internal static partial nint StreamDequeueBuffer(nint stream);

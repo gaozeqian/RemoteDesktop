@@ -435,12 +435,34 @@ DP-1 'Philips Consumer Electronics Company 24"'
 
 **P3 尚未完成的部分**，两件都不再需要有人在旁边点对话框：
 
-- `Display/PipeWireScreenCapturer.cs` —— 在 `OpenPipeWireRemote` 拿到的 fd 上跑 `pw_stream`，把缓冲解成
-  BGRA 交给 `IScreenCapturer`。格式请求 `BGRx` 并钉死尺寸；光标走 `SPA_META_Cursor`。**portal 会话存在时
-  以 `Streams` 为准**（只有它知道用户实际勾选了哪些屏），`DisplayInfo.Id` 是连接器名，按逻辑位置换算成
-  物理后与 stream 匹配。
+- `Display/PipeWireScreenCapturer.cs` —— **已写好，但还没有出帧**，卡在下面那条。
 - `Input/LibEiInputInjector.cs` —— 在同一会话上 `ConnectToEIS`（`PortalConnection` 已提供），再走 libei。
   `ScanCodeToEvdev` 与 EIS 的 region 换算都已有测试打底。
+
+### P3 当前的阻塞点：PipeWire 流连不上目标节点
+
+已经跑通到 `pw_context_connect_fd` + `pw_stream_new`，**portal 那一侧全对**（会话、授权、fd 都拿到了，
+而且 restore token 让后续运行不再弹窗）。卡住的是最后一步——把流接到合成器那个节点上：
+
+`pw_stream_connect` 之后 `state_changed` 报 **`no target node available`**。
+
+排查过程中确认的几件事，都是实测不是推断：
+
+- **`pw_stream_connect` 不接受格式参数。** 把那个 pod 交给它，返回 `-EINVAL`，流停在 unconnected，
+  库里和 `PIPEWIRE_DEBUG=4` 的日志里都**没有任何解释**。同一个 pod、同样的字节交给
+  `pw_stream_update_params` 就被接受。两件事分开做才通得过。那个 pod 的字节已经对着
+  `spa_pod_builder_add_object` 的输出逐字节验证过，日志里 PipeWire 也把它**正确解析**成
+  `Id 8 (BGRx)` / `Rectangle 1920x1080`——所以问题不在 pod。
+- **`target_id` 不是原因。** 文档说它"应当是 `PW_ID_ANY`"，按 id 指定目标已废弃；但改成 `PW_ID_ANY` +
+  `target.object` 属性、`object.serial`、或干脆不给目标，报的都是同一句 `no target node available`。
+- **没能枚举出那个连接上可见的节点。** 想用 `pw_core_get_registry` + `pw_registry_add_listener` 看看到底
+  有哪些 node 可以指名，但**枚举本身是坏的**：对着默认实例（那里必然有几十个全局对象）也是一条都没有。
+  回调没被调用，所以这是枚举的问题，不是 portal 连接真的空。**修好枚举是下一步的第一件事**——不知道
+  目标该叫什么名字，就只能继续猜。
+
+要接着做的话，顺序是：先把 `pw_core_sync` + `done` 等一次往返、确认注册表监听真的收到回调（大概率是
+委托生命周期或 hook 初始化的问题），再看 portal 连接上那个 screencast 节点的 `object.serial` 到底是多少，
+用它去填 `target.object`。
 
 
 ### P4 — 视频编解码 ✅ 已完成（硬件路径待真 GPU 机器验证）

@@ -32,7 +32,6 @@ public static class ServiceCollectionExtensions
     /// of them.
     ///
     /// Still to come, in the order the port plan schedules them:
-    /// <c>IScreenCapturerFactory</c> (portal session + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
     /// <c>IClipboard</c>, and <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>.
     /// </para>
@@ -50,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IUserContextGuard, UnixUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();
         services.AddSingleton<IDisplayEnumerator, WaylandDisplayEnumerator>();
+        services.AddSingleton<IScreenCapturerFactory, PipeWireScreenCapturerFactory>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegH264DecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();
