@@ -32,8 +32,7 @@ public static class ServiceCollectionExtensions
     /// Still to come, in the order the port plan schedules them:
     /// <c>IDisplayEnumerator</c> / <c>IScreenCapturerFactory</c> (portal + PipeWire),
     /// <c>IInputInjector</c> (EIS over the same portal session),
-    /// <c>IClipboard</c>, <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>,
-    /// and <c>IVideoRecorderFactory</c>.
+    /// <c>IClipboard</c>, and <c>ICameraEnumerator</c> / <c>ICameraSourceFactory</c>.
     /// </para>
     /// <para>
     /// <c>IAgentGateway</c> is absent on purpose and will stay absent. On Windows the privileged service cannot see the
@@ -52,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPtyHost, PosixPtyHost>();
         services.AddSingleton<IAudioCapturerFactory, PulseAudioCapturerFactory>();
         services.AddSingleton<IAudioPlayerFactory, PulseAudioPlayerFactory>();
+        services.AddSingleton<IVideoRecorderFactory, FfmpegVideoRecorderFactory>();
 
         // Three encoders, mixed together by VideoCodecSelector: hardware first, then by priority, with every failure
         // falling through to the next. The software one is registered last because it is the one that always works.
