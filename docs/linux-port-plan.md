@@ -1,6 +1,6 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2 完成，P3 起未开始）
+> 状态：**进行中**（P1、P2 完成，P3 完成不需要授权的部分）
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -326,9 +326,28 @@ busctl --user call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfi
 即 .NET 经 D-Bus 传递文件描述符已端到端验证；`HostControlTests` 现在跑在真实的 Unix socket 传输上
 （此前它用 `NamedPipeServerStream` 搭假服务端，与新的客户端传输对不上，这也是一处真实的移植影响）。
 
-### P3 — Wayland 采集与输入（核心，风险最高）
+### P3 — Wayland 采集与输入（核心，风险最高）🚧 进行中
 
 **先做 spike**：用 shell + `busctl` 把整个 portal 流程手写一遍并看它工作，再写 C#。
+
+**已完成的是不需要 portal 授权的那一半**（可以纯单元测试，不碰真实桌面）：
+
+- `Display/SpaPod.cs` —— PipeWire 序列化格式的读取器。格式协商的答案就是一个 pod，而屏幕尺寸/像素格式
+  在驱动之间可能是定值、区间或候选列表，所以这一层非有不可。写成自己的类型而不是一堆解析函数，是为了
+  能把「读一段字节」和「连着一台真实桌面」分开——**事实证明确实如此**：写测试时用字面字节数组钉住布局，
+  立刻抓到解析器把类型字放在偏移 8 而不是 4 的错（读到了 body 的第一个字，一个"看起来合理"的小数字，
+  于是类型错了却像对的）。这个错在真实链路上会表现为"协商总是失败"而毫无线索。
+- `Input/ScanCodeToEvdev.cs` —— 线上协议发的是 PC 扫描码 set 1，evdev 按位置编号，两者之间没有公式。
+  表的值逐条对着 `/usr/include/linux/input-event-codes.h` 抄。`IsExtended` 用来消歧 `E0` 前缀那一批：
+  `0x1C` 不加前缀是回车、加了是小键盘回车——发错一个就是"按了回车却打出别的东西"，而且只对按下那个键的人
+  发生。没有对应键的扫描码（BIOS 的 SysRq、`E1` 序列的 Pause）**明确报告而不是猜一个**。
+- `Display/DisplayGeometry.cs` —— 两套坐标系的换算。合成器用缩放后的单位排布窗口，而一个显示器的位置是
+  按**它自己的**缩放算的，所以混合 DPI 桌面上两台显示器之间的距离不是处处相同的设备像素数。
+  测试直接钉本机实测的数字（2560×1440 物理 / 1920×1080 逻辑 / scale 4/3）。
+
+**仍需 portal 授权、尚未做的部分**：`PortalSession` / `ScreenCastSession`（`CreateSession` → `SelectSources`
+→ `Start` → `OpenPipeWireRemote`）、`PipeWireScreenCapturer`、`MutterDisplayConfig`、`LibEiInputInjector`。
+这一段需要有人在真实桌面上点一次 GNOME 的共享屏幕对话框，因此单独安排。
 
 ### P4 — 视频编解码
 
