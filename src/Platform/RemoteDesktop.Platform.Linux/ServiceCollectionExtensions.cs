@@ -63,7 +63,11 @@ public static class ServiceCollectionExtensions
         // The clipboard rides on the same remote-desktop session as the input, because the portal attaches it there
         // and allows it to be requested only once and only before that session starts.
         services.AddSingleton<IClipboard, WaylandClipboard>();
-        services.AddSingleton<ICameraEnumerator, WaylandCameraEnumerator>();
+        // Registered under both names, and it has to be: the factory asks the enumerator for the connection the
+        // grant was given on, which is not something the port exposes, so it takes the concrete type. Resolving the
+        // interface to the same instance keeps one grant and one list rather than two of each.
+        services.AddSingleton<WaylandCameraEnumerator>();
+        services.AddSingleton<ICameraEnumerator>(provider => provider.GetRequiredService<WaylandCameraEnumerator>());
         services.AddSingleton<ICameraSourceFactory, WaylandCameraSourceFactory>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegVideoDecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();
