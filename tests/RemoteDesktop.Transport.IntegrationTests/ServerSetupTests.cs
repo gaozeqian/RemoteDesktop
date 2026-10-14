@@ -127,7 +127,9 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_name_in_the_relay_address_is_resolved_to_an_address()
     {
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = "%COMPUTERNAME%:5083" });
+        // This machine's own name, spelled portably — "%COMPUTERNAME%" only expands on Windows, because .NET reads
+        // %NAME% there and $NAME everywhere else.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = $"{Environment.MachineName}:5083" });
 
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
         rendezvous.Validate();
@@ -308,6 +310,10 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_certificate_this_step_generates_is_written_so_that_the_server_can_load_it()
     {
+        // The generated certificate is kept in the machine's certificate store, which is a Windows thing: elsewhere
+        // the same step has to write PEM files and point Kestrel at them with Path/KeyPath instead. That form lands
+        // with the rest of the server packaging; until then this test covers what exists.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "The machine certificate store is Windows only.");
         Assert.SkipUnless(
             new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
                 .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator),
