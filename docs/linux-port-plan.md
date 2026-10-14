@@ -77,18 +77,30 @@
 | --- | --- | --- |
 | `Hosts/RemoteDesktop.Client/Program.cs` | `if (!OperatingSystem.IsWindows()) return 1;` | 放行 Linux |
 | `Hosts/RemoteDesktop.Client/ClientHost.cs` | 类级 `[SupportedOSPlatform("windows")]`，无条件 `AddWindowsPlatform` | 改为按平台选择注册 |
-| `Hosts/RemoteDesktop.Client/StartupFailure.cs` | `MessageBoxW`（user32） | 非 Windows 写 stderr 与 crash.log。**只做了一半**：`UserMessage.Show` 已按平台守卫（非 Windows 什么都不做），crash.log 由 `StartupSettings.Report` 与 `CrashLog` 写；**stderr 那半没做**——Linux 上启动失败只留下退出码 1 和一个没人打印出来的 `crash.log` 路径 |
+| `Hosts/RemoteDesktop.Client/StartupFailure.cs` | `MessageBoxW`（user32） | 非 Windows 写 stderr 与 crash.log —— **已补上**：消息框按平台守卫，非 Windows 把同一句话打到标准错误；`crash.log` 由 `StartupSettings.Report` 与 `CrashLog` 写。此前只做了一半，Linux 上启动失败只留下退出码 1 和一个没人打印出路径的 crash.log |
 | `Hosts/RemoteDesktop.HostService/Program.cs` | 程序集级 `[SupportedOSPlatform("windows")]`，`if (!IsWindows()) throw` | 删掉程序集属性，放宽门禁，拆 `AddHostPlatform` / `AddHostAgent` |
 | `Hosts/RemoteDesktop.HostService/HostControlServer.cs` | `WindowsPipes.CreateServer`（PipeSecurity / SID） | 换成 `$XDG_RUNTIME_DIR` 下的 Unix socket |
 | `Hosts/RemoteDesktop.Client/ClientHost.cs` 数据目录 | `SpecialFolder.ApplicationData` | Linux 下那是 `~/.config`（配置目录，不是数据目录），改走 `LocalApplicationData` |
 | `Hosts/RemoteDesktop.HostService` 数据目录 | `SpecialFolder.CommonApplicationData` | Linux 下那是 `/usr/share`，改走 `$XDG_DATA_HOME/RemoteDesktop` |
 | `ViewModels/*` | 三处硬编码 `new MfVideoRecorderFactory()` 藏在 `IsWindows()` 分支后 | 删掉分支，从 DI 注入 `IVideoRecorderFactory` |
-| `Client/Setup/HostServiceSetup.cs` | `Verb = "runas"` 提权 | **没有按计划做。** `HostServiceSetup` 原样留着（仍是 `Verb = "runas"`），改的是调用点：`SaveServerAddressAsync` 在非 Windows 上直接答"只有 Windows 版本可以修改被控端的服务器地址"并返回。所以 Linux 上那个按钮是个明确的"不行"，而不是计划里说的"改成 systemctl --user restart"。**这是一处真实缺口**：Linux 用户要改地址只能手改 `appsettings.json`（文档已按这个更正） |
+| `Client/Setup/HostServiceSetup.cs` | `Verb = "runas"` 提权 | **已按计划的意图补上，做法比计划多一层。** `HostServiceSetup`（Windows 提权那条）原样保留，非 Windows 走 `LinuxSetup`：把地址写进用户自己的 `appsettings.json`，再 `systemctl --user restart remotedesktop-host`（尽力而为——客户端和被控端不一定在同一台机器上）。**但只写文件是不够的**：包里的 `appsettings.json` 在 `/usr/lib` 下、属于 root，普通用户根本改不了。所以两个程序都多读一层**用户自己的**同名文件（`~/.local/share/RemoteDesktop/appsettings.json`，可选、不监视变化），地址写在那里就生效。详见 §1.2 下面那段 |
 | `Server/Server.Shared/SelfSignedCertificate.cs` | `X509Store("My", LocalMachine)`、`MachineKeySet\|PersistKeySet` | Linux 没有证书存储，改写 PEM 文件 |
 | `Server/Server.Shared/ServerSetup.cs` | Kestrel 写 `Subject`/`Store`/`Location`/`AllowInvalid` | 改写 `Path` / `KeyPath` |
 
 `Transport/Nat/PunchSocket.cs` 的 `SIO_UDP_CONNRESET` 已有 `OperatingSystem.IsWindows()` 守卫，**无需改动**。
 `NamedPipeServerStream` 在 Unix 上走 Unix domain socket 可用，但见 §2.5 为何仍然要换掉传输层。
+
+**配置分两层（后来才补上的，不是原计划的一部分）。** 客户端和被控端都是 `Host.CreateApplicationBuilder`，
+默认从**内容根**读 `appsettings.json`——客户端是 `AppContext.BaseDirectory`，被控端是 systemd 单元的
+`WorkingDirectory`。Linux 上这两个都是 `/usr/lib/remotedesktop-*/`，**属于 root**。于是出现一个只有实测才会
+发现的问题：那两个文件里的地址是**普通用户改不了**的默认值，而文档当时还写着"改 `~/.local/share/...`，
+那个文件根本不存在"。现在两个程序在 Linux 上额外叠一层**用户自己的** `appsettings.json`
+（`~/.local/share/RemoteDesktop/`，`optional: true`、`reloadOnChange: false`——后者是因为一个监视器就是
+一个 inotify 实例，这个项目已经在那上面栽过一次），地址写在那里即可。包里的那份仍然提供其余默认值，
+升级时被整个替换也不影响用户改过的东西。
+
+顺带一提，客户端界面上那个「修改服务器地址」的按钮**在 Linux 上是可以用的**（写上面那个用户文件 +
+尽力重启用户服务），不再是先前那句"只有 Windows 版本可以"。
 
 ### 1.3 共享层里与平台有关的缺陷（P1 已修）
 
@@ -316,12 +328,38 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 
 结果：**构建 0 警告 0 错误；全仓 486 个测试 0 失败**（起始 449 个里 85 个失败）。
 
-**计划里有、但没有做的一件：`--self-check`。** 原计划写的是 `RemoteDesktop.Client --self-check` 打印
-OS、会话类型、会话总线可达性、msquic 版本、libavcodec 版本、Mutter.DisplayConfig 是否应答；§六 里还写了
-理由——这台机器上五个互相独立的原生子系统，多数失败形式是**没有任何上下文的 `DllNotFoundException`**。
-它没有出现在最初的清单里，一路下来也没人补，所以现在**不存在**：`Program.cs` 不认这个参数，全仓没有
-`SelfCheck` 字样。这是**仍然欠着的一件**，而且是仍然值得做的一件：今天要回答"这台机器上 portal 通不通、
-libavcodec 版本对不对、输入后端就绪没有、摄像头拿不拿得到"，只能把每一项单独写一个探针跑一遍。
+**`--self-check` 是后来补上的**（见下），不在这一批里——它本该在这里就做，一直拖到最后才补。
+
+### `--self-check`（补做）
+
+原计划里就有、一路漏到最后才做的这一件：`RemoteDesktop.Client --self-check` 打印这台机器能不能用，
+一条命令回答完。五个原生子系统是经 `DllImport` 接进来的，两个是经 socket——失败形式多数是**没有任何
+上下文的 `DllNotFoundException`**，或者一个永远不返回的调用，而发现这件事的地方是**已经坏了的那台机器**。
+
+现在的输出（本机实测，两行是同一台机器、只差一个 `LD_LIBRARY_PATH`）：
+
+```
+[ ok ] Data folder          /home/gaozeqian/.local/share/RemoteDesktop
+[FAIL] QUIC                 libmsquic.so.2 is missing — install libmsquic, or the .deb, which carries its own copy
+[ ok ] Desktop session      session 'wayland' on 'ubuntu:GNOME', WAYLAND_DISPLAY=wayland-0
+[ ok ] Session bus          unix:path=/run/user/1000/bus
+[ ok ] Runtime directory    /run/user/1000
+[ ok ] Portal and camera    answered; no camera on this machine
+[ ok ] Display layout       DP-1 2560x1440@0,0
+[ ok ] PipeWire             libpipewire-0.3.so.0 loads
+[ ok ] libei                libei.so.1 loads
+[ ok ] libavcodec           8.0.1-3ubuntu2
+[ ok ] H.264 encoders       usable: libavcodec software H.264 (x264); not available: NVENC, VA-API
+```
+
+三处设计上的选择：
+
+- **跑在任何东西被构建之前**，所以程序起不来的机器上它照样答得出来——而那正是会去跑它的机器。
+- **每一项都是只读**，不弹任何对话框。需要授权的诊断，在被测的就是授权本身的机器上没有用。
+- **编码器是"开一个试试"而不是"看看有没有这个名字"**：本机 FFmpeg 里 `h264_vaapi` 和 `h264_nvenc`
+  两个名字都在，而两个都用不了。所以它报告的是 x264 可用、另两个不可用——正是产品选编码器时会得到
+  的那个答案。
+- 退出码：有必需项失败就是 1，所以能直接当脚本的闸门。
 
 ### P2 — 密钥、身份、传输、guard、防休眠（D-Bus 桥落地）✅ 已完成
 

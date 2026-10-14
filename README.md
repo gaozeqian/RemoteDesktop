@@ -79,9 +79,22 @@ journalctl --user -u remotedesktop-host -f
 
 **它不在安装时启动**，因为装包的时候可能根本没有图形会话——没有显示、没有会话总线、也没人能点 portal 的对话框。
 
-服务器地址**写在配置文件里**（Linux 的包不内置地址）：`~/.local/share/RemoteDesktop/appsettings.json` 的
-`Transport:RendezvousUri`，客户端和被控端各有一份。客户端界面里那个「修改服务器地址」只在 Windows 上管用
-——它要提权去改装成 Windows 服务的被控端，Linux 上没有对应物，点了会直接告诉你不行。
+服务器地址的默认值是随包装的 `ws://127.0.0.1:5080/ws`，**改成自己的**有两种办法：在客户端里用
+「修改服务器地址」，或者直接写 `~/.local/share/RemoteDesktop/appsettings.json` 里的
+`Transport:RendezvousUri`。**客户端和被控端读的是同一个文件**——Linux 上它们是同一个人、同一个会话。
+
+那份是**你自己的**配置，叠在随包安装的那份之上。随包的那份在 `/usr/lib/remotedesktop-*/` 下、属于 root，
+普通用户改不了，所以能改的只有这一份；升级换掉包里的文件也不会碰到你写的。
+
+想先确认这台机器到底缺什么：
+
+```
+remotedesktop --self-check
+```
+
+它把十件事一次问完——数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、
+显示布局、PipeWire、libei、libavcodec 版本、可用的 H.264 编码器——每一项都是**只读**，不弹任何对话框，
+所以在一台还没授权过、甚至起不来的机器上照样能跑。有必需项不通过时退出码是 1。
 
 ### 需要什么
 
