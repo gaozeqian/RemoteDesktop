@@ -1,6 +1,7 @@
 # Linux 平台移植实现计划
 
-> 状态：**进行中**（P1、P2、P4、P6、P7、P9 完成；P11 服务端完成；P10 的录制完成；P3 完成不需要授权的部分）
+> 状态：**P1–P7、P9–P12 全部完成**；**P8（摄像头）代码完整但未在真机上跑过**——见 P8 一节。
+> 仍未验证的两条：本机没有摄像头、没有能编码的 GPU。
 > 目标平台：Linux 桌面（Ubuntu 24.04+ 为主要验证目标），x86_64
 > 编写日期：2026-10-14
 
@@ -58,7 +59,7 @@
 | `ISecretStore` | `DpapiSecretStore` | 0700 目录下的 0600 文件（`FileSecretStore`，在 `Platform.Posix`） | ✅ P1/P6 |
 | `IUserContextGuard` | 判 SYSTEM | 判 `geteuid()==0`（`UnixUserContextGuard`，在 `Platform.Posix`） | ✅ P1/P6 |
 | `ISystemKeepAwake` | `SetThreadExecutionState` | logind `Inhibit`（**系统**总线，持有返回的 fd） | ✅ P2 |
-| `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`，有 portal 会话后优先用 portal 的 `Streams` | ✅ P3 |
+| `IDisplayEnumerator` | DXGI | `org.gnome.Mutter.DisplayConfig`（免授权）。**「portal 的 `Streams` 优先」那句不在这里**：枚举器不碰 portal，真正按用户实际勾选去匹配屏幕的是 `PipeWireScreenCapturerFactory.Match` | ✅ P3 |
 | `IScreenCapturerFactory` | DXGI Desktop Duplication | portal ScreenCast + PipeWire（`pw_thread_loop` + `MAP_BUFFERS`） | ✅ P3 |
 | `IInputInjector` | `SendInput` | libei / `ConnectToEIS`（与采集同一个 portal 会话） | ✅ P3 |
 | `IVideoEncoderFactory` ×3 | Media Foundation ×2 | `h264_nvenc` / `h264_vaapi` / 软件 x264，都经 libavcodec | ✅ P4 |
@@ -68,7 +69,7 @@
 | `IPtyHost` | ConPTY | `posix_openpt` + `posix_spawn`（落在共享 `Platform.Posix`） | ✅ P6 |
 | `ICameraEnumerator` / `ICameraSourceFactory` | Media Foundation | portal `Camera` 的 fd（**是 PipeWire remote，不是 V4L2 设备**）+ PipeWire 节点 | ⚠️ P8 写完了，没在真机上跑过 |
 | `IAudioCapturerFactory` / `IAudioPlayerFactory` | WASAPI | PulseAudio，主循环由本侧驱动、状态靠轮询 | ✅ P9 |
-| `IPrivacyScreen` | **未实现** | 不支持（`IsSupported => false`），与 Windows 一致 | — |
+| `IPrivacyScreen` | **未实现** | **两个平台都没有实现**，全仓只有接口本身：没有任何地方注册它、也没有任何地方解析它，所以「`IsSupported => false`」的实现并不存在（也不需要——没人问）。与 Windows 一致 | — |
 | `IAgentGateway` | 服务 + 会话 Agent | **不需要**，见 §2.1 | — |
 
 ### 1.2 宿主层需要改的地方
@@ -123,6 +124,20 @@
 
 ## 2. 平台差异与必须做的架构决策
 
+> **读这一节之前先看这段。** 这一节是**动手之前**的推演，写在实现之前；实现的结论记在各阶段里（凡是被改掉的，
+> 阶段末尾都会明确写「计划里的一处被改掉」）。下面这五处**推演与最终实现不一致**，照本节写会写出错的东西：
+>
+> | 本节说 | 实际做成了 | 在哪 |
+> | --- | --- | --- |
+> | §2.2：拆成 `HostPlatformRegistration.AddHostPlatform` / `AddHostAgent` 两个方法 | 是宿主里的 `if/else if (IsWindows/IsLinux)` 内联分支，没有这两个方法 | P2 |
+> | §2.4：用一个薄包装让 portal 代码「看不到 Tmds 类型」，暴露面「一个文件宽」 | 没做包装，Tmds 类型直接用在 5 个文件里 | P2 |
+> | §2.7：一次授权同时覆盖采集与控制（一个对话框授两件事） | **是两条会话**：ScreenCast（可持久化）给采集，RemoteDesktop（不可持久化）给输入与剪贴板 | P3 |
+> | §2.7：libei「必须」先 `ei_device_pointer_motion_region_add` 设绝对坐标 region | 没这么做，直接 `ei_device_pointer_motion_absolute`，用桌面自己的 region | P3 |
+> | §2.8：VA-API 探测用 `vaInitialize` + `vaQueryConfigEntrypoints` 查 `EncSlice` | 改成**直接开一个编码器**（`ProbeRenderNodes`）——名字存在不等于能用 | P4 |
+>
+> 其余各节（2.1 单进程、2.3 共享 `Platform.Posix`、2.5 宿主控制通道换 Unix socket、2.6 光标用 Metadata）
+> 与实现一致。
+
 ### 2.1 进程模型：单进程，不要 Agent
 
 Windows 的模型是：`HostService`（LocalSystem，**Session 0**）看不见桌面，于是在用户会话里拉起
@@ -161,7 +176,7 @@ PTY 是真正值得共享的部分：`posix_openpt`/`grantpt`/`unlockpt`、`posi
 
 **把 455 行复制两份是错误的设计**：两份的差异恰好是最容易出错、且出错后表现为「shell 能用但 Ctrl+C
 没反应」的那几个常量。共享层落地的时机是 P6（PTY 那一步），此前只有 `FileSecretStore` 一个类，
-为一门课开一个工程不值当——它现在放在 `Platform.Linux`，随 PTY 一起搬过去。
+为一门课开一个工程不值当——它现在放在 `Platform.Posix`，随 PTY 一起搬过去（P6）。
 
 架构测试已允许：`Rules` 表里 `Platform` 的 forbidden 列表不含 `Platform` 自身。
 
@@ -189,7 +204,7 @@ PTY 是真正值得共享的部分：`posix_openpt`/`grantpt`/`unlockpt`、`posi
 
 ### 2.6 Wayland 采集：光标必须用 Metadata
 
-`cursor_mode` 必须选 `Metadata`(2) 而不是 `Embedded`：抽象接口的文档写死了「两个光标事件都从
+`cursor_mode` 必须选 `Metadata`（**值是 4**，不是 2——2 是 `Embedded`）而不是 `Embedded`：抽象接口的文档写死了「两个光标事件都从
 `CaptureAsync` 内部触发」且客户端自己画指针。`Embedded` 会把指针烧进像素里，客户端再画一个——重影。
 `Metadata` 每帧带 `SPA_META_Cursor`，与 `CursorChanged` / `CursorMoved` 几乎 1:1。位图是预乘 BGRA，
 要转直通 alpha。
@@ -315,7 +330,7 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 - `src/Platform/RemoteDesktop.Platform.Linux`（`net10.0`、只依赖 `Abstractions`），
   `AddLinuxPlatform(dataDirectory)` 镜像 `AddWindowsPlatform` 的清单。
 - 首批落地两个端口：`FileSecretStore`（0700 目录 / 0600 文件，照抄 `DpapiSecretStore` 的
-  `.tmp` + `File.Move(overwrite)` 原子替换）与 `LinuxUserContextGuard`。
+  `.tmp` + `File.Move(overwrite)` 原子替换）与 `UserContextGuard`（后改名 `UnixUserContextGuard` 并移入 `Platform.Posix`，见 P6）。
   **端口按阶段逐个注册，不预先铺桩**：每个端口都要先是真实现才有意义，而构造函数抛异常的桩只会把
   「这个功能还没做」变成「宿主起不来」。
 - `tests/RemoteDesktop.Platform.Linux.Tests`：建真实容器并逐个解析，让「构造函数会抛」的端口无法
@@ -360,9 +375,12 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
 
 - **跑在任何东西被构建之前**，所以程序起不来的机器上它照样答得出来——而那正是会去跑它的机器。
 - **每一项都是只读**，不弹任何对话框。需要授权的诊断，在被测的就是授权本身的机器上没有用。
-- **编码器是"开一个试试"而不是"看看有没有这个名字"**：本机 FFmpeg 里 `h264_vaapi` 和 `h264_nvenc`
-  两个名字都在，而两个都用不了。所以它报告的是 x264 可用、另两个不可用——正是产品选编码器时会得到
-  的那个答案。
+- **编码器那一条报告的是产品自己会得到的答案**，因为它问的就是产品问的那个问题（`IsSupported`）。
+  这一点要说准，第一版这里写过头了：**只有 VA-API 那个工厂是真的"开一个试试"**（`ProbeRenderNodes`
+  逐节点建编码器），另外两个是查名字——x264 查 `avcodec_find_encoder_by_name`，NVENC 再加一个 NVIDIA
+  节点的检查。本机 `h264_vaapi` 和 `h264_nvenc` 两个名字都在而两个都用不了，所以报告是"x264 可用、
+  另两个不可用"：这正是产品选编码器时得到的答案（NVENC 那条要到真建的时候才失败，而 `VideoChannelModule`
+  本来就有硬件→软件的回落）。
 - 退出码：有必需项失败就是 1，所以能直接当脚本的闸门。
 
 ### P2 — 密钥、身份、传输、guard、防休眠（D-Bus 桥落地）✅ 已完成
@@ -413,7 +431,7 @@ pipewire fd=98
 另有 `tests/RemoteDesktop.Platform.Linux.Tests/PortalScreenCastTests.cs` 两个用例覆盖同一流程，
 默认跳过、`RD_PORTAL_TEST=1` 时运行（要有人在真实桌面上点一次「共享」）。
 
-**五个把前几版实现卡住的坑**，全是"错了不报错、只表现为连接断开、进程消失或干脆挂死"的那类：
+**六个把前几版实现卡住的坑**，全是"错了不报错、只表现为连接断开、进程消失或干脆挂死"的那类：
 
 - **`MessageWriter` 是 `ref struct`，绝不能穿过委托。** 把"写方法体"这件事交给一个
   `Action<MessageWriter, string>` 去做——那是与跑通的版本**唯一**的差别——连接立刻断开、进程核心转储。
@@ -853,7 +871,9 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
 
 ## 5. 服务端在 Linux 上怎么部署
 
-Windows 的 MSI 向导在 Linux 上最接近的对应物是 **debconf + 包脚本**。
+Windows 的 MSI 向导在 Linux 上最接近的对应物是**包脚本**。
+
+> **这一节有两处推演后来被改掉了，写在这里免得有人照着做**：一是曾经打算用 **debconf**，实际没用——服务器要的是**无人值守也能装**，而 debconf 是为交互式安装设计的；改成读 `/etc/default/remotedesktop-server`（conffile，幂等、可脚本化、运维改动能跨升级保留）。所以下表里凡是写 debconf 的行，实际都是这个文件加 `postinst`。二是计划过的 `/usr/bin/remotedesktop-configure-server` + `dpkg-reconfigure` **不存在**，`postinst` 直接调 `--configure-system`。详见 P11。
 
 | Windows MSI 做的事 | Linux 对应 |
 | --- | --- |
@@ -888,10 +908,11 @@ PostgresConnectionString, RelayTicketLifetime, ConnectTimeout, TrustedProxies, M
 
 - **`.deb` 的依赖必须手写**。`dh_shlibdeps` 从 ELF `NEEDED` 推导，而我们的库是经 `DllImport` 到达的，
   **扫描器看不见**。漏写的结果是包安装干净、首次使用 `DllNotFoundException`。
-- **`libavcodec-extra62` 是最大的「在我机器上能跑」陷阱**：Debian/Ubuntu 把含专利的编码器放在
-  **`-extra`** 包里，干净的 Ubuntu 上 `avcodec_find_encoder_by_name("libx264")` **返回 NULL**。
-  本机有 `libx264-165` 只是因为装了 `ffmpeg`。必须 `Depends: libavcodec-extra62 | libavcodec62`，
-  同时工厂的 `IsSupported` 要返回 false 并给出可操作的提示。
+- **`libavcodec-extra62` 曾经被当成最大的「在我机器上能跑」陷阱，实测下来担心是多余的。** 担心的是
+  Debian/Ubuntu 把含专利的编码器放在 `-extra` 包里、干净 Ubuntu 上 `avcodec_find_encoder_by_name("libx264")`
+  会返回 NULL。实测（见 P10）**`libavcodec62` 自己就 Depends `libx264-165`**，而 `libavcodec-extra62`
+  **Provides: libavcodec62`**——所以写 `Depends: libavcodec62`，两种装法都满足，不需要 `-extra`。
+  工厂的 `IsSupported` 仍然会在编码器缺失时返回 false，那部分是照做的。
 - **systemd 用户单元**必须有 `WantedBy=graphical-session.target`、`After=`、`PartOf=`、
   `Restart=on-failure`；**portal 会话必须在首个控制器连接时惰性建立，绝不在启动时**——否则服务会比合成器
   先启动，然后卡在等一个还不存在的会话上。
@@ -906,8 +927,8 @@ PostgresConnectionString, RelayTicketLifetime, ConnectTimeout, TrustedProxies, M
    Windows 的 `DesktopKind.Secure` + agent 替换机制**没有对应物**。**这是相对 Windows 的真实能力回退。**
 3. **快速用户切换 / 多用户**——一个守护进程、一个用户、一个会话。
 4. **隐私屏**（`IPrivacyScreen`）——Windows 上也没实现。
-5. **uinput 后备路径下的 `TextInputEvent`**——任意 Unicode 无键码路径（EIS 下经 `NotifyKeyboardKeysym`
-   可用）。这是 EIS 作主路径的又一条理由。
+5. ~~uinput 后备路径下的 `TextInputEvent`~~——**这条不用读了：uinput 那条路没有实现，也没打算实现。**
+   §2.7 给过理由（它要机器级特权，为了共享屏幕去开 `/dev/uinput` 是笔坏账），最终 EIS 是唯一路径，   udev 规则也没随包发。任意 Unicode 走 `NotifyKeyboardKeysym`，可用。
 6. **H.265**——Windows 上也没实现。
 7. **部分合成器下的指针形状**——见 §2.6。
 8. **X11 会话**——本期不做（不过 portal 路径在 X11 下大概率也能用，不作承诺）。
@@ -922,12 +943,12 @@ PostgresConnectionString, RelayTicketLifetime, ConnectTimeout, TrustedProxies, M
 | 风险 | 缓解 |
 | --- | --- |
 | portal 会话状态机繁琐（先订阅后调用、request handle、`Start` 以 variant 返回 streams、restore token、合成器重启后 PipeWire fd 失效） | P3 先用 shell spike 跑通；持久化 restore token；把「会话失效」当**正常状态**而非异常 |
-| 光标元数据可能不送达（依赖合成器） | 配置开关 + 检测降级 + 宁可抑制客户端光标也不要重影 |
-| PipeWire stream 的 `position`/`size` 是逻辑还是物理未验证 | P3 spike 实测；用本机数字（2560×1440 物理 / 1920×1080 逻辑 / scale 4/3）写单测钉住 |
-| libavcodec ABI 跨发行版漂移 | 带主版本 soname + resolver + 启动自检 + 大声拒绝。能用 `av_opt_set*` 就用，只碰自 FFmpeg 2.x 起就在结构体头部的字段 |
+| 光标元数据可能不送达（依赖合成器） | 检测降级**做了**（连续 10 帧没有 cursor meta 就警告一次并停止通告），**配置开关没做**：`cursor_mode` 是写死的 `CursorMetadata`。宁可抑制客户端光标也不要重影 |
+| ~~PipeWire stream 的 `position`/`size` 是逻辑还是物理未验证~~ | **已答**（P3）：是逻辑坐标，用本机数字（2560×1440 物理 / 1920×1080 逻辑 / scale 4/3）写进了 `DisplayGeometry` 的单测 |
+| libavcodec ABI 跨发行版漂移 | **带主版本 soname + 大声拒绝**（`FfmpegLibraries` 按 `libavcodec.so.62` 找、找不到就抛带版本的 `NotSupportedException`）。计划里的 DllImport resolver 和启动自检**都没做**——`--self-check` 是显式命令，不是启动时自动跑的。能用 `av_opt_set*` 就用，只碰自 FFmpeg 2.x 起就在结构体头部的字段 |
 | **本机没有能编码的 GPU，硬件编码路径无法在本机验证** | 本机能验证软件路径、VA-API 探测、以及「硬件工厂报告支持但 `Create` 失败→回落软件」的完整降级链。**真硬件编码需要一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器** |
 | 多 GPU 时选错 render node / 索引跨重启不稳定 | 见 §2.8，逐个探测，绝不假设索引 |
-| 发行版剥离 H.264 编码（Fedora 的 Mesa、Intel 的 `-non-free` 包） | 一律靠**运行时 entrypoint 探测**决定，不维护硬编码支持列表；日志里打 `vaQueryVendorString` |
+| 发行版剥离 H.264 编码（Fedora 的 Mesa、Intel 的 `-non-free` 包） | 不维护硬编码支持列表，但**探测方式改了**：计划里写的是 `vaQueryConfigEntrypoints` 查 EncSlice，实现改成**直接开一个编码器**（见 P4）；`vaQueryVendorString` 没有打。x264 那条是查 `avcodec_find_encoder_by_name` |
 | portal 授权在部分系统/升级后需重授 | 持久化 restore token；文档说明可能重弹 |
 | `ValidateOnBuild = true` 遇上还没实现的端口 | 端口按阶段注册（P1 起就是这个做法），不铺会抛异常的桩 |
 | Avalonia 在 Linux 上默认走 X11 后端 | 明确接受：XWayland 下客户端是普通 X11 程序，输入按焦点窗口走，对本产品够用。**不要让人误以为客户端跑在原生 Wayland 上** |
