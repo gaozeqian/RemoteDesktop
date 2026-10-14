@@ -6,8 +6,14 @@
 # Why this exists: System.Net.Quic needs libmsquic at run time. Windows gets msquic.dll from the .NET runtime pack;
 # macOS gets nothing, so the application has to bring its own. Homebrew's bottle is the only prebuilt arm64 build, but
 # it is built for the Homebrew prefix and links OpenSSL by absolute path, so it cannot be shipped as it stands. This
-# rewrites the library's own identity and its OpenSSL references to @loader_path — the directory the library was
-# loaded from — which makes the three files work wherever they are copied.
+# rewrites the library's own identity and its references to @loader_path — the directory the library was loaded from —
+# which makes the staged set work wherever it is copied.
+#
+# Which files that set holds is read off the binaries rather than written down, and the set is dlopen'd before this
+# script finishes. Both exist because of the same shipped bug: the bottle in the CI runner linked libcrypto.3 while
+# the script staged openssl@4's libcrypto.4, and every check up to a real load — files present, plausible otool
+# output, signatures applied — passed for a set that could not load at all. The runtime reported it as "QUIC is not
+# supported", with nothing to point at the cause.
 #
 # The result is cached in artifacts/native/macos (artifacts/ is already ignored), and the transport project copies it
 # into every build output that needs it. Run it once per checkout:
@@ -21,12 +27,19 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/artifacts/native/macos"
 
-if [ -f "$out/libmsquic.dylib" ] && [ -f "$out/libssl.4.dylib" ] && [ -f "$out/libcrypto.4.dylib" ]; then
-    echo "Already staged in $out"
-    exit 0
+if [ -f "$out/libmsquic.dylib" ]; then
+    missing=$(for reference in $(otool -L "$out/libmsquic.dylib" | tail -n +2 | awk '{print $1}' | grep '^@loader_path/' || true); do
+        [ -f "$out/$(basename "$reference")" ] || echo "$reference"
+    done)
+    if [ -z "$missing" ]; then
+        echo "Already staged in $out"
+        exit 0
+    fi
+
+    echo "The staged set in $out is missing $missing; staging it again" >&2
 fi
 
-for tool in brew python3 curl tar shasum install_name_tool codesign; do
+for tool in brew python3 curl tar shasum install_name_tool codesign clang; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing required tool: $tool" >&2
         exit 1
@@ -85,29 +98,93 @@ rewrite_homebrew_dependencies() {
 }
 
 libmsquic_lib=$(fetch_bottle libmsquic)
-openssl_lib=$(fetch_bottle openssl@4)
+
+# Which OpenSSL the bottle was built against is Homebrew's business and it moves: the bottle in the CI runner
+# referenced libcrypto.3 while this script staged openssl@4's libcrypto.4, and the library then refused to load. So
+# the dependency is asked for rather than assumed.
+openssl_formula=$(brew info --json=v2 libmsquic | python3 -c '
+import json, sys
+
+formula = json.load(sys.stdin)["formulae"][0]
+for dependency in formula["dependencies"]:
+    if dependency.startswith("openssl"):
+        print(dependency)
+        break
+else:
+    sys.exit("libmsquic declares no openssl dependency to stage")
+')
+openssl_lib=$(fetch_bottle "$openssl_formula")
 
 mkdir -p "$out"
+rm -f "$out"/*.dylib
 
 # -L follows the bottle's symlinks, so each staged file is a real library under a plain name.
 cp -L "$libmsquic_lib/libmsquic.dylib" "$out/libmsquic.dylib"
-cp -L "$openssl_lib/libssl.dylib" "$out/libssl.4.dylib"
-cp -L "$openssl_lib/libcrypto.dylib" "$out/libcrypto.4.dylib"
+
+# Everything the libraries reference through @loader_path has to sit next to them, under the name the reference
+# uses. The references are read back off the staged files, so the pass repeats until it adds nothing — a dependency
+# of a dependency is still a dependency. (A file's own identity shows up in otool's output too and matches itself,
+# which is why an already-staged name is skipped rather than fetched again.)
+for round in 1 2 3; do
+    for file in "$out"/*.dylib; do
+        for reference in $(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep '^@loader_path/' || true); do
+            name=$(basename "$reference")
+            [ -f "$out/$name" ] && continue
+            source=$(find "$libmsquic_lib" "$openssl_lib" -maxdepth 1 -name "$name" -print -quit)
+            if [ -z "$source" ]; then
+                echo "$(basename "$file") references $name, which none of the fetched bottles hold" >&2
+                exit 1
+            fi
+            cp -L "$source" "$out/$name"
+        done
+    done
+done
+
 chmod u+w "$out"/*.dylib
 
 # The identity first: it is what a dependent records as the dependency, and rewriting it also renames the library's
 # own entry in its load commands, which is why it must happen before the references are touched.
-install_name_tool -id "@loader_path/libmsquic.dylib" "$out/libmsquic.dylib"
-install_name_tool -id "@loader_path/libssl.4.dylib" "$out/libssl.4.dylib"
-install_name_tool -id "@loader_path/libcrypto.4.dylib" "$out/libcrypto.4.dylib"
+for file in "$out"/*.dylib; do
+    install_name_tool -id "@loader_path/$(basename "$file")" "$file"
+done
 
-rewrite_homebrew_dependencies "$out/libmsquic.dylib"
-rewrite_homebrew_dependencies "$out/libssl.4.dylib"
-rewrite_homebrew_dependencies "$out/libcrypto.4.dylib"
+for file in "$out"/*.dylib; do
+    rewrite_homebrew_dependencies "$file"
+done
 
 # Editing load commands invalidates the signature, and macOS refuses to load an arm64 binary whose signature is
 # stale, so each one is signed again. Ad-hoc is enough: these are not the app's own code.
-codesign --force --sign - "$out/libmsquic.dylib" "$out/libssl.4.dylib" "$out/libcrypto.4.dylib"
+codesign --force --sign - "$out"/*.dylib
+
+# The staged files are only worth anything if they load. The check is a tiny program compiled here rather than
+# `python3`, because the interpreters macOS ships are platform binaries, and a platform binary enforces library
+# validation — it would refuse a locally signed library whatever the library's state, which is a false alarm rather
+# than a check.
+cat >"$work/check-load.c" <<'EOF'
+#include <dlfcn.h>
+#include <stdio.h>
+
+int main(int argc, char **argv)
+{
+    int failed = 0;
+    for (int i = 1; i < argc; i++)
+    {
+        if (dlopen(argv[i], RTLD_NOW) != NULL)
+        {
+            printf("  %s: loads\n", argv[i]);
+        }
+        else
+        {
+            fprintf(stderr, "  %s: %s\n", argv[i], dlerror());
+            failed++;
+        }
+    }
+
+    return failed;
+}
+EOF
+clang -o "$work/check-load" "$work/check-load.c"
+(cd "$out" && "$work/check-load" ./*.dylib)
 
 echo
 echo "Staged in $out:"
