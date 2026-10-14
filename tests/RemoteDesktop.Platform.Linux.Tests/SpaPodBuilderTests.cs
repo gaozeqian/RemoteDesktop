@@ -107,4 +107,104 @@ public sealed class SpaPodBuilderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => SpaPodBuilder.EnumFormatBgrx(0, 1080));
         Assert.Throws<ArgumentOutOfRangeException>(() => SpaPodBuilder.EnumFormatBgrx(1920, 0));
     }
+
+    /// <summary>What <c>spa_pod_builder_add_object</c> produces for a YUY2 request at 1280x720, 30 fps.</summary>
+    /// <remarks>
+    /// Read out of a program compiled against the headers, the same way the BGRx vector above was. The parts worth
+    /// naming: <c>80</c> is the body's length, <c>01</c> is <c>SPA_FORMAT_mediaType</c> holding
+    /// <c>SPA_MEDIA_TYPE_video</c> (2), <c>02</c> is <c>SPA_FORMAT_mediaSubtype</c> holding
+    /// <c>SPA_MEDIA_SUBTYPE_raw</c> (1), then <c>SPA_FORMAT_VIDEO_format</c> holding <c>SPA_VIDEO_FORMAT_YUY2</c>
+    /// (4) — and the last two words are <c>30/1</c> as a fraction.
+    /// </remarks>
+    private static readonly byte[] YuyvRequest =
+    [
+        0x80, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00,
+        0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00,
+        0xd0, 0x02, 0x00, 0x00, 0x04, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,
+    ];
+
+    /// <summary>The same request for JPEG, which names no pixel format — the encoding is the format.</summary>
+    private static readonly byte[] JpegRequest =
+    [
+        0x68, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00,
+        0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00,
+        0xd0, 0x02, 0x00, 0x00, 0x04, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,
+    ];
+
+    [Fact]
+    public void A_yuyv_request_comes_out_byte_for_byte_as_pipewire_builds_it()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        Assert.Equal(YuyvRequest, SpaPodBuilder.EnumFormatYuyv(1280, 720, 30));
+    }
+
+    [Fact]
+    public void A_jpeg_request_comes_out_byte_for_byte_as_pipewire_builds_it()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        Assert.Equal(JpegRequest, SpaPodBuilder.EnumFormatJpeg(1280, 720, 30));
+    }
+
+    [Fact]
+    public void A_yuyv_request_reads_back_as_the_format_that_was_asked_for()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var properties = SpaPod.Parse(SpaPodBuilder.EnumFormatYuyv(1280, 720, 30)).AsProperties();
+
+        Assert.Equal(5, properties.Count);
+        Assert.Equal(SpaPodBuilder.FormatMediaType, properties[0].Key);
+        Assert.Equal(SpaPodBuilder.MediaTypeVideo, properties[0].Value.AsId());
+        Assert.Equal(SpaPodBuilder.FormatMediaSubtype, properties[1].Key);
+        Assert.Equal(SpaPodBuilder.MediaSubtypeRaw, properties[1].Value.AsId());
+        Assert.Equal(SpaPodBuilder.FormatVideoFormat, properties[2].Key);
+        Assert.Equal(SpaPodBuilder.VideoYuy2, properties[2].Value.AsId());
+        Assert.Equal(SpaPodBuilder.FormatVideoSize, properties[3].Key);
+        Assert.Equal(new SpaRectangle(1280, 720), properties[3].Value.AsRectangle());
+        Assert.Equal(SpaPodBuilder.FormatVideoFramerate, properties[4].Key);
+    }
+
+    [Fact]
+    public void A_jpeg_request_says_jpeg_and_names_no_pixel_format()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var properties = SpaPod.Parse(SpaPodBuilder.EnumFormatJpeg(640, 480, 15)).AsProperties();
+
+        Assert.Equal(4, properties.Count);
+        Assert.Equal(SpaPodBuilder.FormatMediaSubtype, properties[1].Key);
+        Assert.Equal(SpaPodBuilder.MediaSubtypeJpeg, properties[1].Value.AsId());
+
+        // Nothing claims to be a pixel format, because nothing in this request is one.
+        Assert.DoesNotContain(properties, property => property.Key == SpaPodBuilder.FormatVideoFormat);
+        Assert.Equal(new SpaRectangle(640, 480), properties[2].Value.AsRectangle());
+    }
+
+    [Fact]
+    public void A_camera_size_that_could_not_be_one_is_refused()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => SpaPodBuilder.EnumFormatYuyv(0, 720, 30));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SpaPodBuilder.EnumFormatJpeg(1280, 0, 30));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SpaPodBuilder.EnumFormatJpeg(1280, 720, 0));
+    }
 }

@@ -70,6 +70,78 @@ public static class SpaPodBuilder
         return Pod(SpaPodType.Object, [.. body]);
     }
 
+    /// <summary>SPA_FORMAT_mediaType.</summary>
+    public const uint FormatMediaType = 1;
+
+    /// <summary>SPA_FORMAT_mediaSubtype.</summary>
+    public const uint FormatMediaSubtype = 2;
+
+    /// <summary>SPA_FORMAT_VIDEO_framerate.</summary>
+    public const uint FormatVideoFramerate = 131076;
+
+    /// <summary>SPA_MEDIA_TYPE_video.</summary>
+    public const uint MediaTypeVideo = 2;
+
+    /// <summary>SPA_MEDIA_SUBTYPE_raw — uncompressed pixels.</summary>
+    public const uint MediaSubtypeRaw = 1;
+
+    /// <summary>SPA_MEDIA_SUBTYPE_jpeg — a still picture per frame.</summary>
+    public const uint MediaSubtypeJpeg = 196609;
+
+    /// <summary>SPA_VIDEO_FORMAT_YUY2 — 4:2:2 with the chroma interleaved between the luminance samples.</summary>
+    public const uint VideoYuy2 = 4;
+
+    /// <summary>
+    /// What a camera is asked for instead of raw pixels: one JPEG per frame.
+    /// </summary>
+    /// <remarks>
+    /// Worth asking for first at any size a webcam is likely to run at. A 1280x720 frame is 1.8 MB as raw 4:2:2 and
+    /// a hundred kilobytes as JPEG, and the copy out of the stream buffer and the trip through the decoder are both
+    /// paid on every frame of a live preview.
+    /// </remarks>
+    public static byte[] EnumFormatJpeg(int width, int height, int frameRate) =>
+        CameraFormat(width, height, frameRate, jpeg: true);
+
+    /// <summary>
+    /// What a camera is asked for when it will not give JPEG: 4:2:2 as the device produces it.
+    /// </summary>
+    /// <remarks>
+    /// YUY2 rather than something already planar because this asks for what a camera is likely to have natively —
+    /// almost every one is 4:2:2 or 4:2:0 out of the sensor, and asking for a format the device does not produce
+    /// leaves PipeWire inserting a converter we would then have to hope is configured the way ours is.
+    /// </remarks>
+    public static byte[] EnumFormatYuyv(int width, int height, int frameRate) =>
+        CameraFormat(width, height, frameRate, jpeg: false);
+
+    /// <summary>
+    /// One camera format. The two differ by the subtype, and JPEG has no pixel format to name — the encoding is
+    /// the format.
+    /// </summary>
+    private static byte[] CameraFormat(int width, int height, int frameRate, bool jpeg)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(frameRate, 1);
+
+        var properties = new List<byte>();
+        properties.AddRange(Property(FormatMediaType, Id(MediaTypeVideo)));
+        properties.AddRange(Property(FormatMediaSubtype, Id(jpeg ? MediaSubtypeJpeg : MediaSubtypeRaw)));
+        if (!jpeg)
+        {
+            properties.AddRange(Property(FormatVideoFormat, Id(VideoYuy2)));
+        }
+
+        properties.AddRange(Property(FormatVideoSize, Rectangle(width, height)));
+        properties.AddRange(Property(FormatVideoFramerate, Fraction((uint)frameRate, 1)));
+
+        var body = new List<byte>();
+        body.AddRange(BitConverter.GetBytes(TypeObjectFormat));
+        body.AddRange(BitConverter.GetBytes(ParamEnumFormat));
+        body.AddRange(properties);
+
+        return Pod(SpaPodType.Object, [.. body]);
+    }
+
     /// <summary>
     /// A request for the cursor to be described separately from the picture.
     /// </summary>
@@ -119,6 +191,15 @@ public static class SpaPodBuilder
         BinaryPrimitives.WriteInt32LittleEndian(body, width);
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4), height);
         return Pod(SpaPodType.Rectangle, body);
+    }
+
+    /// <summary>A pod whose body is two uint32s: a numerator and a denominator.</summary>
+    private static byte[] Fraction(uint numerator, uint denominator)
+    {
+        var body = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, numerator);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), denominator);
+        return Pod(SpaPodType.Fraction, body);
     }
 
     /// <summary>{key, flags} then the value, which starts at the next eight-byte boundary.</summary>
