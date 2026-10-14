@@ -622,6 +622,6 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 | 锁屏后终端断开 | Agent 切换会结束终端会话 | 重新打开终端；文件传输则可以在重连后继续 |
 | 日志出现 "QUIC is not supported on this system" | Windows 10 缺 Schannel 的 TLS 1.3；或 Linux 上开发运行时找不到 libmsquic | Windows：升级到 Windows 11 / Server 2022+，或换 OpenSSL 版 msquic.dll。Linux：装 `.deb` 的话是随包带的，开发运行时用 `native/linux/fetch-libmsquic.sh` 再设 `LD_LIBRARY_PATH` |
 | Linux：控制端每次连接都要重新同意 | portal 不允许远程桌面会话持久化 | 这是规定，不是配置项。无人值守只能靠 Windows 被控端 |
-| Linux：剪贴板不同步 | 尚未实现（portal 拒绝本程序，后备方案未做） | 用文件传输代替；被控端日志会记一条警告 |
+| Linux：剪贴板不同步 | 桌面没有授予剪贴板（和键盘鼠标在同一次授权里，点"拒绝"就没有）；或内容超过 8 MB | 看一眼被控端日志：授予失败会有 "did not grant control"。超大内容会被丢弃而不是截断 |
 | Linux：摄像头列表是空的 | 尚未实现（P8） | 暂时无解 |
 | Linux：光标位置不更新 | 合成器没有送光标元数据 | 画面本身正常；被控端日志会警告一次 |

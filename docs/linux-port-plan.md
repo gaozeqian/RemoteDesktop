@@ -554,7 +554,7 @@ portal 在这件事上是刻意的：看一块屏和操作一台机器不是同�
 
 **真硬件编码仍需一台 AMD Polaris/VCN+、Intel Gen9+ 或 NVIDIA 的机器验证**，本机做不到。
 
-### P5 — 剪贴板 🚧 已实现，读的一侧尚未验证
+### P5 — 剪贴板 ✅ 已完成
 
 **先更正一条**：本文件早先写的"portal 四种组合全部拒绝、此路不通"是**错的**。那个结论里
 "RemoteDesktop 会话 + Start 之前"那一格从来没被真正执行过——那一次运行用的是没重新构建的库
@@ -579,12 +579,35 @@ RequestClipboard: GRANTED
 `SetSelection` + 应答 `SelectionTransfer`，读取走 `SelectionRead`。读取有超时——另一头不写就会把
 线程永久挂住，在请求剪贴板的那条线程上就是窗口失去响应。
 
-**尚未验证的一侧**：把内容读回来。portal 链路本身是通的（`SelectionRead` 一路走到 Mutter，剪贴板为空时
-它答的是 `No selection owner available`），但**要验证读必须有第二方持有剪贴板**，而本机没有任何 X11
-剪贴板工具、也没有别的程序能自动去复制。所以"被控端复制 → 控制端拿到"这条路**没有端到端验证过**。
+**验证**。（先前写的"本机没有任何剪贴板工具、读的一侧无法验证"是错的：`python3-gi` 连着 GTK3 就在本机，
+`GDK_BACKEND=x11` 下的 `Gtk.Clipboard` 就是一个真剪贴板客户端，XWayland 与 Wayland 的选择区互为镜像。）
+用一个真的 X11 客户端当对手方，两个方向都跑通了：
 
-另外实测：我们自己 `SetSelection` 之后**没有**收到 `SelectionOwnerChanged`。所以代码不再依赖它——
-按优先级直接试各个格式，而不是等一个可能永远不来的信号。
+```
+get  -> text: "typed_by_a_local_app"          本机程序复制，被控端读到
+       The clipboard has changed; 10 format(s) on offer.
+set  -> Published ... (28 characters) / Answered a request ... with 28 bytes
+       本机客户端 get -> 'text_sent_by_the_remote_side'
+```
+
+**修掉一个会让整个功能静默失效的 bug**：`Changed` 永远不触发。`WindowsClipboard` 的 `Changed`
+访问器在第一个订阅者出现时就启动轮询；而 `WaylandClipboard` 原本是 `Get()`/`Set()` 才去订阅 portal
+信号。可 `ClipboardSynchronizer` **只在收到 `Changed` 之后**才读剪贴板——没订阅就没信号，没信号就没
+读取，首尾相接。现在按 Windows 的写法，在 `Changed` 的 `add` 访问器里开一个 worker 去开会话并订阅。
+代价是控制器一连上就会弹一次授权对话框，即使没人复制东西——这是对的时机，剪贴板本来就是这次连接
+要的东西。
+
+**另一个会死锁的地方**：应答 `SelectionTransfer` 不能在这条连接的派发线程上做。应答要在这条连接上
+**再发一次调用并等回复**，而回复只有这条线程能收——原地应答就是对方等到超时，gnome-shell 报
+`Could not fetch selection data ... 操作被取消`。现在排进 channel，由单独的 worker 应答。同类陷阱在
+`AddMatchAsync` 那里已经踩过一次。
+
+**还有**：管道上不能设 `WriteTimeout`，`FileStream` 直接抛 `Timeouts are not supported on this stream`。
+改成在带截止时间的任务上写，超时就关描述符，靠 EPIPE 把写解开。
+
+**关于 `SelectionOwnerChanged`**：我们自己 `SetSelection` 之后不会收到它（这是对的，那是我们自己的
+改动）；本机程序复制时**会**收到，且带着 10 个格式。但会话建立**之前**发生的改动不会补发，所以
+`Get()` 里"格式列表为空就直接试第一个格式"那条兜底保留着——它是读取得以工作的原因。
 
 ### P6 — 终端（PTY 落在共享 `Platform.Posix`）✅ 已完成
 

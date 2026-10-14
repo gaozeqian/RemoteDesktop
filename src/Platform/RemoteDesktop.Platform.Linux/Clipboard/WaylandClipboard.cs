@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using RemoteDesktop.Abstractions.Clipboard;
@@ -39,17 +40,89 @@ public sealed partial class WaylandClipboard(
     /// <summary>How long to wait for the other side to write a transfer before giving up on it.</summary>
     private static readonly TimeSpan TransferTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long to wait before looking again at a control session that has not been granted yet.</summary>
+    private static readonly TimeSpan WatchRetryDelay = TimeSpan.FromSeconds(5);
+
     /// <summary>The largest selection read or written in one go; the same ceiling the synchroniser enforces.</summary>
     private const int MaxBytes = 8 * 1024 * 1024;
 
     private readonly Lock _gate = new();
 
+    /// <summary>Transfers the other side has asked for, answered off the connection's own thread.</summary>
+    /// <remarks>
+    /// A queue rather than answering where the request arrives, and that is not tidiness. The request arrives on the
+    /// thread that dispatches this connection, and answering it means <em>calling back over the same connection</em>
+    /// and waiting for the reply — which only that thread can deliver. Answering in place deadlocks: the reply is
+    /// never read, the other side waits, and the desktop gives up with "Could not fetch selection data for remote
+    /// desktop session". The same trap caught the portal session at the start of this port, where blocking on
+    /// <c>AddMatchAsync</c> did the same thing.
+    /// </remarks>
+    private readonly Channel<(string MimeType, uint Serial)> _transfers =
+        Channel.CreateUnbounded<(string, uint)>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+
+    private EventHandler? _changed;
     private ClipboardContent? _owned;
     private IReadOnlyList<string> _available = [];
     private string? _watchedSession;
     private bool _isOwner;
+    private bool _disposed;
+    private int _listeners;
+    private Task? _worker;
 
-    public event EventHandler? Changed;
+    /// <summary>Raised when somebody else takes the clipboard.</summary>
+    /// <remarks>
+    /// <para>
+    /// Subscribing is what starts the watching, which is how Windows does it too, and here it is not a tidiness
+    /// point but the only thing that works. The synchroniser reads the clipboard <em>only</em> after this event
+    /// tells it to, so a subscription that waited for the first read would wait for ever: no listener, no signal,
+    /// no read, no change ever reported. The first version of this class subscribed from <see cref="Get"/> and
+    /// <see cref="Set"/> and was dead on arrival for exactly that reason.
+    /// </para>
+    /// <para>
+    /// It does mean a controller connecting opens the control session — and so raises the desktop's dialog — even
+    /// if nobody ever copies anything. That is the right moment for it: a session is being set up, the clipboard is
+    /// part of what was asked for, and the dialog is what this product costs on Wayland.
+    /// </para>
+    /// </remarks>
+    public event EventHandler? Changed
+    {
+        add
+        {
+            lock (_gate)
+            {
+                _changed += value;
+                _listeners++;
+                if (_listeners > 1)
+                {
+                    return;
+                }
+            }
+
+            StartWatching();
+        }
+
+        remove
+        {
+            lock (_gate)
+            {
+                _changed -= value;
+                _listeners--;
+            }
+        }
+    }
+
+    /// <summary>Answers transfers for as long as the object lives.</summary>
+    private async Task AnswerTransfersAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var (mimeType, serial) in _transfers.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (control.EnsureReady())
+            {
+                var (connection, session) = control.Current();
+                Answer(connection, session, mimeType, serial);
+            }
+        }
+    }
 
     /// <inheritdoc />
     public ClipboardContent? Get()
@@ -130,11 +203,42 @@ public sealed partial class WaylandClipboard(
 
     public void Dispose()
     {
+        _transfers.Writer.TryComplete();
+
         lock (_gate)
         {
+            _disposed = true;
             _owned = null;
             _available = [];
+            _changed = null;
         }
+    }
+
+    /// <summary>
+    /// Opens the control session and subscribes, once somebody is listening for changes.
+    /// </summary>
+    /// <remarks>
+    /// On a worker rather than where the subscription happened: opening the session asks the desktop a question,
+    /// and the caller subscribing is the clipboard synchroniser about to start its loops — not something to hold up
+    /// while a dialog waits for an answer. The desktop is asked again on its own schedule when it says no, so this
+    /// only waits for it to be willing.
+    /// </remarks>
+    private void StartWatching()
+    {
+        _ = Task.Run(async () =>
+        {
+            while (!_disposed)
+            {
+                if (control.EnsureReady())
+                {
+                    var (connection, session) = control.Current();
+                    Watch(connection, session);
+                    return;
+                }
+
+                await Task.Delay(WatchRetryDelay).ConfigureAwait(false);
+            }
+        });
     }
 
     /// <summary>
@@ -146,6 +250,8 @@ public sealed partial class WaylandClipboard(
     /// </remarks>
     private void Watch(PortalConnection connection, string session)
     {
+        EnsureWorker();
+
         lock (_gate)
         {
             if (_watchedSession == session)
@@ -173,11 +279,41 @@ public sealed partial class WaylandClipboard(
                 if (!isOwner)
                 {
                     LogOwnerChanged(logger, types.Count);
-                    Changed?.Invoke(this, EventArgs.Empty);
+
+                    // The field, not the event: raising it through the accessor would run the subscription side of
+                    // it, and this is the one place that must not.
+                    EventHandler? changed;
+                    lock (_gate)
+                    {
+                        changed = _changed;
+                    }
+
+                    changed?.Invoke(this, EventArgs.Empty);
                 }
             },
-            onTransfer: (mimeType, serial) => Answer(connection, session, mimeType, serial),
+            // Queued, not answered here — see the note on the queue. This runs on the connection's dispatch thread.
+            onTransfer: (mimeType, serial) => _transfers.Writer.TryWrite((mimeType, serial)),
             CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Starts the answer worker, once, on first use.
+    /// </summary>
+    /// <remarks>
+    /// Not in the constructor: this is a singleton, and a container building it should not leave a thread waiting on
+    /// a channel for a feature nobody has asked for.
+    /// </remarks>
+    private void EnsureWorker()
+    {
+        if (_worker is not null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _worker ??= Task.Run(() => AnswerTransfersAsync(CancellationToken.None));
+        }
     }
 
     /// <summary>Writes our content into the pipe the portal opened for a peer that asked for it.</summary>
@@ -199,12 +335,17 @@ public sealed partial class WaylandClipboard(
         {
             using var pipe = connection.SelectionWriteAsync(session, serial, CancellationToken.None).GetAwaiter().GetResult();
 
-            // The portal reports success or failure for us, so the write is given a deadline: a reader that has gone
-            // away would otherwise leave this thread parked forever holding the session.
-            using var writer = new FileStream(pipe, FileAccess.Write);
-            writer.WriteTimeout = (int)TransferTimeout.TotalMilliseconds;
-            writer.Write(payload.Value.Span);
-            writer.Flush();
+            // On a task with a deadline, the same as the read and for the same reason. A pipe has no write timeout —
+            // setting one throws "Timeouts are not supported on this stream" — so the only way to stop waiting on a
+            // reader that has gone away is to give up and close the descriptor, which unblocks the write with EPIPE.
+            var bytes = payload.Value;
+            var writing = Task.Run(() => Publish(pipe, bytes), CancellationToken.None);
+            if (!writing.Wait(TransferTimeout))
+            {
+                pipe.Dispose();
+                LogTransferFailed(logger, "the other side did not read it in time");
+                return;
+            }
 
             _ = connection.SelectionWriteDoneAsync(session, serial, success: true).ConfigureAwait(false);
             LogAnswered(logger, mimeType, payload.Value.Length);
@@ -266,6 +407,21 @@ public sealed partial class WaylandClipboard(
         finally
         {
             pipe?.Dispose();
+        }
+    }
+
+    /// <summary>Writes a selection into the pipe the portal opened.</summary>
+    private static void Publish(SafeFileHandle pipe, ReadOnlyMemory<byte> payload)
+    {
+        try
+        {
+            using var writer = new FileStream(pipe, FileAccess.Write);
+            writer.Write(payload.Span);
+            writer.Flush();
+        }
+        catch (IOException)
+        {
+            // The reader went away or the descriptor was closed underneath this. Either way there is nothing to say.
         }
     }
 
