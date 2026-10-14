@@ -78,6 +78,11 @@
 - **没有摄像头的机器不再白弹一次授权窗**：枚举先读 `IsCameraPresent`（属性，不弹窗），为假就直接返回空。
 - [FileTransfer/macOS] **符号链接目标要再解析**：macOS 上根内合法链接曾被误拒（`/var` 是 `/private/var`
   的链接）。
+- [macOS/打包] **`fetch-libmsquic.sh` 随包分发的依赖集原先靠写死的 openssl@4**，而 Homebrew 当前
+  libmsquic bottle 直接链接 `libcrypto.3`（openssl@3）——**装出来的 .app / .pkg 里 QUIC 会起不来**，
+  且所有不真正加载的检查（文件在、`otool` 正常、签名已打）都会放行。现在依赖从 bottle 的声明里读、
+  引用按二进制里的实际形状收集（bottle 占位符与 `@loader_path` 两种），并且**结束前把每个 staged
+  文件真的 `dlopen` 一遍**，缺件当场报出 dyld 的原因而不是等到运行时"QUIC is not supported"。
 
 ### 平台上的边界与未验证项
 

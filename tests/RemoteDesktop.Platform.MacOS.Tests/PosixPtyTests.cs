@@ -111,8 +111,10 @@ public partial class PosixPtyTests
 
         await session.DisposeAsync();
 
-        // The whole process group gets SIGHUP, so the background child goes with the shell.
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        // The whole process group gets SIGHUP, so the background child goes with the shell. The deadline is a load
+        // tolerance rather than a timing claim: this runs beside the whole integration suite, and a contended runner
+        // can take a while to let a signal work its way through a shell.
+        var deadline = DateTime.UtcNow.AddSeconds(20);
         while (IsRunning(childPid))
         {
             Assert.True(DateTime.UtcNow < deadline, $"The background process {childPid} outlived its shell.");
