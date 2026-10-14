@@ -197,24 +197,34 @@ public readonly struct SpaPod
             throw new InvalidDataException($"A {Type} pod has no properties.");
         }
 
-        // {object_type, object_id, property_count} then that many properties.
-        const int ObjectHeaderSize = 12;
+        // {object_type, object_id} and then the properties, to the end of the body. There is no count — an earlier
+        // version of this read one from the word after the id, which is not a count but the first property's key.
+        // With `SPA_FORMAT_VIDEO_format` in that position that is 131073, so the parser confidently went looking for
+        // a hundred thousand properties. The mistake survived its tests because the test bytes had been written from
+        // the same wrong idea; it was caught by building a pod with the real builder and comparing the bytes.
+        const int ObjectHeaderSize = 8;
         if (_body.Length < ObjectHeaderSize)
         {
             throw new InvalidDataException("An object pod is shorter than its header.");
         }
 
-        var count = BinaryPrimitives.ReadUInt32LittleEndian(_body.Span[8..]);
         var remaining = _body[ObjectHeaderSize..];
-        var properties = new List<SpaProperty>((int)count);
-
+        var properties = new List<SpaProperty>();
         var offset = 0;
-        for (var i = 0; i < count && offset + 8 <= remaining.Length; i++)
+
+        // Until the body runs out, which is the only thing that says how many there are. A body that ends in the
+        // middle of a property ends the walk rather than reading past it.
+        while (offset + 8 <= remaining.Length)
         {
             var key = BinaryPrimitives.ReadUInt32LittleEndian(remaining.Span[offset..]);
 
             // {key, flags} then the value, which starts at the next eight-byte boundary.
             var valueOffset = Align(offset + 8);
+            if (valueOffset + HeaderSize > remaining.Length)
+            {
+                break;
+            }
+
             properties.Add(new SpaProperty(key, Parse(remaining[valueOffset..])));
 
             offset = Align(valueOffset + HeaderSize + (int)BinaryPrimitives.ReadUInt32LittleEndian(remaining.Span[valueOffset..]));
@@ -222,6 +232,18 @@ public readonly struct SpaPod
 
         return properties;
     }
+
+    /// <summary>The object's kind, which for a negotiated format is <c>SPA_TYPE_OBJECT_Format</c>.</summary>
+    /// <exception cref="InvalidDataException">This pod holds something else.</exception>
+    public uint AsObjectType() => Require(SpaPodType.Object) is { Length: >= 8 } body
+        ? BinaryPrimitives.ReadUInt32LittleEndian(body.Span)
+        : throw new InvalidDataException("An object pod is shorter than its header.");
+
+    /// <summary>What the object is an instance of, such as <c>SPA_PARAM_EnumFormat</c>.</summary>
+    /// <exception cref="InvalidDataException">This pod holds something else.</exception>
+    public uint AsObjectId() => Require(SpaPodType.Object) is { Length: >= 8 } body
+        ? BinaryPrimitives.ReadUInt32LittleEndian(body.Span[4..])
+        : throw new InvalidDataException("An object pod is shorter than its header.");
 
     /// <summary>Walks a run of pods laid end to end, each starting at the next eight-byte boundary.</summary>
     private static IEnumerable<SpaPod> Children(ReadOnlyMemory<byte> body)

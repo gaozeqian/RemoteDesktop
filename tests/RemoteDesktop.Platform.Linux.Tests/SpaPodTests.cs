@@ -191,16 +191,60 @@ public sealed class SpaPodTests
     }
 
     [Fact]
-    public void An_object_claiming_more_properties_than_it_carries_stops_at_the_end()
+    public void A_format_request_pod_built_by_pipewire_itself_is_read_correctly()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        // The count is a driver's word for it; reading that many properties blindly would run off the end.
-        var bytes = Object(objectType: 3, objectId: 3, countOverride: 9, (1u, Id(1)));
+        // Not made up: these are the bytes `spa_pod_builder_add_object` produces for
+        // {SPA_FORMAT_VIDEO_format: Id(BGRx), SPA_FORMAT_VIDEO_size: Rectangle(1920, 1080)},
+        // dumped from a program compiled against <spa/pod/builder.h>. They are here because the hand-written
+        // fixtures around them were built from the same understanding as the parser, and when that understanding
+        // was wrong both agreed and both were wrong.
+        byte[] bytes =
+        [
+            0x38, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x03, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00,
+        ];
 
-        var properties = SpaPod.Parse(bytes).AsProperties();
+        var pod = SpaPod.Parse(bytes);
+
+        Assert.Equal(SpaPodType.Object, pod.Type);
+        Assert.Equal(56, pod.Size);
+
+        // 262147 is SPA_TYPE_OBJECT_Format and 3 is SPA_PARAM_EnumFormat.
+        Assert.Equal(262147u, pod.AsObjectType());
+        Assert.Equal(3u, pod.AsObjectId());
+
+        var properties = pod.AsProperties();
+        Assert.Equal(2, properties.Count);
+
+        Assert.Equal(131073u, properties[0].Key);
+        Assert.Equal(SpaPodType.Id, properties[0].Value.Type);
+        Assert.Equal(8u, properties[0].Value.AsId());
+
+        Assert.Equal(131075u, properties[1].Key);
+        Assert.Equal(new SpaRectangle(1920, 1080), properties[1].Value.AsRectangle());
+    }
+
+    [Fact]
+    public void A_body_that_stops_in_the_middle_of_a_property_ends_the_walk()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // The object header, one whole property, and then a second property's key with no value behind it. The length
+        // word is honest — the body really is this long — so the pod itself is well formed and only the properties
+        // stop early. There is no count saying how many to expect, so the walk has to notice that the bytes ran out.
+        var body = new List<byte>();
+        body.AddRange(ObjectHeader(objectType: 262147, objectId: 3));
+        body.AddRange(Property(131073u, Id(8)));
+        body.AddRange(BitConverter.GetBytes(131075u));
+
+        var properties = SpaPod.Parse(Pod(SpaPodType.Object, [.. body])).AsProperties();
 
         Assert.Single(properties);
+        Assert.Equal(131073u, properties[0].Key);
     }
 
     // ---- Builders. Each writes the layout as spa/pod/pod.h describes it, so that the cases above stay readable
@@ -249,25 +293,32 @@ public sealed class SpaPodTests
         return Pod(SpaPodType.Choice, [.. body]);
     }
 
-    private static byte[] Object(uint objectType, uint objectId, params (uint Key, byte[] Value)[] properties) =>
-        Object(objectType, objectId, properties.Length, properties);
-
-    private static byte[] Object(uint objectType, uint objectId, int countOverride, params (uint Key, byte[] Value)[] properties)
+    /// <summary>An object's body starts with its type and id, and nothing else.</summary>
+    private static byte[] ObjectHeader(uint objectType, uint objectId)
     {
-        var body = new List<byte>();
-        var header = new byte[12];
+        var header = new byte[8];
         BinaryPrimitives.WriteUInt32LittleEndian(header, objectType);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), objectId);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), (uint)countOverride);
-        body.AddRange(header);
+        return header;
+    }
+
+    /// <summary>A property is a key, four bytes of flags, and the value.</summary>
+    private static byte[] Property(uint key, byte[] value)
+    {
+        var bytes = new byte[8 + value.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, key);
+        value.CopyTo(bytes, 8);
+        return bytes;
+    }
+
+    private static byte[] Object(uint objectType, uint objectId, params (uint Key, byte[] Value)[] properties)
+    {
+        var body = new List<byte>();
+        body.AddRange(ObjectHeader(objectType, objectId));
 
         foreach (var (key, value) in properties)
         {
-            // {key, flags} then the value, which starts at the next eight-byte boundary.
-            var propHeader = new byte[8];
-            BinaryPrimitives.WriteUInt32LittleEndian(propHeader, key);
-            body.AddRange(propHeader);
-            body.AddRange(value);
+            body.AddRange(Property(key, value));
         }
 
         return Pod(SpaPodType.Object, [.. body]);
