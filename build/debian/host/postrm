@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Takes the host off the list of things that start with a session.
+#
+# It does not stop it in anyone's running session: this script runs as root, and reaching into a user's session from
+# here to stop a service would be a package reaching further than it has any business reaching. The unit is gone from
+# disk by the time a running instance would next be restarted, so it ends by itself.
+#
+# Nothing belonging to a person is touched — their device identity, remembered grant and logs live in their own home
+# directory, and removing a package is not a reason to make their machine a different device.
+set -e
+
+case "$1" in
+    remove)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --global disable remotedesktop-host.service >/dev/null 2>&1 || true
+        fi
+        ;;
+
+    purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

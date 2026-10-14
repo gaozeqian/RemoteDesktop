@@ -1,0 +1,30 @@
+[Unit]
+Description=Remote Desktop (lets this machine be controlled)
+Documentation=https://github.com/gaozeqian/RemoteDesktop
+# A user service, because that is where the desktop is. The portals answer only inside the session that owns the
+# screen, and they answer only the user who owns it, so this cannot run as a system service however convenient that
+# would be — there is no session 0 here to be blinded by and no privileged process to give the work to.
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/remotedesktop-host/RemoteDesktop.HostService
+# The program reads appsettings.json from its working directory, so this is what decides where its settings come
+# from. Overrides that belong to one person rather than to the machine go in `systemctl --user edit`.
+WorkingDirectory=/usr/lib/remotedesktop-host
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+# Deliberately short. Nothing here reaches a system directory, and the ones that would be tidy to have — ProtectHome,
+# PrivateTmp, a restricted address family — are exactly the ones that break it: the state lives in the user's home,
+# and the desktop is reached over the session bus and a Unix socket in the runtime directory.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target

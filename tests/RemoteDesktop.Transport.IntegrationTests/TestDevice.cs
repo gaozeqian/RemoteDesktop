@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Abstractions.Platform;
@@ -32,7 +33,20 @@ public sealed class TestDevice : IAsyncDisposable
 
     public static async Task<TestDevice> StartAsync(Uri rendezvousUri, bool forceRelay = false, params IFeatureModule[] modules)
     {
-        var builder = Host.CreateApplicationBuilder();
+        // Deliberately not the full set of defaults. Host.CreateApplicationBuilder() adds appsettings.json as a
+        // *reloading* file provider, and a reloading provider holds an inotify instance for as long as the host lives.
+        // This project has no appsettings.json, so the watcher watches nothing — but these tests start hosts in
+        // parallel, and enough of them at once exhausts the machine's user-wide limit of 128 inotify instances. The
+        // suite then fails at host construction on any desktop that is already holding most of them, with an error
+        // that says nothing about the code under test. TestRendezvous avoids this the same way, by using the slim
+        // builder. What is kept here is everything the defaults would have provided except the watching file source:
+        // the content root, and the environment.
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            DisableDefaults = true,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
+        builder.Configuration.AddEnvironmentVariables();
         builder.Services
             .AddSingleton<ISecretStore, InMemorySecretStore>()
             .AddQuicTransport(new TransportOptions { RendezvousUri = rendezvousUri, ForceRelay = forceRelay })

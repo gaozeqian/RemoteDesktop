@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# Turns the host on for everybody who logs in, and says what is missing if anything is.
+#
+# Nothing is started here. The host runs inside a graphical session, and at the moment a package is configured there
+# may be no session at all — no display, no session bus, nobody to answer the portal's dialog. It starts when the
+# session does, which is what WantedBy=graphical-session.target in the unit file arranges.
+set -e
+
+case "$1" in
+    configure)
+        # --global rather than a plain enable: this unit belongs to every user rather than to root. It writes a
+        # symlink under /etc/systemd/user, so each account picks it up the next time it logs in. That is also why
+        # deb-systemd-helper is not used here — it only knows about system units.
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --global enable remotedesktop-host.service >/dev/null 2>&1 || true
+            systemctl --global daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        # The libraries this program loads by name at run time. dpkg has already refused the installation if any of
+        # the declared ones were missing, so this is about the two cases dpkg cannot see: a package installed with
+        # --force-depends, and the encoder, which may exist but have been built without the codec that makes it
+        # useful.
+        missing=""
+        for library in libpipewire-0.3.so.0 libei.so.1 libpulse.so.0 libavcodec.so.62; do
+            if ! ldconfig -p 2>/dev/null | grep -q "$library"; then
+                missing="$missing $library"
+            fi
+        done
+
+        if [ -n "$missing" ]; then
+            echo "remotedesktop-host: these libraries are not in the loader's cache:$missing" >&2
+            echo "  Screen sharing, control and audio each need theirs, and will fail with" >&2
+            echo "  DllNotFoundException the first time they are used rather than at startup." >&2
+        fi
+
+        # The portal is what asks the person for permission. Without one there is nothing to ask, and the host will
+        # offer no screens and no input at all.
+        if [ ! -d /usr/share/xdg-desktop-portal/portals ] && [ ! -d /usr/lib/xdg-desktop-portal/portals ]; then
+            echo "remotedesktop-host: no desktop portal is installed. Sharing this machine's screen needs one;" >&2
+            echo "  install xdg-desktop-portal-gnome (or the one for your desktop) and log in again." >&2
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

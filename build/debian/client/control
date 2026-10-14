@@ -1,0 +1,22 @@
+Package: remotedesktop-client
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCHITECTURE@
+Maintainer: Remote Desktop <noreply@example.invalid>
+Homepage: https://github.com/gaozeqian/RemoteDesktop
+Depends: libx11-6, libxext6, libxi6, libxrandr2, libxcursor1, libxfixes3, libxrender1, libxcb1, libfontconfig1, libfreetype6, libgl1, libpulse0, libavcodec62, libavutil60, libswscale9
+Description: Remote Desktop client (controls another computer)
+ Shows another computer's screen in a window and sends this machine's keyboard
+ and pointer to it.
+ .
+ The window is the whole of it: this package has no service and runs nothing in
+ the background. Installing it does not make this machine reachable — that is
+ the separate `remotedesktop-host` package — so it is safe to install on a
+ machine that is only ever the one doing the controlling.
+ .
+ The libraries above are loaded by name when the window is first drawn rather
+ than at startup, so without them the program would start and then fail to show
+ anything. They are the toolkit's, not this program's: X11 and OpenGL for the
+ window, PulseAudio for the sound coming back from the other machine, and
+ libavcodec for decoding its screen.

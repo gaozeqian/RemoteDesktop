@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    # Phase 1 targets Windows only; macOS and Linux join the matrix with their platform projects.
+    # Each platform builds and tests on its own runner; the test steps themselves live in a shared action so that the
+    # retry policy and the summary table cannot drift between them.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,81 +27,101 @@ jobs:
           if ($report -match 'has the following vulnerable packages') {
             throw "Vulnerable packages found; the report is above."
           }
-      - name: Test
-        shell: pwsh
-        # Microsoft.Testing.Platform 模式（global.json 里的 test.runner）：--logger 是 VSTest 的东西，
-        # 在这个模式下会被忽略或拒绝；TRX 由 MTP 的扩展写出来，路径还是 TestResults/*.trx，下面那步照旧解析。
-        # 注意 --nologo 在这里不能用：它会被转发给测试程序，测试程序以退出码 5 拒绝整次运行。
-        #
-        # 失败自动重跑一次。集成测试要跑真实进程、真实 PTY、真实 UDP 打洞和真实 Media Foundation 编码器，
-        # 而 runner 又慢又抢：同一提交常常这次红一个测试、下次红另一个（2026-10-11 三个不同的测试各红过一次），
-        # 重跑基本都过。代价必须写明——真实存在的偶发 bug 也会被这一次重试掩盖，所以第一次失败会打成 GitHub 警告
-        # 并列出失败的测试名，重试的结果才写进 TestResults 给汇总表用；两次都失败则照样判红。
-        run: |
-          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
-          if ($LASTEXITCODE -eq 0) { exit 0 }
-
-          $failed = [System.Collections.Generic.List[string]]::new()
-          foreach ($file in Get-ChildItem TestResults/*.trx -ErrorAction SilentlyContinue) {
-              [xml]$xml = Get-Content $file.FullName
-              $xml.TestRun.Results.UnitTestResult |
-                  Where-Object { $_.outcome -eq 'Failed' } |
-                  ForEach-Object { $failed.Add($_.testName) }
-          }
-
-          $names = if ($failed.Count) { $failed -join '; ' } else { '(no TRX recorded a failure)' }
-          Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
-          Write-Host "Failed on the first attempt: $names"
-
-          Remove-Item TestResults -Recurse -Force -ErrorAction SilentlyContinue
-          dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
-          }
-      - name: Upload Test Results
-        uses: actions/upload-artifact@v7
-        if: always()
+      - uses: ./.github/actions/run-test-suite
         with:
-          name: test-results
-          path: TestResults/*.trx
-      - name: Generate Test Summary
-        if: always()
+          artifact-name: test-results-windows
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      # System.Net.Quic is a thin managed wrapper over the native MsQuic library. Windows gets it from the runtime
+      # pack; on Linux it is a separate package, and without it every test that opens a QUIC connection fails with
+      # "QUIC is not supported on this system" rather than a missing-dependency error. Microsoft's own repository is
+      # asked for the build matching whatever release the runner is on, so this does not have to be kept in step with
+      # the runner image by hand.
+      - name: Install libmsquic
+        run: |
+          . /etc/os-release
+          curl -fsSL -o /tmp/packages-microsoft-prod.deb \
+            "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+          sudo dpkg -i /tmp/packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libmsquic
+      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      - name: Audit packages for known vulnerabilities
         shell: pwsh
         run: |
-          if (Test-Path TestResults) {
-            $trxFiles = Get-ChildItem TestResults/*.trx
-            $summary = @()
-            $summary += "### 🧪 Test Results Summary"
-            $summary += ""
-            $summary += "| Test Suite | Total | Passed | Failed | Skipped | Status |"
-            $summary += "| :--- | :---: | :---: | :---: | :---: | :---: |"
-            $hasFailures = $false
-            foreach ($file in $trxFiles) {
-              [xml]$xml = Get-Content $file.FullName
-              $storage = $xml.TestRun.TestDefinitions.UnitTest[0].storage
-              $suite = if ($storage) { [System.IO.Path]::GetFileNameWithoutExtension($storage) } else { $file.BaseName }
-              $counters = $xml.TestRun.ResultSummary.Counters
-              $failed = [int]$counters.failed
-              if ($failed -gt 0) { $hasFailures = $true }
-              $status = if ($failed -eq 0) { "✅ Passed" } else { "❌ Failed" }
-              $summary += "| $($suite) | $($counters.total) | $($counters.passed) | $($counters.failed) | $($counters.notExecuted) | $($status) |"
-            }
-            if ($hasFailures) {
-              $summary += ""
-              $summary += "### ❌ Failed Tests"
-              foreach ($file in $trxFiles) {
-                [xml]$xml = Get-Content $file.FullName
-                $failedResults = $xml.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' }
-                foreach ($f in $failedResults) {
-                  $msg = $f.Output.ErrorInfo.Message
-                  $summary += "<details><summary><b>$($f.testName)</b></summary>"
-                  $summary += ""
-                  $summary += '```'
-                  $summary += $msg
-                  $summary += '```'
-                  $summary += "</details>"
-                }
-              }
-            }
-            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+          $report
+          if ($report -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found; the report is above."
           }
+      - uses: ./.github/actions/run-test-suite
+        with:
+          artifact-name: test-results-linux
+
+      # The three .deb packages are built here as well as at release time, and that is the whole point of the step.
+      # The scripts under build/debian/ otherwise only ever run when a tag is pushed, so anything that breaks them —
+      # a project reference that no longer resolves, a file the publish stops producing, a version that stops being
+      # readable out of Directory.Build.props — would first be discovered while publishing a release, which is the one
+      # build nobody gets to re-check before it is public. Here it is an ordinary red pull request.
+      #
+      # Nothing is uploaded: the packages are several hundred megabytes of self-contained runtime each, and the
+      # release job builds its own. What is being checked is that the scripts still work, not the bytes.
+      - name: Build the Linux packages
+        run: |
+          build/debian/client/build-deb.sh
+          build/debian/host/build-deb.sh
+          build/debian/server/build-deb.sh
+
+      # A script that exits zero without producing a usable package is the failure this is here for: the release job
+      # counts the files too, but a package with nothing in it would be counted just the same.
+      - name: Check the packages hold what they are supposed to
+        run: |
+          set -eu
+
+          count=$(ls -1 artifacts/debian/*.deb 2>/dev/null | wc -l)
+          if [ "$count" -ne 3 ]; then
+            echo "Expected three packages, found $count:" >&2
+            ls -la artifacts/debian/ >&2 || true
+            exit 1
+          fi
+
+          # The dependencies have to be written by hand — our libraries are reached through DllImport, which
+          # dpkg-shlibdeps cannot see — so a control file that has lost them installs cleanly and then fails on first
+          # use. Every package declares something, whether in Depends or in Recommends (the server's msquic is
+          # optional, so it is a Recommends).
+          check() {
+            package=$1
+            binary=$2
+
+            # The listing is read into a variable rather than piped into grep: grep stops at the first match and
+            # closes the pipe, which leaves dpkg's tar writing into nothing and printing a broken-pipe error that
+            # reads like a failure in a log that is otherwise green.
+            contents=$(dpkg-deb --contents "$package")
+            case "$contents" in
+              *"$binary"*) ;;
+              *)
+                echo "$package does not contain $binary." >&2
+                exit 1
+                ;;
+            esac
+
+            declared=$(dpkg-deb --field "$package" Depends Recommends 2>/dev/null || true)
+            if [ -z "$declared" ]; then
+              echo "$package declares no dependencies or recommendations; the control file has probably lost them." >&2
+              exit 1
+            fi
+
+            echo "--- $(dpkg-deb --field "$package" Package) $($(command -v stat) -c%s "$package") bytes"
+            dpkg-deb --info "$package" | sed -n '1,10p'
+          }
+
+          check artifacts/debian/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
+          check artifacts/debian/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
+          check artifacts/debian/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous

@@ -195,8 +195,9 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
             FileTransferClient.UploadAsync(connection, source, Path.Combine(_root, "absent"), "s.txt", ConflictPolicy.Overwrite, new Observer(), Ct));
         Assert.Equal(FileError.NotFound, noFolder.Error);
 
+        // The destination is one name, not a path, and the character that would make it a path depends on the host.
         var badName = await Assert.ThrowsAsync<FileOperationException>(() =>
-            FileTransferClient.UploadAsync(connection, source, _root, @"..\evil.txt", ConflictPolicy.Overwrite, new Observer(), Ct));
+            FileTransferClient.UploadAsync(connection, source, _root, OperatingSystem.IsWindows() ? @"..\evil.txt" : "../evil.txt", ConflictPolicy.Overwrite, new Observer(), Ct));
         Assert.Equal(FileError.InvalidPath, badName.Error);
 
         var noFile = await Assert.ThrowsAsync<FileOperationException>(() =>

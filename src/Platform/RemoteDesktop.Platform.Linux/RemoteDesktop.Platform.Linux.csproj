@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Stays net10.0 (not -linux) so the same hosts can reference it next to the Windows one; every entry point is
+         guarded by [SupportedOSPlatform("linux")] and the CA1416 analyzer forces callers to check the OS. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Domain\RemoteDesktop.Domain.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Posix\RemoteDesktop.Posix.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Tmds.DBus.Protocol" />
+    <PackageReference Include="FFmpeg.AutoGen" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux.Tests" />
+  </ItemGroup>
+</Project>

@@ -101,9 +101,26 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
     public Task DeleteAsync(string path, bool recursive, CancellationToken cancellationToken) =>
         OperationAsync(new FileRequest { Delete = new DeleteRequest { Path = path, Recursive = recursive } }, cancellationToken);
 
-    // Hosts are Windows in this phase; another platform would have its own separator.
-    public string Combine(string folder, string name) =>
-        string.IsNullOrEmpty(folder) ? name : $"{folder.TrimEnd('\\')}\\{name}";
+    public string Combine(string folder, string name)
+    {
+        if (string.IsNullOrEmpty(folder))
+        {
+            return name;
+        }
+
+        var separator = SeparatorOf(folder);
+        return $"{folder.TrimEnd(separator)}{separator}{name}";
+    }
+
+    /// <summary>
+    /// The separator the other computer writes paths with. It is the host's, not this machine's: a Posix controller
+    /// driving a Windows host has to build <c>C:\dir\name</c> and a Windows controller driving a Posix host
+    /// <c>/home/u/name</c>, and neither side is told what the other runs. The folder the host just handed over is the
+    /// evidence — and it is reliable, because an absolute Windows path always starts with a drive letter or a UNC
+    /// prefix, and nothing else does.
+    /// </summary>
+    private static char SeparatorOf(string folder) =>
+        folder.Length >= 2 && folder[1] == ':' || folder.StartsWith(@"\\", StringComparison.Ordinal) ? '\\' : '/';
 
     public async ValueTask DisposeAsync()
     {

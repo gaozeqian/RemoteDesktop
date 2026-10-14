@@ -56,13 +56,24 @@ public sealed class LocalFileOperations(FileAccessPolicy policy)
     {
         var places = new List<PlaceInfo>();
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var candidates = new[]
-        {
-            home,
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            string.IsNullOrEmpty(home) ? string.Empty : Path.Combine(home, "Downloads"),
-        };
+        var candidates = OperatingSystem.IsWindows()
+            ? new[]
+            {
+                home,
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                string.IsNullOrEmpty(home) ? string.Empty : Path.Combine(home, "Downloads"),
+            }
+            :
+            [
+                home,
+                // From the desktop's own file, because SpecialFolder answers with English names under the home
+                // directory and a desktop that is not in English does not use them — on a Chinese install the desktop
+                // is ~/桌面, and asking for "Desktop" there finds nothing at all.
+                XdgUserDirectories.Desktop ?? string.Empty,
+                XdgUserDirectories.Documents ?? string.Empty,
+                XdgUserDirectories.Downloads ?? string.Empty,
+            ];
 
         foreach (var candidate in candidates.Where(c => !string.IsNullOrEmpty(c) && Directory.Exists(c)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -172,6 +183,18 @@ public sealed class LocalFileOperations(FileAccessPolicy policy)
         });
     }
 
+    /// <summary>Filesystem types that are not somewhere a person keeps files.</summary>
+    /// <remarks>
+    /// Every one of these appears in <see cref="DriveInfo.GetDrives"/> on a Linux machine and none of them is a disk:
+    /// squashfs is a snap, overlay is a container's own filesystem, and the rest are the kernel's. Offering them
+    /// would fill the drive list with entries nobody can put a file on.
+    /// </remarks>
+    private static readonly string[] NotADriveFormats =
+        ["squashfs", "overlay", "tmpfs", "devtmpfs", "ramfs", "sysfs", "proc", "cgroup", "cgroup2", "autofs", "nsfs", "efivarfs", "debugfs", "tracefs"];
+
+    /// <summary>Filesystem types whose size cannot be asked for without a round trip to another machine.</summary>
+    private static readonly string[] NetworkFormats = ["nfs", "nfs4", "cifs", "smb", "smb2", "smb3", "fuseblk", "fuse.sshfs"];
+
     private static List<FileEntryInfo> ListDrives()
     {
         var drives = new List<FileEntryInfo>();
@@ -179,10 +202,27 @@ public sealed class LocalFileOperations(FileAccessPolicy policy)
         {
             try
             {
-                if (drive.IsReady)
+                if (!drive.IsReady)
                 {
-                    drives.Add(new FileEntryInfo(drive.Name, IsDirectory: true, drive.TotalSize, DateTimeOffset.MinValue, FileEntryAttributes.None));
+                    continue;
                 }
+
+                // The format is the filesystem type on Unix and something like "NTFS" on Windows, where none of the
+                // names below are possible. Filtering there would be pointless; filtering here is what stops a snap
+                // from being offered as a disk.
+                var format = drive.DriveFormat;
+                if (Array.Exists(NotADriveFormats, name => string.Equals(name, format, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                // Asking a network mount how big it is means asking the server, and a server that has gone away makes
+                // that wait — on the thread that is drawing the drive list. The size is not what the list is for.
+                var size = Array.Exists(NetworkFormats, name => string.Equals(name, format, StringComparison.OrdinalIgnoreCase))
+                    ? 0
+                    : drive.TotalSize;
+
+                drives.Add(new FileEntryInfo(drive.Name, IsDirectory: true, size, DateTimeOffset.MinValue, FileEntryAttributes.None));
             }
             catch (IOException)
             {

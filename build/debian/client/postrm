@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# Refreshes the desktop's caches so the launcher stops being offered.
+#
+# Leaves everything belonging to the person alone: their device identity, the machines they have connected to and
+# their saved passwords live in their own home directory, and removing a program is not a reason to lose them. The
+# next version installed finds them where it left them.
+set -e
+
+case "$1" in
+    remove)
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+        fi
+
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+        fi
+        ;;
+
+    purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,5 +1,3 @@
-using System.IO.Pipes;
-
 namespace RemoteDesktop.Application.Hosting;
 
 /// <summary>UI side of the background service's control pipe.</summary>
@@ -42,12 +40,16 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
 
     private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {
-        var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await using (pipe.ConfigureAwait(false))
+        // The address is a named pipe on Windows and a Unix domain socket elsewhere; see HostControlEndpoint for why
+        // the .NET named pipe implementation is not used on the other side of that line.
+        var stream = await HostControlEndpoint
+            .ConnectAsync(HostControlEndpoint.Resolve(pipeName), ConnectTimeout, cancellationToken)
+            .ConfigureAwait(false);
+
+        await using (stream.ConfigureAwait(false))
         {
-            await pipe.ConnectAsync(ConnectTimeout, cancellationToken).ConfigureAwait(false);
-            await HostControlProtocol.WriteLineAsync(pipe, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);
-            return await HostControlProtocol.ReadLineAsync<T>(pipe, cancellationToken).ConfigureAwait(false);
+            await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);
+            return await HostControlProtocol.ReadLineAsync<T>(stream, cancellationToken).ConfigureAwait(false);
         }
     }
 }

@@ -1,0 +1,70 @@
+# Settings for the Remote Desktop server.
+#
+# This file is read when the package is configured and whenever you run
+#
+#     dpkg-reconfigure remotedesktop-server
+#
+# Editing it alone changes nothing: both servers run with the settings in
+# /etc/remotedesktop-server, which are written from this file. The package never
+# overwrites them, so a change here only takes effect through one of the two
+# commands above.
+#
+# Every one of these may be left as it is.
+
+# Where the signaling server listens, as a URL. Change the port here and in the
+# relay address below if 5080 is taken.
+RD_URLS="http://0.0.0.0:5080"
+
+# What clients are told to reach the relay on. It has to be an address (or a name
+# that resolves at configuration time) that the clients can reach: a private
+# address here means the relay is never used and connections fall back to direct
+# ones only.
+#
+# "auto" picks this machine's first non-loopback IPv4 address, which is wrong on a
+# machine with a VPN or a virtual interface.
+RD_RELAY_ENDPOINT="auto"
+
+# Signs the tickets that let a client use the relay. Both servers must have the
+# same one, and it must stay the same across restarts or clients holding a ticket
+# are refused. Leave "auto" to keep whatever is already configured (generating one
+# on first use); set it to a base64 key of at least 32 bytes to share one with a
+# relay on another machine.
+#
+#     openssl rand -base64 48
+RD_RELAY_KEY="auto"
+
+# PostgreSQL connection string, or empty for none.
+#
+# With a database the device codes survive a restart, which is what makes a
+# machine reachable without anybody present. Without one the codes live in memory
+# and every device gets a different code each time the server restarts.
+#
+# The database itself has to exist already; the server creates its table but not
+# the database.
+#
+#     Host=127.0.0.1;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=...
+RD_POSTGRES=""
+
+# Whether the signaling server speaks TLS.
+#
+#   generate  make a self-signed certificate on this machine (the default)
+#   auto      serve plain HTTP, and say so in the notes
+#   /path     use a certificate you already have — a PKCS#12 file (.pfx/.p12), or
+#             a PEM certificate with its key beside it under the same name and a
+#             .key extension (signaling.crt and signaling.key)
+#
+# A certificate made here is not trusted by anything, so each client has to be
+# given the public half: /etc/remotedesktop-server/tls/signaling.crt. On a client,
+#
+#     cp signaling.crt /usr/local/share/ca-certificates/ && update-ca-certificates
+RD_TLS="generate"
+
+# Whether to open the three ports in ufw, if ufw is installed and active.
+#
+#   5080/tcp  signaling
+#   5081/udp  address reflection
+#   5082/udp  relay
+#
+# Left at 0 by default: a package that changes a machine's firewall decides for
+# whoever administers it. Nothing here touches nftables or iptables directly.
+RD_OPEN_FIREWALL="0"

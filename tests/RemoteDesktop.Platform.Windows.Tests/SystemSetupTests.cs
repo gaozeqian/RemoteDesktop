@@ -8,15 +8,22 @@ namespace RemoteDesktop.Platform.Windows.Tests;
 /// The installer's registry and settings steps. Everything runs against a scratch key under HKCU and a temporary
 /// folder, so the machine's real SoftwareSASGeneration policy is never read or written.
 /// </summary>
+/// <remarks>
+/// Only the Settings-of-a-policy half is Windows-specific. Writing the server address and removing the data folder
+/// are plain file work that the same executable performs on every platform, so those tests run everywhere; the
+/// registry half skips where there is no registry. Nothing here may touch the registry while the class is being
+/// constructed — a constructor runs before the test body, so a skip written inside the body could never reach it.
+/// </remarks>
 public sealed class SystemSetupTests : IDisposable
 {
     private const string SasValue = "SoftwareSASGeneration";
 
+    private const string SasIsARegistryValue = "The SoftwareSASGeneration policy is a Windows registry value.";
+
     private readonly string _keyRoot = $@"Software\RemoteDesktop.Tests\{Guid.NewGuid():N}";
     private readonly string _folder = Directory.CreateTempSubdirectory("rd-setup-").FullName;
-    private readonly SystemSetup _setup;
 
-    public SystemSetupTests() => _setup = new SystemSetup(new SystemSetupLocations(
+    private SystemSetup Setup => new(new SystemSetupLocations(
         Registry.CurrentUser,
         $@"{_keyRoot}\Policy",
         $@"{_keyRoot}\Marker"));
@@ -27,7 +34,11 @@ public sealed class SystemSetupTests : IDisposable
 
     public void Dispose()
     {
-        Registry.CurrentUser.DeleteSubKeyTree($@"Software\RemoteDesktop.Tests", throwOnMissingSubKey: false);
+        if (OperatingSystem.IsWindows())
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\RemoteDesktop.Tests", throwOnMissingSubKey: false);
+        }
+
         Directory.Delete(_folder, recursive: true);
     }
 
@@ -42,12 +53,13 @@ public sealed class SystemSetupTests : IDisposable
     [Fact]
     public void Installing_allows_the_service_to_send_ctrl_alt_del_and_removing_takes_that_back()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), SasIsARegistryValue);
         Assert.Null(Policy);
 
-        _setup.ConfigureSasPolicy();
+        Setup.ConfigureSasPolicy();
         Assert.Equal(1, Policy);
 
-        _setup.RevertSasPolicy();
+        Setup.RevertSasPolicy();
         Assert.Null(Policy); // the value is removed again, not left as 0
         Assert.Null(Registry.CurrentUser.OpenSubKey(MarkerPath));
     }
@@ -55,32 +67,35 @@ public sealed class SystemSetupTests : IDisposable
     [Fact]
     public void Installing_twice_changes_nothing()
     {
-        _setup.ConfigureSasPolicy();
-        _setup.ConfigureSasPolicy();
+        Assert.SkipUnless(OperatingSystem.IsWindows(), SasIsARegistryValue);
+        Setup.ConfigureSasPolicy();
+        Setup.ConfigureSasPolicy();
 
         Assert.Equal(1, Policy);
-        _setup.RevertSasPolicy();
+        Setup.RevertSasPolicy();
         Assert.Null(Policy);
     }
 
     [Fact]
     public void Other_bits_of_the_policy_are_kept_when_they_were_already_there()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), SasIsARegistryValue);
         SetPolicy(2); // set by something else (ease-of-access apps)
 
-        _setup.ConfigureSasPolicy();
+        Setup.ConfigureSasPolicy();
         Assert.Equal(3, Policy);
 
-        _setup.RevertSasPolicy();
+        Setup.RevertSasPolicy();
         Assert.Equal(2, Policy); // only our bit is taken away
     }
 
     [Fact]
     public void A_policy_set_by_someone_else_is_never_touched()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), SasIsARegistryValue);
         SetPolicy(1); // an administrator allowed it; no marker of ours
 
-        _setup.RevertSasPolicy();
+        Setup.RevertSasPolicy();
 
         Assert.Equal(1, Policy);
     }
@@ -88,10 +103,11 @@ public sealed class SystemSetupTests : IDisposable
     [Fact]
     public void The_installer_remembers_that_it_added_the_bit_even_if_the_policy_later_changes()
     {
-        _setup.ConfigureSasPolicy();
+        Assert.SkipUnless(OperatingSystem.IsWindows(), SasIsARegistryValue);
+        Setup.ConfigureSasPolicy();
         SetPolicy(3); // somebody adds another feature's bit afterwards
 
-        _setup.RevertSasPolicy();
+        Setup.RevertSasPolicy();
 
         Assert.Equal(2, Policy);
     }

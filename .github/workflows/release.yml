@@ -6,7 +6,48 @@ on:
       - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
 
 jobs:
+  # The Linux packages. A separate job rather than a step, because a .deb has to be built on Linux: dpkg-deb does
+  # not exist on the Windows runner and the publish has to be a Linux one anyway. Nothing is signed here — the
+  # signing in the job below is Authenticode, which has no meaning to dpkg.
+  linux-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # The scripts read the version out of Directory.Build.props and publish self-contained, so there is nothing to
+      # restore or build up front. Each one fetches libmsquic itself if it is not already in artifacts/, which is
+      # what a package needs to carry: the .NET runtime does not ship it on Linux.
+      - name: Build the three .deb packages
+        run: |
+          build/debian/client/build-deb.sh
+          build/debian/host/build-deb.sh
+          build/debian/server/build-deb.sh
+
+      # Named after the tag the way the MSIs are, so the release page does not mix v0.3.0 with 0.3.0. The version
+      # being replaced is read rather than written down, or the first release to change it would silently stop
+      # renaming anything and ship files named for the previous version.
+      - name: Name them after the tag
+        run: |
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
+          for package in artifacts/debian/*.deb; do
+            mv "$package" "${package%-$version.deb}-${GITHUB_REF_NAME}.deb"
+          done
+          ls -la artifacts/debian/*.deb
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages
+          path: artifacts/debian/*.deb
+
   build-and-release:
+    needs: linux-packages
     runs-on: windows-latest
 
     # 权限配置：允许向 Releases 写入文件
@@ -168,6 +209,14 @@ jobs:
           Write-Output "CLIENT_MSI=build/installer/client/windows/artifacts/$clientName" >> $env:GITHUB_ENV
           Write-Output "SERVER_MSI=build/installer/server/windows/artifacts/$serverName" >> $env:GITHUB_ENV
 
+      # 三个 Linux 包在上一个 job 里打好，这里取回来。少了就什么都不发——和下面 MSI 一样的理由：只发出其中
+      # 一部分，是发完才会被发现的那种错。
+      - name: Download the Linux packages
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-packages
+          path: linux-packages
+
       # 上传至 GitHub Release：一个版本一个 Release，两个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
       # 用官方 gh CLI 取代第三方 softprops/action-gh-release（上游已停维护）；gh 在托管 runner 上预装，
@@ -177,8 +226,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          # Linux 的包按平台惯例用 amd64，Windows 的用 x64——各随各的约定，不为了让列表整齐而互相将就。
+          $linux = Get-ChildItem -Path linux-packages/*.deb -ErrorAction SilentlyContinue
+          if ($linux.Count -lt 3) {
+              throw "Expected three Linux packages, found $($linux.Count)."
+          }
+
           gh release create "$env:GITHUB_REF_NAME" `
-            "$env:CLIENT_MSI" "$env:SERVER_MSI" `
+            "$env:CLIENT_MSI" "$env:SERVER_MSI" @($linux.FullName) `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes

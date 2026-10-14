@@ -6,8 +6,16 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
-    <!-- Built before the service so the agent executable can be copied next to it; nothing is referenced from it. -->
-    <ProjectReference Include="..\RemoteDesktop.SessionAgent\RemoteDesktop.SessionAgent.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Linux\RemoteDesktop.Platform.Linux.csproj" />
+    <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
+    <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
+    <!-- Built before the service so the agent executable can be copied next to it; nothing is referenced from it.
+         Windows only: elsewhere there is no agent to build, and copying one into the output would put a Windows
+         executable in a Linux package. -->
+    <ProjectReference Include="..\RemoteDesktop.SessionAgent\RemoteDesktop.SessionAgent.csproj" ReferenceOutputAssembly="false" Private="false" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
@@ -20,7 +28,7 @@
        the agent's build output next to it. Publishing is a separate matter: the installer publishes each executable
        self-contained into one folder (see build/installer/client/windows/build-installer.ps1), because a framework-dependent
        agent copied into a self-contained folder would look for the .NET runtime on the target machine. -->
-  <Target Name="CopySessionAgent" AfterTargets="Build">
+  <Target Name="CopySessionAgent" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <ItemGroup>
       <AgentFiles Include="$(MSBuildThisFileDirectory)..\RemoteDesktop.SessionAgent\bin\$(Configuration)\$(TargetFramework)\**\*" />
     </ItemGroup>

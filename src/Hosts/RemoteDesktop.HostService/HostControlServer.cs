@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Runtime.Versioning;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Platform.Windows;
 
@@ -12,7 +13,21 @@ internal sealed class HostControlServer(IHostControl control, IConfiguration con
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var pipeName = configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
+        var name = configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
+
+        if (OperatingSystem.IsWindows())
+        {
+            await ServePipesAsync(name, stoppingToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await ServeSocketAsync(HostControlEndpoint.Resolve(name), stoppingToken).ConfigureAwait(false);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private async Task ServePipesAsync(string pipeName, CancellationToken stoppingToken)
+    {
         NamedPipeServerStream? server = null;
         try
         {
@@ -37,11 +52,26 @@ internal sealed class HostControlServer(IHostControl control, IConfiguration con
         }
     }
 
-    private async Task ServeAsync(NamedPipeServerStream pipe, CancellationToken stoppingToken)
+    /// <summary>
+    /// The same conversation over a Unix domain socket, which is a stream like the pipe and needs no ACL: the socket
+    /// lives in a directory only this user can enter.
+    /// </summary>
+    [UnsupportedOSPlatform("windows")]
+    private async Task ServeSocketAsync(string address, CancellationToken stoppingToken)
     {
-        await using (pipe.ConfigureAwait(false))
+        await using var listener = new HostControlSocketListener(address);
+        while (!stoppingToken.IsCancellationRequested)
         {
-            await HostControlHandler.HandleAsync(pipe, control, logger, stoppingToken).ConfigureAwait(false);
+            var stream = await listener.AcceptAsync(stoppingToken).ConfigureAwait(false);
+            _ = ServeAsync(stream, stoppingToken);
+        }
+    }
+
+    private async Task ServeAsync(Stream stream, CancellationToken stoppingToken)
+    {
+        await using (stream.ConfigureAwait(false))
+        {
+            await HostControlHandler.HandleAsync(stream, control, logger, stoppingToken).ConfigureAwait(false);
         }
     }
 }

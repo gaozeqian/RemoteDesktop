@@ -32,7 +32,7 @@ public sealed class DeviceIdentity : IDisposable
         {
             try
             {
-                return new DeviceIdentity(X509CertificateLoader.LoadPkcs12(stored, password: null));
+                return new DeviceIdentity(Import(stored));
             }
             catch (CryptographicException)
             {
@@ -42,11 +42,21 @@ public sealed class DeviceIdentity : IDisposable
 
         var pfx = CreatePfx();
         store.Save(SecretName, pfx);
-        return new DeviceIdentity(X509CertificateLoader.LoadPkcs12(pfx, password: null));
+        return new DeviceIdentity(Import(pfx));
     }
 
     /// <summary>An identity that is not persisted (tests, one-off tools).</summary>
-    public static DeviceIdentity CreateEphemeral() => new(X509CertificateLoader.LoadPkcs12(CreatePfx(), password: null));
+    public static DeviceIdentity CreateEphemeral() => new(Import(CreatePfx()));
+
+    /// <summary>
+    /// Loads a PKCS#12 the way the QUIC stack needs it: the private key has to be exportable, because MsQuic takes
+    /// the key out of the certificate to hand it to the TLS layer, and a key that cannot be exported fails there with
+    /// an error that says nothing about certificates. On some systems the default lands the key in a store that will
+    /// not give it up — macOS and its keychain is the documented case — and asking up front costs nothing anywhere
+    /// else, including Windows, where it is ignored.
+    /// </summary>
+    private static X509Certificate2 Import(byte[] pfx) =>
+        X509CertificateLoader.LoadPkcs12(pfx, password: null, X509KeyStorageFlags.Exportable);
 
     public static string ComputeFingerprint(X509Certificate2 certificate)
     {

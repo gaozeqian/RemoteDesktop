@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Stops and disables the services when the package goes away.
+#
+# Deliberately leaves the settings, the certificates and the logs behind. The settings name the relay key both servers
+# share and the certificate clients have been taught to trust; a package that deleted them on removal would make
+# reinstalling it a different server as far as every client is concerned. Whoever wants them gone can say so:
+#
+#     dpkg --purge remotedesktop-server
+set -e
+
+case "$1" in
+    remove)
+        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+        else
+            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+        fi
+
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            deb-systemd-helper disable remotedesktop-relay.service >/dev/null 2>&1 || true
+        else
+            systemctl disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            systemctl disable remotedesktop-relay.service >/dev/null 2>&1 || true
+        fi
+        ;;
+
+    purge)
+        # Everything this package put outside /usr, now that it has been asked for explicitly.
+        rm -rf /etc/remotedesktop-server
+        rm -rf /var/lib/remotedesktop-server
+        rm -rf /var/log/remotedesktop-server
+
+        if getent passwd remotedesktop >/dev/null 2>&1; then
+            deluser --system remotedesktop >/dev/null 2>&1 || true
+        fi
+
+        if getent group remotedesktop >/dev/null 2>&1; then
+            delgroup --system remotedesktop >/dev/null 2>&1 || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --system daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0
