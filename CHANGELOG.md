@@ -12,6 +12,7 @@
 ### Added
 
 #### macOS
+
 - [Platform] **屏幕采集与输入注入**：ScreenCaptureKit 截屏（含光标）、CGEvent 键鼠注入，统一坐标换算
   （虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1）。
 - [Platform] **视频编解码**：VideoToolbox H.264（硬件优先 + 软件兜底），线上 Annex-B、内部 AVCC 显式互转。
@@ -26,6 +27,7 @@
 - [CI] 新增 `build-macos` job（`macos-26`，arm64）。
 
 #### Linux
+
 - [Platform] **Linux 被控端与客户端**：屏幕走桌面 portal + PipeWire，输入走 libei，编解码走 libavcodec，
   音频走 PulseAudio，防休眠走 logind。
 - **Linux 被控端是一条 `systemd --user` 服务**，不是系统服务：Wayland 的 portal 只在该会话内应答，
@@ -38,6 +40,7 @@
   写的就是这一份，客户端和被控端共用。
 
 #### 两端共通
+
 - **`--self-check`**：一条命令问完这台机器能不能用。macOS 的版本在 bundle 内逐一验证每个平台端口与行为探针；
   Linux 的版本检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal、显示布局、PipeWire、libei、
   libavcodec 版本与可用的 H.264 编码器。全部只读、不弹对话框，在一台起不来的机器上照样能跑；
@@ -47,6 +50,7 @@
   构建脚本坏了要等到发版才知道。
 
 #### 仓库结构与跨平台一致性
+
 - **`.gitattributes`**：此前仓库里**一个 git 属性都没有**，行尾全靠各人机器上的 `core.autocrlf`——而那是个本地
   设置，对这个跨平台保证没有任何强制力。现在在仓库层面声明：`.sh` / `Dockerfile` / Debian 维护脚本 / `.plist` /
   `.service` / `.desktop` / `.yml` 一律 LF，`.ps1` / `.wxs` / `.wixproj` / `.csproj` / `.props` / `.slnx` 一律 CRLF，
@@ -56,7 +60,7 @@
   `.gitattributes` 的职责，两处都写就会有两个答案。
 - **`build/tools/`**：仓库维护类脚本从 `build/` 根下收拢进来并统一命名——`Generate-ThirdPartyNotices.ps1`、
   `Invoke-SecurityAudit.ps1`（原 `security-audit.ps1`）、`New-AppIcons.ps1`（原 `generate-icons.ps1`）。
-  新增 `build/tools/README.md` 写明哪几份能跨平台跑：前两份只读文件、三平台都可用 `pwsh`，`New-AppIcons.ps1`
+  新增 `build/README.md` 的 `tools/` 一节写明哪几份能跨平台跑：前两份只读文件、三平台都可用 `pwsh`，`New-AppIcons.ps1`
   依赖 `mstsc.exe` 的资源段与 GDI+，只能在 Windows 上跑（产物是提交进仓库的，所以不需要别处能跑）。
 - **`LICENSE`**：安装包一直带着一份专有 EULA（`build/installer/License.txt`），但仓库根本身没有任何许可声明。
   现在那份文本就是仓库根的 `LICENSE`，MSI 与 `.pkg` 都从它生成，不再是"仓库一份、包一份"的两份拷贝。
@@ -76,8 +80,8 @@
   Windows 打包脚本每次构建都会重新生成它。原来它躺在版本库里，改了 `LICENSE` 却忘了重跑脚本时，安装器的许可页
   会静默停留在旧版本，且没有任何构建步骤会发现。现在已 gitignore。
 - **`docs/` 按读者分层**：`design/`（架构、协议、安全及其评审）、`ops/`（部署、存储）、`ports/`（macOS / Linux
-  移植计划与评审）；文档索引与两份目录结构评审留在 `docs/` 根。`docs/README.md` 同时补上了此前漏掉的
-  `directory-structure-review.md`。
+  移植计划与评审）；文档索引与两份目录结构评审留在 `docs/` 根（这一步后来又被整体重排成"一个目录一份文档"，
+  见"未发布"一节）。`docs/README.md` 同时补上了此前漏掉的目录结构评审。
 - **目录结构约定改由测试强制**：新增 `tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs`，
   把六条约定变成断言——`tests/` 的项目名闭集、项目目录名 == `.csproj` 名、`.cs` 文件名与所声明类型的关系、
   `.sh` 的 kebab-case、`.ps1` 的 Verb-Noun（动词须在 PowerShell 批准表上）、`build/` 下的平台与角色目录名。
@@ -117,7 +121,7 @@
 - **三处改名让名字说明自己是什么**：`build/service/linux/default` → `remotedesktop-server.default`（它变成
   `/etc/default/remotedesktop-server`，`.gitattributes` 里那条逐名规则也随之改成 `*.default` 通配）；
   两份 `HOW-TO-CONFIGURE.txt` → `how-to-configure.txt`；`Generate-ThirdPartyNotices.ps1` →
-  `Export-ThirdPartyNotices.ps1`——`Generate` 不在 PowerShell 的批准动词表上，而 `build/tools/README.md`
+  `Export-ThirdPartyNotices.ps1`——`Generate` 不在 PowerShell 的批准动词表上，而 `build/README.md`
   原先恰好把它当范例列着。
 - **`release.yml` 的 `build-and-release` → `build-windows-and-release`**：它是三个 job 里唯一不带平台词的，
   读 job 列表看不出 Windows 在哪。
@@ -126,7 +130,7 @@
 - **`native/README.md` 与 `build/README.md` 补齐**：前者说明这层放什么、为什么没有 `windows/`（Windows 走 C#
   P/Invoke，没有编译出来的辅助库）与 `rd_` 前缀规则；后者首行声明"本目录不是构建系统"、补上三平台角色集合不
   对称的表（Linux 单独出被控端包，Windows 并进客户端 MSI，macOS 客户端自己就是被控端）、补 `docker/` 是第三条
-  轴，并把脚本命名规则从 `build/tools/README.md` 提升上来。
+  轴，并把脚本命名规则从 `build/README.md` 提升上来。
 - **`THIRD-PARTY-NOTICES.md` 有了过期防护**：CI 在一个平台 job 里重新生成它并比对，有差异就红并把 diff 打出来。
   上一节记的正是它已经静默过期过一次（缺 `FFmpeg.AutoGen` 整个一项、两个版本号过时），而这类漂移在 review 里
   看不出来。只放一个 job 是因为清单不带 RID 读，三平台同一份。
@@ -146,12 +150,47 @@
   含三平台对照表与两条成因。**产物名没有跟着改**（`artifacts/installer/windows/` 里仍是
   `RemoteDesktop-<版本>-x64.msi`），所以 `verify-packages` 的分平台 glob 不受影响；产物名与资产名不一致这件事
   本身仍在，两份文档里都写着——那是这个仓库踩过的坑。
-  顺带修掉 `docs/ops/deployment.md` 发布一节开头的过期说法：那里写"把**两个**安装包放进同一个 Release"并只列了
+  顺带修掉 `docs/ops/README.md` 发布一节开头的过期说法：那里写"把**两个**安装包放进同一个 Release"并只列了
   两个 MSI，而流水线实际发**七个**（两个 MSI、两个 `.pkg`、三个 `.deb`），现在按平台列全了。
 - **`build-deb.sh` 不再依赖 GNU 专属的 `sed -i`**：改用 `awk` 写临时文件再 `mv`（BSD 的 `sed -i` 把参数当成备份
   后缀，替换里的 `\n` 也不是换行）。
 
+#### 文档与仓库约定
+
+- **文档体系重排：从 27 份收敛到 13 份**（`docs/` 一份正文对应一类读者，`build/` 与 `native/` 各一份），
+  目标是"一个目录一份完整文档"——读者按目录名找到东西，打开就是全文，不必猜该看哪一份。
+  `docs/` 现在是 `usage/`（使用说明）、`design/`（分层 + 协议 + 安全）、`ops/`（部署 + 打包 + 本机存储）、
+  `ports/`（两平台移植总览）、`reviews/`（归档）五份正文，加索引与规范本身。
+- **三份设计文档合并为 `docs/design/README.md`**，三份运维文档合并为 `docs/ops/README.md`
+  （去掉了打包一节里与部署一节重复的构建说明），两份使用文档合并为 `docs/usage/README.md`
+  （平台差异表原先是两份各写一遍）。
+- **两份移植计划合并为 `docs/ports/README.md` 并删掉约 1300 行本机实测记录**：那两份文档共 2877 行，
+  其中三分之二是"哪条命令、什么输出"的一次性证据，长在"计划"里而计划早已 100% 完成。
+  合并后只留**结论**——已确认的决策、每个平台绕不过去的硬约束、明确不做的范围、未验证项与风险。
+  现场记录仍可从 git 历史里取回。**代码与构建脚本里 15 处指向 `§3.x` 实测小节的注释同步改成按小节名引用**，
+  否则删掉实测就等于留下一堆指向不存在小节的注释。
+- **同一天三轮的目录结构评审合订为一份**（`repo-structure-review-2026-10-16.md`，按轮分节），
+  不再为每一轮单开文件；命名规则随之简化为"评审用日期"。
+- **根 `README.md` 从 395 行的手册精简为落地页**：功能说明、平台支持与限制、被控端进程模型、打包细节全部
+  下沉到 `docs/`，README 只留摘要与导航。它此前也重列了 `docs/README.md` 的子集，且已经漏掉四份文档——
+  手工维护的第二份索引必然分叉，现在没有第二份了。
+- **新增 `docs/STYLE.md`**：文档放哪、叫什么、怎么写、什么时候更新，以及**哪些规则由测试和 CI 强制**。
+  此前这些约定散在 `CONTRIBUTING.md`、`build/README.md` 与 `docs/README.md` 三处。
+- **新增 `DocumentationTests`（8 条断言）**：必备文件存在、每个文档恰好一个 H1、`docs/` 下没有孤儿文档、
+  相对链接与锚点可解析、文件命名规范、评审必须归档在 `docs/reviews/`、README 必备章节。它第一次运行就抓出
+  四处死链——`docs/design/README.md` 指向 `ports/`、`docs/design/README.md` 指向 `ops/`，
+  两处都是 `docs/` 按读者分目录那一轮留下的，之后一直没人点到。
+- **新增 GitHub 标准社区文件**：根 `SECURITY.md`（私有漏洞上报通道，并列出"已知的、不算新发现的问题"）、
+  `.github/PULL_REQUEST_TEMPLATE.md`、`.github/ISSUE_TEMPLATE/`（bug 表单带自检与日志提示，config 把安全问题
+  指向私有通道）。
+- **`build/tools/README.md` 并入 `build/README.md`**：49 行的目录说明不值得单开一份文件，
+  而 `build/README.md` 本来就有它那一行索引。
+- **CI 新增 `docs` 作业跑 markdownlint**，版本钉在 `0.23.3` 而不是 `@latest`：新规则在次版本里就默认开启
+  （MD060 表格列风格就是这么来的，一次报了 249 条本仓库长期在用的表格写法），`@latest` 会让构建在某天早上
+  无故变红。同时把全仓 60 处未标语言的代码围栏补上语言（`text` / `bash` / `powershell`），并修掉其余格式问题。
+
 ### Changed
+
 - **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
   业务代码不知道自己在哪个平台上；客户端由 `ClientPlatformRegistration` 在运行时选层。
 - [Posix] **伪终端一份实现服务两个系统**：原先 macOS 与 Linux 各写了一份（会话、等待退出、清理在内约 455 行
@@ -205,6 +244,7 @@
   `Platform` 那条规则看到（见 Fixed）。
 
 ### Fixed
+
 - **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
   ——那其实是第一个属性的 key（真实值是 131073）。此前的测试全绿是因为用例字节按同一个错误理解手写。
   这类错误在真实链路上的表现是"格式协商莫名其妙失败"。
@@ -241,12 +281,14 @@
 ### 平台上的边界与未验证项
 
 **macOS**
+
 - 最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
-  （见 `docs/ports/macos-port-plan.md` §3.4）。降低下限需改走"从源码构建 MsQuic"。
+  （见 `docs/ports/README.md` 的"最低系统版本是 macOS 26"）。降低下限需改走"从源码构建 MsQuic"。
 - 已知未覆盖（需人工授权，自动化测试无法验证）：辅助功能授权下的真实输入注入、受保护目录
   （`~/Desktop` / `~/Documents` / `~/Downloads`）的 TCC 弹窗路径。
 
 **Linux**
+
 - **登录界面 / 登录前的远程访问**：GNOME 的登录界面是另一个用户、另一个 VT，私有用户会话够不着。
   Windows 上能换 Agent 接管安全桌面，这里没有对应物。
 - **无人值守下的操作**：portal 不允许远程桌面会话持久化，所以**控制权限每次连接都要有人在机器前点一次同意**。
@@ -260,6 +302,7 @@
 ## [0.3.0] - 2026-10-11 · 安装向导与自签名证书
 
 ### Changed
+
 - [CI] **集成测试失败后自动重跑一次**（`ci.yml` 与 `release.yml` 同策略）。这些测试要跑真实进程、真实 PTY、
   真实 UDP 打洞和真实 Media Foundation 编码器，而 runner 又慢又抢：同一提交常常这次红一个测试、下次红另一个
   ——2026-10-11 一天里三个不同的测试各红过一次，其中一个在 Release 流水线里通过、几分钟后的 master CI 里失败。
@@ -267,6 +310,7 @@
   **代价说清**：真实存在的偶发 bug 同样会被这一次重试掩盖，所以那行警告不是噪音，别忽略它。
 
 ### Added
+
 - [Server] **服务端安装包有向导页了**（"服务器设置"，插在选目录与确认之间）：数据库连接串、中继公网地址、
   以及信令是否走 TLS（不启用／**自动生成一张自签名证书**／使用已有证书文件+口令）。此前这些只能在命令行上
   传 `msiexec POSTGRESCONNECTIONSTRING=...`——双击安装会全取默认值，而默认值是"不用数据库"和"明文 http"，
@@ -280,6 +324,7 @@
   `appsettings.json`，而服务端程序自带的 `--configure-system` 从未写进文档、等于不存在。
 
 ### Fixed
+
 - [Server] `TLSCERTIFICATEPATH=auto`（安装包的默认值）以前会走到文件检查，报出"证书 'auto' 不存在"——
   读起来像用户填错了。现在它正确地等同于"不给证书"，并给出那条明文 http 的警告。
 - [Server] **"自动生成自签名证书"那条路以前装出来的服务根本起不来**，现在真的能用了（已按端到端跑过：服务启动、
@@ -296,6 +341,7 @@
 ## [0.2.1] - 2026-10-11 · 连接可靠性
 
 ### Fixed
+
 - [Transport] **同一台机器上的两台设备现在有一条可靠的路**：候选地址里**无条件**加上回环地址（排在最后）。
   此前回环只会在反射器答上来、且它报回来的恰好就是回环时才出现；于是"网卡地址不可用"（CI runner 上防火墙
   挡入站 UDP、虚拟网卡没有路由）叠加"反射器超时"，就只剩中继一条路——中继再失败就彻底连不上。2026-10-11 的
@@ -314,6 +360,7 @@
   就等于这条路不存在。重试只在已经失败的路径上多花一次超时。
 
 ### Changed
+
 - [Build] **测试运行方式迁到 Microsoft.Testing.Platform**（`global.json` 里加 `test.runner`）：xunit.v3 4.x 带来的
   MTP 在 .NET 10 SDK 上**不再支持 VSTest 目标**，不迁的话 `dotnet test` 直接报错（那正是两个 xunit 依赖 PR
   一直红着的原因，不是升级本身有问题）。CI 的 TRX 改由 `Microsoft.Testing.Extensions.TrxReport` 产出
@@ -323,17 +370,19 @@
 - [Build] xunit.v3 3.2.2 → 4.0.2、xunit.runner.visualstudio 3.1.5 → 4.0.1。迁移之外，测试代码一行没改。
 
 ### Added
+
 - [Build] `Microsoft.Testing.Extensions.TrxReport` 2.5.1：TRX 报告是 MTP 的扩展而不是平台本身，没有它测试程序
   会拒绝 `--report-trx`（退出码 5），而 CI 的测试汇总正是从 TRX 里读的。
 
 ## [0.2.0] - 2026-10-11 · 公网发布准备
 
 ### Security
+
 - [Client] **修复提权命令注入**：修改服务器地址不再经过 PowerShell，改为把参数作为独立 argv 交给服务程序
   （`HostServiceSetup`），地址先经严格解析。此前一个伪装成服务器地址的字符串能以管理员权限执行。
 - [Protocol] **密码证明改用 PBKDF2 派生密钥**（60 万轮，nonce 作盐），**临时密码从 8 位加长到 12 位**
   （约 2^40 → 2^60）。两者合起来让"拿到证明后离线猜口令"从几天变成不现实；这仍不是 PAKE，
-  固定密码仍需要它，见 `docs/design/security.md`。协议主版本随之升到 2，新旧版本会明确报"版本不兼容"。
+  固定密码仍需要它，见 `docs/design/README.md`。协议主版本随之升到 2，新旧版本会明确报"版本不兼容"。
 - [Server] **注册与连接请求限流、连接配额**：单地址注册速度、单设备连接请求速度、挂起请求上限、
   同时连接数与单地址连接数（超出的在 WebSocket 升级前拒绝）。身份是这台服务器上所有限额的计量单位，
   所以注册限流是让其余限额真正有效的那一条。
@@ -352,6 +401,7 @@
   信令给的设备号不合法时不再产生无人观察的异常。
 
 ### Added
+
 - [Server] **`/metrics`**（Prometheus 文本格式，默认关闭，`Rendezvous:MetricsEnabled`）。
 - [Server] `/health` 现在真的检查数据库（配置了 PostgreSQL 时）。
 - [Build] 打包脚本在许可文本仍含占位符时**拒绝出包**（`-AllowDraftLicense` 可显式跳过）。这道检查现在放在最前面
@@ -374,13 +424,14 @@
 - [CI] 依赖漏洞审计（含传递依赖）、Dependabot、发布前跑测试。
 - [CI] 打 Tag 出的 Release 现在**同时带客户端与服务端两个安装包**（`RemoteDesktop-Server-Windows-x64-<tag>.msi`），
   不再只发客户端——服务端安装包此前只能在本地构建。
-- [Docs] 新增系统架构设计文档 (`docs/design/architecture.md`)。
-- [Docs] 新增网络通信协议规范文档 (`docs/design/protocol.md`)。
+- [Docs] 新增系统架构设计与网络通信协议文档（现在合并在 `docs/design/README.md`）。
+- [Docs] 新增网络通信协议规范文档（现在合并在 `docs/design/README.md`）。
 - [Docs] 新增文档中心索引与贡献指南 (`CONTRIBUTING.md`)。
 - [Docs] 部署文档新增"生产环境：信令必须走 TLS"（自带证书或反向代理两种做法）与"公网上的限额"两节。
 - [Installer] 引入基于 WiX v5 的 Windows 安装包打包脚本。
 
 ### Changed
+
 - [Build] **许可文本从草案变成正式文本**：著作权人 Zeqian GAO、项目主页为联系方式、适用中国法律、
   争议提交作者住所地有管辖权的人民法院；开头那段"本文件是草案、请替换方括号"的说明也删掉了——它原本会被
   转成 RTF **印在每个用户的许可页上**。打包脚本"有占位符就拒绝出包"的闸门保留，留给将来换主体发布时用。
@@ -406,34 +457,43 @@
 - [Repo] 优化项目文档组织结构，统一采用 Kebab-case 命名并提供全局导航。
 
 ### Fixed
+
 - [Build] **Windows PowerShell 5.1 下构建脚本里的中文是乱码**：含中文的 `.ps1` 是**无 BOM** 的 UTF-8，而 5.1 会按
   GBK 解码——提示信息变乱码是轻的，重则脚本压根解析不了（`TerminatorExpectedAtEndOfString`）；更要紧的是
   许可占位符那个正则 `'【[^】]+】'` 会**静默匹配不到任何东西**，闸门等于不存在（脚本注释里却写着"用 Windows
   自带的 PowerShell 跑发布构建也要能work"）。`build/` 下 10 个脚本都补上了 UTF-8 BOM，5.1 与 pwsh 7 现在都正常。
 - [Installer] **客户端安装包现在真的配置了服务崩溃重启**：`ServiceInstall` 本身不含失败动作，此前只有按
-  deployment.md 用 `sc.exe failure` 手工安装那条路才有——而 README 已经把它当成安装包的行为写着了。
+  deployment.md（现 `docs/ops/README.md`）用 `sc.exe failure` 手工安装那条路才有——而 README 已经把它当成
+  安装包的行为写着了。
   现在安装即生效：崩溃后 5 秒重启，连续三次后不再自动重启，稳定运行一天后重新计数。README 也改成与代码一致。
   包内容测试会检查这一行，缺了就构建失败。
 
 ---
 
 ## [M7] - 远程摄像头支持
+
 ### Added
+
 - [Feature] 完整支持远程摄像头串流 (`Features.Camera`)。
 - [Feature] 支持被控端指示灯激活与 UI 强制关闭控制。
 - [Platform] 基于 Media Foundation 实现 Windows 下的摄像头采集与 NV12 转换。
 
 ## [M6] - 远程终端 (Terminal)
+
 ### Added
+
 - [Feature] 支持基于 ConPTY 的远程终端，提供完整的 VT 序列解析。
 - [UI] 终端窗口支持多标签页，并增加鼠标上报与剪贴板支持。
 
 ## [M5] - 文件传输 (File Transfer)
+
 ### Added
+
 - [Feature] 双栏文件管理器，支持拖拽、断点续传（基于 `.rdpart` 和 xxHash64 校验）。
 - [Security] 文件传输强制以被控端当前登录用户身份 (Agent) 执行，防范 SYSTEM 权限越界。
 
 ## [M1 ~ M4] - 核心功能迭代
+
 - **M4**: 完成观看模式、剪贴板同步、双向音频转发、多显示器切换。
 - **M3**: 完成 HostService 守护进程化，支持 UAC 和 Windows 登录界面突破（Session Agent 隔离）。
 - **M2**: 完成远程控制 MVP，基于 DXGI 和 SendInput 实现极低延迟桌面协同。

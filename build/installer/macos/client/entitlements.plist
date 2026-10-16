@@ -5,7 +5,8 @@
 
   Deliberately minimal. In particular there is NO `keychain-access-groups`: an app reaches its own keychain items
   through the access group its team identifier already gives it, and adding the entitlement explicitly was measured to
-  make the process die on launch under an ad-hoc signature rather than fix anything (docs/ports/macos-port-plan.md §3.7).
+  make the process die on launch under an ad-hoc signature rather than fix anything (docs/ports/README.md, "Keychain 的
+  OSStatus 100001 是 EPERM").
 
   The two JIT entitlements are what a .NET runtime needs once the hardened runtime is switched on, which is required
   for notarization. They are harmless before that, so they are carried from the start rather than remembered later.

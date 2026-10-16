@@ -1,0 +1,49 @@
+name: 功能建议
+description: 提议一个新功能或对现有功能的改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前建议先看一眼 [README](../blob/master/README.md) 的"平台支持与限制"一节与
+        [`docs/usage/README.md`](../blob/master/docs/usage/README.md)：
+        有些能力是某个平台上**没有对应物**（比如 macOS 没有 Ctrl+Alt+Del、Linux portal 不允许远程控制会话持久化），
+        不是没做。这类改不了，但知道的人越多越好。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的问题
+      description: 描述场景和痛点，而不是直接给方案——这样更容易找到更合适的做法。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎么做
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 试过的替代方案
+      description: 现在是怎么绕过去的？
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 主要涉及哪个平台
+      multiple: true
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - Linux
+        - 所有平台
+        - 服务端
+    validations:
+      required: true

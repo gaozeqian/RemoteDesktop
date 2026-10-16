@@ -5,7 +5,7 @@
 .DESCRIPTION
   Windows only, deliberately: the master image is lifted out of mstsc.exe's resources with LoadLibraryEx, and the
   derived sizes are produced with System.Drawing. Neither exists off Windows, and neither needs to — the generated
-  assets are committed, so this runs only when the icon itself changes. build/tools/README.md says so out loud, which
+  assets are committed, so this runs only when the icon itself changes. build/README.md says so out loud, which
   is the point of keeping it here rather than at the root of build/.
 
 .PARAMETER OutputDir

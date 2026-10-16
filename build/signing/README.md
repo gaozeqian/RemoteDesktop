@@ -172,7 +172,7 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 .\build\signing\New-ServerCertificate.ps1 -DnsName rd.lan -IpAddress 192.168.1.10
 ```
 
-完整的部署步骤见 [docs/ops/deployment.md](../../docs/ops/deployment.md) 的"生产环境：信令必须走 TLS"。
+完整的部署步骤见 [docs/ops/README.md](../../docs/ops/README.md) 的"生产环境：信令必须走 TLS"。
 同样是那句话：把自签证书装进受信任根，等于持有它私钥的人能在这些机器上冒充任何服务器，私钥不要外传。
 
 **它买到什么、买不到什么**

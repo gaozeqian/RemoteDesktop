@@ -332,7 +332,7 @@ public static class ServerSetup
         // "auto" is the installer's default property value, and it means the same as an empty one here: no certificate.
         if (IsAuto(certificatePath))
         {
-            notes.Add("Signaling is served over plain http: anyone on the way can read the device codes and take a relay ticket. Give the installer a certificate (see docs/ops/deployment.md) or put a reverse proxy in front.");
+            notes.Add("Signaling is served over plain http: anyone on the way can read the device codes and take a relay ticket. Give the installer a certificate (see docs/ops/README.md) or put a reverse proxy in front.");
             return urls;
         }
 

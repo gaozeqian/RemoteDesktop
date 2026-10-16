@@ -10,7 +10,7 @@ public class HostControlTests
     public HostControlTests() =>
         Assert.SkipUnless(
             OperatingSystem.IsWindows(),
-            "Windows only: macOS has no service/agent split to control (see docs/ports/macos-port-plan.md 2.1), and .NET maps a " +
+            "Windows only: macOS has no service/agent split to control (see docs/ports/README.md, \"进程模型：没有 Session 0\"), and .NET maps a " +
             "named pipe onto a Unix socket whose path cannot exceed 104 characters -- the temp path alone is already longer.");
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

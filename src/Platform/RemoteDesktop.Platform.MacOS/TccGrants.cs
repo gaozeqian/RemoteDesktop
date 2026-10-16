@@ -31,7 +31,7 @@ public enum TccGrant
 /// <para>
 /// The grants are keyed to the code-signing identity, not to the bundle path. An ad-hoc signature is different on
 /// every build, so macOS treats each build as a new application and either re-prompts or silently refuses — which
-/// is why the packaging script insists on a stable identity. See docs/ports/macos-port-plan.md §2.3.
+/// is why the packaging script insists on a stable identity. See docs/ports/README.md, "TCC 授权按签名身份记账".
 /// </para>
 /// <para>
 /// Granting Screen Recording does not take effect for a process that is already running: macOS caches the answer at

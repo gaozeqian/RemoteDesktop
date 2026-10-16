@@ -16,7 +16,7 @@ namespace RemoteDesktop.Platform.MacOS.UnitTests;
 /// <c>Enqueue</c> is the entry point worth exercising from managed code specifically. The native helper takes a
 /// pointer and an explicit length, and a source-generated marshaller passes a span as a bare pointer with no length
 /// beside it, so the wrong declaration silently fills the length with whatever argument follows — which is a crash
-/// inside <c>memmove</c>, not a wrong number (docs/ports/macos-port-plan.md 3.12).
+/// inside <c>memmove</c>, not a wrong number (docs/ports/README.md, "[LibraryImport] 会把 span 当裸指针传").
 /// </para>
 /// </remarks>
 public class MacAudioPlayerTests

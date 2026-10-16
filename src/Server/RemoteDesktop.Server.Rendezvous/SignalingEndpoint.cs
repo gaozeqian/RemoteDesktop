@@ -198,7 +198,7 @@ public sealed partial class SignalingEndpoint(
     private static partial void LogDisconnected(ILogger logger, uint deviceId);
 
     // The three refusals below carry the caller's address: they are the only place this server writes one down, and
-    // they are exactly the lines an operator needs when somebody is abusing the server. See docs/design/security.md.
+    // they are exactly the lines an operator needs when somebody is abusing the server. See docs/design/README.md.
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Address}: {Open} are already being served.")]
     private static partial void LogOverQuota(ILogger logger, string address, int open);
 

@@ -231,7 +231,8 @@ internal static partial class SelfCheck
 
     /// <summary>
     /// Writes, reads back and removes a throwaway secret. This is the check that distinguishes "the keychain works"
-    /// from "the keychain answers EPERM", which is what an ad-hoc signature produces (see docs/ports/macos-port-plan.md 3.7).
+    /// from "the keychain answers EPERM", which is what an ad-hoc signature produces (see docs/ports/README.md,
+    /// "Keychain 的 OSStatus 100001 是 EPERM").
     /// </summary>
     private static string KeychainRoundTrip(IServiceProvider provider)
     {
@@ -363,7 +364,7 @@ internal static partial class SelfCheck
     /// <para>
     /// Playback is exercised first and on its own, because <c>rd_audio_player_enqueue</c> takes a pointer and a
     /// length — the shape that a source-generated marshaller gets wrong silently, by filling the length with the
-    /// next argument (docs/ports/macos-port-plan.md 3.12). That failure is a crash inside <c>memmove</c>, not a wrong
+    /// next argument (docs/ports/README.md, "[LibraryImport] 会把 span 当裸指针传"). That failure is a crash inside <c>memmove</c>, not a wrong
     /// number, so it has to be run for real to be ruled out.
     /// </para>
     /// <para>

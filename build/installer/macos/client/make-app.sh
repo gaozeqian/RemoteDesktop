@@ -5,7 +5,7 @@
 # Why a bundle and not just the executable: macOS grants screen recording, accessibility, camera and keychain access to
 # a *bundle with a stable code-signing identity*, not to a path. Since macOS 26 a bare CLI executable does not even
 # appear in the Privacy & Security list, so running `dotnet run` cannot be granted anything. See
-# docs/ports/macos-port-plan.md §2.3 and §3.7.
+# docs/ports/README.md ("TCC 授权按签名身份记账" 与 "Keychain 的 OSStatus 100001 是 EPERM").
 #
 # Usage:
 #   build/installer/macos/client/make-app.sh [--configuration Release] [--output <dir>] [--framework-dependent]
@@ -44,7 +44,7 @@ APP_NAME="RemoteDesktop.app"
 BUNDLE_ID="com.remotedesktop.client"
 EXECUTABLE_NAME="RemoteDesktop.Client"
 PROJECT="$REPO_ROOT/src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj"
-# Apple Silicon only, deliberately: the macOS port is arm64 (see docs/ports/macos-port-plan.md). A universal build would mean
+# Apple Silicon only, deliberately: the macOS port is arm64 (see docs/ports/README.md). A universal build would mean
 # a second native helper library and a second publish, which is a separate piece of work rather than a flag here.
 RUNTIME="osx-arm64"
 # Distribution signing (Developer ID) differs from development signing in two ways that matter: the signature needs a
@@ -218,7 +218,7 @@ else
     # refuses, and the bundle never stays in the Privacy & Security list.                      #
     #                                                                                         #
     # (The keychain is NOT affected — that failure is the caller being sandboxed, not the      #
-    # signature. See docs/ports/macos-port-plan.md 3.7.)                                             #
+    # signature. See docs/ports/README.md, "Keychain 的 OSStatus 100001 是 EPERM".)                                             #
     #                                                                                         #
     # Install a free Apple Development certificate in Xcode and re-run. §3.9 has the steps.    #
     ###########################################################################################

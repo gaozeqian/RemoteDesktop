@@ -5,7 +5,7 @@
 # Why this exists: signing a .app needs a *stable* identity. Ad-hoc signatures (`codesign -s -`) change on every
 # build, so macOS treats each build as a different program -- TCC grants are lost on every rebuild, and keychain
 # items written by a previous build become "another app's" items. The right answer is a real Apple Development
-# certificate (see docs/ports/macos-port-plan.md 3.9), but obtaining one needs Xcode plus a signed-in Apple ID. This
+# certificate (see docs/ports/README.md, "TCC 授权按签名身份记账"), but obtaining one needs Xcode plus a signed-in Apple ID. This
 # script is the stand-in for machines that have neither.
 #
 # It is NOT a substitute for an Apple Development certificate. A self-signed certificate carries no Apple-issued

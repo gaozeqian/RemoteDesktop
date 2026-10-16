@@ -32,7 +32,8 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<!-- Must match the highest `minos` of the bundled dylibs, otherwise dyld refuses to load them. The Homebrew
-	     bottles of libmsquic/openssl@4 are built for macOS 26, so this tracks that (see docs/ports/macos-port-plan.md 3.4). -->
+	     bottles of libmsquic/openssl@4 are built for macOS 26, so this tracks that (see docs/ports/README.md,
+	     "最低系统版本是 macOS 26"). -->
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>

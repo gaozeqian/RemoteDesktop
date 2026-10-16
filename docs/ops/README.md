@@ -1,9 +1,15 @@
-# 部署文档
+# 部署与运维
+
+给**要部署和运维的人**：架服务器、发版、把客户端与被控端装到机器上、出问题时查什么。
+打包脚本的内部细节见 §八，客户端本机存了什么见 §九。
+
+被控端与服务端各自需要什么系统见 §一；功能怎么用、哪些平台支持什么见 [使用说明](../usage/README.md)；
+"部署者必须自己做的事"（换共享密钥、信令上 TLS、装包签名）见 [系统设计](../design/README.md) §3。
 
 这套软件是**自建服务器**的：两台机器互相连接，靠的是一台它们都能连上的**信令服务器（Rendezvous）**。
 没有它，被控端拿不到设备代码，控制端也无从发现对方——"设备代码是空的"几乎总是这个原因。
 
-```
+```text
         ┌──────────────┐   信令 WebSocket(TCP 5080)   ┌───────────────────┐
         │  控制端       │ ───────────────────────────► │  Rendezvous       │
         │  (客户端)     │ ◄─────────────────────────── │  （信令/设备代码） │
@@ -27,10 +33,10 @@
 
 > **服务器可以混着来。** 信令和中继跟两端跑什么系统无关，一台 Linux 服务器可以同时服务 Windows 和 Linux 的
 > 客户端与被控端。只有「被控端装什么包」是跟系统绑的。
-
+>
 > **Windows 上的 `.deb` 装不了，Linux 上的 MSI 也装不了**——这不是限制，是两个平台各有一套安装方式，
 > 下面每节都写明了哪条路属于哪个平台。
-
+>
 > **为什么不是 Windows 10**：传输层走 QUIC（`System.Net.Quic` / MsQuic），它在 Windows 上依赖 Schannel 的
 > TLS 1.3 加密 API，而这只在 Windows 11、Windows Server 2022 及更新系统里提供。Windows 10 缺这些 API，
 > `QuicListener.IsSupported` / `QuicConnection.IsSupported` 会返回 `false`，被控端日志打出
@@ -176,7 +182,7 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 
 ### 2. 手工构建
 
-```
+```bash
 dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Rendezvous
 dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Relay
 ```
@@ -249,7 +255,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
 
 **做法 B：前面放反向代理**（Docker 部署，或想用 Let's Encrypt 自动续期）。Caddy：
 
-```
+```text
 rd.example.com {
     reverse_proxy /ws* 127.0.0.1:5080
     reverse_proxy /health 127.0.0.1:5080
@@ -368,7 +374,7 @@ docker compose up -d --build
 
 ### 8. 防火墙
 
-```
+```powershell
 netsh advfirewall firewall add rule name="RemoteDesktop Rendezvous" dir=in action=allow protocol=TCP localport=5080
 netsh advfirewall firewall add rule name="RemoteDesktop Reflect"    dir=in action=allow protocol=UDP localport=5081
 netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in action=allow protocol=UDP localport=5082
@@ -376,7 +382,7 @@ netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in actio
 
 ### 9. 健康检查
 
-```
+```bash
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
 ```
 
@@ -434,12 +440,14 @@ scrape_configs:
 
 1. 导出您的代码签名证书为 PKCS#12 格式 (`.pfx`)。
 2. 在本地使用 PowerShell 将其转为 Base64：
+
    ```powershell
    [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")) | Set-Clipboard
    ```
+
 3. 在您的 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** 中添加：
-   *   `CODE_SIGN_CERT_BASE64` = 刚刚复制的 Base64 字符串
-   *   `CODE_SIGN_CERT_PASSWORD` = 您的证书密码
+   - `CODE_SIGN_CERT_BASE64` = 刚刚复制的 Base64 字符串
+   - `CODE_SIGN_CERT_PASSWORD` = 您的证书密码
 
 *(如果不配置这些 Secrets，流水线会自动跳过签名步骤并正常打包)*
 
@@ -452,7 +460,8 @@ scrape_configs:
 ### 2. 配置默认服务器地址（可选）
 
 在 GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **Variables** 标签页下，新建一个变量：
-*   `DEFAULT_RENDEZVOUS_URI` = `wss://您的域名:5080/ws`
+
+- `DEFAULT_RENDEZVOUS_URI` = `wss://您的域名:5080/ws`
 
 配了：这个地址会被编进客户端安装包，下载的人装完就能连上你的服务器，不用自己填。
 
@@ -469,10 +478,12 @@ scrape_configs:
 ### 3. 触发自动发布
 
 在本地完成开发后：
+
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
 GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现
 `RemoteDesktop-Client-Windows-x64-v1.0.0.msi` 和 `RemoteDesktop-Server-Windows-x64-v1.0.0.msi`。
 
@@ -482,11 +493,8 @@ GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Release
 
 ### 1. 构建安装包时带上你的服务器地址
 
-```
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://192.168.1.10:5080/ws
-```
-
-不加 `-RendezvousUri` 时用的是开发默认值 `ws://127.0.0.1:5080/ws`，脚本会给出警告：**这样装出来的机器只能被服务器所在的机器连**。
+先按 §八 把包装出来。**构建时务必给 `-RendezvousUri`**：不加时用的是开发默认值
+`ws://127.0.0.1:5080/ws`，脚本会给出警告——**这样装出来的机器只能被服务器所在的机器连**。
 
 ### 2. 安装
 
@@ -560,29 +568,22 @@ msiexec /i RemoteDesktop-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 
 ### 5. 签名
 
-```
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
-```
+打包脚本自动在当前用户和本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），
+**只自动使用名字里含 `RemoteDesktop`** 的证书——别的产品的证书不会被默默拿来用，那种情况会列出候选让你指定：
 
-脚本会自动在当前用户和本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名并验证，
-签名时间戳默认打到 DigiCert。它只自动使用**名字里含 `RemoteDesktop`** 的证书；别的产品的证书不会被默默拿来用，
-那种情况会列出候选让你指定：
-
-```
+```powershell
 ... -SignCertificate <证书指纹>          # 或 -SignCertificate "CN=你的公司"
 ... -SkipSigning                          # 明确不签名
-... -SkipSignatureVerification            # 跳过签名验证（一般不需要）
 ```
 
 签名分两步：先签发布目录里本产品自己的 exe/dll（这样**装到机器上的程序**也带签名），再签 MSI。
-工具按"最少配置"自动选：证书存储里有可用证书就用 signtool，没有就退回 Windows 自带的 PowerShell
-Authenticode 签名（**不需要 Windows SDK**）；也可以用开源跨平台的 osslsigncode 直接签证书文件（支持 MSI，
-Linux CI 也能签）：`-SigningTool osslsigncode -CertificateFile <pfx|pem> [-CertificatePassword <密码>] [-PrivateKeyFile <key.pem>]`。
-自签名证书在装过它 `.cer` 的机器之前只会得到一条"不受信任的根"的**警告**，构建不会失败。
-完整说明（怎么买证书、有哪些替代方案、怎么检查签名）见 [`build/signing/README.md`](../../build/signing/README.md)；
+
+不签名时 SmartScreen 和企业策略可能拦住安装；自签名证书在装过它 `.cer` 的机器之前只会得到一条"不受信任的根"的
+**警告**，构建不会失败。完整说明（怎么买证书、有哪些替代方案、怎么检查签名、osslsigncode 怎么用）见
+[`build/signing/README.md`](../../build/signing/README.md)；
 本地测试签名用 `build/signing/windows/New-SigningCertificate.ps1` 生成证书、`build/signing/windows/Install-TrustedCertificate.ps1` 让机器信任它。
 
-## 四之二、部署客户端 / 被控端（Debian 包，Linux）
+## 五、部署客户端 / 被控端（Debian 包，Linux）
 
 ### 1. 构建
 
@@ -601,7 +602,7 @@ build/installer/linux/host/build-deb.sh     # 允许被别人控制
 Windows 的 MSI 用 `-RendezvousUri` 把地址烤进包里；**Linux 的包只带一个默认值**（`ws://127.0.0.1:5080/ws`，
 即"连本机"，装到别的机器上等于没配）。改成自己的：在客户端的「修改服务器地址」里填，或者直接写
 
-```
+```text
 ~/.local/share/RemoteDesktop/appsettings.json     # { "Transport": { "RendezvousUri": "ws://主机:5080/ws" } }
 ```
 
@@ -664,16 +665,15 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 3. **日志里有没有"合成器没有描述指针"**：那意味着光标位置不会实时更新，画面本身正常。
 4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。
 
-## 四之三、部署客户端 / 被控端（.pkg，macOS）
+## 六、部署客户端 / 被控端（.pkg，macOS）
 
 ### 1. 构建与安装
-
 
 macOS 侧是**单进程**的：同一个 `.app` 既能当控制端、也能当被控端（没有 Windows 那种服务 + Agent 的拆分，
 因为 macOS 的守护进程拿不到屏幕录制权限）。安装包由 `build/installer/macos/client/make-pkg.sh` 产出，
 装到 `/Applications`。
 
-```
+```bash
 build/installer/macos/client/make-pkg.sh --configuration Release
 # 产物：artifacts/installer/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
 ```
@@ -695,9 +695,9 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 也可装完后在客户端界面用「修改服务器地址」填 `wss://<主机>:5080/ws`。
 
 > **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
-> （见 `docs/ports/macos-port-plan.md` §3.4）。`.pkg` 只面向 Apple Silicon（arm64）。
+> （见 [平台移植总览](../ports/README.md) 的"最低系统版本"）。`.pkg` 只面向 Apple Silicon（arm64）。
 
-## 五、运行期注意事项
+## 七、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
 - **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。
@@ -706,11 +706,242 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 - **日志**：服务器是标准输出（服务方式运行时进 Windows 事件日志或用 `--console` 重定向）；被控端在
   `%ProgramData%\RemoteDesktop\logs`；客户端没有文件日志，问题看界面提示。
 
-## 六、故障速查
+## 八、安装包怎么构建（三平台）
+
+**怎么产出交付物**，以及打包脚本里几个不显眼但会咬人的地方。装到机器上之后的事（安装、升级、卸载、排错）
+见 §四–§六与 §十；脚本的目录分层与命名规则见 [`build/README.md`](../../build/README.md)。
+
+安装包是**自包含发布**（目标机器不需要装 .NET），所以每个平台各自打自己的包，都在对应平台上构建；
+构建命令本身是 `dotnet build` / `dotnet test`，环境要求见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md)。
+所有产物落在仓库根的 `artifacts/installer/<平台>/`，命名与角色约定见同一份文档的"构建产物布局"。
+
+### Windows（MSI）
+
+```powershell
+# 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
+# 正式发布请带上自己服务器的地址（不带就用内置的 127.0.0.1，装到别的机器上连不上）
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+
+# 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
+```
+
+**客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物约 49 MB。
+服务端有**自己的**安装包，装的是另一套东西，和这个包互不影响：
+
+```powershell
+.\build\installer\windows\server\Build-ServerInstaller.ps1
+# 产出 artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
+```
+
+打包脚本做四件事：发布可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名，
+最后**不安装就直接检查包内容**：`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
+自定义操作和属性，缺什么就报错。
+
+几个容易踩的地方：
+
+- **包内容检查不是可选的。** 见下面那条 WiX 陷阱——它就是为了在包"看着正常但什么都没做"时喊出来。
+- **许可页**：界面用 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成），许可页显示仓库根 `LICENSE` 里的专有 EULA，
+  构建时由 `installer/New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
+  该文件里若还有**【方括号】占位符**，打包脚本会拒绝出包——那是留给"换个人/换主体来发布"时的闸门，
+  不是待办事项（当前内容是完整的）。
+- `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
+- **签名是自动的**，细节见 [`build/signing/README.md`](../../build/signing/README.md)。
+- 安装时把服务器地址写进 `appsettings.json`；这个文件在升级时**不会被覆盖**，所以就地改过的地址会保留。
+  静默安装可以覆盖：`msiexec /i ... /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
+
+> **WiX 版本陷阱。** 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持）。
+> 改动 `build/installer/windows/client` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
+> 自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——
+> 上面那个包内容检查就是为了这个。
+
+**打包脚本必须用 pwsh 7 跑。** 用 Windows PowerShell 5.1 调 `Build-ClientInstaller.ps1` 会在
+`Get-ChildItem ... -Filter *.pdb -Recurse | Remove-Item` 处抛 `InputObjectNotBound` 而中断；同样的命令在
+pwsh 7 下正常。CI 用的也是 pwsh。
+
+### macOS（`.app` / `.pkg`）
+
+需要 Xcode Command Line Tools；打包为**自包含**应用。
+
+```bash
+# .app（bundle 目录，用 Apple Development 身份签名，便于本机开发调试）
+build/installer/macos/client/make-app.sh --configuration Release
+
+# .pkg（可分发安装包，装到 /Applications；默认未签名）
+build/installer/macos/client/make-pkg.sh --configuration Release
+
+# 服务端 .pkg（两个服务器 + launchd 守护进程，装到 /usr/local/remotedesktop-server）
+build/installer/macos/server/make-pkg.sh --configuration Release
+```
+
+`.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
+"unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID 签名 + 硬化运行时）
+和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开——证书与公证凭据的配置见
+[`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
+
+### Linux（`.deb`）
+
+三个包各装各的，在 Linux 上构建（自包含发布，目标机器不需要装 .NET）：
+
+```bash
+build/installer/linux/client/build-deb.sh   # 用来控制别人
+build/installer/linux/host/build-deb.sh     # 允许被别人控制
+build/installer/linux/server/build-deb.sh   # 信令与中继服务器
+```
+
+`libmsquic` 随包放在可执行文件旁，所以装出来的包不需要设 `LD_LIBRARY_PATH`。安装与服务管理见 §五。
+
+### 产物在哪
+
+一律在 `artifacts/installer/<平台>/`，角色写在**文件名**里，不另开子目录。发布时 `release.yml` 会把它们改名成
+用户看到的那份资产，形状是 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：七个资产一个形状。
+
+注意一个坑：`artifacts/installer/windows/` 里**没有**带 `Windows` 的文件——Windows 的资产名是发布时才长成终态的。
+照着发布资产名去那个目录里找会一无所获（这个仓库已经踩过一次）。
+完整的四类产物路径与 SDK 自己的四层布局见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) §构建产物布局。
+
+## 九、客户端本机的存储（设备列表）
+
+> **2026-10-10 决定：不做账号体系。** 下面关于"账号体系上线后"的部分因此不会发生，留在这里是因为它记录了
+> 当前数据格式为什么长这样（条目里没有密码、时间字段的合并规则、墓碑、`accountId` 参数），
+> 以及万一将来改变主意时已经踩过的坑。清单同步、`SyncedRecentDevicesStore`、服务端的 `account_devices` 表都不实现。
+
+这份文档说明"最近连接过的设备"这个列表今天存在哪里、为什么这么存，以及**账号体系上线后**要把它搬到
+服务器时，哪些决定必须现在做、哪些坑必须提前避开。今天没有账号，也没有同步——这里描述的是已经落地的
+数据格式和明确留出的接口。
+
+### 今天怎么存
+
+客户端把列表放在数据目录下的 `recent_devices.json`（默认 `%AppData%\RemoteDesktop\`，由 `DataDirectory`
+配置决定）。结构是带版本号的：
+
+```json
+{
+  "Version": 1,
+  "Devices": [
+    {
+      "DeviceId": "123 456 789",
+      "Alias": "办公室台式机",
+      "LastConnectedUtc": "2026-10-07T02:11:04.5120000+00:00",
+      "UpdatedAtUtc": "2026-10-07T02:11:04.5120000+00:00",
+      "DeletedAtUtc": null
+    }
+  ]
+}
+```
+
+读写由 `IRecentDevicesStore` / `RecentDevicesStore`（`src/Hosts/RemoteDesktop.Client/Storage/`）负责，界面只
+通过接口访问它——这个接口就是将来接同步时的缝，见下文。
+
+几处与旧格式不同的地方：
+
+- **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会再留下一个截断的文件，也就不会出现
+  "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
+- **读不出来的文件会被让开**：解析失败或版本比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>`
+  保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
+- **旧格式会被迁移**：早期文件是一个裸数组，条目里还带着明文 `SavedPassword`。读到这种文件时，密码被搬进
+  系统保护的密钥库，文件当场重写成上面的带版本结构——升级即把明文从磁盘上拿掉，而不是等用户下次改点什么。
+
+### 密码为什么不进列表
+
+`RecentDeviceEntry` 里**没有**密码字段，这是刻意的，三条理由：
+
+1. **跨机器没有意义**。密码用 DPAPI 以 `CurrentUser` 作用域加密，换一台机器根本解不开，同步过去也是废数据。
+2. **服务器不该看到它**。`docs/design/README.md` 把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
+   把设备密码放上去，等于要求用户相信一个我们明确假设不可信的组件。
+3. **它是本机的事**。"记住密码"是这台机器上的便利，不是账号的属性。
+
+所以密码存在 `ISecretStore`（客户端是 DPAPI，`secrets/` 目录）里，名字为 `recent-device-<设备代码>`，
+由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。`UpdatePasswordAsync(id, null)` 会
+**删除**密钥——这条路径以前在 API 上是缺失的，"取消勾选记住密码"因此永远清不掉已存的密码。
+
+将来如果产品坚持要"新机器登录后自动带上密码"，唯一可接受的形态是：客户端用账号口令派生密钥（Argon2id）
+做端到端加密，服务器只存不透明密文。因为密码不在条目里，这个决定**不需要改动数据格式**就能后加。
+
+### 字段语义与合并规则
+
+账号同步一上线，"两台机器上的同一份列表怎么合"就必须有确定答案。三个时间字段就是为它准备的：
+
+| 字段 | 含义 | 合并规则 |
+|---|---|---|
+| `LastConnectedUtc` | 最后一次连上这台设备的时间 | 取两边**较晚**的值。这是各机器的观测，不是编辑 |
+| `UpdatedAtUtc` | 用户最后一次**改这个条目**的时间（改别名、或删除） | 较晚者胜。连接行为不动它 |
+| `DeletedAtUtc` | 用户删除它的时间；null 表示还在列表里 | 非空即视为删除；与对方的 `UpdatedAtUtc` 比较，较晚者胜 |
+
+注意 `LastConnectedUtc` 用的是取最大值而不是"最后写入者胜"：连接是观测，谁先谁后无所谓，晚的那次才是事实。
+把连接的写入也当成编辑（顺带推进 `UpdatedAtUtc`）会让"在 A 机改名"被"在 B 机连接"无声覆盖。
+
+**墓碑**（`DeletedAtUtc`）是删除必须软删的原因：在 A 机上删掉设备，如果只是从文件里拿掉，B 机的副本会在
+下次同步时把它原样送回来，用户会觉得"删不掉"。带时间戳的墓碑让删除可以被合并、被传播，合并完再清理。
+在没有同步的今天，墓碑只是留在文件里、被 `GetAllAsync` 过滤掉——所以现在删掉的设备**看起来**是没了。
+连上同一个设备会让它复活（`DeletedAtUtc` 清空、`UpdatedAtUtc` 推进），不会出现"删过一次就再也回不来"。
+
+### 账号作用域
+
+`RecentDevicesStore` 的构造函数接受一个可选的 `accountId`：
+
+- 不传（今天的情况）：列表在 `dataDirectory/recent_devices.json`，密钥名 `recent-device-<设备代码>`。
+- 传入：列表在 `dataDirectory/accounts/<accountId>/recent_devices.json`，密钥名带账号前缀。
+
+这样同一个 Windows 用户登录两个账号时，两份列表和两套记住的密码互不串扰。现在就把这个参数留出来，是因为
+它的成本是零；等到有了账号再改，已经写下的数据就要迁移。`accountId` 来自服务器，所以构造时会校验它不含
+路径分隔符和 `..`——它必须只是一个名字，不能决定文件写到哪儿。
+
+### 账号体系上线时怎么接
+
+**客户端**：`MainWindowViewModel` 依赖的是接口，不是具体类型，所以换实现不用动界面。预期是在中间加一层：
+
+```text
+IRecentDevicesStore
+  └─ SyncedRecentDevicesStore(本地: RecentDevicesStore, 远端: IAccountDeviceListClient)
+       读：本地立即返回，后台按 UpdatedAtUtc 合并
+       写：本地先落（离线可用）+ 入队推送
+```
+
+能这么接的前提正是"条目里没有密码"——同步层搬运 `RecentDeviceEntry` 这件事本身就不可能泄漏密码。
+
+**服务端**：PostgreSQL 已经在跑（Rendezvous 的 `PostgresDeviceRegistry`，裸 Npgsql + 启动时
+`EnsureSchemaAsync`，连接串为空则回退内存），设备代码与证书指纹的映射已经持久化在
+`device_registrations` 里，新表直接引用它的 `device_id`：
+
+```sql
+CREATE TABLE IF NOT EXISTS account_devices (
+    account_id        BIGINT NOT NULL,
+    device_id         BIGINT NOT NULL,      -- 对应 device_registrations.device_id
+    alias             TEXT,
+    last_connected_at TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL,
+    deleted_at        TIMESTAMPTZ,
+    PRIMARY KEY (account_id, device_id)
+);
+```
+
+沿用既有的写法（裸 SQL、启动建表、`Rendezvous:PostgresConnectionString` 配置），不要为这一张表引入 EF Core。
+
+两点别低估：
+
+- **账号体系本身的工作量远大于列表同步**。现在的 Rendezvous 对客户端只有 `/ws` 信令和 `/health`，没有注册、
+  登录、令牌、吊销、找回中的任何一样。还要决定设备证书怎么绑定到账号——最自然的做法是设备证书注册进账号，
+  这样设备开机不需要输账号密码。
+- **设备代码会失效**。它绑定证书指纹，设备重装就是新指纹、新代码。列表里的旧条目会变成死链接，不能假设
+  `device_id` 永远有效。界面现在显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"
+  和"当前离线"的回答故意完全相同（见 `docs/design/README.md` 的在线状态查询一段），所以界面只能说这么多，
+  "该设备可能已重新注册"的提示只在有证据时（连接返回"对方设备不在线"）出现。
+  **这三态只存在内存里，不写进 `recent_devices.json`**：它是机器的观测值而不是用户意图，写进去只会给将来的
+  账号同步增加一条需要合并的字段。合并规则因此完全不受影响。
+
+### 现在有意不做的
+
+- 不引入 EF Core，不写客户端同步框架：一个接口、一种格式、一组时间字段就够了。
+- 不把 `DeviceId` 换成 GUID 之类的"分布式友好"标识：服务端已经用 `device_id BIGINT UNIQUE` 关联好了。
+- 不清理墓碑：合并规则需要它们。等同步真正落地时再定保留期（比如超过 N 天的墓碑可以丢弃）。
+- **不做密码同步**，也不为此预留字段。
+
+## 十、故障速查
 
 **Linux 上先跑这一条**，它一次问完这台机器缺什么，比照表格逐条猜快得多：
 
-```
+```bash
 remotedesktop --self-check
 ```
 
@@ -731,5 +962,5 @@ remotedesktop --self-check
 | 日志出现 "QUIC is not supported on this system" | Windows 10 缺 Schannel 的 TLS 1.3；或 Linux 上开发运行时找不到 libmsquic | Windows：升级到 Windows 11 / Server 2022+，或换 OpenSSL 版 msquic.dll。Linux：装 `.deb` 的话是随包带的，开发运行时用 `native/linux/fetch-libmsquic.sh` 再设 `LD_LIBRARY_PATH` |
 | Linux：控制端每次连接都要重新同意 | portal 不允许远程桌面会话持久化 | 这是规定，不是配置项。无人值守只能靠 Windows 被控端 |
 | Linux：剪贴板不同步 | 桌面没有授予剪贴板（和键盘鼠标在同一次授权里，点"拒绝"就没有）；或内容超过 8 MB | 看一眼被控端日志：授予失败会有 "did not grant control"。超大内容会被丢弃而不是截断 |
-| Linux：摄像头列表是空的 | 两种可能：机器上确实没有摄像头（portal 的 `IsCameraPresent` 答 false），或者授权被拒了 | 被控端日志里会有 "did not grant access to the cameras"。这条路径**没有被验证过**——见 docs/ports/linux-port-plan.md 的 P8 |
+| Linux：摄像头列表是空的 | 两种可能：机器上确实没有摄像头（portal 的 `IsCameraPresent` 答 false），或者授权被拒了 | 被控端日志里会有 "did not grant access to the cameras"。这条路径**没有被验证过**——见 [平台移植总览](../ports/README.md) 的"未验证项" |
 | Linux：光标位置不更新 | 合成器没有送光标元数据 | 画面本身正常；被控端日志会警告一次 |

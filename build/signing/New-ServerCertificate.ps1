@@ -14,7 +14,7 @@
 
   It is not put into any certificate store: the server reads the .pfx, and the files are the only copies.
 
-  The server side then needs two settings in its appsettings.json (see docs/ops/deployment.md):
+  The server side then needs two settings in its appsettings.json (see docs/ops/README.md):
     "Urls": "https://0.0.0.0:5080"
     "Kestrel": { "Certificates": { "Default": { "Path": "<Name>.pfx", "Password": "<the password>" } } }
 
@@ -132,7 +132,7 @@ if ($addresses.Count) { Write-Host "                IP=$($addresses -join ', IP=
 Write-Host "  server file:  $pfxPath"
 Write-Host "  trust file:   $cerPath"
 Write-Host ''
-Write-Host 'On the signaling server, point Kestrel at the .pfx and serve https (docs/ops/deployment.md):'
+Write-Host 'On the signaling server, point Kestrel at the .pfx and serve https (docs/ops/README.md):'
 Write-Host '  "Urls": "https://0.0.0.0:5080",'
 Write-Host "  `"Kestrel`": { `"Certificates`": { `"Default`": { `"Path`": `"$pfxPath`", `"Password`": `<the password>` } } }"
 Write-Host ''

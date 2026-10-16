@@ -19,7 +19,7 @@
 #     native/linux/fetch-libmsquic.sh
 #
 # Then set RD_MSQUIC_LIBRARY to the staged file, or copy it next to the executable and turn on the
-# System.Net.Quic.AppLocalMsQuic switch (see docs/ports/linux-port-plan.md).
+# System.Net.Quic.AppLocalMsQuic switch (see docs/ports/README.md).
 set -eu
 
 # Pinned on purpose: the .NET runtime loads libmsquic without pinning a version, so an unnoticed upgrade changes
