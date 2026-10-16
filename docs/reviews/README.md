@@ -19,6 +19,7 @@
 
 | 文件 | 主题 | 日期 | 它的结论现在在哪 |
 |---|---|---|---|
+| [`ui-consistency-review-2026-10-17.md`](ui-consistency-review-2026-10-17.md) | 客户端 UI 跨平台一致性：视图/样式盘点 + 平台驱动差异逐项核对 | 2026-10-17 | 三处文案缺陷（U1–U3）与一处限制告知缺口（U4）待修复；现行事实以 [`docs/usage/README.md`](../usage/README.md) 为准 |
 | [`repo-structure-review-2026-10-16.md`](repo-structure-review-2026-10-16.md) | 目录结构：同一天三轮（跨平台规范核对 → 第一轮修复的落地核验 → 逐目录逐文件全量普查） | 2026-10-16 | 约定进 `CONTRIBUTING.md` 与 `build/README.md`；六条断言进 `RepositoryStructureTests` |
 | [`security-review-2026-10-12.md`](security-review-2026-10-12.md) | 安全审计：逐项定级与对抗性实测 | 2026-10-12 | 规范性结论并入 [`docs/design/README.md`](../design/README.md) §3 |
 | [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md) | macOS 移植的架构与技术选型评估 | 2026-10-13 | 后续做法见 [`docs/ports/README.md`](../ports/README.md) |
