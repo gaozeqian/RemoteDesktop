@@ -3,6 +3,7 @@
 > **历史快照 · 已冻结** — 这是 2026-10-16 三轮目录结构评审的合订记录，**不再更新**；其中写了"建议"
 > 而后来未被采纳的项，一律以现行约定为准（[`docs/STYLE.md`](../STYLE.md)、[`CONTRIBUTING.md`](../../CONTRIBUTING.md)、
 > [`build/README.md`](../../build/README.md)）。归档说明见 [`docs/reviews/README.md`](README.md)。
+> （2026-10-17：正文引用的旧文档路径已统一替换为现路径，评审结论未改动。）
 
 同一天做了三轮，一轮比一轮彻底：第一轮按跨平台仓库规范逐项核对并给出目标结构，第二轮核验第一轮的修复是否
 真的落地、并挑出 `build/` 分类轴这类新问题，第三轮放弃抽检、把每个目录与每个文件名逐个过一遍，
@@ -171,7 +172,7 @@
 
 **11. `docs/README.md` 索引漏项**
 
-`docs/` 实有 10 个文件，索引列出 9 个（含自身），漏掉 `docs/design/security-review.md`。而 `macos-port-review.md` 已在索引中，说明这是遗漏而非有意排除。
+`docs/` 实有 10 个文件，索引列出 9 个（含自身），漏掉安全评审（现 [`security-review-2026-10-12.md`](security-review-2026-10-12.md)）。而 macOS 移植评审（现 [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md)）已在索引中，说明这是遗漏而非有意排除。
 
 **12. 缺 `LICENSE`**
 
@@ -348,17 +349,17 @@ build/installer/New-LicenseRtf.ps1
 
 #### P3-6 `docs/README.md` 索引漏掉本 PR 新增的文档
 
-`docs/` 实有 11 个文件，索引列出 9 个，漏掉 `docs/directory-structure-review.md`（第一轮评审产物）。上一轮刚补过 `security-review.md`，同一类漏项复发。建议：要么补进索引，要么明确规定"评审类文档不进索引"（目前 `macos-port-review.md` 在索引里，说明是无意遗漏而非有意排除）。
+`docs/` 实有 11 个文件，索引列出 9 个，漏掉第一轮评审产物（现 [`repo-structure-review-2026-10-16.md`](repo-structure-review-2026-10-16.md) §第一轮）。上一轮刚补过安全评审（现 [`security-review-2026-10-12.md`](security-review-2026-10-12.md)），同一类漏项复发。建议：要么补进索引，要么明确规定"评审类文档不进索引"（移植评审在索引里——现 [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md)——说明是无意遗漏而非有意排除）。
 
 #### P3-7 `docs/` 平铺 11 个文件，无子目录
 
-第一轮明确标为"规模未到必须，未做"。现在 11 个文件里混了三类读者：设计/协议（architecture、protocol、security、security-review）、运维（deployment、device-list-storage）、移植计划与评审（macos/linux port plan + review，其中两份各 77KB / 137KB）。建议按读者分层：
+第一轮明确标为"规模未到必须，未做"。现在 11 个文件里混了三类读者：设计/协议（四份已并入 [`../design/README.md`](../design/README.md)，安全评审另入 [`security-review-2026-10-12.md`](security-review-2026-10-12.md)）、运维（两份已并入 [`../ops/README.md`](../ops/README.md)）、移植计划与评审（计划已并入 [`../ports/README.md`](../ports/README.md)，评审另入 [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md)；其中两份计划原各 77KB / 137KB）。建议按读者分层：
 
 ```text
 docs/
-├─ design/    architecture.md protocol.md security.md security-review.md
-├─ ops/       deployment.md device-list-storage.md
-└─ ports/     macos-port-plan.md macos-port-review.md linux-port-plan.md
+├─ design/    README.md（架构、协议、安全合并为一份）
+├─ ops/       README.md（部署、设备列表存储合并为一份）
+└─ ports/     README.md（两份移植计划合并为一份；评审另入 reviews/）
 ```
 
 （含评审记录 `*-review.md` 的归属：是"当时的结论"还是"现行规范"，值得在 `docs/README.md` 里说一句，否则新贡献者会拿旧评审当现行约定。）
@@ -377,7 +378,7 @@ docs/
 
 | 优先级 | 事项 | 建议时机 |
 |---|---|---|
-| P2-1 | `build/` 分类轴统一为 `<平台>/<角色>` | 单独 PR（涉及 3 个 deb 脚本 + CI 引用 + deployment.md） |
+| P2-1 | `build/` 分类轴统一为 `<平台>/<角色>` | 单独 PR（涉及 3 个 deb 脚本 + CI 引用 + 部署文档（现 [`../ops/README.md`](../ops/README.md)）） |
 | P2-2 | 服务定义收敛到 `build/service/<平台>/` | 同上，可与 P2-1 合并做 |
 | P2-3 | `License.rtf` 改为构建时生成，或加 CI 漂移校验 | **本 PR 内**（改动小、合规相关） |
 | P2-4 | `signing/`、`installer/` 层级混放 | 本 PR 内（纯移动） |
@@ -403,13 +404,13 @@ docs/
 | P2-4 | 层级混放 | ✅ 复核后改为立规矩，不动文件 | 复核时发现这不是混放而是**共享层**：`build/signing/README.md` 早已写明"跨平台的脚本放在本目录"，`installer/` 本层放的是 client 与 server 共用的许可文本。判断标准只有一句——被两个以上角色/平台用到就放本层，否则进子目录。这条规则现在写在 `build/README.md` 里；按它判断，`tools/` 是唯一真正需要扁平的目录（与平台无关） |
 | P3-5 | 项目数过期 | ✅ | `CONTRIBUTING.md` 的"23 个项目"改为 27（21 个产品项目 + 6 个测试项目） |
 | P3-6 | docs 索引漏项 | ✅ | `docs/README.md` 重写：按 `design/` / `ops/` / `ports/` 分节，两份结构评审单列一节，并注明"评审是当时的记录，现行约定以 `CONTRIBUTING.md` 与 `README.md` 为准" |
-| P3-7 | `docs/` 平铺 | ✅ | 9 个文档分入 `docs/design/`、`docs/ops/`、`docs/ports/`；`README.md` 与两份结构评审留在根。`deployment.md` 里指向仓库根与 `build/` 的 4 处相对链接从 `../` 改为 `../../` |
+| P3-7 | `docs/` 平铺 | ✅ | 9 个文档分入 `docs/design/`、`docs/ops/`、`docs/ports/`；`README.md` 与两份结构评审留在根。部署文档（现 [`../ops/README.md`](../ops/README.md)）里指向仓库根与 `build/` 的 4 处相对链接从 `../` 改为 `../../` |
 | P3-8 | `sed -i` | ✅ | 三处改为 `awk` 写临时文件 + `mv`。复核时另有一处原判有误：脚本开头已有 `command -v dpkg-deb` 的工具自检，"跑错平台"其实会被挡住，`sed -i` 在 Linux 上也不会出问题；真正该去掉的是 GNU 语法依赖本身 |
 | P3-9 | 例外产物清理 | ✅ | `CONTRIBUTING.md` 写明唯一破例是 `build/installer/windows/` 下的三个安装器工程，并给出 `git clean -xdf build/installer`（附 `-n` 预演提示） |
 
 **未做**：`.deb` 脚本的 `dpkg-deb` 自检之外的平台断言（已足够）、`build/docker/` 归入统一分层（它不按平台分，是镜像而非安装包）。
 
-**验证**：9 个 `.sh` 脚本 `bash -n` 全部通过；全仓 grep 旧路径（`build/debian`、`installer/client`、`installer/server`）无残留（历史记录除外：`CHANGELOG.md` 与本文档第三节按原样保留当时的路径）。三平台的打包链路（`installer/windows`、`installer/linux`、`installer/macos`）需在 CI 上实跑确认。
+**验证**：9 个 `.sh` 脚本 `bash -n` 全部通过；全仓 grep 旧路径（`build/debian`、`installer/client`、`installer/server`）无残留（历史记录除外：`CHANGELOG.md` 与本文档第三节按原样保留当时的**构建目录**路径）。三平台的打包链路（`installer/windows`、`installer/linux`、`installer/macos`）需在 CI 上实跑确认。
 
 ## 第三轮 · 全量普查
 

@@ -126,8 +126,9 @@ public class DocumentationTests
 
     /// <summary>
     /// Every relative link and image resolves, and an anchor names a heading that exists. This is the check that
-    /// would have caught architecture.md pointing at macos-port-plan.md, which has never been in the same directory
-    /// as it. Anchors are checked because GitHub's Chinese heading anchors are pasted by hand and rot silently.
+    /// would have caught the design document linking to the macOS port plan by a bare file name, when the two had
+    /// never been in the same directory. Anchors are checked because GitHub's Chinese heading anchors are pasted
+    /// by hand and rot silently.
     /// </summary>
     [Fact]
     public void Every_relative_link_resolves()

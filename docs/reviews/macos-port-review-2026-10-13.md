@@ -2,6 +2,7 @@
 
 > **历史快照 · 已冻结** — 本文件是 2026-10-13 的评审记录，**不再更新**。后续进展与最终做法见现行的
 > [`docs/ports/README.md`](../ports/README.md)。归档说明见 [`docs/reviews/README.md`](README.md)。
+> （2026-10-17：正文引用的旧文档路径已统一替换为现路径，评审结论未改动。）
 >
 > 评审对象：`feat/macos-arm64-port` 分支（P1–P10，`master`..`633c837`）
 > 评审日期：2026-10-13
@@ -172,7 +173,7 @@ macOS 移植**没有污染原体系**：核心零改动、依赖规则完好、�
 | **高** | 从源码构建 MsQuic + OpenSSL，把最低系统版本降到 macOS 14 | 扩大用户群 | 中（只需替换 `fetch-libmsquic.sh`） |
 | 中 | `ILoginItem` 的 `[SupportedOSPlatform]` 从接口移到实现类 | 一致性 | 极低 |
 | 中 | 原生头文件 + `MacNativeInterop` 按域拆分 | 可维护性 | 低（纯机械） |
-| 低 | `macos-port-plan.md` 从"计划"转为"移植说明"（P1–P10 已完成） | 文档定位 | 低 |
+| 低 | 移植计划（现 [`docs/ports/README.md`](../ports/README.md)）从"计划"转为"移植说明"（P1–P10 已完成） | 文档定位 | 低 |
 
 ---
 
@@ -182,13 +183,13 @@ macOS 移植**没有污染原体系**：核心零改动、依赖规则完好、�
 
 **文档整合**
 
-- `docs/README.md`：新增"平台移植"章节，接入 `macos-port-plan.md` 与 `macos-port-review.md`。
+- `docs/README.md`：新增"平台移植"章节，接入移植计划与移植评审两份文档（现 [`docs/ports/README.md`](../ports/README.md) 与 [本评审](macos-port-review-2026-10-13.md)）。
 - `README.md`：去掉"第一阶段仅支持 Windows"的过时表述；文档列表补入两份 macOS 文档；补 macOS `.app` 打包与
   最低系统版本说明。
 - `docs/design/README.md`：具体实现层补 `RemoteDesktop.Platform.MacOS`；宿主章节标明 HostService/SessionAgent 为
   Windows 专属，并补 macOS 单进程宿主模型说明。
 - `CHANGELOG.md`：新增 `[Unreleased] · macOS 平台移植` 章节（Added / Changed / Notes）。
-- 新增本评审文档 `docs/ports/macos-port-review.md`。
+- 新增本评审文档（现 [`docs/reviews/macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md)）。
 
 **目录清理**（`artifacts/` 与 `TestResults/` 均为 gitignore 覆盖，可再生产物）
 

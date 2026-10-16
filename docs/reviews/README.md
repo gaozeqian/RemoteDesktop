@@ -7,6 +7,9 @@
 **不会。** 每份文件顶部都有一行"历史快照 · 已冻结"的标注。一条结论写进来之后就定在那里，
 哪怕后来又改了主意也不回头修改它——否则"当时怎么想的"就没有地方可查了。
 
+唯一的例外是**路径**：2026-10-17 把三份快照正文里的旧文档路径统一替换成了现路径（结论与建议
+一字未动）——快照冻结的是判断，不是让读者顺着死链接扑空的地址。
+
 由此推出两条规矩：
 
 - **不要拿这里的结论当现行约定。** 现行约定在 [`docs/STYLE.md`](../STYLE.md)、
@@ -25,16 +28,3 @@
 
 同一主题的多轮评审**合订成一份**（`repo-structure-review-2026-10-16.md` 里按轮分节），
 不为每一轮单开一个文件——一轮一个文件只会让归档变成一串读不出差别的名字。
-
-### 以前叫什么
-
-2026-10 的两次文档整理动过这几份的路径。**正文里凡提到旧路径的地方按下面这张表对着看**——
-那些是当时的记录，不再改动。
-
-| 旧路径 | 现路径 |
-|---|---|
-| `docs/directory-structure-review.md` | `docs/reviews/repo-structure-review-2026-10-16.md`（§第一轮） |
-| `docs/directory-structure-review-2.md` | 同上（§第二轮） |
-| `docs/directory-structure-review-3.md` | 同上（§第三轮） |
-| `docs/design/security-review.md` | `docs/reviews/security-review-2026-10-12.md` |
-| `docs/ports/macos-port-review.md` | `docs/reviews/macos-port-review-2026-10-13.md` |
