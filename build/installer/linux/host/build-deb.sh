@@ -39,7 +39,7 @@ done
 # put next to the executable, which is a place the loader looks for a self-contained program and nowhere near a place
 # it looks for anything else — so this package cannot accidentally give QUIC to some other program, and cannot be
 # broken by one either.
-native="$root/artifacts/native/linux"
+native="$root/artifacts/lib/linux"
 if [ ! -f "$native/libmsquic.so.2" ]; then
     echo "Fetching libmsquic..."
     "$root/native/linux/fetch-libmsquic.sh"

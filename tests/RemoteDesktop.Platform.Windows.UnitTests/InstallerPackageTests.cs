@@ -13,7 +13,7 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 /// built that way looks fine, builds without warnings, and quietly does nothing on the custom-action side. ICE
 /// validation does not catch it either, because nothing in the database is inconsistent - things are simply absent.
 /// <para>
-/// The test skips unless an installer has been built (build\installer\windows\client\build-installer.ps1), or unless the path
+/// The test skips unless an installer has been built (build\installer\windows\client\Build-ClientInstaller.ps1), or unless the path
 /// is given in RD_INSTALLER_MSI.
 /// </para>
 /// </remarks>
@@ -54,7 +54,7 @@ public sealed class InstallerPackageTests
     public void The_package_contains_the_payload_the_service_and_the_machine_setup_actions()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\client\\windows\\build-installer.ps1).");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\client\\windows\\Build-ClientInstaller.ps1).");
         using var package = new MsiPackage(Msi!);
 
         // --- payload ---------------------------------------------------------------------------------------------
@@ -103,7 +103,7 @@ public sealed class InstallerPackageTests
 
         // --- the certificates that go into a machine's trusted roots ----------------------------------------------
         // Two can be in a package, and either, both or neither may be: the certificate the build signed with, when it
-        // is self-signed (build-installer.ps1 passes -p:TrustedRootCertificate, which is the only thing that compiles
+        // is self-signed (Build-ClientInstaller.ps1 passes -p:TrustedRootCertificate, which is the only thing that compiles
         // that component in; it is what lets a UIAccess agent signed with it start without a prompt), and the
         // signaling server's, when the build was given one with -ServerCertificate (what makes wss:// work against a
         // server no authority issued a certificate for). At install time the IIS extension's action adds each to the
@@ -115,7 +115,7 @@ public sealed class InstallerPackageTests
         // and a certificate in a component with no key path is one that nothing removes again.
         var certificates = package.Rows("SELECT `Component_`, `StoreLocation`, `StoreName`, `Binary_` FROM `Wix4Certificate`", 4);
         var trustedRoots = registry.Where(row => row[1].EndsWith("CertInstalled", StringComparison.Ordinal)).ToList();
-        // How many certificates the build meant to put in, passed by build-installer.ps1 along with the path to the
+        // How many certificates the build meant to put in, passed by Build-ClientInstaller.ps1 along with the path to the
         // package. Without it this only checks that a certificate's pieces agree with each other, which a package
         // that quietly lost the whole component passes too - the component and its key path are simply both absent.
         // With it, "the build asked for one and the package has none" fails here instead of on somebody's machine.

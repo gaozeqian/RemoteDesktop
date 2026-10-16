@@ -12,7 +12,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
         Signaling (独立契约)
 ```
 
-*说明：`Platform.*` 和 `Media` 等具体实现层只依赖 `Abstractions` 提供的接口，不依赖其他业务逻辑层。`Signaling` 为了保证服务端不引入任何客户端依赖，是一个完全独立的协议包。*
+*说明：`Platform.*` 和 `Media` 等具体实现层只依赖 `Abstractions` 提供的接口（以及 `Domain` 的实体），不依赖其他业务逻辑层。`Signaling` 为了保证服务端不引入任何客户端依赖，是一个完全独立的协议包。*
 
 **平台层不只一个。** `Platform.Windows`、`Platform.Linux` 各自实现同一批端口，`Platform.Posix` 放两个
 类 Unix 系统语义相同的部分（PTY、0600 文件密钥库、用户上下文守卫）。宿主在启动时按操作系统选一个，

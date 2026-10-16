@@ -13,13 +13,8 @@ macOS 上客户端自己就是被控端（没有服务/Agent 拆分）；Linux �
 
 为了保证软件的可维护性与团队协作，请参阅以下专属文档：
 - **[📘 文档中心 (Docs Index)](docs/README.md)**：所有技术文档的入口。
-  - **[部署与运维文档 (Deployment)](docs/ops/deployment.md)**
-  - **[系统架构设计 (Architecture)](docs/design/architecture.md)**
-  - **[网络通信协议 (Protocol)](docs/design/protocol.md)**
-  - **[安全机制说明 (Security)](docs/design/security.md)**
-  - **[设备列表存储设计 (Storage)](docs/ops/device-list-storage.md)**
-  - **[macOS 移植计划 (macOS Port Plan)](docs/ports/macos-port-plan.md)**
-  - **[macOS 移植评审 (macOS Port Review)](docs/ports/macos-port-review.md)**
+  <!-- 这里只放这一条链接，不要在这里重列文档清单。曾经列过，然后漏掉了 4 份（security-review、
+       linux-port-plan 与两份结构评审）——两份手工维护的索引必然分叉，所以清单只在 docs/README.md 里有一份。 -->
 - **[🤝 贡献指南 (Contributing)](CONTRIBUTING.md)**：包含代码提交流程、环境要求与架构依赖规则。
 - **[📜 更新日志 (Changelog)](CHANGELOG.md)**：记录各里程碑的新增特性与修复。
 
@@ -34,8 +29,8 @@ dotnet test RemoteDesktop.slnx
 
 ```
 # Windows MSI（需要 .NET SDK 与网络还原 WiX 包）
-pwsh -File build/installer/windows/client/build-installer.ps1
-pwsh -File build/installer/windows/server/build-server-installer.ps1
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1
+pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 
 # Linux .deb（在 Linux 上构建；自包含发布，目标机器不需要装 .NET）
 build/installer/linux/client/build-deb.sh
@@ -309,8 +304,8 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 ```
 # 管理员 PowerShell
 dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/windows/host
-.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
-.\build\service\windows\uninstall-service.ps1
+.\build\service\windows\Install-HostService.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
+.\build\service\windows\Uninstall-HostService.ps1
 ```
 
 日志在 `%ProgramData%\RemoteDesktop\logs`（`service-*.log`、`agent-*.log`），设备身份在同目录的 `secrets`（仅 SYSTEM、管理员可访问）。
@@ -324,10 +319,10 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 ```
 # 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
 # 正式发布请带上自己服务器的地址（不带就用内置的 127.0.0.1，装到别的机器上连不上）
-.\build\installer\windows\client\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
-.\build\installer\windows\client\build-installer.ps1 -SignCertificate <证书指纹或 CN 名称>
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
 ```
 
 脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名（见下）→
@@ -358,7 +353,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
   自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——上面那个包内容检查就是为了这个。
 
 **服务端**（信令 + 中继）有自己的安装包，装的是另一套东西，和这个包互不影响：
-`build/installer/windows/server/build-server-installer.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
+`build/installer/windows/server/Build-ServerInstaller.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
 把两个服务器注册成服务、开好防火墙、写好配置。见 [docs/ops/deployment.md](docs/ops/deployment.md) 的"最省事的一条路"。
 
 安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/design/security.md](docs/design/security.md)。
@@ -367,8 +362,9 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 
 详细的系统架构与分层规则设计，请参见 **[系统架构设计文档](docs/design/architecture.md)**。
 
-依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`。
-`Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.Architecture.UnitTests` 强制检查。
+依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← {Features, Hosts}`。
+`Features` 与 `Hosts` 是**并列**的两层，都只依赖 `Application`，彼此之间不互相依赖。
+`Platform.*` 和 `Media` 只依赖 `Abstractions` 与 `Domain`（平台端口接口）。以上规则由 `tests/RemoteDesktop.Architecture.UnitTests` 强制检查。
 
 | 目录 | 内容 |
 |---|---|

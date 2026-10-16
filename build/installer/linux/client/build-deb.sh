@@ -35,7 +35,7 @@ done
 
 # Same reasoning as the host's package: the .NET runtime does not ship libmsquic on Linux, and a self-contained
 # program looks for it beside itself and nowhere else.
-native="$root/artifacts/native/linux"
+native="$root/artifacts/lib/linux"
 if [ ! -f "$native/libmsquic.so.2" ]; then
     echo "Fetching libmsquic..."
     "$root/native/linux/fetch-libmsquic.sh"

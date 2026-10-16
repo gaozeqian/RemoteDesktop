@@ -136,7 +136,10 @@ runs:
         foreach ($check in $checks) {
           Write-Host "--- $(Split-Path -Leaf $check.Msi) ($([math]::Round((Get-Item $check.Msi).Length / 1MB, 1)) MB)"
           Set-Item -Path "Env:$($check.Variable)" -Value $check.Msi
-          dotnet test --project tests/RemoteDesktop.Platform.Windows.UnitTests --filter-class $check.Class -v quiet
+          # --results-directory is not optional. Without it dotnet test creates an empty TestResults/ in the current
+          # directory, which puts a second artifact root back at the repository root -- the thing "构建产物布局" in
+          # CONTRIBUTING.md says there is only one of. This branch is Windows-only, so the directory is fixed too.
+          dotnet test --project tests/RemoteDesktop.Platform.Windows.UnitTests --filter-class $check.Class --results-directory artifacts/test-results/windows -v quiet
           if ($LASTEXITCODE -ne 0) { throw "$($check.Msi) is missing something (see the test output above)." }
           Remove-Item "Env:$($check.Variable)" -ErrorAction SilentlyContinue
         }

@@ -47,14 +47,14 @@ public sealed class ServerInstallerPackageTests
     public void The_package_installs_both_servers_the_ports_they_need_and_the_settings_they_share()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\windows\\build-server-installer.ps1).");
+        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\windows\\Build-ServerInstaller.ps1).");
 
         using var package = new MsiPackage(Msi!);
 
         // --- the two programs, each with the runtime that comes with it -------------------------------------------
         var files = package.Rows("SELECT `File`, `FileName` FROM `File`", 2);
         var names = files.Select(row => row[1].Split('|')[^1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "appsettings.json", "configure-server.ps1", "HOW-TO-CONFIGURE.txt" })
+        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "appsettings.json", "Set-ServerConfiguration.ps1", "how-to-configure.txt" })
         {
             Assert.Contains(expected, names);
         }
@@ -267,7 +267,7 @@ public sealed class ServerInstallerPackageTests
         // private, so a link to it would not help whoever runs the server.
         var shortcuts = package.Rows("SELECT `Name`, `Target` FROM `Shortcut`", 2);
         var howTo = Assert.Single(shortcuts, row => row[0] == "服务器配置说明");
-        Assert.Contains("HOW-TO-CONFIGURE.txt", howTo[1], StringComparison.Ordinal);
+        Assert.Contains("how-to-configure.txt", howTo[1], StringComparison.Ordinal);
 
         // --- the step that gives both servers the same key ------------------------------------------------------
         var actions = package.Rows("SELECT `Action` FROM `CustomAction`", 1).Select(row => row[0]).ToList();
@@ -293,7 +293,7 @@ public sealed class ServerInstallerPackageTests
     public void The_settings_page_custom_action_is_packed_for_the_installer_that_runs_it()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\build-server-installer.ps1).");
+        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\Build-ServerInstaller.ps1).");
 
         using var database = new Database(Msi!, DatabaseOpenMode.ReadOnly);
 

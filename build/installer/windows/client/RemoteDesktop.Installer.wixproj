@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Passed by build-installer.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
+    <!-- Passed by Build-ClientInstaller.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
     <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>
@@ -22,7 +22,7 @@
     <DefineConstants Condition="'$(TrustedRootCertificate)' != ''">$(DefineConstants);TrustedRootCertificate=$(TrustedRootCertificate)</DefineConstants>
     <!-- The same for the signaling server's certificate (-ServerCertificate). A variable that is passed to the build
          but not named here is not defined for the preprocessor, and the component it guards is dropped without a
-         word - which is why build-installer.ps1 checks the finished package for the certificates it meant to put in. -->
+         word - which is why Build-ClientInstaller.ps1 checks the finished package for the certificates it meant to put in. -->
     <DefineConstants Condition="'$(TrustedServerCertificate)' != ''">$(DefineConstants);TrustedServerCertificate=$(TrustedServerCertificate)</DefineConstants>
   </PropertyGroup>
 
@@ -38,9 +38,9 @@
 
   <Target Name="RequireGeneratedFiles" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(MSBuildProjectDirectory)\Files.generated.wxs')"
-           Text="Files.generated.wxs is missing. Run build\installer\windows\client\build-installer.ps1, which publishes the applications and generates the file list from the publish output." />
+           Text="Files.generated.wxs is missing. Run build\installer\windows\client\Build-ClientInstaller.ps1, which publishes the applications and generates the file list from the publish output." />
     <Error Condition="'$(SourceRoot)' == ''"
-           Text="SourceRoot is not set. Run build\installer\windows\client\build-installer.ps1 -SourceDirectory &lt;publish folder&gt;." />
+           Text="SourceRoot is not set. Run build\installer\windows\client\Build-ClientInstaller.ps1 -SourceDirectory &lt;publish folder&gt;." />
   </Target>
 
 </Project>

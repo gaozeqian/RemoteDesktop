@@ -171,8 +171,9 @@ public static class MstscIconExtractor
 
             if (iconBytes.Length > 8 && iconBytes[0] == 0x89 && iconBytes[1] == 0x50 && iconBytes[2] == 0x4E && iconBytes[3] == 0x47)
             {
+                // Written under its size name only. There used to be a second copy called icon.png, holding these same
+                // bytes: mstsc's icon is 256x256, so the master and the 256 size were one image under two names.
                 File.WriteAllBytes(Path.Combine(assetsDir, "icon-256.png"), iconBytes);
-                File.WriteAllBytes(Path.Combine(assetsDir, "icon.png"), iconBytes);
                 break;
             }
         }
@@ -187,8 +188,8 @@ public static class MstscIconExtractor
     [MstscIconExtractor]::Extract($mstscPath, $outFull)
 }
 
-# Generate derived PNG sizes from icon.png
-$masterPng = Join-Path $outFull "icon.png"
+# Generate the derived PNG sizes from the resource's own 256. That one is the master, so it is not in the list below.
+$masterPng = Join-Path $outFull "icon-256.png"
 if (Test-Path $masterPng) {
     Add-Type -AssemblyName System.Drawing
     $bmp = [System.Drawing.Bitmap]::FromFile($masterPng)

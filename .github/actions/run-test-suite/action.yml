@@ -12,8 +12,12 @@ runs:
   using: composite
   steps:
     # Microsoft.Testing.Platform mode (global.json's test.runner): --logger is a VSTest concept and is ignored or
-    # rejected here; the TRX files come from the MTP extension and still land in TestResults/*.trx. --nologo must NOT
-    # be passed -- it is forwarded to the test program, which rejects the whole run with exit code 5.
+    # rejected here; the TRX files come from the MTP extension and still land in one file per test project. --nologo
+    # must NOT be passed -- it is forwarded to the test program, which rejects the whole run with exit code 5.
+    #
+    # The results go under the repository's single artifact root rather than to a second one at the repo root; see
+    # CONTRIBUTING.md "构建产物布局". RUNNER_OS is "Linux"/"Windows"/"macOS" and the repository's platform tokens are
+    # lowercase, hence the ToLower() -- the directory name has to match build/ and artifacts/ elsewhere.
     #
     # A failure is retried once. The integration suite runs real processes, real PTYs, real UDP hole punching and, on
     # Windows, a real Media Foundation encoder, on a runner that is slow and contended: the same commit often fails
@@ -23,6 +27,8 @@ runs:
     - name: Test
       shell: pwsh
       run: |
+        $resultsDir = "artifacts/test-results/$($env:RUNNER_OS.ToLower())"
+
         # macOS: the test hosts are framework-dependent, and System.Net.Quic resolves libmsquic relative to the
         # assembly that declares the P/Invoke -- the shared framework directory in that deployment shape. The loader
         # tries that directory before anything else (CoreCLR's LoadNativeLibraryBySearch probes the assembly
@@ -34,21 +40,21 @@ runs:
         # survive, because macOS strips DYLD_* whenever a restricted binary (Apple's /bin/sh, /usr/bin/env) is
         # spawned anywhere in the chain -- doing it here, inside the already-running shell, is the one place it
         # sticks.
-        if ($IsMacOS -and (Test-Path "artifacts/native/macos")) {
+        if ($IsMacOS -and (Test-Path "artifacts/lib/macos")) {
             foreach ($runtime in Get-ChildItem "$HOME/.dotnet/shared/Microsoft.NETCore.App" -Directory) {
-                Copy-Item artifacts/native/macos/*.dylib $runtime.FullName -Force
+                Copy-Item artifacts/lib/macos/*.dylib $runtime.FullName -Force
                 Write-Host "Staged the MsQuic libraries into $($runtime.FullName)"
             }
 
-            $env:DYLD_LIBRARY_PATH = "$PWD/artifacts/native/macos:$env:DYLD_LIBRARY_PATH"
+            $env:DYLD_LIBRARY_PATH = "$PWD/artifacts/lib/macos:$env:DYLD_LIBRARY_PATH"
             Write-Host "DYLD_LIBRARY_PATH=$env:DYLD_LIBRARY_PATH"
         }
 
-        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
         if ($LASTEXITCODE -eq 0) { exit 0 }
 
         $failed = [System.Collections.Generic.List[string]]::new()
-        foreach ($file in Get-ChildItem TestResults/*.trx -ErrorAction SilentlyContinue) {
+        foreach ($file in Get-ChildItem "$resultsDir/*.trx" -ErrorAction SilentlyContinue) {
             [xml]$xml = Get-Content $file.FullName
             $xml.TestRun.Results.UnitTestResult |
                 Where-Object { $_.outcome -eq 'Failed' } |
@@ -59,8 +65,8 @@ runs:
         Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
         Write-Host "Failed on the first attempt: $names"
 
-        Remove-Item TestResults -Recurse -Force -ErrorAction SilentlyContinue
-        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory TestResults
+        Remove-Item $resultsDir -Recurse -Force -ErrorAction SilentlyContinue
+        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
         if ($LASTEXITCODE -ne 0) {
             Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
         }
@@ -70,14 +76,16 @@ runs:
       if: always()
       with:
         name: ${{ inputs.artifact-name }}
-        path: TestResults/*.trx
+        # A glob rather than the ${{ runner.os }} token: that one is "Linux"/"macOS", and the results directory is
+        # lowercased to match the repository's platform tokens, so on a Linux runner the two would not meet.
+        path: artifacts/test-results/*/*.trx
 
     - name: Generate Test Summary
       if: always()
       shell: pwsh
       run: |
-        if (Test-Path TestResults) {
-          $trxFiles = Get-ChildItem TestResults/*.trx
+        if (Test-Path artifacts/test-results) {
+          $trxFiles = Get-ChildItem artifacts/test-results/*/*.trx
           $summary = @()
           $summary += "### 🧪 Test Results Summary"
           $summary += ""

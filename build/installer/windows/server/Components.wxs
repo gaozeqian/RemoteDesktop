@@ -4,7 +4,7 @@
   them, and the two settings files. Everything else is generated from the publish output into Files.generated.wxs.
 
   The two server folders (Rendezvous, Relay) are declared by that generated file, which mirrors the publish output;
-  build-server-installer.ps1 tells the generator to name those two directories RendezvousFolder and RelayFolder, so
+  Build-ServerInstaller.ps1 tells the generator to name those two directories RendezvousFolder and RelayFolder, so
   the components here can be placed in them regardless of the order the publish output happens to be read in.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -252,7 +252,7 @@
       <Component Id="ServerShortcut" Guid="d17b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d">
         <Shortcut Id="HowToConfigureLink" Name="服务器配置说明"
                   Description="How to change the database, relay address and TLS settings of these servers"
-                  Target="[INSTALLFOLDER]HOW-TO-CONFIGURE.txt" WorkingDirectory="INSTALLFOLDER" />
+                  Target="[INSTALLFOLDER]how-to-configure.txt" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\RemoteDesktop\Server" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
         <!-- Windows Installer only removes folders it is told about. -->
         <RemoveFolder Id="RemoveServerShortcutFolder" Directory="ServerShortcutFolder" On="uninstall" />
@@ -272,7 +272,7 @@
 
     <Dialog Id="ServerSettingsDlg" Width="370" Height="364" Title="[ProductName] 安装向导">
       <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器设置" />
-      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下三项都可以留空，装完也能改（见安装目录下的 configure-server.ps1）。" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下三项都可以留空，装完也能改（见安装目录下的 Set-ServerConfiguration.ps1）。" />
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
       <Control Id="BottomLine" Type="Line" X="0" Y="328" Width="370" Height="0" />
 

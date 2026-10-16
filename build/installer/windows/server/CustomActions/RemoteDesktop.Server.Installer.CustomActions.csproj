@@ -8,7 +8,7 @@
     this project runs is a TCP reachability test rather than the full one the server does at start-up).
 
     Not in RemoteDesktop.slnx: this is installer plumbing, not product code, and the solution's projects are all
-    net10. It is built by build-server-installer.ps1 alongside the package.
+    net10. It is built by Build-ServerInstaller.ps1 alongside the package.
   -->
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>

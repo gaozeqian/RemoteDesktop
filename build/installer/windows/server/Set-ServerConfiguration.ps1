@@ -12,15 +12,15 @@
 .EXAMPLE
   # Point the servers at a database (the one setting whose default has the worst consequence: without it device codes
   # only live in memory and change on every restart).
-  .\configure-server.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+  .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 
 .EXAMPLE
   # Move signaling to https with a certificate this machine makes for itself, and print what would happen first.
-  .\configure-server.ps1 -TlsGenerate -WhatIf
+  .\Set-ServerConfiguration.ps1 -TlsGenerate -WhatIf
 
 .EXAMPLE
   # Tell clients where the relay is (required when the relay runs on another machine).
-  .\configure-server.ps1 -RelayPublicEndpoint 203.0.113.10:5082
+  .\Set-ServerConfiguration.ps1 -RelayPublicEndpoint 203.0.113.10:5082
 
 .NOTES
   Needs an elevated prompt: it writes the settings next to the programs and restarts services.

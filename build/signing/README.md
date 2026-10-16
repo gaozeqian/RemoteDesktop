@@ -17,7 +17,7 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 
 安装包和程序都需要**代码签名**：没有签名时 Windows SmartScreen 会提示"未知发布者"，企业策略和杀毒软件也更可能拦截。
 
-这套构建脚本的签名是**自动**的：`build-installer.ps1` 会在本机和当前用户的证书存储里找可用的代码签名证书
+这套构建脚本的签名是**自动**的：`Build-ClientInstaller.ps1` 会在本机和当前用户的证书存储里找可用的代码签名证书
 （有私钥、未过期、用途是代码签名），找到就签名。它只自动使用**名字里含 `RemoteDesktop`** 的证书——别人的证书
 （比如另一个产品的）绝不会被默默拿来签本产品；那种情况下脚本会列出候选并让你用 `-SignCertificate` 明确指定。
 
@@ -61,7 +61,7 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 CI 上最常见的用法（证书以 Base64 放在 Secrets 里，解码成 .pfx 再传给脚本）：
 
 ```powershell
-.\build\installer\windows\client\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws `
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws `
     -CertificateFile .\sign.pfx -CertificatePassword $env:PFX_PASSWORD
 ```
 
@@ -76,17 +76,17 @@ brew install osslsigncode
 
 ```powershell
 # PKCS#12（.pfx/.p12）：-SingingTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
-pwsh -File build/installer/windows/client/build-installer.ps1 `
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # 指定 osslsigncode 也可以（Linux/macOS 上只有它），密码也可以放在环境变量 RD_SIGNING_PASSWORD 里
-pwsh -File build/installer/windows/client/build-installer.ps1 `
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）——这一种只有 osslsigncode 支持
-pwsh -File build/installer/windows/client/build-installer.ps1 `
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.crt.pem -PrivateKeyFile C:\keys\codesign.key.pem
 ```
 
@@ -126,7 +126,7 @@ pwsh -File build/signing/windows/New-SigningCertificate.ps1 -Years 5
 #    → build/signing/windows/certificates/RemoteDesktop.pfx  .cer
 
 # 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用）
-pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
 #    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要
@@ -162,7 +162,7 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 
 `-ServerCertificate <证书文件>` 会把**信令服务器用的那张证书**的公钥部分一起打进安装包，装到哪台机器，
 哪台机器就信任它。这是给"服务器地址没有公网 CA 会签发证书"的部署准备的（内网、车间、没有域名的机器）：
-配上 TLS 之后客户端不会再报证书错误。`build-installer.ps1` 把它作为 `-p:TrustedServerCertificate` 传给 WiX，
+配上 TLS 之后客户端不会再报证书错误。`Build-ClientInstaller.ps1` 把它作为 `-p:TrustedServerCertificate` 传给 WiX，
 `Components.wxs` 里对应的是第二个条件组件，和上面那一个互不影响。
 
 生成服务器证书用 `New-ServerCertificate.ps1`（列上客户端会用的所有名字和地址）：
@@ -193,20 +193,20 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 
 ```powershell
 # 自动找证书并签名（默认行为）
-pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定证书（指纹或 CN 名称的一部分）
-pwsh -File build/installer/windows/client/build-installer.ps1 -SignCertificate 1A2B3C... 
-pwsh -File build/installer/windows/client/build-installer.ps1 -SignCertificate "CN=你的公司名"
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SignCertificate 1A2B3C... 
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SignCertificate "CN=你的公司名"
 
 # 明确不签名
-pwsh -File build/installer/windows/client/build-installer.ps1 -SkipSigning
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SkipSigning
 
 # 跳过签名验证（一般不需要：自签名证书只是"不受信任的根"警告，不会让构建失败）
-pwsh -File build/installer/windows/client/build-installer.ps1 -SkipSignatureVerification
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SkipSignatureVerification
 
 # 换时间戳服务器（默认 DigiCert；留空则不时间戳，正式发布不建议）
-pwsh -File build/installer/windows/client/build-installer.ps1 -TimestampServer http://timestamp.sectigo.com
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -TimestampServer http://timestamp.sectigo.com
 ```
 
 **时间戳为什么重要**：不时间戳的签名在证书过期后失效，已经发出去的安装包会突然"签名无效"；有时间戳的签名在证书过期后依然有效。

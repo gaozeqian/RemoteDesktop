@@ -1,37 +1,41 @@
 ﻿<#
 .SYNOPSIS
-  Builds the Windows installer (MSI) for RemoteDesktop.
+  Builds the Windows installer (MSI) for the RemoteDesktop servers.
 
 .DESCRIPTION
-  1. Publishes the client and the host service (which carries the session agent with it) self-contained for win-x64 into
-     one output folder.
-  2. Generates the WiX file list from that folder (WiX v5 has no heat, and the list changes with every build anyway).
+  1. Publishes the two server programs (the rendezvous server and the relay) self-contained for win-x64, each into a
+     folder of its own (Rendezvous, Relay) under one publish directory.
+  2. Generates the WiX file list from that directory (WiX v5 has no heat, and the list changes with every build
+     anyway).
   3. Builds the MSI with the WiX v5 SDK and, when a signing certificate is given, signs it.
 
-  The MSI installs the client, the background service and the session agent, adds a start menu shortcut, an inbound UDP
-  firewall rule for peer connections, and configures Ctrl+Alt+Del support and the server address.
+  The MSI installs both servers into Program Files\Remote Desktop Server, registers each as a Windows service
+  (RemoteDesktopRendezvous and RemoteDesktopRelay), adds the three inbound firewall rules they need, and configures
+  the two of them - the address signaling listens on, the relay endpoint clients are told, the key they share, and
+  optionally a certificate to serve TLS with.
+
+  This is a package of its own, next to the client installer in ..\client: a machine can run the servers, the client,
+  or both, and upgrading one never touches the other.
 
 .EXAMPLE
-  # Development build with the built-in default server address
-  .\build\installer\windows\client\build-installer.ps1
+  # Development build, servers reachable on this machine's name and on all interfaces
+  .\build\installer\windows\server\Build-ServerInstaller.ps1
 
 .EXAMPLE
-  # An installer for your own server, signed
-  .\build\installer\windows\client\build-installer.ps1 -RendezvousUri ws://rd.example.com:5080/ws `
+  # A server built for a deployment with TLS, signed
+  .\build\installer\windows\server\Build-ServerInstaller.ps1 -RendezvousUrl https://0.0.0.0:5080 `
       -SignCertificate (Get-ChildItem Cert:\CurrentUser\My\ABCDEF...)
 
 .NOTES
   A signed installer is what keeps SmartScreen and enterprise policy from blocking the install. Without -SignCertificate
   the MSI is built but unsigned, which is fine for testing on your own machines.
 
-  A build that signs with a *self-signed* certificate also puts that certificate's public half into the installer, which
-  adds it to the trusted roots of the machine it is installed on. That is what a UIAccess agent needs to start without a
-  prompt, and it is why the certificate does not have to be installed there by hand first. A certificate from an
-  authority is left alone: it is trusted through its chain, and adding a leaf to the root store would be a downgrade.
+  Unlike the client package, this one carries no certificate: nothing on a server needs UIAccess, so there is no
+  trusted root to install. Sign the package and move the certificate to the machines that need to trust it with
+  build/signing/windows/Install-TrustedCertificate.ps1.
 
-  -ServerCertificate does the same thing for the *signaling server's* certificate, which is what a deployment on a
-  network no authority issues certificates for needs: every machine that runs this installer then trusts that server's
-  TLS, so wss:// works without a certificate error. Make one with build/signing/New-ServerCertificate.ps1.
+  The certificate the signaling server serves TLS with is not a build input: it belongs to the deployment, so it is
+  given to the installer (TLSCERTIFICATEPATH) rather than baked into the package.
 #>
 [CmdletBinding()]
 param(
@@ -41,8 +45,10 @@ param(
     # Where the MSI ends up. Empty means the default below.
     [string]$OutputDirectory = '',
 
-    # Server address baked into the installer (ws:// or wss://). Empty leaves the published default in place.
-    [string]$RendezvousUri = '',
+    # The address the rendezvous server binds to (http:// or https://), baked into the settings template the installer
+    # ships and used as the default of the RENDEZVOUSURL property. This is what the server listens on, not what clients
+    # are told to use. Empty leaves whatever the publish output already has in place.
+    [string]$RendezvousUrl = 'http://0.0.0.0:5080',
 
     [string]$Configuration = 'Release',
 
@@ -66,12 +72,6 @@ param(
 
     [switch]$SkipSigning,
 
-    # The certificate the signaling server serves TLS with, as a .cer or .pfx (only the public part is used). It is
-    # installed into the trusted roots of every machine that runs this installer, which is what makes wss:// work
-    # against a server whose address no public authority would issue a certificate for. Made by
-    # build/signing/New-ServerCertificate.ps1; leave empty when the server uses a certificate from an authority.
-    [string]$ServerCertificate = '',
-
     # Timestamp server for signing; an empty value signs without a timestamp (not recommended: the signature then
     # expires together with the certificate).
     [string]$TimestampServer = 'http://timestamp.digicert.com',
@@ -83,12 +83,13 @@ param(
     # certificate, which no policy can build a chain to; a release build must never pass this.
     [switch]$SkipSignatureVerification,
 
-    # Ship the symbol files too (they are about a third of the payload): useful for stack traces from other machines,
+    # Ship the symbol files too (they are a good part of the payload): useful for stack traces from a deployment,
     # not needed for a normal installation.
     [switch]$KeepSymbols,
 
-    # Build even though the repository's LICENSE still has 【placeholders】 in it. For a test build that nobody will be
-    # handed; a build meant to be published should have the real details in the license instead.
+    # Build even though LICENSE at the repository root (the same text the client package shows) still has
+    # 【placeholders】 in it. For a test build that nobody will be handed; a build meant to be published should have the
+    # real details in the license instead.
     [switch]$AllowDraftLicense
 )
 
@@ -96,41 +97,42 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # $PSScriptRoot is empty inside parameter defaults on Windows PowerShell 5.1 (it works in PowerShell 6 and later), so
-# every path that means "next to this script" is resolved here instead. Running the release build with the PowerShell
+# every path that means "next to this script" is resolved here instead. Running a release build with the PowerShell
 # that ships with Windows is common enough that it has to work there as well as in PowerShell 7.
 $installerDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..\..')
 
-# Both outputs live under the repository's single artifacts/ root, laid out as <kind>/<os>/ — the same shape the macOS
-# scripts use and the one a Linux package will use. One root means "where did the build put it" has one answer; before
-# this, Windows wrote under build/installer/…/artifacts while macOS wrote under artifacts/, so every new platform had
-# to pick a side.
-#
-# The publish output is an intermediate and the MSI is the deliverable, hence two kinds. The role is a directory only
-# where one OS has more than one of that kind — Windows publishes a client and a server, so their publish outputs need
-# separate trees; the MSIs do not, because the role is already in their file names.
-if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts\app\windows\client' }
+# Same single artifacts/ root as the client installer, same <kind>/<os>/ shape — see the longer note in
+# build/installer/windows/client/Build-ClientInstaller.ps1. The role directory is what keeps the two servers' publish
+# outputs apart; the MSIs share one directory because their names already say which is which.
+if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts\app\windows\server' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'artifacts\installer\windows' }
+
+# The license text is the product's, shared by every package (the agreement covers running the server components too),
+# and it is the repository's own LICENSE rather than a copy kept beside the packages: one text, and the RTF the MSI
+# license page needs is generated from it. No package can show an agreement the repository no longer states.
+$sharedDirectory = Join-Path $installerDirectory '..\..'
+$licenseText = Join-Path $repoRoot 'LICENSE'
+$licenseRtf = Join-Path $sharedDirectory 'License.rtf'
 
 # Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
 # it, a typo) is worth a plain sentence now, not a cryptographic error five minutes into the build.
-foreach ($name in 'CertificateFile', 'PrivateKeyFile', 'ServerCertificate') {
+foreach ($name in 'CertificateFile', 'PrivateKeyFile') {
     $path = Get-Variable -Name $name -ValueOnly
     if ($path -and -not (Test-Path -LiteralPath $path)) { throw "The certificate -$name '$path' does not exist." }
 }
 
 # The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
 # document that says "insert your company name here" to whoever installs the product, so the build stops instead.
-# Fill in LICENSE at the repository root (shared by every package) or pass -AllowDraftLicense for a build that is not going anywhere.
-# Checked here for the same reason as the certificate paths: a release that is going to stop should stop in the first
-# second, not after five minutes of publishing.
-$licensePath = Join-Path $repoRoot 'LICENSE'
-$placeholders = Select-String -Path $licensePath -Pattern '【[^】]+】' -AllMatches |
+# Fill in LICENSE at the repository root (or pass -AllowDraftLicense for a build that is not going anywhere).
+# Checked here for the same reason as the certificate paths above: a release that is going to stop should stop in the
+# first second, not after the servers have been published.
+$placeholders = Select-String -Path $licenseText -Pattern '【[^】]+】' -AllMatches |
     ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
 if ($placeholders -and -not $AllowDraftLicense) {
     throw @"
 The license text still has placeholders in it: $($placeholders -join ', ')
-Edit $licensePath and put your own details in their place, or pass -AllowDraftLicense to build anyway
+Edit $licenseText and put your own details in their place, or pass -AllowDraftLicense to build anyway
 (for a test build that will not be handed to anybody).
 "@
 }
@@ -140,11 +142,8 @@ if ($placeholders) {
 
 function Get-ProductVersion {
     $props = [xml](Get-Content (Join-Path $repoRoot 'Directory.Build.props'))
-    # Every PropertyGroup, not just the first. $props.Project.PropertyGroup is an array as soon as the file has more
-    # than one group, and reading .Version off that array is version-dependent: Windows PowerShell 5.1 enumerates the
-    # member and hands back the one non-null value, PowerShell 7 throws "The property 'Version' cannot be found on this
-    # object" because the other group has no such element. The build runs under pwsh, so the file's shape decides
-    # whether this works — which is the wrong thing for it to depend on.
+    # Every PropertyGroup, not just the first — see the longer note in Build-ClientInstaller.ps1. Reading .Version off the
+    # PropertyGroup array works in Windows PowerShell 5.1 and throws in PowerShell 7, which is what CI runs.
     $version = $props.SelectNodes('/Project/PropertyGroup/Version') |
         ForEach-Object { $_.InnerText } |
         Select-Object -First 1
@@ -158,61 +157,97 @@ function Get-ProductVersion {
     return "$version.0"
 }
 
-# One component per file, nested directories mirroring the publish output. Ids are positional: component GUIDs are
-# derived from each file's key path, so they stay stable as long as a file keeps its name and place.
+# One component per file, the subfolders of the publish output mirrored as directories. Ids are positional: component
+# GUIDs are derived from each file's key path, so they stay stable as long as a file keeps its name and place.
+#
+# Two things differ from the client installer's copy of this function, both of them because the servers have what it
+# does not (one folder per server, each with the runtime's own localization folders under it):
+#
+#   * the folders directly under the publish directory are named after those servers and get their id from
+#     $TopLevelDirectoryIds rather than from the counter. The hand-written components in Components.wxs install into
+#     them (the two executables, the two settings files), and a counter would tie those to the order the publish
+#     output happens to be read in. A folder the caller does not name falls back to the counter, and the components
+#     that expect the named id then fail to link - loudly, which is the point;
+#   * the directory tree is written under a DirectoryRef and the components stay in the ComponentGroup, each one
+#     carrying the id of the folder it belongs to. WiX 5 has no Directory element inside a ComponentGroup (the client's
+#     publish output is flat, so its generator never met that), and a component that nothing references is not
+#     installed at all, so the two cannot simply be written together.
 function New-FileList {
-    param([string]$Source, [string]$Destination, [string[]]$Exclude)
+    param([string]$Source, [string]$Destination, [string[]]$Exclude, [hashtable]$TopLevelDirectoryIds = @{})
 
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
-    [void]$builder.AppendLine('<!-- Generated by build-installer.ps1 from the publish output: do not edit, do not commit. -->')
-    [void]$builder.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-    [void]$builder.AppendLine('  <Fragment>')
-    [void]$builder.AppendLine('    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">')
-
+    $directories = [System.Text.StringBuilder]::new()
+    $components = [System.Text.StringBuilder]::new()
     $count = @{ Files = 0; Directories = 0 }
 
     function Add-Component {
-        param([string]$Indent, [string]$SourcePath)
+        param([string]$Indent, [string]$SourcePath, [string]$DirectoryId)
 
         $count.Files++
         $escaped = [System.Security.SecurityElement]::Escape($SourcePath)
-        [void]$builder.AppendLine("$Indent<Component Id=""cmp$($count.Files)"" Guid=""*"">")
-        [void]$builder.AppendLine("$Indent  <File Id=""file$($count.Files)"" Source=""$escaped"" />")
-        [void]$builder.AppendLine("$Indent</Component>")
+        # No Directory attribute when the file lies in the install folder itself: the ComponentGroup says where its
+        # components go, and saying it twice is how the two drift apart.
+        $where = if ($DirectoryId) { " Directory=""$DirectoryId""" } else { '' }
+        [void]$components.AppendLine("$Indent<Component Id=""cmp$($count.Files)"" Guid=""*""$where>")
+        [void]$components.AppendLine("$Indent  <File Id=""file$($count.Files)"" Source=""$escaped"" />")
+        [void]$components.AppendLine("$Indent</Component>")
     }
 
     function Add-Directory {
-        param([string]$Path, [string]$Indent)
+        param([string]$Path, [string]$Indent, [int]$Depth)
 
         foreach ($directory in Get-ChildItem -LiteralPath $Path -Directory | Sort-Object Name) {
-            $count.Directories++
-            [void]$builder.AppendLine("$Indent<Directory Id=""dir$($count.Directories)"" Name=""$($directory.Name)"">")
-            Add-Directory -Path $directory.FullName -Indent "$Indent  "
-            foreach ($file in Get-ChildItem -LiteralPath $directory.FullName -File | Sort-Object Name) {
-                if ($Exclude -notcontains $file.Name) {
-                    Add-Component -Indent "$Indent  " -SourcePath $file.FullName
-                }
+            if ($Depth -eq 1 -and $TopLevelDirectoryIds.ContainsKey($directory.Name)) {
+                $id = $TopLevelDirectoryIds[$directory.Name]
+            }
+            else {
+                $count.Directories++
+                $id = "dir$($count.Directories)"
             }
 
-            [void]$builder.AppendLine("$Indent</Directory>")
+            [void]$directories.AppendLine("$Indent<Directory Id=""$id"" Name=""$($directory.Name)"">")
+            Add-Directory -Path $directory.FullName -Indent "$Indent  " -Depth ($Depth + 1)
+            [void]$directories.AppendLine("$Indent</Directory>")
+
+            foreach ($file in Get-ChildItem -LiteralPath $directory.FullName -File | Sort-Object Name) {
+                if ($Exclude -notcontains $file.Name) {
+                    Add-Component -Indent '      ' -SourcePath $file.FullName -DirectoryId $id
+                }
+            }
         }
     }
 
-    # Files directly in the install folder first, then the subfolders (runtime natives, localizations).
+    # Files directly in the publish folder first (there are none today: it holds the two server folders), then the
+    # folders themselves (the runtime, the localizations).
     foreach ($file in Get-ChildItem -LiteralPath $Source -File | Sort-Object Name) {
         if ($Exclude -notcontains $file.Name) {
-            Add-Component -Indent '      ' -SourcePath $file.FullName
+            Add-Component -Indent '      ' -SourcePath $file.FullName -DirectoryId ''
         }
     }
 
-    Add-Directory -Path $Source -Indent '    '
+    Add-Directory -Path $Source -Indent '      ' -Depth 1
 
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
+    [void]$builder.AppendLine('<!-- Generated by Build-ServerInstaller.ps1 from the publish output: do not edit, do not commit. -->')
+    [void]$builder.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
+    [void]$builder.AppendLine('  <Fragment>')
+    if ($directories.Length -gt 0) {
+        [void]$builder.AppendLine('    <DirectoryRef Id="INSTALLFOLDER">')
+        [void]$builder.Append($directories.ToString())
+        [void]$builder.AppendLine('    </DirectoryRef>')
+    }
+
+    [void]$builder.AppendLine('    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">')
+    [void]$builder.Append($components.ToString())
     [void]$builder.AppendLine('    </ComponentGroup>')
     [void]$builder.AppendLine('  </Fragment>')
     [void]$builder.AppendLine('</Wix>')
     Set-Content -LiteralPath $Destination -Value $builder.ToString() -Encoding utf8
-    Write-Host "  $($count.Files) files in $($count.Directories) subfolders"
+    # The two folders the servers live in are named by hand, so they are not in this count — it is the folders that
+    # were left for the generator to name. Saying "0 subfolders" for a payload that plainly has two of them sends
+    # whoever reads the log looking for a problem that is not there.
+    $extra = if ($count.Directories -gt 0) { " plus $($count.Directories) folders named for it" } else { '' }
+    Write-Host "  $($count.Files) files$extra"
 }
 
 
@@ -266,44 +301,6 @@ function Read-PfxCertificate {
 
     return [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
         $Path, $secret, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
-}
-
-# Writes the public half of the certificate this build signs with next to the publish output, and returns its file name
-# - the installer then puts it into the machine's trusted root store, which is what lets a UIAccess agent signed with a
-# self-signed certificate start without a prompt.
-#
-# Only a self-signed certificate is exported, and nothing is exported when the build did not sign at all:
-#   * a certificate from a certificate authority is trusted through its chain already, and putting a leaf into the
-#     machine's root store would make that one key - not the authority - the root of everything the machine trusts,
-#     which is both unnecessary and a way to lose the authority's rotation;
-#   * a certificate that signed nothing has no business in a trusted root store. That also keeps an empty placeholder
-#     out of the package, which would otherwise try to install "nothing" as a root certificate.
-function Export-TrustedRootCertificate {
-    param([object]$Certificate, [string]$Destination)
-
-    # signtool and PowerShell are handed the certificate; osslsigncode is handed files and keeps it to itself, so what
-    # signed this build is asked of a file it has just signed - one answer that covers every tool.
-    $certificate = $Certificate
-    if (-not $certificate) {
-        $signed = Get-ChildItem $Destination -Recurse -Include 'RemoteDesktop*.exe' | Select-Object -First 1
-        if ($signed) { $certificate = (Get-AuthenticodeSignature $signed.FullName).SignerCertificate }
-    }
-
-    if (-not $certificate) {
-        Write-Warning 'The certificate this build signed with could not be read back from a signed file; the installer carries no root certificate.'
-        return $null
-    }
-
-    if ($certificate.Subject -ne $certificate.Issuer) {
-        Write-Host "The signing certificate is issued by '$($certificate.Issuer)', not by itself; it is trusted through that authority already, so the installer adds no root certificate."
-        return $null
-    }
-
-    $name = 'RemoteDesktop-TrustedRoot.cer'
-    $path = Join-Path $Destination $name
-    [System.IO.File]::WriteAllBytes($path, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-    Write-Host "The signing certificate is self-signed; the installer will add its public half ($name) to the trusted roots of the machine it is installed on."
-    return $name
 }
 
 # Signing needs a tool. signtool comes with the Windows SDK, which not every build machine has; Windows itself can
@@ -392,7 +389,10 @@ in place - nothing about the build is wrong.
 
 On every machine that should accept this software, once, as an administrator:
   pwsh -File build/signing/windows/Install-TrustedCertificate.ps1 -CertificatePath <the .cer file>
-$(if ($selfSigned) { 'A machine that installs this package does not need that step: it puts this certificate into its trusted roots itself. Copying the binaries without the installer is what needs it.' })
+
+The client package puts a self-signed certificate into the machine's trusted roots by itself; this server package
+carries no certificate, so a machine that installs only this one needs the step above - or the binaries copied to it
+without the installer, which needs it in every case.
 
 For machines you do not control, only a certificate from a certificate authority helps: they have no reason to trust
 yours, and Windows keeps warning about an unknown publisher. See build/signing/README.md.
@@ -484,102 +484,101 @@ function Invoke-Signing {
     return $result
 }
 
-Write-Host 'Publishing the applications...'
+Write-Host 'Publishing the servers...'
 if (Test-Path $PublishDirectory) {
     if (-not $KeepPublishOutput) { Remove-Item -Recurse -Force $PublishDirectory }
 }
 New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 
-# The agent is built more than once per run: on its own, and as a project reference of the service, whose build copies
-# the agent's output next to itself. Both have to be the packaging build (see -p:UiAccessAgent below), and the copies
-# of the last few builds have to go: the SDK generates the executable that carries the manifest with an incremental
-# check that does not look at the manifest at all (Microsoft.NET.Sdk.targets, _CreateAppHost: inputs are the assembly
-# and the apphost source), so an apphost generated by an earlier build - a development build, without UIAccess - is
-# considered up to date and is what ends up in the package. It builds in seconds.
-#
-# The two folders are the SDK's artifacts layout, which Directory.Build.props points at the repository root: the shape
-# is artifacts/<kind>/<project> and not <project>/<kind>, which is the whole point of that setting.
-foreach ($kind in 'obj', 'bin') {
-    Remove-Item (Join-Path $repoRoot "artifacts\$kind\RemoteDesktop.SessionAgent") -Recurse -Force -ErrorAction SilentlyContinue
-}
+# The folder each server is published into is the folder the installer creates under Program Files, and the one the
+# configuration step looks in (ServerSetup.RendezvousFolder / RelayFolder), so the two have to be spelled the same.
+$servers = @(
+    @{ Project = 'RemoteDesktop.Server.Rendezvous'; Folder = 'Rendezvous' }
+    @{ Project = 'RemoteDesktop.Server.Relay'; Folder = 'Relay' }
+)
 
 Push-Location $repoRoot
 try {
-    # Each executable is published self-contained into the same folder: the service starts the agent from its own
-    # directory, so the agent has to be there with the same runtime (a plain build copies the agent, but a
-    # framework-dependent agent would look for the .NET runtime on the target machine).
-    foreach ($project in 'RemoteDesktop.HostService', 'RemoteDesktop.SessionAgent', 'RemoteDesktop.Client') {
-        Write-Host "  $project"
+    foreach ($server in $servers) {
+        Write-Host "  $($server.Project)"
 
-        # -p:UiAccessAgent=true goes to every publish, not only the agent's own: the agent project is also built as part
-        # of the others, and a build without it is an agent that cannot drive elevated windows - whichever copy lands
-        # last in the shared output folder would decide. This is the build that ends up signed in Program Files, which
-        # is what UIAccess requires; a development build keeps the manifest without it (see the project file).
-        dotnet publish "src\Hosts\$project" -c $Configuration -r win-x64 --self-contained true -p:PublishReadyToRun=true `
-            -p:UiAccessAgent=true -o $PublishDirectory -nologo -v quiet
-        if ($LASTEXITCODE -ne 0) { throw "Publishing $project failed." }
+        # Self-contained, so a machine that installs this needs no .NET runtime of its own, and one folder per server
+        # because each is a whole application: they share nothing at run time, and an operator looking at Program Files
+        # sees which two programs are there.
+        #
+        # No -p:PublishReadyToRun, unlike the client: the servers do not need the start-up time it buys (they start
+        # once, as services), and precompiling the whole runtime is what makes a package of this size - the
+        # self-contained output alone is already most of it.
+        dotnet publish "src\Server\$($server.Project)" -c $Configuration -r win-x64 --self-contained true `
+            -o (Join-Path $PublishDirectory $server.Folder) -nologo -v quiet
+        if ($LASTEXITCODE -ne 0) { throw "Publishing $($server.Project) failed." }
     }
 }
 finally {
     Pop-Location
 }
 
-foreach ($expected in 'RemoteDesktop.Client.exe', 'RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json', 'msquic.dll') {
+foreach ($expected in @('Rendezvous\RemoteDesktop.Server.Rendezvous.exe', 'Rendezvous\appsettings.json',
+                        'Relay\RemoteDesktop.Server.Relay.exe', 'Relay\appsettings.json')) {
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
 }
 
-# The agent asks for UIAccess, and only this build does: Windows refuses to start such an image unless it is signed and
-# installed in a secure location, so a development build carries the manifest without it. Published without
-# -p:UiAccessAgent the feature would silently be missing from every installation, and nothing in the package would look
-# wrong - hence the check on the file itself (the manifest travels inside the executable as plain XML).
-$agentManifest = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $PublishDirectory 'RemoteDesktop.SessionAgent.exe')))
-if ($agentManifest -notmatch 'uiAccess="true"') {
-    throw 'The published agent does not ask for UIAccess; it would not be able to drive elevated windows (see the SessionAgent project file).'
-}
-
-# The address this installation talks to. It is stored in the settings file the installer ships (which an upgrade never
-# overwrites) and is also the default of the RENDEZVOUSURI property, so the deferred custom action always writes a
-# consistent value. An installation can override it: msiexec /i <msi> RENDEZVOUSURI=ws://other.
-$settingsPath = Join-Path $PublishDirectory 'appsettings.json'
+# The address the signaling server binds to. It is stored in the settings template the installer ships (which a
+# configuration step reads and an upgrade never overwrites) and is also the default of the RENDEZVOUSURL property, so
+# the deferred custom action always writes a consistent value. An installation can override it:
+# msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080
+$settingsPath = Join-Path $PublishDirectory 'Rendezvous\appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-if ($RendezvousUri) {
-    if ($RendezvousUri -notmatch '^wss?://[^/]+') { throw "RendezvousUri must look like ws://host:port/ws (got '$RendezvousUri')." }
 
-    $settings.Transport.RendezvousUri = $RendezvousUri
+if ($RendezvousUrl) {
+    if ($RendezvousUrl -notmatch '^https?://') { throw "RendezvousUrl must look like http://0.0.0.0:5080 (got '$RendezvousUrl')." }
+
+    # A published settings file that has no Urls at all is a server that listens where its own default says; adding the
+    # property here is what keeps this step from depending on that file's shape.
+    if ($settings.PSObject.Properties.Name -contains 'Urls') { $settings.Urls = $RendezvousUrl }
+    else { $settings | Add-Member -NotePropertyName Urls -NotePropertyValue $RendezvousUrl }
     $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding utf8
 }
 
-$defaultRendezvousUri = [string]$settings.Transport.RendezvousUri
-if (-not $defaultRendezvousUri) { throw 'The published appsettings.json has no Transport:RendezvousUri to bake in.' }
-Write-Host "Server address: $defaultRendezvousUri"
+$defaultRendezvousUrl = if ($settings.PSObject.Properties.Name -contains 'Urls') { [string]$settings.Urls } else { '' }
+if (-not $defaultRendezvousUrl) { throw 'The published Rendezvous\appsettings.json has no Urls to bake in.' }
+Write-Host "Signaling listens on: $defaultRendezvousUrl"
 
-# The published default points at the machine itself, which is right for developing on one computer and wrong for
-# every other installation: a device that cannot reach a signaling server gets no device code and cannot be connected
-# to at all. Say it loudly rather than letting somebody find out after installing on two machines.
-if ($defaultRendezvousUri -match '^wss?://(127\.0\.0\.1|localhost|\[::1\])') {
+# https:// without a certificate is a server that does not start: Kestrel refuses to configure an HTTPS endpoint with
+# nothing to serve it with. The certificate belongs to the deployment and is given to the installer, not to the build,
+# so all this can do is say it - before somebody wonders why the service they just installed is not running.
+if ($defaultRendezvousUrl -match '^https://') {
     Write-Warning @"
-This installer points at $defaultRendezvousUri - the computer it runs on. Devices installed from it can only be
-connected to if the signaling server runs there. For anything else, build again with your server's address:
-  -RendezvousUri ws://<server>:5080/ws
+This installer serves TLS ($defaultRendezvousUrl) but carries no certificate of its own. Install it with one, or
+signaling will not start:
+  msiexec /i <msi> TLSCERTIFICATEPATH=C:\certs\rd.pfx [TLSCERTIFICATEPASSWORD=<password>]
 "@
 }
 
 $version = Get-ProductVersion
 
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.
+# Same text as the client installer's, so the two packages agree; generated next to this script, which is where this
+# package's project looks for it.
 Write-Host 'Generating the license RTF...'
-# The generator reads the repository's LICENSE and writes License.rtf next to itself, which is where the packages look
-# for it (WixUILicenseRtf points at ..\..\License.rtf in both .wxs files).
-& (Join-Path $installerDirectory '..\..\New-LicenseRtf.ps1') | ForEach-Object { Write-Host "  $_" }
-if ($LASTEXITCODE -ne 0) { throw 'The license RTF could not be generated.' }
+& (Join-Path $sharedDirectory 'New-LicenseRtf.ps1') -Text $licenseText -Rtf $licenseRtf
+if (-not (Test-Path -LiteralPath $licenseRtf)) { throw "The license RTF was not written to $licenseRtf." }
 
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
-# Declared by hand in Components.wxs (they carry the service, the shortcuts or the settings).
-$handWritten = @('RemoteDesktop.Client.exe', 'RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json')
+# The two files that make an installation maintainable rather than only installable: a script that writes the settings
+# the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
+# servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
+foreach ($extra in 'Set-ServerConfiguration.ps1', 'how-to-configure.txt') {
+    Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
+}
+
+# Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
+# which is what leaves out both copies of it: the publish output has one in each server folder.
+$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'appsettings.json')
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
@@ -587,7 +586,7 @@ if (-not $KeepSymbols) {
 }
 
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and
-# not just the installer: SmartScreen and antivirus look at the executables a user actually runs. Only our files are
+# not just the installer: SmartScreen and antivirus look at the executables a service runs. Only our files are
 # touched - the .NET runtime and Microsoft's libraries next to them already carry Microsoft's signature.
 $signing = if ($SkipSigning) { @{ Chosen = $null; Candidates = @() } } else { Find-SigningCertificate -Wanted $SignCertificate -Product 'RemoteDesktop' }
 $resolvedSigner = if ($SkipSigning) { $null } else { Resolve-SigningTool }
@@ -596,64 +595,66 @@ $resolvedSigner = if ($SkipSigning) { $null } else { Resolve-SigningTool }
 # Resolve-SigningTool, so the certificate it settled on is what everything else here uses.
 $signer = $resolvedSigner
 $signingCertificate = if ($signer) { $signer.Certificate } else { $null }
-$trustedRootCertificate = $null
 if ($signer) {
     $own = Get-ChildItem $PublishDirectory -Recurse -Include 'RemoteDesktop*.exe', 'RemoteDesktop*.dll'
     Write-Host "Signing $($own.Count) product file(s) before packaging..."
     foreach ($file in $own) {
         # Discarded: the per-file result of Set-AuthenticodeSignature is a row of the same table for every file, and a
-        # build that signs 287 of them does not need it printed 287 times.
+        # build that signs hundreds of them does not need it printed hundreds of times.
         [void](Invoke-Signing -Tool $signer -Certificate $signingCertificate -File $file.FullName)
     }
-
-    # Nothing comes of this when the build did not sign, or signed with a certificate from an authority: see the
-    # function for why. It is the file's presence that decides whether the installer carries the component at all.
-    $trustedRootCertificate = Export-TrustedRootCertificate -Certificate $signingCertificate -Destination $PublishDirectory
-    if ($trustedRootCertificate) { Write-Host "  $trustedRootCertificate" }
 }
 
-# The signaling server's certificate, when one was handed in: the installer puts its public part into the trusted root
-# store of every machine that runs it, which is what makes wss:// work against a server this deployment made a
-# certificate for itself. A .pfx is accepted and reduced to its public part - only the certificate travels, never a key.
-$trustedServerCertificate = ''
-if ($ServerCertificate) {
-    $trustedServerCertificate = 'RemoteDesktop-Signaling.cer'
-    $destination = Join-Path $PublishDirectory $trustedServerCertificate
+New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten `
+    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder' }
 
-    if ([System.IO.Path]::GetExtension($ServerCertificate) -in '.pfx', '.p12') {
-        $fromPfx = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-            (Resolve-Path -LiteralPath $ServerCertificate).Path, $CertificatePassword)
-        Export-Certificate -Cert $fromPfx -FilePath $destination -Type CERT | Out-Null
-        $fromPfx.Dispose()
+# The hand-written components own those files; a second component for one of them would install it twice, and for the
+# settings files it would fight the NeverOverwrite an upgrade depends on. The exclusion is by file name, so it is
+# checked here rather than assumed: a renamed binary would quietly come back into the generated list, and WiX would
+# accept it.
+foreach ($name in $handWritten) {
+    if (Select-String -LiteralPath $fileList -SimpleMatch $name -Quiet) {
+        throw "$name is in the generated file list as well as in the hand-written components in Components.wxs."
     }
-    else {
-        Copy-Item -LiteralPath $ServerCertificate -Destination $destination -Force
-    }
-
-    $installed = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path -LiteralPath $destination).Path)
-    Write-Host "  server certificate to trust: $($installed.Subject) ($($installed.Thumbprint))"
-    $installed.Dispose()
 }
-
-New-FileList -Source $PublishDirectory -Destination $fileList -Exclude @($handWritten + 'RemoteDesktop-TrustedRoot.cer', 'RemoteDesktop-Signaling.cer')
 
 Write-Host 'Building the MSI...'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-# -p:TrustedRootCertificate is what compiles the component that installs the certificate; without it neither the
-# component nor the binary it needs exists in the package (Components.wxs).
+# The custom actions the settings page needs: asking for a certificate file, and finding out whether a database
+# answers. A separate net48 project (msiexec hosts the .NET Framework runtime, so a custom action assembly has to be
+# one it can load), built here because it is installer plumbing rather than part of the product's solution.
+Write-Host 'Building the installer custom actions...'
+dotnet build (Join-Path $installerDirectory 'CustomActions\RemoteDesktop.Server.Installer.CustomActions.csproj') -c $Configuration --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'The installer custom actions failed to build.' }
+
+# The packaging step turns the assembly into a single DLL that carries its dependencies and the DTF runtime with it;
+# that one is what goes into the package, not the plain assembly next to it.
+# "x64" in the path is part of the path on purpose: the project sets Platform=x64 so that SfxCA packs the 64-bit native
+# host stub, and that is what satisfies the x64 package below. Packed with the x86 stub instead, msiexec cannot load the
+# action at all and it fails without a word in the log, so the folder spelling out the bitness is worth keeping.
+# bin\ and not artifacts\bin\ is also on purpose: the installer projects carry their own (empty) Directory.Build.props,
+# so they never import the root one and never pick up its ArtifactsPath — see build/installer/windows/client/
+# Directory.Build.props. The path here is relative to the project, as it has always been.
+$customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\x64\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
+if (-not (Test-Path -LiteralPath $customActions)) { throw "The custom actions were not packaged into $customActions." }
+
 $wixArguments = @(
     "-p:ProductVersion=$version"
     "-p:SourceRoot=$PublishDirectory"
-    "-p:DefaultRendezvousUri=$defaultRendezvousUri"
+    "-p:DefaultRendezvousUrl=$defaultRendezvousUrl"
+    "-p:CustomActionsPath=$customActions"
 )
-if ($trustedRootCertificate) { $wixArguments += "-p:TrustedRootCertificate=$trustedRootCertificate" }
-if ($trustedServerCertificate) { $wixArguments += "-p:TrustedServerCertificate=$trustedServerCertificate" }
 
-dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory
+# Same as the client script: the .msi is the deliverable and the .wixpdb is not, but WiX writes the pdb into
+# $(TargetDir), which OutputPath above has pointed at artifacts/installer/windows. PdbOutputDir puts it back in the
+# project's own obj; a relative value is normalized against the project directory.
+dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Server.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory -p:PdbOutputDir=obj\$Configuration\
 if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 
-$package = Get-ChildItem $OutputDirectory -Filter *.msi | Select-Object -First 1
+# The newest, not merely the first: an older package left in the output folder must not be the one that gets signed
+# and checked (a rebuild of the same version overwrites its name, a new version does not).
+$package = Get-ChildItem $OutputDirectory -Filter *.msi | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $package) { throw "No MSI was produced in $OutputDirectory." }
 
 Write-Host "  $($package.FullName) ($([math]::Round($package.Length / 1MB, 1)) MB)"
@@ -735,23 +736,15 @@ if (-not $SkipSigning) {
 
 
 # The package is checked without installing it: a test opens the database and reports what is missing from it. WiX 5
-# drops some content without a word (see verify notes in that test), so building is not proof.
+# drops some content without a word (see the verify notes in that test), so building is not proof.
 Write-Host 'Checking the package...'
-$env:RD_INSTALLER_MSI = $package.FullName
+$env:RD_SERVER_INSTALLER_MSI = $package.FullName
 
-# What this build meant to put in, so that a component WiX dropped without a word is caught here rather than on a
-# machine that installs it: the certificates it was given, and the difference between that and what the package has.
-$expectedCertificates = 0
-if ($trustedRootCertificate) { $expectedCertificates++ }
-if ($trustedServerCertificate) { $expectedCertificates++ }
-$env:RD_EXPECTED_CERTIFICATES = "$expectedCertificates"
-
-# 一个类一个类地跑（--filter-class 认的是完全限定类名；写成 `*InstallerPackageTests` 会把服务端那个类也选上）。
-# 没有 --nologo：新的 dotnet test（Microsoft.Testing.Platform 模式）不认它，会把它转发给测试程序，测试程序
-# 以退出码 5 拒绝整次运行。
-dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.UnitTests') --filter-class RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests -v quiet
+# 完全限定类名，和客户端脚本同样的原因（见那里的注释）：--filter-class 不认通配形式的"精确匹配"，
+# 而 --nologo 在新的 dotnet test 下会让测试程序以退出码 5 拒绝整次运行。
+# 同理 --results-directory：不给它，dotnet test 会在当前目录建一个空的 TestResults/。
+dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.UnitTests') --filter-class RemoteDesktop.Platform.Windows.UnitTests.ServerInstallerPackageTests --results-directory (Join-Path $repoRoot 'artifacts\test-results\windows') -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
-Remove-Item Env:\RD_INSTALLER_MSI
-Remove-Item Env:\RD_EXPECTED_CERTIFICATES
+Remove-Item Env:\RD_SERVER_INSTALLER_MSI
 
-Write-Host 'Done. Install with: msiexec /i <msi> (or RENDEZVOUSURI=ws://... to set the server now).'
+Write-Host 'Done. Install with: msiexec /i <msi> (or RENDEZVOUSURL=... to set the listening address now).'

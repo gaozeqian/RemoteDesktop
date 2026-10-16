@@ -9,7 +9,7 @@
          but Windows only starts such an image when it is signed with a certificate the machine trusts *and* sits in a
          secure location - an unsigned build, or one running out of bin\Debug, is refused outright ("a referral was
          returned from the server", or error 740). So only the packaged build the installer puts into Program Files
-         asks for it: build-installer.ps1 publishes with -p:UiAccessAgent=true.
+         asks for it: Build-ClientInstaller.ps1 publishes with -p:UiAccessAgent=true.
          Without it the agent still captures the screen, injects input and does everything else; it just cannot reach
          windows that run at a higher integrity level. -->
     <ApplicationManifest Condition="'$(UiAccessAgent)' == 'true'">app.uiaccess.manifest</ApplicationManifest>

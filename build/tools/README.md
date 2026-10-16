@@ -8,11 +8,11 @@
 
 | 脚本 | 做什么 | 平台 |
 |---|---|---|
-| `Generate-ThirdPartyNotices.ps1` | 从 NuGet 元数据生成根目录的 `THIRD-PARTY-NOTICES.md` | **三平台**（`pwsh`） |
+| `Export-ThirdPartyNotices.ps1` | 从 NuGet 元数据生成根目录的 `THIRD-PARTY-NOTICES.md` | **三平台**（`pwsh`） |
 | `Invoke-SecurityAudit.ps1` | 检查一份生产部署的配置是否还停在"开发默认"的不安全状态 | **三平台**（`pwsh`） |
 | `New-AppIcons.ps1` | 从 Windows 的 `mstsc.exe` 提取图标，生成客户端的各尺寸 PNG 与 `icon.svg` | **仅 Windows**，原因见下 |
 
-命名按语言各走各的：`.ps1` 用 PowerShell 的动词-名词 PascalCase（`Generate-`、`Invoke-`、`New-`），
+命名按语言各走各的：`.ps1` 用 PowerShell 的动词-名词 PascalCase（`Export-`、`Invoke-`、`New-`），
 `build/` 下的 `.sh` 用 kebab-case（`build-deb.sh`、`make-pkg.sh`）。两者混在同一目录里时这条尤其要守住——
 不然"这是个 PowerShell 脚本还是个 shell 脚本"要靠打开文件才知道。
 
@@ -20,7 +20,7 @@
 
 ```powershell
 # 依赖变化后重新生成第三方许可清单（写入仓库根，不要手改生成物）
-pwsh -File build/tools/Generate-ThirdPartyNotices.ps1
+pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 
 # 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 文件读不到
 pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"

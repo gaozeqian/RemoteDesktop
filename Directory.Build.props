@@ -17,12 +17,12 @@
 
   <!--
     Build output goes to the repository's single artifacts/ root, the same one the packaging scripts already write to
-    (artifacts/app, artifacts/installer, artifacts/native — see CONTRIBUTING.md). Without this, every project grows its
-    own bin/ and obj/ next to its sources: 23 projects meant 46 directories to clean, to ignore and to explain, and a
+    (artifacts/app, artifacts/installer, artifacts/lib — see CONTRIBUTING.md). Without this, every project grows its
+    own bin/ and obj/ next to its sources: 27 projects meant 54 directories to clean, to ignore and to explain, and a
     "where is the output" question with one answer per project.
 
     The layout this produces is the SDK's: artifacts/bin/<Project>/<pivot>/, artifacts/obj/<Project>/<pivot>/,
-    artifacts/publish/<Project>/<pivot>/ and artifacts/packages/. ArtifactsPath has to be set here rather than left to
+    artifacts/publish/<Project>/<pivot>/ and artifacts/package/<pivot>/. ArtifactsPath has to be set here rather than left to
     the default, which would resolve against each project's own directory and scatter artifacts/ folders through src/
     instead of collecting them.
 

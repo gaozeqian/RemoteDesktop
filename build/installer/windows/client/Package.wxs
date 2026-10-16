@@ -23,7 +23,7 @@
     <MediaTemplate EmbedCab="yes" />
 
     <!-- The server this installation talks to. The default is the address baked in when the installer was built
-         (build-installer.ps1 -RendezvousUri); it can be given at install time instead:
+         (Build-ClientInstaller.ps1 -RendezvousUri); it can be given at install time instead:
          msiexec /i <msi> RENDEZVOUSURI=ws://rd.example.com:5080/ws
          It has a value (rather than none) on purpose: a property without one is left out of the property table
          altogether, and the deferred custom action that writes it into appsettings.json would find nothing.

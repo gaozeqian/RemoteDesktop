@@ -70,7 +70,7 @@ curl http://127.0.0.1:5080/health
 不想手工发布 + `sc.exe` + `netsh`（也就是下面 2、3、6、8 节那些步骤）的话，用仓库里的服务端安装包。
 
 ```powershell
-pwsh -File build/installer/windows/server/build-server-installer.ps1
+pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 # 产物：artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
 ```
 
@@ -96,7 +96,7 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `POSTGRESCONNECTIONSTRING` | `auto` | `auto` = 不用数据库 |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`configure-server.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
 
 三件必须知道的事：
@@ -144,7 +144,7 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
   别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
 - **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist 与目录，
   `--keep-settings` 可只删程序）。
-- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `configure-server.ps1` 一一对应 ——
+- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.ps1` 一一对应 ——
   同样的选项，跑的是同一个 `--configure-system` 步骤。
 
 > 两个平台的服务器是**同一份可执行文件**、同一个 `--configure-system` 步骤，所以写出来的
@@ -156,20 +156,20 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 
 安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
 
-- **`configure-server.ps1`** —— 推荐的路子。在**管理员** PowerShell 里给它想改的项即可，没给的保持不动；
+- **`Set-ServerConfiguration.ps1`** —— 推荐的路子。在**管理员** PowerShell 里给它想改的项即可，没给的保持不动；
   它写完之后会重启两个服务让设置生效：
 
   ```powershell
   cd "C:\Program Files\Remote Desktop Server"
-  .\configure-server.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
-  .\configure-server.ps1 -TlsGenerate            # 本机生成自签名证书并切 https
-  .\configure-server.ps1 -RelayPublicEndpoint 203.0.113.10:5082
-  .\configure-server.ps1 -PostgresConnectionString '' -NoRestart   # 回到不用数据库，先不重启
+  .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+  .\Set-ServerConfiguration.ps1 -TlsGenerate            # 本机生成自签名证书并切 https
+  .\Set-ServerConfiguration.ps1 -RelayPublicEndpoint 203.0.113.10:5082
+  .\Set-ServerConfiguration.ps1 -PostgresConnectionString '' -NoRestart   # 回到不用数据库，先不重启
   ```
 
   它会调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
   所以两者的行为不会分叉；做过什么会追加到 `server-setup.log`。拿不准就先加 `-WhatIf` 看一眼。
-- **`HOW-TO-CONFIGURE.txt`** —— 同一件事的短说明，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。
+- **`how-to-configure.txt`** —— 同一件事的短说明，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。
 - 两个 `appsettings.json`（`Rendezvous\` 与 `Relay\`）—— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留。**注意它们在安装目录里，本机任何用户都能读**：
   带口令的连接串放这儿，等于本机所有用户都能看到。
@@ -177,9 +177,14 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 ### 2. 手工构建
 
 ```
-dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/rendezvous
-dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/relay
+dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Rendezvous
+dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Relay
 ```
+
+两个服务端各自一个子目录，因为它们是两个程序，装在同一台机器上时目录不能混。
+`build/installer/windows/server/Build-ServerInstaller.ps1` 用的就是这个布局（见它的 `$PublishDirectory` 与
+`-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.ps1`、`how-to-configure.txt`
+与两个 `appsettings.json` 也在这一层。
 
 （Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等，并把 `artifacts/app/windows/` 里的 `windows`
 换成对应平台 —— 服务端是跨平台的。产物目录的约定见 [CONTRIBUTING.md](../../CONTRIBUTING.md) 的"构建产物布局"。）
@@ -293,7 +298,7 @@ server {
 #    产物：rd.lan.pfx（放服务器，含私钥）+ rd.lan.cer（给客户端机器）
 # 2. 服务器端按"做法 A"配置：Urls 改 https，Kestrel 指向那个 .pfx。
 # 3. 客户端：打包时带上证书的公钥，之后装这个包的机器就信任它。
-.\build\installer\windows\client\build-installer.ps1 -RendezvousUri wss://rd.lan:5080/ws `
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri wss://rd.lan:5080/ws `
     -ServerCertificate build\signing\certificates\rd.lan.cer
 ```
 
@@ -394,14 +399,22 @@ scrape_configs:
 
 ## 三、自动化发布到 GitHub Releases
 
-项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**两个**安装包放进同一个 Release：
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**七个**安装包放进同一个 Release——三个平台各出自己的，装的机器不同，版本是同一个：
 
-| 产物 | 装的是什么 |
-|---|---|
-| `RemoteDesktop-Windows-x64-<tag>.msi` | 客户端 / 被控端 |
-| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | 服务端（信令 + 中继） |
+| 产物 | 平台 | 装的是什么 |
+|---|---|---|
+| `RemoteDesktop-Client-Windows-x64-<tag>.msi` | Windows | 客户端 / 被控端（一个包同时装客户端、被控端服务与会话 Agent） |
+| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（信令 + 中继） |
+| `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | macOS | 客户端（在 macOS 上它自己就是被控端） |
+| `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端 |
+| `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | Linux | 客户端 |
+| `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | Linux | 被控端 |
+| `RemoteDesktop-Server-Linux-amd64-<tag>.deb` | Linux | 服务端 |
 
-两个包版本号相同，但各自独立安装、互不影响：一台机器可以只做被控端、只做服务器，或者两个都做。
+命名约定（角色词一律写全；架构词各平台用自己的说法，Linux 那个与包内 `Architecture` 字段同源）见
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的"构建产物布局"。
+
+同一个平台上的包版本号相同，但各自独立安装、互不影响：一台机器可以只做被控端、只做服务器，或者两个都做。
 
 发布前要准备好下面这些。**没有哪一件是必填的**，但流水线会根据你配了什么调整产物，并把结果写在 Release 说明
 最前面：
@@ -461,7 +474,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现
-`RemoteDesktop-Windows-x64-v1.0.0.msi` 和 `RemoteDesktop-Server-Windows-x64-v1.0.0.msi`。
+`RemoteDesktop-Client-Windows-x64-v1.0.0.msi` 和 `RemoteDesktop-Server-Windows-x64-v1.0.0.msi`。
 
 服务器地址是**编进包里的**，所以同一个 Tag 用不同地址出包没有意义：要换地址就出新的 Tag。
 
@@ -470,7 +483,7 @@ GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Release
 ### 1. 构建安装包时带上你的服务器地址
 
 ```
-pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://192.168.1.10:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://192.168.1.10:5080/ws
 ```
 
 不加 `-RendezvousUri` 时用的是开发默认值 `ws://127.0.0.1:5080/ws`，脚本会给出警告：**这样装出来的机器只能被服务器所在的机器连**。
@@ -548,7 +561,7 @@ msiexec /i RemoteDesktop-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 ### 5. 签名
 
 ```
-pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 ```
 
 脚本会自动在当前用户和本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名并验证，

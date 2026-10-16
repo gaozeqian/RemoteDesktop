@@ -2,7 +2,7 @@
 #
 # Packages the Remote Desktop servers (signaling + relay) into a macOS .pkg installer.
 #
-# The counterpart of build/installer/windows/server/build-server-installer.ps1, and deliberately the same shape: the
+# The counterpart of build/installer/windows/server/Build-ServerInstaller.ps1, and deliberately the same shape: the
 # two servers go into one install directory, each with its own appsettings.json, and a setup step writes those
 # settings at install time. That step is the server's own `--configure-system`, which is platform-neutral .NET, so
 # both platforms produce identical settings and generate the relay key the same way.
@@ -132,7 +132,7 @@ echo "==> Assembling the payload"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Rendezvous/." "$SERVER_DIR/Rendezvous/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Relay/." "$SERVER_DIR/Relay/"
 cp "$REPO_ROOT/build/service/macos/com.remotedesktop.rendezvous.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.relay.plist" "$STAGE_DIR/Library/LaunchDaemons/"
-cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/HOW-TO-CONFIGURE.txt" "$SERVER_DIR/"
+cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/how-to-configure.txt" "$SERVER_DIR/"
 chmod +x "$SERVER_DIR/configure-server.sh" "$SERVER_DIR/uninstall-server.sh"
 
 # The answers this package was built with, read by the postinstall and handed to the server's --configure-system step.
@@ -179,7 +179,7 @@ cat > "$RES_DIR/conclusion.html" <<'HTML'
   <li>Without a certificate, signaling is <b>plain http</b>: device codes, who is connecting to whom, and the relay
       tickets are all readable on the way.</li>
 </ul>
-<p>Both are set with <b>configure-server.sh</b> in the install directory; <b>HOW-TO-CONFIGURE.txt</b> next to it explains
+<p>Both are set with <b>configure-server.sh</b> in the install directory; <b>how-to-configure.txt</b> next to it explains
 them, and logs are in <b>logs/</b>.</p>
 </body></html>
 HTML
@@ -298,7 +298,7 @@ fi
 # The payload is what actually has to be right here: two executables where the launchd plists say they are, and the
 # plists themselves. Printing both makes a wrong layout visible now rather than as a job that will not start.
 echo "    payload:"
-pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|HOW-TO-CONFIGURE' | sed 's/^/      /'
+pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|how-to-configure' | sed 's/^/      /'
 echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries in total)"
 
 echo

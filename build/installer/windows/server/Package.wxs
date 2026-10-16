@@ -44,7 +44,7 @@
 
     <!-- The address the signaling server listens on, e.g. http://0.0.0.0:5080, or https://0.0.0.0:5080 together with a
          certificate below. The default is the address baked in when the installer was built
-         (build-server-installer.ps1 -RendezvousUrl); it can be given at install time instead:
+         (Build-ServerInstaller.ps1 -RendezvousUrl); it can be given at install time instead:
          msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080
          This is what the server binds to, not what clients are told to use - that is the relay endpoint just below,
          and clients reach this address through whatever name and port the deployment puts in front of it. -->

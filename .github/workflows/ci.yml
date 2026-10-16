@@ -24,6 +24,27 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      # THIRD-PARTY-NOTICES.md is generated from the dependency graph and then committed, because it ships inside the
+      # installers. Nothing regenerates it when a package is bumped, and it had already drifted once in this
+      # repository: it was missing FFmpeg.AutoGen entirely and still named two versions nothing referenced. That
+      # drift is invisible in review, which is exactly why it survived. Regenerating here and failing on any
+      # difference turns it into a red pull request.
+      #
+      # Only on this job, not on all three: the list is read with "dotnet list package" and no runtime identifier, so
+      # it is identical on every platform — the committed list carries Avalonia.Win32, .X11 and .Native at once — and
+      # there is one file. Running it three times would only mean three chances to be flaky.
+      - name: Check the third-party notices are current
+        shell: pwsh
+        run: |
+          pwsh -File build/tools/Export-ThirdPartyNotices.ps1
+
+          # Test $LASTEXITCODE rather than the command's output: --quiet writes nothing, so PowerShell would evaluate
+          # the call to an empty value and this step would fail on every pull request instead of on a stale file.
+          git diff --quiet -- THIRD-PARTY-NOTICES.md
+          if ($LASTEXITCODE -ne 0) {
+              git --no-pager diff -- THIRD-PARTY-NOTICES.md
+              throw 'THIRD-PARTY-NOTICES.md is out of date. Run build/tools/Export-ThirdPartyNotices.ps1 and commit the result.'
+          }
       # The build reports what is wrong with the packages a project references directly; this walks the whole graph,
       # including everything those packages drag in. A known-vulnerable dependency fails the build.
       - uses: ./.github/actions/audit-packages
@@ -41,8 +62,8 @@ jobs:
       - name: Build the Windows installers (MSI)
         shell: pwsh
         run: |
-          .\build\installer\windows\client\build-installer.ps1 -Configuration Release -SkipSigning
-          .\build\installer\windows\server\build-server-installer.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\client\Build-ClientInstaller.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
 
       # Both packages are opened and their contents checked, by the same shared action the other two platforms call:
       # one place answers "does this package hold what it is supposed to" for all three.
@@ -100,7 +121,7 @@ jobs:
         with:
           global-json-file: global.json
       # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
-      # this. It stages artifacts/native/macos, and RemoteDesktop.Transport copies that directory next to every
+      # this. It stages artifacts/lib/macos, and RemoteDesktop.Transport copies that directory next to every
       # executable that references it -- the test hosts included. It has to run before the build, because that copy is
       # an MSBuild glob over a directory that would otherwise not exist yet.
       - name: Stage the native MsQuic library

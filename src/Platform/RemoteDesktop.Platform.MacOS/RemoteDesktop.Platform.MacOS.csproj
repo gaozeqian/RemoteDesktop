@@ -21,7 +21,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.MacOS.UnitTests" />
   </ItemGroup>
-  <!-- The Objective-C helper is built by native/macos/build-native.sh into artifacts/native; it is embedded into the
+  <!-- The Objective-C helper is built by native/macos/build-native.sh into artifacts/lib; it is embedded into the
        .app bundle by the packaging script. Keep it out of the compile set. -->
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)..\..\..\native\macos\**\*" LinkBase="native" />

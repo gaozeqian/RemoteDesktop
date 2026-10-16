@@ -45,7 +45,7 @@ foreach ($project in $shipped) {
 Write-Host "Found $($packages.Count) packages."
 
 # Where NuGet keeps the packages, asked of the SDK rather than assembled from $env:USERPROFILE: that variable does not
-# exist outside Windows, and the SDK's answer also follows NUGET_PACKAGES, which CI sets to put the cache elsewhere.
+# exist outside Windows, and the SDK's answer also follows NUGET_PACKAGES when something sets it to move the cache.
 # The key is not translated, so this reads the same in any locale.
 function Get-PackagesDirectory {
     $line = & dotnet nuget locals global-packages --list 2>$null |
@@ -107,11 +107,11 @@ $header = @'
 本产品使用以下开源组件。它们按各自的许可条款提供，版权归各自的作者所有（许可证全文见各组件的项目主页）。
 列表取自三个随安装包发布的程序的依赖闭包，因此也包含只在构建时用到的包。
 
-本文件由 `build/tools/Generate-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
+本文件由 `build/tools/Export-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
 依赖变化后（例如 Dependabot 升级了某个包）重新运行一次：
 
 ```
-pwsh -File build/tools/Generate-ThirdPartyNotices.ps1
+pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 ```
 
 此外，程序以自包含方式发布，因此还包含 .NET 运行时（MIT 许可，https://github.com/dotnet/runtime）。

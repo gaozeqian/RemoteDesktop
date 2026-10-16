@@ -89,7 +89,7 @@ Write-Host "  signing file: $pfxPath"
 Write-Host "  trust file:   $cerPath"
 Write-Host ''
 Write-Host 'Sign a build with the certificate that is now in this user''s store:'
-Write-Host '  pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<server>:5080/ws'
+Write-Host '  pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<server>:5080/ws'
 Write-Host 'Or with the .pfx (also works on another machine, or off Windows):'
 Write-Host "  ... -SigningTool osslsigncode -CertificateFile `"$pfxPath`" [-CertificatePassword <pw>]"
 Write-Host ''

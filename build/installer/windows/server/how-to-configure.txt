@@ -11,7 +11,7 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 在**管理员** PowerShell 里：
 
     cd "C:\Program Files\Remote Desktop Server"
-    .\configure-server.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+    .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 
 它会做两件事：把设置写进两个 appsettings.json，然后重启两个服务让它们生效。
 只给想改的项就行，没给的保持不动。可用的项：

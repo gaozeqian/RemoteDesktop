@@ -24,14 +24,18 @@
 Dockerfile*         text eol=lf
 
 # Debian control files and maintainer scripts carry no extension of their own,
-# so they have to be named individually. Same for the systemd environment file
-# and the macOS package's postinstall: no extension, and the kernel (or launchd)
-# reads them literally.
+# so they have to be named individually. Same for the macOS package's postinstall,
+# which the kernel (or launchd) reads literally.
+#
+# The systemd environment file used to be named here too, as build/service/linux/default.
+# It is remotedesktop-server.default now -- named after the /etc/default/remotedesktop-server
+# it is installed as, rather than after the directory it happens to sit in -- so the glob
+# below covers it and anything else given the same shape.
 build/installer/linux/**/control                             text eol=lf
 build/installer/linux/**/postinst                            text eol=lf
 build/installer/linux/**/postrm                              text eol=lf
 build/installer/macos/server/scripts/postinstall             text eol=lf
-build/service/linux/default                                  text eol=lf
+*.default                                                    text eol=lf
 
 *.plist             text eol=lf
 *.service           text eol=lf

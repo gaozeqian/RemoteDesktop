@@ -53,7 +53,7 @@ rm -f "$work/usr/lib/remotedesktop-server/Relay/appsettings"*.json
 
 install -m 0644 "$root/build/service/linux/remotedesktop-rendezvous.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-relay.service" "$work/lib/systemd/system/"
-install -m 0644 "$root/build/service/linux/default" "$work/etc/default/remotedesktop-server"
+install -m 0644 "$root/build/service/linux/remotedesktop-server.default" "$work/etc/default/remotedesktop-server"
 
 install -m 0755 "$root/build/installer/linux/server/postinst" "$work/DEBIAN/postinst"
 install -m 0755 "$root/build/installer/linux/server/postrm" "$work/DEBIAN/postrm"

@@ -7,7 +7,7 @@
 # native/macos/rd_*.m and crosses into C# as a flat C ABI; see rd_native.h for the contract. This script turns those
 # sources into the one dylib the platform layer loads.
 #
-# The result is cached in artifacts/native/macos (artifacts/ is already ignored) and copied next to every build
+# The result is cached in artifacts/lib/macos (artifacts/ is already ignored) and copied next to every build
 # output that needs it, the same way fetch-libmsquic.sh stages libmsquic. Unlike that script this one is *not*
 # one-shot: it rebuilds whenever a source or the header is newer than the dylib, because these files are edited far
 # more often than a downloaded bottle is.
@@ -34,7 +34,7 @@ esac
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 source_dir="$root/native/macos"
-out_dir="$root/artifacts/native/macos"
+out_dir="$root/artifacts/lib/macos"
 output="$out_dir/libRemoteDesktopMacNative.dylib"
 
 # The video codec sources sit apart from the capture ones: rd_video_common holds the Annex-B/AVCC conversions that

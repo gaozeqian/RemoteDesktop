@@ -15,7 +15,7 @@
 # output, signatures applied — passed for a set that could not load at all. The runtime reported it as "QUIC is not
 # supported", with nothing to point at the cause.
 #
-# The result is cached in artifacts/native/macos (artifacts/ is already ignored), and the transport project copies it
+# The result is cached in artifacts/lib/macos (artifacts/ is already ignored), and the transport project copies it
 # into every build output that needs it. Run it once per checkout:
 #
 #     native/macos/fetch-libmsquic.sh
@@ -25,7 +25,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-out="$root/artifacts/native/macos"
+out="$root/artifacts/lib/macos"
 
 if [ -f "$out/libmsquic.dylib" ]; then
     missing=$(for reference in $(otool -L "$out/libmsquic.dylib" | tail -n +2 | awk '{ print $1 }' | grep -E '@@HOMEBREW_|^/opt/homebrew/|^/usr/local/|^@loader_path/' || true); do

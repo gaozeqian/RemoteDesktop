@@ -78,6 +78,76 @@
 - **`docs/` 按读者分层**：`design/`（架构、协议、安全及其评审）、`ops/`（部署、存储）、`ports/`（macOS / Linux
   移植计划与评审）；文档索引与两份目录结构评审留在 `docs/` 根。`docs/README.md` 同时补上了此前漏掉的
   `directory-structure-review.md`。
+- **目录结构约定改由测试强制**：新增 `tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs`，
+  把六条约定变成断言——`tests/` 的项目名闭集、项目目录名 == `.csproj` 名、`.cs` 文件名与所声明类型的关系、
+  `.sh` 的 kebab-case、`.ps1` 的 Verb-Noun（动词须在 PowerShell 批准表上）、`build/` 下的平台与角色目录名。
+  三轮目录结构评审每轮都能挑出新的违反，原因是同一个：分层规则有架构测试盯着、三平台移植期间一次没坏过，
+  而这些规则只写在 `CONTRIBUTING.md` 里，靠读到的人自觉。现在违反即构建红。
+- **产物目录三处修正**：`.trx` 从仓库根的 `TestResults/` 迁到 `artifacts/test-results/<平台>/`；`artifacts/native/`
+  改名 `artifacts/lib/`，免得与顶层那棵手写 Objective-C 源码树 `native/` 同名不同义（一个删了就没了、一个随时
+  可再生）；安装包的 `.wixpdb` 是调试符号不是交付物，用 `-p:PdbOutputDir=` 留在工程 `obj/` 里，不再落进
+  `artifacts/installer/<平台>/`。
+- **`TestResults/` 不再由仓库自己的东西产生了**——补完上一条漏掉的一半。改 `run-test-suite` 只把**报告文件**
+  挪进了 `artifacts/`，而 `dotnet test` 在没给 `--results-directory` 时仍会在当前目录建一个**空**的
+  `TestResults/`；仓库里还有三处这么调用（`verify-packages` 的 Windows 分支、两个安装器脚本的自查步骤），
+  所以根上照样会长出目录，只是被 `.gitignore` 挡着看不见。三处都补上了 `--results-directory`（两个脚本指向
+  `artifacts\test-results\windows`，CI 那处指向 `artifacts/test-results/windows`）。
+  第四处修不掉也不打算修：`CONTRIBUTING.md` 教贡献者跑的那条裸 `dotnet test RemoteDesktop.slnx` 同样会建它，
+  那是 Microsoft.Testing.Platform 的默认值而不是本仓库的约定。MTP 的
+  `TestingPlatformCommandLineArguments` 属性能把参数烤进测试程序，但烤进去的和 CI 显式传的是同一个选项，
+  重复选项很可能让 MTP 直接报错——CI 的正确性比一个空的本地目录重要，所以接受默认值，改在 `CONTRIBUTING.md`
+  里写明看到它不必处理。忽略规则保留。
+- **修一个静默回归**：产物收敛之后，`HostService` 的 `CopySessionAgent` 仍在往已被搬走的
+  `RemoteDesktop.SessionAgent\bin\` 里找文件，而 MSBuild 对空 item 列表不报错——"普通构建会把 agent 放到服务
+  旁边"这句话已不成立，构建却一直是绿的，直到 `install-service.ps1` 抛出一句指错方向的提示。改为用
+  `GetTargetPath` 向那个工程要输出目录，从此不可能再与布局脱节。
+- **`CONTRIBUTING.md` 产物表的三处硬错误**：`artifacts/packages/` 改成 `package/<pivot>/`（SDK 用的是单数，
+  且没有项目层）；安装包文件名改成实际的两个 `RemoteDesktop-<版本>-x64.msi` 与
+  `RemoteDesktop.Server-<版本>-x64.msi`——文档原先写的带 `Windows` 的名字只是发布时重命名的资产，
+  `verify-packages` 的注释里早就记着这个坑"这个仓库已经踩过一次"；`app/<平台>/` 的下一层写明是**交付物**
+  而不是角色（`app/windows/client/` 里同时有三个 `.exe`，因为一个 MSI 装三个角色）。
+- **`THIRD-PARTY-NOTICES.md` 重新生成**：它已经静默过期——`Directory.Packages.props` 里的 Avalonia 12.1.4 与
+  Tmds.DBus 0.95.1 没同步进去，`FFmpeg.AutoGen` 更是整个缺项。与 `License.rtf` 是同一类问题（生成物进了仓库
+  却没有防过期的机制），但这份不能靠"不跟踪"解决，CI 侧的防护留待后续。
+- **7 个文件名与所声明类型不符的 `.cs` 改名**：`SystemIntegration.cs` 里装的是 `IOPMAssertionKeepAwake`、
+  `SystemIntegration.LoginItem.cs` 里是 `MacLoginItem`（两者还都不是 partial 拆分）、`DxgiDisplays.cs` 里是
+  `DxgiDisplayEnumerator`、`PortalResponse.cs` 里是 `PortalRequestResult`、`CameraExceptions.cs` 里是
+  `CameraUnavailableException`，另有两个测试文件。判据同时写进 `CONTRIBUTING.md`：文件名不是类型时它必须是
+  个分组（声明两个以上类型），这样 `IAudio.cs` 这类"一个概念的整组契约"仍然合法。
+- **三处改名让名字说明自己是什么**：`build/service/linux/default` → `remotedesktop-server.default`（它变成
+  `/etc/default/remotedesktop-server`，`.gitattributes` 里那条逐名规则也随之改成 `*.default` 通配）；
+  两份 `HOW-TO-CONFIGURE.txt` → `how-to-configure.txt`；`Generate-ThirdPartyNotices.ps1` →
+  `Export-ThirdPartyNotices.ps1`——`Generate` 不在 PowerShell 的批准动词表上，而 `build/tools/README.md`
+  原先恰好把它当范例列着。
+- **`release.yml` 的 `build-and-release` → `build-windows-and-release`**：它是三个 job 里唯一不带平台词的，
+  读 job 列表看不出 Windows 在哪。
+- **`icon.png` 与 `icon-256.png` 去重**：从 `mstsc.exe` 抠出来的就是 256×256，所以"母版"与"256 尺寸"是同一张图
+  的两个名字，生成器每次都会重造这份重复。现在只写 `icon-256.png`（应用与 `icon.svg` 本来就指向它）。
+- **`native/README.md` 与 `build/README.md` 补齐**：前者说明这层放什么、为什么没有 `windows/`（Windows 走 C#
+  P/Invoke，没有编译出来的辅助库）与 `rd_` 前缀规则；后者首行声明"本目录不是构建系统"、补上三平台角色集合不
+  对称的表（Linux 单独出被控端包，Windows 并进客户端 MSI，macOS 客户端自己就是被控端）、补 `docker/` 是第三条
+  轴，并把脚本命名规则从 `build/tools/README.md` 提升上来。
+- **`THIRD-PARTY-NOTICES.md` 有了过期防护**：CI 在一个平台 job 里重新生成它并比对，有差异就红并把 diff 打出来。
+  上一节记的正是它已经静默过期过一次（缺 `FFmpeg.AutoGen` 整个一项、两个版本号过时），而这类漂移在 review 里
+  看不出来。只放一个 job 是因为清单不带 RID 读，三平台同一份。
+- **5 个安装器与服务脚本改成 Verb-Noun**：`Build-ClientInstaller.ps1`、`Build-ServerInstaller.ps1`、
+  `Set-ServerConfiguration.ps1`（`Configure` 不在 PowerShell 的批准动词表上）、`Install-HostService.ps1`、
+  `Uninstall-HostService.ps1`（后两个装/卸的是**被控端**服务，旧名只说 "service"，与 mac 的
+  `uninstall-server.sh` 一词之差而角色相反）。结构断言里的豁免清单随之删掉，`build/` 下 12 个 `.ps1` 现在
+  全部受约束。`CHANGELOG.md` 与旧评审里的旧名保持原样。
+- **`.gitignore` 的构建产物段从 13 条无锚定模式砍到 2 条**：只留 `[Oo]bj/` 与 `**/[Bb]in/*`，并把例外规则
+  扩成 `build/installer/windows/**/{bin,obj}/` 盖住深一层的 `CustomActions`。删掉的 `[Dd]ebug/`、`[Rr]elease/`、
+  `[Ll]og/` 等**一条都没在干活**——它们按名字匹配树里任何同名目录，实测被忽略的路径集合删改前后
+  6019 条逐行相同。留着只是等着 `Log/`、`Release/` 这类目录第一次出现在源码树里时被静默吞掉。
+- **发布资产的命名对齐**：客户端资产此前只在 Linux 上带 `Client` 词（那边有三个包，本来就得靠角色词区分），
+  现在三个平台都带，七个资产的形状统一为 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`。架构词**保持**各平台
+  自己的说法（Windows `x64` / macOS `arm64` / Linux `amd64`）——Linux 那个与 `.deb` 内的 `Architecture` 字段
+  同源（`control` 模板），统一成 `x64` 会让文件名与字段不同词。约定写进 `CONTRIBUTING.md` 的产物布局一节，
+  含三平台对照表与两条成因。**产物名没有跟着改**（`artifacts/installer/windows/` 里仍是
+  `RemoteDesktop-<版本>-x64.msi`），所以 `verify-packages` 的分平台 glob 不受影响；产物名与资产名不一致这件事
+  本身仍在，两份文档里都写着——那是这个仓库踩过的坑。
+  顺带修掉 `docs/ops/deployment.md` 发布一节开头的过期说法：那里写"把**两个**安装包放进同一个 Release"并只列了
+  两个 MSI，而流水线实际发**七个**（两个 MSI、两个 `.pkg`、三个 `.deb`），现在按平台列全了。
 - **`build-deb.sh` 不再依赖 GNU 专属的 `sed -i`**：改用 `awk` 写临时文件再 `mv`（BSD 的 `sed -i` 把参数当成备份
   后缀，替换里的 `\n` 也不是换行）。
 

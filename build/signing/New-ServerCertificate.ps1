@@ -20,7 +20,7 @@
 
   And the client side is one step in the installer build, which puts the .cer into the MSI so that every machine
   installing it trusts this certificate:
-    build-installer.ps1 ... -ServerCertificate <Name>.cer
+    Build-ClientInstaller.ps1 ... -ServerCertificate <Name>.cer
 
   The address has to be in the certificate: clients compare what they dialed against the names and addresses listed
   here, so give it every name and address they will use - a short name, a full name, and the address itself.
@@ -137,7 +137,7 @@ Write-Host '  "Urls": "https://0.0.0.0:5080",'
 Write-Host "  `"Kestrel`": { `"Certificates`": { `"Default`": { `"Path`": `"$pfxPath`", `"Password`": `<the password>` } } }"
 Write-Host ''
 Write-Host 'Build the installer that makes client machines trust it:'
-Write-Host "  pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
+Write-Host "  pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
 Write-Host ''
 Write-Host 'Machines that already have the software can be given the certificate without reinstalling, as an administrator:'
 Write-Host "  Import-Certificate -FilePath `"$cerPath`" -CertStoreLocation Cert:\LocalMachine\Root"
