@@ -248,6 +248,17 @@
 
 ### Fixed
 
+- [UI] **Linux 上的三处平台说明文案说成了 macOS 的**：`高级设置` 里由 `OperatingSystem.Is*()` 选边的说明文字
+  （固定密码存储、服务器地址改动、本机控制端代码）写的是"Windows / 非 Windows"二分支，非 Windows 即
+  macOS——macOS 移植期定下的，Linux 合入后读到的全是 macOS 的说法：密钥说成"macOS 钥匙串"（实际是仅本
+  用户可读写的 0600 文件）、进程模型说成"客户端与被控端是同一个进程"（实际是 `systemd --user` 服务）、
+  设备代码说成"和主页是同一个"（服务模式下是两串代码，与 Windows 同构）。现在按平台三分支
+  （本机控制端代码按被控端形态二分，Windows 与 Linux 同文），"无法联系后台服务"一并恢复在 Linux 上的
+  准确措辞；新增 `MainWindowPlatformNoteTests`，三个 CI 平台各验自己那支（见
+  [`docs/reviews/ui-consistency-review-2026-10-17.md`](docs/reviews/ui-consistency-review-2026-10-17.md) U1–U3）。
+- [UI] **固定密码区块在 Linux 上没有说明它不能使其无人值守**：portal 不允许远程桌面会话持久授权，控制权限
+  每次连接都要现场重新授权，只有被观看不受此限（`docs/usage/README.md` §1）。Linux 的设置页现在补一行
+  说明（同一评审 U4）；另把 macOS 登录项说明里自相矛盾的"不需要有人先登录"改为"不需要有人手动打开"。
 - **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
   ——那其实是第一个属性的 key（真实值是 131073）。此前的测试全绿是因为用例字节按同一个错误理解手写。
   这类错误在真实链路上的表现是"格式协商莫名其妙失败"。

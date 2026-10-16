@@ -331,6 +331,10 @@
                     <TextBlock Text="固定密码（无人值守）" Classes="sectionHeader" />
                     <TextBlock Classes="caption"
                                Text="{x:Static vm:MainWindowViewModel.FixedPasswordStorageNote}" />
+                    <!-- Linux only: the portal restriction that keeps a fixed password from meaning unattended
+                         access there. Null on the other two platforms, which hides the whole line. -->
+                    <TextBlock Classes="caption" Text="{x:Static vm:MainWindowViewModel.FixedPasswordPlatformNote}"
+                               IsVisible="{x:Static vm:MainWindowViewModel.ShowFixedPasswordPlatformNote}" />
 
                     <StackPanel Spacing="{DynamicResource RdSpaceSm}">
                       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}"
@@ -364,7 +368,7 @@
                     <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{Binding HasLoginItem}">
                       <TextBlock Text="开机自启（无人值守）" Classes="sectionHeader" />
                       <TextBlock Classes="caption"
-                                 Text="开启后，每次登录 macOS 都会自动启动本应用并保持被控在线，不需要有人先登录。" />
+                                 Text="开启后，每次登录 macOS 都会自动启动本应用并保持被控在线，不需要有人手动打开。" />
                       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
                         <TextBlock Text="{Binding LoginItemStatus}" VerticalAlignment="Center"
                                    Foreground="{DynamicResource RdAccentBrush}" />

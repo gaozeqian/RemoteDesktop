@@ -230,32 +230,66 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The sidebar's version line, built from <see cref="ClientVersion"/> so the two cannot disagree.</summary>
     public string ClientVersionLabel => $"Remote Desktop {ClientVersion}";
 
-    // The three captions below describe how this build actually behaves, and Windows and macOS differ in all three:
-    // where a fixed password is kept (DPAPI / keychain), what changing the server address costs (elevation and a
-    // service restart / neither), and what the controlled side even is (an installed service / this process).
+    // The captions below describe how this build actually behaves, and the three platforms differ in all of them:
+    // where a fixed password is kept (DPAPI / keychain / owner-only file), what changing the server address costs
+    // (elevation and a service restart / a process restart / neither), and what the controlled side even is
+    // (an installed service / this process / a systemd --user service).
     //
-    // Static, because nothing about them depends on the instance — the view reaches them with {x:Static}.
-
-    /// <summary>The caption under 固定密码, naming the store this platform actually uses.</summary>
-    public static string FixedPasswordStorageNote => OperatingSystem.IsWindows()
-        ? "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。"
-        : "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。";
-
-    /// <summary>The caption under 服务器地址.</summary>
-    public static string ServerAddressNote => OperatingSystem.IsWindows()
-        ? "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。"
-        : "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。";
-
-    /// <summary>The caption explaining 本机控制端代码.</summary>
-    public static string ClientCodeNote => OperatingSystem.IsWindows()
-        ? "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。"
-        : "「本机控制端代码」是这台机器连出去时用的身份。macOS 上客户端与被控端是同一个进程，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。";
+    // Static, because nothing about them depends on the instance — the view reaches them with {x:Static}; the
+    // Linux-only caption pairs with a static flag for the same reason.
 
     /// <summary>
-    /// The sentence for "the host did not answer", which has to name the thing that is actually unreachable: an
-    /// installed service on Windows, this process's own host state on macOS.
+    /// Picks the sentence for the running platform. Three branches, not "Windows or not": the non-Windows branch
+    /// used to mean macOS, which made Linux read a wrong statement wherever the two differ — where a secret is
+    /// kept, what changing the server address costs, and which process a device code belongs to. Linux is not
+    /// macOS: secrets live in an owner-only file and the controlled end is a systemd --user service, see
+    /// docs/usage/README.md §1.
     /// </summary>
-    private static string HostUnreachable => OperatingSystem.IsWindows() ? "无法联系后台服务" : "无法读取本机被控状态";
+    private static string ByPlatform(string windows, string macOS, string linux) =>
+        OperatingSystem.IsWindows() ? windows
+        : OperatingSystem.IsMacOS() ? macOS
+        : linux;
+
+    /// <summary>The caption under 固定密码, naming the store this platform actually uses.</summary>
+    public static string FixedPasswordStorageNote => ByPlatform(
+        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。",
+        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。",
+        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以仅本用户可读写的文件（0600）保存在本机。");
+
+    /// <summary>The caption under 服务器地址.</summary>
+    public static string ServerAddressNote => ByPlatform(
+        "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。",
+        "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。",
+        "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端与已安装的被控端服务会各自重启，两边一起换到新地址。");
+
+    /// <summary>
+    /// The caption explaining 本机控制端代码. Branches by where the controlled end runs, not by operating system:
+    /// on Windows and Linux it is a background service with an identity of its own (the installed service / a
+    /// systemd --user unit), so this window's code and the home page's are two different codes — the same
+    /// situation, and therefore the Windows wording. macOS runs the controlled end inside this same process, so
+    /// there the two codes are one.
+    /// </summary>
+    public static string ClientCodeNote => OperatingSystem.IsMacOS()
+        ? "「本机控制端代码」是这台机器连出去时用的身份。macOS 上客户端与被控端是同一个进程，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。"
+        : "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。";
+
+    /// <summary>
+    /// Linux only: a fixed password cannot make this machine unattended there — the desktop portal refuses to
+    /// persist a remote-desktop session, so every control connection needs a fresh consent at the machine. Null
+    /// on the other two platforms, hidden together with <see cref="ShowFixedPasswordPlatformNote"/>.
+    /// </summary>
+    public static string? FixedPasswordPlatformNote => OperatingSystem.IsLinux()
+        ? "注意：本平台无法让控制变成无人值守——portal 不允许远程桌面会话持久授权，控制权限每次连接都要重新授权（被观看不受此限制）。要在无人值守的机器上被操作，只能用 Windows 的被控端。"
+        : null;
+
+    /// <summary>Whether <see cref="FixedPasswordPlatformNote"/> has anything to say on this platform.</summary>
+    public static bool ShowFixedPasswordPlatformNote => OperatingSystem.IsLinux();
+
+    /// <summary>
+    /// The sentence for "the host did not answer", which has to name the thing that is actually unreachable: a
+    /// background service on Windows and Linux, this process's own host state on macOS.
+    /// </summary>
+    private static string HostUnreachable => OperatingSystem.IsMacOS() ? "无法读取本机被控状态" : "无法联系后台服务";
 
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
     /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
