@@ -1,0 +1,43 @@
+// markdownlint-cli2 —— 文档的**格式**检查（规则与分工见 docs/STYLE.md §7）。
+// 语义（文件该不该存在、名字对不对、链接通向哪里）由 tests/.../DocumentationTests.cs 在 dotnet test 里管。
+{
+  "config": {
+    "default": true,
+
+    // 行长。中文文档按句读断行，硬性限长会逼出没有意义的换行；表格与代码块更没法限。
+    "MD013": false,
+
+    // 内联 HTML / 用 **粗体** 当小标题。本仓库的文档用粗体起强调式小标题，不打算改。
+    "MD033": false,
+    "MD036": false,
+
+    // CHANGELOG 是 Keep a Changelog 格式：每个 ## 版本下都有一组 ### Added / ### Changed / ### Fixed。
+    "MD024": { "siblings_only": true },
+
+    // 有序列表：允许全部写 1.，也允许 1. 2. 3.。
+    "MD029": { "style": "one_or_ordered" },
+
+    // 嵌套列表缩进 2 格；代码块一律用反引号围栏。
+    "MD007": { "indent": 2 },
+    "MD046": { "style": "fenced" },
+    "MD048": { "style": "backtick" },
+
+    // 行尾空格：Markdown 里两格表示硬换行，本仓库的文档确实在用（blockquote 里续行）。
+    "MD009": { "br_spaces": 2 },
+
+    // 表格列的间距风格。MD060 是 markdownlint 新加的规则，默认风格与本仓库从头到尾在用的紧凑分隔行
+    // （|---|---|）冲突，会让几百行无关的表格全部报错。关掉；哪天想统一表格风格时再打开并按它的建议重排。
+    "MD060": false
+  },
+
+  // 构建产物与生成物不进检查：artifacts/ 是产物根，THIRD-PARTY-NOTICES.md 由依赖图生成、不要手改。
+  "ignores": [
+    "artifacts/**",
+    "TestResults/**",
+    ".workbuddy/**",
+    "node_modules/**",
+    "**/bin/**",
+    "**/obj/**",
+    "THIRD-PARTY-NOTICES.md"
+  ]
+}

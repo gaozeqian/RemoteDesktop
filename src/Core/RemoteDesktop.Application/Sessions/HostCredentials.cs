@@ -12,7 +12,7 @@ public sealed class HostCredentials(TimeProvider? time = null)
     /// <remarks>
     /// It is shown on screen and read out loud, so it has to survive the phone call; it is also the one password
     /// somebody may have photographed or pasted into a chat, so it should not survive the day. The fixed password is
-    /// a separate thing and does not expire — lasting is what it is for. See docs/design/security.md.
+    /// a separate thing and does not expire — lasting is what it is for. See docs/design/README.md.
     /// </remarks>
     public static readonly TimeSpan TemporaryPasswordLifetime = TimeSpan.FromMinutes(30);
 

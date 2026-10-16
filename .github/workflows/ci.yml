@@ -111,7 +111,7 @@ jobs:
 
   build-macos:
     # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
-    # minos 26.0 and dyld refuses to load them on anything older (docs/ports/macos-port-plan.md 3.4). That is also what makes
+    # minos 26.0 and dyld refuses to load them on anything older (docs/ports/README.md, "最低系统版本是 macOS 26"). That is also what makes
     # this job possible at all: on macos-latest (macos-14/15) every transport test would fail with "Unable to load
     # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
     runs-on: macos-26
@@ -148,6 +148,26 @@ jobs:
       # The payload is what has to be right: a package that installs nothing would still be a package, and the scripts
       # do not assert that what they packed is in there. Same shared action as the other two platforms.
       - uses: ./.github/actions/verify-packages
+
+  docs:
+    # Documentation *formatting*: blank lines around headings and lists, indentation, ``` fences tagged with a
+    # language. It is one job on one runner because it is a pure text rule with nothing platform-specific in it.
+    #
+    # Whether a document should exist, where it may live, what it may be called and whether its links resolve is
+    # checked somewhere else -- DocumentationTests, in dotnet test, on all three runners. That split is deliberate
+    # (docs/STYLE.md §7): markdownlint sees one file at a time and cannot know that a link points at a path no
+    # longer there, and the test has no opinion about whitespace. Each checks what it is good at.
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      # Node comes from the runner image. It is not pinned to a setup-node action on purpose: the tool itself is
+      # pinned below, which is the version that actually matters here.
+      - name: Lint the Markdown
+        # Pinned, not @latest. A new rule lands in a minor release and is on by default: MD060 (table column style)
+        # arrived exactly that way and reported 249 findings on this repository's long-standing table style. With
+        # @latest the build would go red one morning with nothing in the repository having changed. Bump this by
+        # hand, in a commit that fixes whatever the new rules find.
+        run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
 
   # release.yml has per-platform packaging jobs of its own: each one builds and tests its port, packages the MSIs,
   # the .pkg and the three .deb files, and hands them to a single release job. The jobs here stay the place every

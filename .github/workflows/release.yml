@@ -79,7 +79,7 @@ jobs:
   # 只发出 Windows 的两个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
   build-macos:
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
-    # dyld 拒绝在更老的系统上加载（docs/ports/macos-port-plan.md §3.4）。macos-26 就是 arm64 镜像。
+    # dyld 拒绝在更老的系统上加载（docs/ports/README.md"最低系统版本是 macOS 26"）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
     # 证书与公证凭据都是可选的：没配就出一个**未签名**的 .pkg（Gatekeeper 会提示"身份不明的开发者"，
     # 右键 → 打开即可），配了就签名 + 公证（下载即开）。四个证书 Secret 与三个公证 Secret 见下面的注释。
@@ -276,7 +276,7 @@ jobs:
                   '> [!IMPORTANT]'
                   '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
                   '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
-                  '> 部署步骤见 [docs/ops/deployment.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/deployment.md)。'
+                  '> 部署步骤见 [docs/ops/README.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/README.md)。'
               ) -join "`n"
           }
 

@@ -24,7 +24,7 @@ public sealed class RendezvousOptions
     /// <summary>
     /// Answer presence queries, which is how a client shows an online/offline dot beside each remembered device.
     /// Turning it off is deliberately the same behaviour an older server has — clients show 未知 — so the capability
-    /// can be removed from a deployment without a protocol change. See docs/design/security.md.
+    /// can be removed from a deployment without a protocol change. See docs/design/README.md.
     /// </summary>
     public bool PresenceEnabled { get; set; } = true;
 
@@ -84,7 +84,7 @@ public sealed class RendezvousOptions
     /// The numbers say how many devices this public server is serving and how hard it is refusing the rest, which is
     /// the operator's business rather than a visitor's. Turning it on is therefore deliberate, and normally combined
     /// with a listener only one's own monitoring can reach — a loopback address behind a proxy, a firewall rule, or
-    /// the monitoring's own network. See docs/ops/deployment.md.
+    /// the monitoring's own network. See docs/ops/README.md.
     /// </remarks>
     public bool MetricsEnabled { get; set; }
 

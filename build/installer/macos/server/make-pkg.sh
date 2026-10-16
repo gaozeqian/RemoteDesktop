@@ -10,7 +10,7 @@
 # What differs is only what has to: there is no MSI property mechanism here, so the answers are baked into the package
 # when it is built (as setup-options) and handed to the setup step by the postinstall; the two servers are launchd
 # LaunchDaemons instead of Windows services; and there is no firewall step, because macOS has no per-port rule to add
-# — its application firewall is off by default and, when on, is per-application. docs/ops/deployment.md says what to open.
+# — its application firewall is off by default and, when on, is per-application. docs/ops/README.md says what to open.
 #
 # The .pkg is UNSIGNED by default; see the note in make-pkg.sh of the client for what that costs and what --identity
 # and --notarize add.

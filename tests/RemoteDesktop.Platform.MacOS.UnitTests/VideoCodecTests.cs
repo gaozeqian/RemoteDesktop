@@ -9,7 +9,7 @@ namespace RemoteDesktop.Platform.MacOS.UnitTests;
 /// <remarks>
 /// <para>
 /// Every test here runs a real compression and decompression session. That is deliberate and it is the lesson of
-/// docs/ports/macos-port-plan.md 3.12: a codec port can build, register, resolve and report supported while its
+/// docs/ports/README.md ("[LibraryImport] 会把 span 当裸指针传"): a codec port can build, register, resolve and report supported while its
 /// declarations are wrong, and only a real frame through the pipeline shows it. The struct that crosses this
 /// particular boundary lost a field during development, which would have shown up as pictures of the wrong height
 /// or none at all — exactly the kind of thing that survives review.

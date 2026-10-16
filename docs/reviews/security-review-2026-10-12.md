@@ -1,5 +1,9 @@
 # 安全审查报告
 
+> **历史快照 · 已冻结** — 本文件是 2026-10-12 的审计记录，**不再更新**。它的规范性结论已并入现行的
+> [`docs/design/README.md`](../design/README.md)（"还没有做的事"一节）；两者不一致时以那份为准。
+> 归档说明见 [`docs/reviews/README.md`](README.md)。
+>
 > 审查时间：2026-10-12　审查范围：全项目（代码、构建、部署、网络协议）  
 > 方法：代码审查 + 单元/集成测试覆盖盘点 + 对抗性实测（MITM 抓包、反射放大、爆破成本、soak、协议 fuzz、连接洪泛）
 
@@ -36,6 +40,7 @@
 **影响**：无人值守设备反复被连（远程运维/监控），内存持续上涨直到崩溃。
 
 **解决方案**（追查后修正，见下方结论）：
+
 - 实验 F 证明泄漏在 `QuicListener.ListenAsync`+`DisposeAsync` **本身**（无连接、callback 未调用即泄漏 ~1.1MB/轮），是 **.NET/MsQuic 的 listener 生命周期原生 bug**。
 - 原方案 A（listener 端口池）**不可行**：NAT 打洞要求"打洞端口 = candidate 端口 = QUIC 监听端口"，复用 listener 会破坏打洞。
 - 实际路径：① 向 dotnet/runtime 上报 bug；② 或投入 QUIC 层底层重构（改用 MsQuic C API）；③ 过渡期监控内存。
@@ -111,10 +116,10 @@
 
 **解决方案**：
 
-- **部署者必须配 wss://**（`docs/ops/deployment.md` 已详述，两种做法：服务器自带证书 / 反向代理）；
+- **部署者必须配 wss://**（`docs/ops/README.md` 已详述，两种做法：服务器自带证书 / 反向代理）；
 - 可选增强：客户端对信令服务器做证书指纹固定（当前只走系统信任链）。
 
-**位置**：`docs/design/security.md`、`docs/ops/deployment.md` 已声明  
+**位置**：`docs/design/README.md`、`docs/ops/README.md` 已声明  
 **状态**：🔶 已知，依赖部署者配置（风险已实测证实）
 
 ---
@@ -202,7 +207,7 @@
 > 更新于 2026-10-12 下午：第 2–5 项已完成，第 1 项已确认根因（.NET/MsQuic 原生 bug）。
 
 1. 🔴 **修复 QuicListener 泄漏**——已追查定位：实验 F 证明仅 `ListenAsync`+`DisposeAsync`（无连接、callback 未调用）即泄漏 ~1.1MB/轮，是 **.NET/MsQuic 的 QuicListener 生命周期原生 bug**；且"NAT 打洞端口 = candidate 端口 = QUIC 监听端口"是架构硬约束，复用 listener 会破坏打洞。**当前无法安全修复**，需向 dotnet/runtime 上报，或投入 QUIC 层底层重构。
-2. ✅ **固定密码最短长度 6→8 位**——已改 `FixedPasswordPolicy.MinimumLength`、UI、README、docs/design/security.md。PAKE 迁移仍是根治方案。
+2. ✅ **固定密码最短长度 6→8 位**——已改 `FixedPasswordPolicy.MinimumLength`、UI、README、docs/design/README.md。PAKE 迁移仍是根治方案。
 3. ✅ **补 `.gitignore` 的 `*.cer` 规则**——已加。
 4. ✅ **Docker PG 数据卷路径**——查证确认 PG 18+ 的正确挂载点就是 `/var/lib/postgresql`（父目录），项目已正确，无需修改。
 5. ✅ **替换过时依赖**——删除冗余 `xunit.runner.visualstudio`，`softprops/action-gh-release@v3` 改为官方 `gh release create`。

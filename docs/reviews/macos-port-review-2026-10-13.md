@@ -1,5 +1,8 @@
 # macOS (arm64) 移植评审
 
+> **历史快照 · 已冻结** — 本文件是 2026-10-13 的评审记录，**不再更新**。后续进展与最终做法见现行的
+> [`docs/ports/README.md`](../ports/README.md)。归档说明见 [`docs/reviews/README.md`](README.md)。
+>
 > 评审对象：`feat/macos-arm64-port` 分支（P1–P10，`master`..`633c837`）
 > 评审日期：2026-10-13
 > 结论：**架构方案正确，技术选型基本最优，对原体系影响极小且高度契合。**
@@ -109,6 +112,7 @@ macOS 实现的是与 Windows **完全相同**的 ~16 个端口接口，因此�
 总计 **90 文件 / +16360 / −121**，结构如下：
 
 **新增（平台层，不触碰共享层）：**
+
 - `src/Platform/RemoteDesktop.Platform.MacOS`：30 个 `.cs`，~5.4k 行
 - `native/macos`：11 个 `.m`/`.h`，4814 行，44 个导出入口
 - `tests/RemoteDesktop.Platform.MacOS.UnitTests`：99 条用例
@@ -154,8 +158,9 @@ macOS 移植**没有污染原体系**：核心零改动、依赖规则完好、�
 ## 4. 清理与整合（本次已执行）
 
 见文末"清理与整合记录"。要点：
+
 - 把 macOS 文档接入 `docs/README.md` 索引；
-- 更新根 `README.md`（去掉"第一阶段仅支持 Windows"）、`docs/design/architecture.md`（补 macOS 平台与单进程模型）、`CHANGELOG.md`（补 macOS 条目）；
+- 更新根 `README.md`（去掉"第一阶段仅支持 Windows"）、`docs/design/README.md`（补 macOS 平台与单进程模型）、`CHANGELOG.md`（补 macOS 条目）；
 - 清理 `artifacts/` 下 811MB 陈旧 bundle 与 `TestResults/` 陈旧 TRX。
 
 ---
@@ -176,19 +181,22 @@ macOS 移植**没有污染原体系**：核心零改动、依赖规则完好、�
 本次执行（均为 gitignore 覆盖的可再生产物 / 文档，无源码语义改动）：
 
 **文档整合**
+
 - `docs/README.md`：新增"平台移植"章节，接入 `macos-port-plan.md` 与 `macos-port-review.md`。
 - `README.md`：去掉"第一阶段仅支持 Windows"的过时表述；文档列表补入两份 macOS 文档；补 macOS `.app` 打包与
   最低系统版本说明。
-- `docs/design/architecture.md`：具体实现层补 `RemoteDesktop.Platform.MacOS`；宿主章节标明 HostService/SessionAgent 为
+- `docs/design/README.md`：具体实现层补 `RemoteDesktop.Platform.MacOS`；宿主章节标明 HostService/SessionAgent 为
   Windows 专属，并补 macOS 单进程宿主模型说明。
 - `CHANGELOG.md`：新增 `[Unreleased] · macOS 平台移植` 章节（Added / Changed / Notes）。
 - 新增本评审文档 `docs/ports/macos-port-review.md`。
 
 **目录清理**（`artifacts/` 与 `TestResults/` 均为 gitignore 覆盖，可再生产物）
+
 - 删除 `artifacts/app/` 下 6 个陈旧 bundle：`audio`、`devcert`、`devcert2`、`macos-selfcheck`、`sc`、`sc2`。
 - 删除 `TestResults/*.trx` 陈旧测试报告。
 - 保留 `artifacts/app/macos`（当前 bundle）、`artifacts/native`（构建依赖）、`artifacts/probe`（文档引用的 C 探针）。
 - 结果：`artifacts/` 由 **811MB → 168MB**。
 
 **未改动**（源码语义）
+
 - §1.4 / §5 的代码级建议（`ILoginItem` 注解、原生互操作按域拆分）**未执行**，留待决策。

@@ -52,6 +52,31 @@ dotnet test RemoteDesktop.slnx
 所以"某个功能在哪测"不能只靠项目名推。默认是**功能层的单测放 `Core.UnitTests`**；只有平台专有的才进对应平台的
 项目，只有需要真网络/真进程/容器的才进 `IntegrationTests`。
 
+## 🖥 本地联调
+
+单机两个客户端互连的完整步骤在根 [`README.md`](README.md) 的"快速开始"里。各平台多出来的那几步在这里：
+
+**Linux：要么把 `libmsquic` 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它。** 开发时是框架依赖运行，库不在可执行文件旁，
+缺它的报错是 `QUIC is not supported on this system`——看着像平台不支持，其实是缺库。`.deb` 里是随包带的，
+所以装出来的包不会有这个问题。仓库里有 `native/linux/fetch-libmsquic.sh`。
+
+**macOS：不需要 `dotnet run`。** 用服务端 `.pkg` 把服务端装到本机，再开两个客户端实例——
+`open --args` 送不到参数（`args` 会丢，原因见 [`docs/ports/README.md`](docs/ports/README.md) 的"`open --args` 送不到参数"一节），
+所以直接跑 bundle 里的可执行文件：
+
+```bash
+sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
+curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
+
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd1
+"artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd2
+```
+
+**跨机器测试**：放通服务器的 TCP 5080、UDP 5081（地址反射）和 UDP 5082（中继），并把 Rendezvous 的
+`Rendezvous:RelayEndpoint` 配成客户端可达的中继公网地址。`--Transport:ForceRelay true` 强制走中继，
+`--Transport:RendezvousUri ws://<服务器>:5080/ws` 换服务器。生产环境必须换掉 `RelaySharedKey` 并让信令走 `wss://`
+（做法见 [`docs/ops/README.md`](docs/ops/README.md)）。
+
 ## 📦 构建产物布局
 
 所有构建产物都在仓库根的 `artifacts/`（已 gitignore）。仓库自己的脚本写的四类按 `<类别>/<平台>/` 组织：
@@ -150,6 +175,22 @@ Linux 有三个包本来就是靠角色词区分的，另外两个平台跟着�
 `artifacts/installer/macos/`）；**C# 项目名与命名空间**用 PascalCase（`RemoteDesktop.Platform.MacOS`，
 因为 `MacOS` 在这里是 .NET 标识符的一部分）；**RID** 按 SDK 写（`osx-arm64`）；**散文**里写 Apple 的
 `macOS`。注意 `.app` bundle 里的 `Contents/MacOS/` 是 Apple 定的目录名，不是这里的拼写问题。
+
+## 📄 文档
+
+文档的规范在 [`docs/STYLE.md`](docs/STYLE.md)：放哪、叫什么、怎么写、什么时候更新。三条最常被违反的：
+
+1. **新文档要进索引**（[`docs/README.md`](docs/README.md)）。索引只有一份，漏加会让 `dotnet test` 变红。
+2. **评审是快照，不是规范。** 一次评审的结论进 `docs/reviews/`；其中被采纳的部分才写进规范类文档。
+3. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
+
+能机器判断的部分已经是断言（`tests/RemoteDesktop.Architecture.UnitTests/DocumentationTests.cs`）：必备文件、
+一个文件一个 H1、`docs/` 下没有孤儿文档、相对链接可解析、文件命名规范。**格式**（空行、缩进、代码块标注）
+由 CI 的 `docs` 作业跑 markdownlint。所以只改了文档也要跑一次测试：
+
+```bash
+dotnet test tests/RemoteDesktop.Architecture.UnitTests
+```
 
 ## 📝 提交规范
 
