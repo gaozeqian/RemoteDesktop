@@ -140,7 +140,14 @@ if ($placeholders) {
 
 function Get-ProductVersion {
     $props = [xml](Get-Content (Join-Path $repoRoot 'Directory.Build.props'))
-    $version = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    # Every PropertyGroup, not just the first. $props.Project.PropertyGroup is an array as soon as the file has more
+    # than one group, and reading .Version off that array is version-dependent: Windows PowerShell 5.1 enumerates the
+    # member and hands back the one non-null value, PowerShell 7 throws "The property 'Version' cannot be found on this
+    # object" because the other group has no such element. The build runs under pwsh, so the file's shape decides
+    # whether this works — which is the wrong thing for it to depend on.
+    $version = $props.SelectNodes('/Project/PropertyGroup/Version') |
+        ForEach-Object { $_.InnerText } |
+        Select-Object -First 1
     if (-not $version) { throw 'Directory.Build.props has no <Version>.' }
 
     # MSI versions are four numbers; anything else (e.g. "0.1.0-beta") is refused by the WiX compiler.

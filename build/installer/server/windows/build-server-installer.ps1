@@ -142,7 +142,11 @@ if ($placeholders) {
 
 function Get-ProductVersion {
     $props = [xml](Get-Content (Join-Path $repoRoot 'Directory.Build.props'))
-    $version = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    # Every PropertyGroup, not just the first — see the longer note in build-installer.ps1. Reading .Version off the
+    # PropertyGroup array works in Windows PowerShell 5.1 and throws in PowerShell 7, which is what CI runs.
+    $version = $props.SelectNodes('/Project/PropertyGroup/Version') |
+        ForEach-Object { $_.InnerText } |
+        Select-Object -First 1
     if (-not $version) { throw 'Directory.Build.props has no <Version>.' }
 
     # MSI versions are four numbers; anything else (e.g. "0.1.0-beta") is refused by the WiX compiler.
