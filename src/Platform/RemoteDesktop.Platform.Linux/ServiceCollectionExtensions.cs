@@ -35,7 +35,7 @@ public static class ServiceCollectionExtensions
     /// </para>
     /// <para>
     /// Ports shared with any other Posix system — the secret store, the user-context guard and the terminal — come
-    /// from RemoteDesktop.Posix rather than from here, so that a second Posix platform would not mean a second copy
+    /// from RemoteDesktop.Platform.Posix rather than from here, so that a second Posix platform would not mean a second copy
     /// of them.
     ///
     /// The clipboard and the cameras are registered but not implemented — see P5 and P8 in the port plan. They are

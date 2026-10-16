@@ -25,7 +25,7 @@
   </Folder>
   <Folder Name="/src/Platform/">
     <Project Path="src/Platform/RemoteDesktop.Platform.Windows/RemoteDesktop.Platform.Windows.csproj" />
-    <Project Path="src/Platform/RemoteDesktop.Posix/RemoteDesktop.Posix.csproj" />
+    <Project Path="src/Platform/RemoteDesktop.Platform.Posix/RemoteDesktop.Platform.Posix.csproj" />
     <Project Path="src/Platform/RemoteDesktop.Platform.Linux/RemoteDesktop.Platform.Linux.csproj" />
     <Project Path="src/Platform/RemoteDesktop.Platform.MacOS/RemoteDesktop.Platform.MacOS.csproj" />
   </Folder>
@@ -41,10 +41,10 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
-    <Project Path="tests/RemoteDesktop.ArchitectureTests/RemoteDesktop.ArchitectureTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Architecture.UnitTests/RemoteDesktop.Architecture.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />
-    <Project Path="tests/RemoteDesktop.Platform.Windows.Tests/RemoteDesktop.Platform.Windows.Tests.csproj" />
-    <Project Path="tests/RemoteDesktop.Platform.Linux.Tests/RemoteDesktop.Platform.Linux.Tests.csproj" />
-    <Project Path="tests/RemoteDesktop.Platform.MacOS.Tests/RemoteDesktop.Platform.MacOS.Tests.csproj" />
+    <Project Path="tests/RemoteDesktop.Platform.Windows.UnitTests/RemoteDesktop.Platform.Windows.UnitTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Platform.Linux.UnitTests/RemoteDesktop.Platform.Linux.UnitTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Platform.MacOS.UnitTests/RemoteDesktop.Platform.MacOS.UnitTests.csproj" />
   </Folder>
 </Solution>
