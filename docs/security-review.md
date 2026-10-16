@@ -127,9 +127,9 @@
 
 - **风险**：误用开发配置上公网会裸奔。
 - **缓解（已有）**：Docker/服务器启动时校验密钥长度；文档已声明生产必须换。
-- **建议**：README 顶部加醒目提醒，或提供"上线前检查清单"（已有 `build/security-audit.ps1` 可自动扫描）。
+- **建议**：README 顶部加醒目提醒，或提供"上线前检查清单"（已有 `build/tools/Invoke-SecurityAudit.ps1` 可自动扫描）。
 
-**状态**：✅ 已提供 `build/security-audit.ps1` 自动扫描
+**状态**：✅ 已提供 `build/tools/Invoke-SecurityAudit.ps1` 自动扫描（三个平台都可用 pwsh 运行）
 
 ### 7. 本机用户之间不区分
 

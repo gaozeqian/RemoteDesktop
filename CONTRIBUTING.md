@@ -20,21 +20,52 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
+### 测试项目命名
+
+`tests/` 下的项目一律是 `<区域>.<种类>Tests`，种类只有两种：
+
+| 种类 | 含义 | 例子 |
+|---|---|---|
+| `UnitTests` | 不需要外部服务或网络，随时可跑 | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
+| `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
+
+**后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
+`**/*.UnitTests` 会漏掉它，而漏掉是静默的。加新测试项目时请照这个模式命名，别用 `FooTests` 或 `Foo.Test`。
+
+平台专有的用例（只在某个 OS 上有意义）仍然放在对应平台的 `UnitTests` 项目里，用 `Assert.SkipUnless(...)`
+在别的系统上跳过，而不是为每个平台单开一种后缀。
+
 ## 📦 构建产物布局
 
 所有构建产物都在仓库根的 `artifacts/`（已 gitignore），按 `<类别>/<平台>/` 组织：
 
 | 路径 | 是什么 |
 |---|---|
-| `artifacts/installer/<平台>/` | **交付物**：安装包（`.msi` / `.pkg` / 未来的 `.deb`）。角色写在文件名里（`RemoteDesktop-Windows-x64-*` 与 `RemoteDesktop-Server-Windows-*`） |
-| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 是各角色的 publish 输出（`app/windows/client/`、`app/windows/server/`），因为同一台机器上会同时出两个角色 |
+| `artifacts/installer/<平台>/` | **交付物**：安装包（`installer/windows/` 的 `.msi`、`installer/macos/` 的 `.pkg`、`installer/linux/` 的 `.deb`）。角色写在文件名里（`RemoteDesktop-Windows-x64-*` 与 `RemoteDesktop-Server-Windows-*`） |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 是各角色的 publish 输出（`app/windows/client/`、`app/windows/server/`、`app/windows/host/`），因为同一台机器上会同时出多个角色 |
 | `artifacts/native/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
+
+`dotnet build` / `dotnet publish` 的产物也在这里，用 SDK 自己的布局——`Directory.Build.props` 设了
+`UseArtifactsOutput` + `ArtifactsPath`：
+
+| 路径 | 是什么 |
+|---|---|
+| `artifacts/bin/<项目>/<pivot>/` | 编译输出（`pivot` 形如 `debug`、`release_linux-x64`） |
+| `artifacts/obj/<项目>/<pivot>/` | 中间产物 |
+| `artifacts/publish/<项目>/<pivot>/` | `dotnet publish` 的输出（**不在** `bin/` 下面，这是 SDK 的约定） |
+| `artifacts/packages/` | `dotnet pack` 的输出 |
+
+所以项目目录里**没有** `bin/` 和 `obj/` 了：23 个项目不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与
+`artifacts/obj` 即可，不必逐个项目找。`build/installer/` 下的安装器项目（WiX 与 net48 的 CustomActions）是例外，
+它们带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在项目内。
 
 **只有一个产物根目录。** 新增平台照 `<类别>/<平台>/` 加一层即可；不要再另起一个 `artifacts/` 目录（比如写在 `build/` 里面）—— 那样"产物在哪"就会有两个答案，每加一个平台都要重新选边。
 
+`<平台>` 取 `windows` / `macos` / `linux`——是**平台**，不是发行版或包格式：`.deb` 因此落在 `installer/linux/` 而不是 `installer/debian/`。
+
 ## 📐 架构与依赖规则
 
-本项目采用严格的**洋葱架构/整洁架构**，依赖方向只能**由外向内**。此规则由 `RemoteDesktop.ArchitectureTests` 强制校验。
+本项目采用严格的**洋葱架构/整洁架构**，依赖方向只能**由外向内**。此规则由 `RemoteDesktop.Architecture.UnitTests` 强制校验。
 
 * `Domain` (领域层) 不能引用任何其他层。
 * `Abstractions` (抽象端口) 只能引用 `Domain`。

@@ -11,6 +11,8 @@
   * 信令层 (WebSocket) 与 传输层 (QUIC) 交互流程，多路复用帧结构。
 * [**安全机制说明 (security.md)**](security.md)
   * 端到端加密 (E2EE)、密码证明防重放攻击、权限隔离与降级。
+* [**安全评审 (security-review.md)**](security-review.md)
+  * 对现有安全设计的逐项复核：已缓解的风险、仍待产品决策的项与上线前检查清单。
 
 ### 2. 部署与运维 (Ops)
 * [**部署指南 (deployment.md)**](deployment.md)

@@ -13,7 +13,7 @@
 | 采集与注入 | **Wayland 优先**（xdg-desktop-portal + PipeWire），X11 后续 |
 | 打包 | 客户端与被控端 **`.deb` + systemd 用户服务**；服务端 **`.deb` + systemd 系统单元 + debconf** |
 | 视频编解码 | **硬件与软件都经 libavcodec 一把桥**，不手绑 VA-API / NVENC |
-| POSIX 共享 | 新建 `src/Platform/RemoteDesktop.Posix`，与将来的 macOS 实现共用语义相同的部分 |
+| POSIX 共享 | 新建 `src/Platform/RemoteDesktop.Platform.Posix`，与将来的 macOS 实现共用语义相同的部分 |
 | 基线 | 从 `master` 起分支，不依赖未合并的 `feat/macos-arm64-port` |
 
 ---
@@ -23,7 +23,7 @@
 这个代码库本来就是为移植设计的，**不需要重写**：
 
 - 依赖严格向内（`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`），由
-  `tests/RemoteDesktop.ArchitectureTests` 按**程序集名前缀**强制。新增 `RemoteDesktop.Platform.Linux`
+  `tests/RemoteDesktop.Architecture.UnitTests` 按**程序集名前缀**强制。新增 `RemoteDesktop.Platform.Linux`
   自动纳入既有规则，规则表一行都不用改。
 - 每一个平台相关能力都在 `src/Core/RemoteDesktop.Abstractions` 里有端口接口，Windows 实现集中在
   `src/Platform/RemoteDesktop.Platform.Windows`（34 文件 / 约 5000 行）——**这就是要写的部分**。
@@ -333,9 +333,9 @@ LD_LIBRARY_PATH=$PWD/artifacts/native/linux dotnet test --solution RemoteDesktop
   `.tmp` + `File.Move(overwrite)` 原子替换）与 `UserContextGuard`（后改名 `UnixUserContextGuard` 并移入 `Platform.Posix`，见 P6）。
   **端口按阶段逐个注册，不预先铺桩**：每个端口都要先是真实现才有意义，而构造函数抛异常的桩只会把
   「这个功能还没做」变成「宿主起不来」。
-- `tests/RemoteDesktop.Platform.Linux.Tests`：建真实容器并逐个解析，让「构造函数会抛」的端口无法
+- `tests/RemoteDesktop.Platform.Linux.UnitTests`：建真实容器并逐个解析，让「构造函数会抛」的端口无法
   蒙混过注册；另有用例断言 `IAgentGateway` **不在**容器里（见 §2.1）。
-- 给 `RemoteDesktop.ArchitectureTests` 补 `ProjectReference`——不加的话按前缀加载的规则根本看不到新工程，
+- 给 `RemoteDesktop.Architecture.UnitTests` 补 `ProjectReference`——不加的话按前缀加载的规则根本看不到新工程，
   而测试仍然全绿。
 - `.github/actions/run-test-suite/action.yml`（与 macOS 分支同一份，逐字节一致）+ `ci.yml` 的
   `build-linux` 作业。
@@ -428,7 +428,7 @@ session=/org/freedesktop/portal/desktop/session/1_1407/rdSession1393a5fe
 pipewire fd=98
 ```
 
-另有 `tests/RemoteDesktop.Platform.Linux.Tests/PortalScreenCastTests.cs` 两个用例覆盖同一流程，
+另有 `tests/RemoteDesktop.Platform.Linux.UnitTests/PortalScreenCastTests.cs` 两个用例覆盖同一流程，
 默认跳过、`RD_PORTAL_TEST=1` 时运行（要有人在真实桌面上点一次「共享」）。
 
 **六个把前几版实现卡住的坑**，全是"错了不报错、只表现为连接断开、进程消失或干脆挂死"的那类：

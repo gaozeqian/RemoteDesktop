@@ -252,7 +252,7 @@
       <Component Id="ServerShortcut" Guid="d17b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d">
         <Shortcut Id="HowToConfigureLink" Name="服务器配置说明"
                   Description="How to change the database, relay address and TLS settings of these servers"
-                  Target="[INSTALLFOLDER]如何配置.txt" WorkingDirectory="INSTALLFOLDER" />
+                  Target="[INSTALLFOLDER]HOW-TO-CONFIGURE.txt" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\RemoteDesktop\Server" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
         <!-- Windows Installer only removes folders it is told about. -->
         <RemoveFolder Id="RemoveServerShortcutFolder" Directory="ServerShortcutFolder" On="uninstall" />

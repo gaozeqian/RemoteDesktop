@@ -132,7 +132,7 @@ echo "==> Assembling the payload"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Rendezvous/." "$SERVER_DIR/Rendezvous/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Relay/." "$SERVER_DIR/Relay/"
 cp "$SCRIPT_DIR/com.remotedesktop.rendezvous.plist" "$SCRIPT_DIR/com.remotedesktop.relay.plist" "$STAGE_DIR/Library/LaunchDaemons/"
-cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/如何配置.txt" "$SERVER_DIR/"
+cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/HOW-TO-CONFIGURE.txt" "$SERVER_DIR/"
 chmod +x "$SERVER_DIR/configure-server.sh" "$SERVER_DIR/uninstall-server.sh"
 
 # The answers this package was built with, read by the postinstall and handed to the server's --configure-system step.
@@ -179,7 +179,7 @@ cat > "$RES_DIR/conclusion.html" <<'HTML'
   <li>Without a certificate, signaling is <b>plain http</b>: device codes, who is connecting to whom, and the relay
       tickets are all readable on the way.</li>
 </ul>
-<p>Both are set with <b>configure-server.sh</b> in the install directory; <b>如何配置.txt</b> next to it explains
+<p>Both are set with <b>configure-server.sh</b> in the install directory; <b>HOW-TO-CONFIGURE.txt</b> next to it explains
 them, and logs are in <b>logs/</b>.</p>
 </body></html>
 HTML
@@ -207,8 +207,9 @@ cat > "$WORK_DIR/distribution.xml" <<XML
 </installer-gui-script>
 XML
 
-# The product's own licence text, the same file the Windows packages show.
-cp "$REPO_ROOT/build/installer/License.txt" "$RES_DIR/License.txt"
+# The product's own licence text — the repository's LICENSE, the same document the Windows packages show. It is copied
+# into the package resources under the name the installer-gui-script above refers to.
+cp "$REPO_ROOT/LICENSE" "$RES_DIR/License.txt"
 
 # --- 5. The component package ----------------------------------------------------------------------------------
 
@@ -297,7 +298,7 @@ fi
 # The payload is what actually has to be right here: two executables where the launchd plists say they are, and the
 # plists themselves. Printing both makes a wrong layout visible now rather than as a job that will not start.
 echo "    payload:"
-pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|如何配置' | sed 's/^/      /'
+pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|HOW-TO-CONFIGURE' | sed 's/^/      /'
 echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries in total)"
 
 echo

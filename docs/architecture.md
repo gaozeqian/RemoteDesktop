@@ -1,6 +1,6 @@
 # 系统架构设计
 
-本项目采用**领域驱动设计 (DDD)** 的思想与**整洁架构 (Clean Architecture)**/洋葱架构分层原则，配合 `.NET 10` 的模块化特性构建。依赖关系通过自动化单元测试 (`RemoteDesktop.ArchitectureTests`) 严格执行。
+本项目采用**领域驱动设计 (DDD)** 的思想与**整洁架构 (Clean Architecture)**/洋葱架构分层原则，配合 `.NET 10` 的模块化特性构建。依赖关系通过自动化单元测试 (`RemoteDesktop.Architecture.UnitTests`) 严格执行。
 
 ## 整体分层规则
 
@@ -44,7 +44,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 *   **`RemoteDesktop.Platform.Windows`**: 对 `Abstractions` 的 Windows 原生实现。调用 DXGI 进行超低延迟截屏、使用 SendInput 模拟键鼠、对接 Media Foundation、读写 Windows DPAPI。
 *   **`RemoteDesktop.Platform.MacOS`**: 对 `Abstractions` 的 macOS (Apple Silicon) 原生实现。调用 ScreenCaptureKit 截屏与环回音频、CGEvent 模拟键鼠、VideoToolbox 编解码、AVFoundation 摄像头、AVAssetWriter 录制、Keychain 存密钥、`SMAppService` 开机自启。平台项目同样保持 `net10.0`（**不是** `net10.0-macos`），C 框架直连 P/Invoke，ObjC-only 框架经一个小型辅助库（`native/macos` → `libRemoteDesktopMacNative.dylib`）暴露扁平 C ABI。详见 [macos-port-plan.md](macos-port-plan.md)。
 *   **`RemoteDesktop.Platform.Linux`**: 对 `Abstractions` 的 Linux 原生实现。屏幕走桌面 portal + PipeWire，输入走 libei（**不需要 `/dev/uinput` 那种机器级特权**），编解码走 libavcodec（NVENC / VA-API / x264 回落），音频走 PulseAudio，防休眠走 logind，密钥是 0600 文件。
-*   **`RemoteDesktop.Posix`**: 两个类 Unix 系统语义相同的部分——PTY（`posix_spawn`，不用 `fork`——多线程 .NET 进程里 fork 会死锁）、0600 文件密钥库、Unix 用户上下文守卫。
+*   **`RemoteDesktop.Platform.Posix`**: 两个类 Unix 系统语义相同的部分——PTY（`posix_spawn`，不用 `fork`——多线程 .NET 进程里 fork 会死锁）、0600 文件密钥库、Unix 用户上下文守卫。
 
 ### 6. 宿主与程序入口 (Hosts)
 *   **`RemoteDesktop.Client`**: 基于 Avalonia 12 编写的跨平台图形客户端，**同一份代码在 Windows、macOS 与 Linux 上构建运行**（`ClientPlatformRegistration` 在运行时按 OS 选择平台层，ILLink 按目标 OS 裁掉其余分支）。

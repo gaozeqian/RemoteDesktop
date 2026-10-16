@@ -5,9 +5,9 @@
 ## [未发布] · macOS (Apple Silicon) 与 Linux 平台支持
 
 新增 `RemoteDesktop.Platform.MacOS` 与 `RemoteDesktop.Platform.Linux` 两个平台项目（`net10.0`，与 Windows 侧
-同形），实现全部平台端口，使同一份客户端代码可在三个系统上构建运行；两个移植共享新增的 `RemoteDesktop.Posix`
-层（伪终端、0600 文件密钥库、用户上下文守卫）。核心层（`Domain` / `Application` / `Media` / `Protocol` /
-`Signaling`）**零改动**，依赖规则（`ArchitectureTests`）无需修改。
+同形），实现全部平台端口，使同一份客户端代码可在三个系统上构建运行；两个移植共享新增的
+`RemoteDesktop.Platform.Posix` 层（伪终端、0600 文件密钥库、用户上下文守卫）。核心层（`Domain` /
+`Application` / `Media` / `Protocol` / `Signaling`）**零改动**，依赖规则（`Architecture.UnitTests`）无需修改。
 
 ### Added
 
@@ -46,6 +46,24 @@
   把两个 MSI、两个 `.pkg` 和三个 `.deb` 一起发出；CI 在每个 PR 上构建三平台的包并检查包内容——不检查的话，
   构建脚本坏了要等到发版才知道。
 
+#### 仓库结构与跨平台一致性
+- **`.gitattributes`**：此前仓库里**一个 git 属性都没有**，行尾全靠各人机器上的 `core.autocrlf`——而那是个本地
+  设置，对这个跨平台保证没有任何强制力。现在在仓库层面声明：`.sh` / `Dockerfile` / Debian 维护脚本 / `.plist` /
+  `.service` / `.desktop` / `.yml` 一律 LF，`.ps1` / `.wxs` / `.wixproj` / `.csproj` / `.props` / `.slnx` 一律 CRLF，
+  图片与库文件标为二进制。Windows 上工作区里的 13 个 `#!/bin/sh` 脚本原本是 CRLF，意味着 WSL、Docker 挂载源码
+  目录、`scp` 到 Linux 主机这些走法都会以 `bad interpreter: /bin/sh^M` 失败。
+- **`.editorconfig`**：编码与缩进基线（C# 4 空格、XML 类文件与 JSON/YAML 2 空格）。**不设行尾**——那是
+  `.gitattributes` 的职责，两处都写就会有两个答案。
+- **`build/tools/`**：仓库维护类脚本从 `build/` 根下收拢进来并统一命名——`Generate-ThirdPartyNotices.ps1`、
+  `Invoke-SecurityAudit.ps1`（原 `security-audit.ps1`）、`New-AppIcons.ps1`（原 `generate-icons.ps1`）。
+  新增 `build/tools/README.md` 写明哪几份能跨平台跑：前两份只读文件、三平台都可用 `pwsh`，`New-AppIcons.ps1`
+  依赖 `mstsc.exe` 的资源段与 GDI+，只能在 Windows 上跑（产物是提交进仓库的，所以不需要别处能跑）。
+- **`LICENSE`**：安装包一直带着一份专有 EULA（`build/installer/License.txt`），但仓库根本身没有任何许可声明。
+  现在那份文本就是仓库根的 `LICENSE`，MSI 与 `.pkg` 都从它生成，不再是"仓库一份、包一份"的两份拷贝。
+- **测试项目命名统一为 `<区域>.<种类>Tests`**：`ArchitectureTests` → `Architecture.UnitTests`、
+  `Platform.{Windows,Linux,MacOS}.Tests` → `Platform.{Windows,Linux,MacOS}.UnitTests`，命名空间同步。
+  此前同一层混用三种后缀，按 `**/*.UnitTests` 之类的模式筛选会**静默漏掉**项目；规则写进了 `CONTRIBUTING.md`。
+
 ### Changed
 - **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
   业务代码不知道自己在哪个平台上；客户端由 `ClientPlatformRegistration` 在运行时选层。
@@ -82,6 +100,22 @@
   列 payload（客户端要带 `Info.plist`、服务端要带各自的 launchd plist），MSI 用仓库自己的
   `InstallerPackageTests` 打开数据库（payload、服务崩溃重启、防火墙规则、快捷方式、向导页与许可文本）。
   CI 与 Release 各三处调用，发版路径上 Linux 与 macOS 的包此前**只被数过数量**：内容不对的包照样会被数到。
+- [Build] **构建产物收敛到 `artifacts/`**：根 `Directory.Build.props` 打开 `UseArtifactsOutput` 并把
+  `ArtifactsPath` 指向仓库根，于是 23 个项目不再各自长出 `bin/` 与 `obj/`（此前是 46 个目录要清、要忽略、
+  要解释），输出统一落在 `artifacts/bin|obj|publish|packages/<项目>/<pivot>/`——与打包脚本一直在写的
+  `artifacts/{app,installer,native}/<平台>/` 同一个根。`build/installer/` 下的 WiX 与 net48 CustomActions
+  项目带着自己那份（故意留空的）`Directory.Build.props`，不受影响，产物仍在项目内。
+- [Build] **`.deb` 的输出路径从 `artifacts/debian/` 改为 `artifacts/installer/linux/`**：`CONTRIBUTING.md` 写死了
+  `<类别>/<平台>/` 的形状、并明确禁止"同一类别两个根"，而 `debian` 是发行版不是平台。现在三个平台的安装包
+  都在 `installer/<平台>/` 下，`.deb` 与 `.msi`、`.pkg` 并列。
+- [Build] `make-app.sh` 不再写死客户端的 publish 目录（原先硬编码
+  `src/Hosts/RemoteDesktop.Client/bin/<配置>/net10.0/osx-arm64/publish`，既耦合布局也耦合 RID），改为向 MSBuild
+  询问 `PublishDir`；`build-installer.ps1` 清理 SessionAgent 产物时同理改用 `artifacts/` 下的新位置。
+- [Docs] `docs/README.md` 补上漏列的 `security-review.md`；`HOW-TO-CONFIGURE.txt` 取代原先带中文的
+  `如何配置.txt` 文件名（开始菜单里的入口名「服务器配置说明」不变），仓库内已无任何非 ASCII 路径。
+- [Naming] `RemoteDesktop.Posix` → `RemoteDesktop.Platform.Posix`：与 `Platform.{Windows,Linux,MacOS}` 对称。
+  这同时堵上一个洞——架构规则按**程序集名前缀**加载程序集，`RemoteDesktop.Posix` 因此一直没被
+  `Platform` 那条规则看到（见 Fixed）。
 
 ### Fixed
 - **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
@@ -105,6 +139,11 @@
   （`RemoteDesktop-Windows-*.msi`）去 glob，两个都找不到，会在"少一个就什么都不发"的检查上直接抛错。
   这条路径在 v0.3.0 之后一次都没跑过，所以一直没被发现；同一次改动把三平台的产物校验统一成了共享动作，
   它按构建产物的真实名字找包，并断言"一个 glob 恰好命中一个"。
+- [Tests] **架构规则有两个平台层从未被检查过**：`DependencyRuleTests` 按程序集名前缀从测试输出目录里加载
+  程序集，于是 `RemoteDesktop.Posix`（前缀对不上 `RemoteDesktop.Platform`）和 `RemoteDesktop.Platform.MacOS`
+  （根本没被 `ArchitectureTests.csproj` 引用）都不在检查范围内——而那个文件第 5 行的注释正是警告"没被引用的
+  平台会让套件全绿却什么都没检查"。前者随 `RemoteDesktop.Platform.Posix` 改名解决，后者补上项目引用；
+  现在四个平台程序集都在规则内，且都合规。
 
 ### 平台上的边界与未验证项
 

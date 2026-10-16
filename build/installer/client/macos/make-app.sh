@@ -43,6 +43,10 @@ SELF_CONTAINED=1
 APP_NAME="RemoteDesktop.app"
 BUNDLE_ID="com.remotedesktop.client"
 EXECUTABLE_NAME="RemoteDesktop.Client"
+PROJECT="$REPO_ROOT/src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj"
+# Apple Silicon only, deliberately: the macOS port is arm64 (see docs/macos-port-plan.md). A universal build would mean
+# a second native helper library and a second publish, which is a separate piece of work rather than a flag here.
+RUNTIME="osx-arm64"
 # Distribution signing (Developer ID) differs from development signing in two ways that matter: the signature needs a
 # secure timestamp (`--timestamp`, not `--timestamp=none`) and the hardened runtime (`--options runtime`). Both are
 # prerequisites for notarization; neither is needed for a local build. Off by default so the development flow is
@@ -67,8 +71,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 # The SDK's own publish folder, not one of our own: MSBuild then owns the contents and removes what a previous publish
-# left behind, which a hand-rolled `--output` directory does not get for free.
-PUBLISH_DIR="$REPO_ROOT/src/Hosts/RemoteDesktop.Client/bin/$CONFIGURATION/net10.0/osx-arm64/publish"
+# left behind, which a hand-rolled `--output` directory does not get for free. Where that folder *is*, though, is
+# MSBuild's business rather than something to spell out here — with UseArtifactsOutput (see Directory.Build.props) it is
+# artifacts/publish/<project>/<pivot>/ and not the old bin/<configuration>/<tfm>/<rid>/publish. Writing either one down
+# only moves the coupling somewhere else, so it is asked for. The answer comes back absolute.
+SELF_CONTAINED_ARG="$([[ "$SELF_CONTAINED" == "1" ]] && echo true || echo false)"
+PUBLISH_DIR="$(dotnet msbuild "$PROJECT" -nologo -getProperty:PublishDir \
+    -p:Configuration="$CONFIGURATION" -p:RuntimeIdentifier="$RUNTIME" -p:SelfContained="$SELF_CONTAINED_ARG")"
 APP_DIR="$OUTPUT_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -76,10 +85,10 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "==> Publishing $EXECUTABLE_NAME ($CONFIGURATION, osx-arm64)"
 if [[ "${RD_SKIP_PUBLISH:-0}" != "1" ]]; then
-    dotnet publish "$REPO_ROOT/src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj" \
+    dotnet publish "$PROJECT" \
         --configuration "$CONFIGURATION" \
-        --runtime osx-arm64 \
-        "--self-contained=$([[ "$SELF_CONTAINED" == "1" ]] && echo true || echo false)" \
+        --runtime "$RUNTIME" \
+        "--self-contained=$SELF_CONTAINED_ARG" \
         --nologo
 fi
 

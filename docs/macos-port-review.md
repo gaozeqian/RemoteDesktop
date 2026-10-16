@@ -111,7 +111,7 @@ macOS 实现的是与 Windows **完全相同**的 ~16 个端口接口，因此�
 **新增（平台层，不触碰共享层）：**
 - `src/Platform/RemoteDesktop.Platform.MacOS`：30 个 `.cs`，~5.4k 行
 - `native/macos`：11 个 `.m`/`.h`，4814 行，44 个导出入口
-- `tests/RemoteDesktop.Platform.MacOS.Tests`：99 条用例
+- `tests/RemoteDesktop.Platform.MacOS.UnitTests`：99 条用例
 - `build/installer/client/macos`：`make-app.sh` / `Info.plist` / `entitlements.plist` / `make-dev-cert.sh`
 - `.github/actions/run-test-suite`：Win/macOS 共用的测试组合动作
 

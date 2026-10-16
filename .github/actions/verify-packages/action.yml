@@ -16,10 +16,10 @@ runs:
       run: |
         set -eu
 
-        count=$(ls -1 artifacts/debian/*.deb 2>/dev/null | wc -l)
+        count=$(ls -1 artifacts/installer/linux/*.deb 2>/dev/null | wc -l)
         if [ "$count" -ne 3 ]; then
           echo "Expected three packages, found $count:" >&2
-          ls -la artifacts/debian/ >&2 || true
+          ls -la artifacts/installer/linux/ >&2 || true
           exit 1
         fi
 
@@ -53,9 +53,9 @@ runs:
           dpkg-deb --info "$package" | sed -n '1,10p'
         }
 
-        check artifacts/debian/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
-        check artifacts/debian/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
-        check artifacts/debian/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous
+        check artifacts/installer/linux/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
+        check artifacts/installer/linux/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
+        check artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous
 
     - name: Verify the .pkg installers
       if: runner.os == 'macOS'
@@ -129,14 +129,14 @@ runs:
         # and it is the pass that verifies the package the release job has on disk rather than the one the build
         # script had in hand.
         $checks = @(
-          @{ Msi = $client[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.Tests.InstallerPackageTests' }
-          @{ Msi = $server[0].FullName; Variable = 'RD_SERVER_INSTALLER_MSI'; Class = 'RemoteDesktop.Platform.Windows.Tests.ServerInstallerPackageTests' }
+          @{ Msi = $client[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests' }
+          @{ Msi = $server[0].FullName; Variable = 'RD_SERVER_INSTALLER_MSI'; Class = 'RemoteDesktop.Platform.Windows.UnitTests.ServerInstallerPackageTests' }
         )
 
         foreach ($check in $checks) {
           Write-Host "--- $(Split-Path -Leaf $check.Msi) ($([math]::Round((Get-Item $check.Msi).Length / 1MB, 1)) MB)"
           Set-Item -Path "Env:$($check.Variable)" -Value $check.Msi
-          dotnet test --project tests/RemoteDesktop.Platform.Windows.Tests --filter-class $check.Class -v quiet
+          dotnet test --project tests/RemoteDesktop.Platform.Windows.UnitTests --filter-class $check.Class -v quiet
           if ($LASTEXITCODE -ne 0) { throw "$($check.Msi) is missing something (see the test output above)." }
           Remove-Item "Env:$($check.Variable)" -ErrorAction SilentlyContinue
         }

@@ -12,14 +12,18 @@
     3  文件不存在或读不了（可能是指错了目录）
 
 .EXAMPLE
-  .\build\security-audit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"
+  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"
 
 .EXAMPLE
-  .\build\security-audit.ps1 -SettingsPath .\artifacts\app\windows\rendezvous\appsettings.json
+  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/appsettings.json
 
 .NOTES
   这份脚本只读文件、不改任何东西。它不能代替真正的渗透测试，但能在"看着正常、其实在裸奔"的部署上线前
   拦住它。
+
+  三个平台都能跑：它只读文件、不调用任何平台专有 API，所以在 Linux 或 macOS 上用 pwsh 跑同一份脚本，就能
+  审那边的服务端部署（配置换成 /etc/remotedesktop-server/ 下那两份）。图标与第三方许可清单那两份脚本没有
+  这个性质，见 build/tools/README.md。
 #>
 [CmdletBinding()]
 param(

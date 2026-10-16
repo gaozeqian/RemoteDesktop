@@ -46,7 +46,7 @@
 
 ```sh
 build/debian/server/build-deb.sh
-sudo dpkg -i artifacts/debian/RemoteDesktop-Server-Linux-amd64-<版本>.deb
+sudo dpkg -i artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<版本>.deb
 ```
 
 包把两个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay}`，两个 **system** 单元装到
@@ -169,7 +169,7 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 
   它会调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
   所以两者的行为不会分叉；做过什么会追加到 `server-setup.log`。拿不准就先加 `-WhatIf` 看一眼。
-- **`如何配置.txt`** —— 同一件事的短说明，面向拿到机器的人。
+- **`HOW-TO-CONFIGURE.txt`** —— 同一件事的短说明，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。
 - 两个 `appsettings.json`（`Rendezvous\` 与 `Relay\`）—— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留。**注意它们在安装目录里，本机任何用户都能读**：
   带口令的连接串放这儿，等于本机所有用户都能看到。
@@ -410,7 +410,7 @@ scrape_configs:
   不配就是"不内置"，见"配置默认服务器地址"那一节。
 - **代码签名证书**（可选，但强烈建议）：不配置也能出包（流水线跳过签名），但没签名的包在目标机器上过不了
   UIAccess，见"准备代码签名证书"那一节。
-- **许可文本**：`build/installer/License.txt` 已经是填好的正式文本，不需要动。只有里面重新出现【方括号】占位符时
+- **许可文本**：仓库根的 `LICENSE` 已经是填好的正式文本，不需要动。只有里面重新出现【方括号】占位符时
   打包脚本才会拒绝出包——那道闸门是留给"换个人/换主体来发布"的，构建日志会列出是哪几处。
 
 ### 1. 准备代码签名证书 (非常重要)

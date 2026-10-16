@@ -19,7 +19,9 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
-out=${1:-$root/artifacts/debian}
+# Same single artifacts/ root and <kind>/<os>/ shape as the Windows and macOS installers: a .deb is a delivered
+# installer, so it belongs under installer/, next to the .msi and the .pkg.
+out=${1:-$root/artifacts/installer/linux}
 work="$out/remotedesktop-client_${version}_${architecture}"
 program="$work/usr/lib/remotedesktop-client"
 icons="$work/usr/share/icons/hicolor"

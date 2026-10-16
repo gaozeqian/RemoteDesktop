@@ -68,6 +68,6 @@ done
 echo "Remote Desktop Server: installed in $INSTALL_DIR"
 echo "  health:  curl http://127.0.0.1:5080/health"
 echo "  logs:    $INSTALL_DIR/logs/rendezvous.log and relay.log"
-echo "  settings: $INSTALL_DIR/如何配置.txt"
+echo "  settings: $INSTALL_DIR/HOW-TO-CONFIGURE.txt"
 
 exit 0

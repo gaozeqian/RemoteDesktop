@@ -58,7 +58,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 Platform.* / Media 只依赖 Abstractions
 ```
 
-该规则由 `tests/RemoteDesktop.ArchitectureTests/DependencyRuleTests.cs` 强制。注意其实现方式是按**前缀**加载程序集  
+该规则由 `tests/RemoteDesktop.Architecture.UnitTests/DependencyRuleTests.cs` 强制。注意其实现方式是按**前缀**加载程序集  
 （`LoadAssemblies("RemoteDesktop.Platform")`），因此新增 `RemoteDesktop.Platform.MacOS` **会自动纳入既有规则**，无需改测试。
 
 ### 1.2 需要 macOS 实现的平台端口
@@ -386,7 +386,7 @@ keychain round trip      ok (write, read back, delete)
 沙箱外直接跑测试可执行文件：
 
 ```
-RemoteDesktop.Platform.MacOS.Tests  Total: 28, Errors: 0, Failed: 0, Skipped: 0
+RemoteDesktop.Platform.MacOS.UnitTests  Total: 28, Errors: 0, Failed: 0, Skipped: 0
 ```
 
 沙箱内跑时，28 条里只有这 2 条 Keychain 测试是红的 —— 现在知道那是环境造成的**假阴性**。
@@ -1102,7 +1102,7 @@ shell 直跑时，App 是终端/代理进程链的子进程，**继承**了父�
   `README.md`/`docs/*`。
 - 测试：`SystemSetupTests` / `HostControlTests` / `FileAccessPolicyTests` / `LocalFileOperationsTests` /
   `ServerSetupTests` / `FileTransferSessionTests` 加平台跳过（§3.10）；新增
-  `RemoteDesktop.Platform.MacOS.Tests`
+  `RemoteDesktop.Platform.MacOS.UnitTests`
   - P3：`ScreenCaptureTests.cs`（帧 sink 与坐标约定）、`DisplayAndInputTests.cs`、
     `MacNativeInteropTests`、`TccGrantTests`、`ScreenCaptureKitCapturerTests`
   - P5：`ClipboardTests.cs`
@@ -1143,7 +1143,7 @@ shell 直跑时，App 是终端/代理进程链的子进程，**继承**了父�
 ### P1 平台骨架与工具链 ✅
 
 - [x] `src/Platform/RemoteDesktop.Platform.MacOS`（`net10.0`，**不是** `net10.0-macos`）与
-      `tests/RemoteDesktop.Platform.MacOS.Tests`，均已加入 `RemoteDesktop.slnx`
+      `tests/RemoteDesktop.Platform.MacOS.UnitTests`，均已加入 `RemoteDesktop.slnx`
 - [x] `AddMacOSPlatform(this IServiceCollection)` 注册扩展，对齐 `AddWindowsPlatform`
       （无 `DataProtectionScope` 参数 —— 钥匙串按用户而非按作用域）
 - [x] `DeviceIdentity` 加载 PKCS#12 时加 `X509KeyStorageFlags.Exportable`（§3.2，**3 行以内**）
@@ -1179,7 +1179,7 @@ shell 直跑时，App 是终端/代理进程链的子进程，**继承**了父�
       `kSec*` 是全局变量，经 `NativeLibrary.GetExport` 解引用取值）
 - [x] `OSStatus 100001` **已定性并解除阻塞**：它是 `EPERM`（**不是** `errSecMissingEntitlement`，那是 `-34018`），
       由**调用方进程被沙箱包裹**造成，与代码签名无关。沙箱外这 2 条测试直接转绿（§3.7）
-- [x] 设备身份往返：`RemoteDesktop.Platform.MacOS.Tests` **28/28** 通过（含 `KeychainSecretStoreTests` 2 条）
+- [x] 设备身份往返：`RemoteDesktop.Platform.MacOS.UnitTests` **28/28** 通过（含 `KeychainSecretStoreTests` 2 条）
 
 验收：`KeychainSecretStoreTests` 2 条转绿 ✅；同一数据目录两次启动拿到同一设备身份，两个数据目录是两台设备 ✅。
 
@@ -1201,7 +1201,7 @@ shell 直跑时，App 是终端/代理进程链的子进程，**继承**了父�
       而不是 `Width`）、越界钳制、副屏偏移，以及最关键的一条：**缩放系数不参与换算**
       （同一个归一化位置在 1.0 与 2.0 的屏幕上必须落在同一点 —— 把 `display.Scale` 乘进去会只坏 Retina 上的输入）
 
-验收：`RemoteDesktop.Platform.MacOS.Tests` **50/50** 通过（非沙箱；其中 2 条真实采集用例在授予屏幕录制后运行）。
+验收：`RemoteDesktop.Platform.MacOS.UnitTests` **50/50** 通过（非沙箱；其中 2 条真实采集用例在授予屏幕录制后运行）。
 `--self-check` 在 `.app` 内外都能报告采集结果（**直接执行 `Contents/MacOS/RemoteDesktop.Client`**，见 §3.11⑧）。
 （P5 之后这个项目变成 **66** 条，P8/P9 之后 **78** 条：50 + 剪贴板 9 + 坐标换算 7 + 摄像头相关 4 + 音频 11 -
 部分归并。）
@@ -1580,7 +1580,7 @@ add (data-protection)                      → -34018   ← 仍然如此：它�
 # 签名不是变量：签成 Authority=Remote Desktop Development、密封 292 个文件之后
 #   沙箱内跑 .app --self-check  → keychain round trip FAILED — OSStatus 100001
 #   沙箱外跑同一个 .app         → keychain round trip ok (write, read back, delete)
-#   沙箱外跑测试可执行文件       → RemoteDesktop.Platform.MacOS.Tests  Total: 28, Failed: 0
+#   沙箱外跑测试可执行文件       → RemoteDesktop.Platform.MacOS.UnitTests  Total: 28, Failed: 0
 #
 # 早先那条"关掉沙箱重跑仍是 100001"是错的：当时的"关沙箱"开关并没有生效，进程仍被沙箱包裹。
 
@@ -1737,7 +1737,7 @@ P3 之后（沙箱外）                             → 502 总计 / 405 成功
 #   Transport.IntegrationTests 138 / 0 / 26      ← §3.10 新增的跳过
 
 # P5 之后（Platform.MacOS.Tests；**这一次没能拿到沙箱外的运行**）：
-tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.Tests -noColor
+tests/RemoteDesktop.Platform.MacOS.UnitTests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.UnitTests -noColor
   → 66 总计 / 64 成功 / 2 失败 / 0 跳过
 #   P5 新增 16 条 = MacClipboardTests 9 + PointerCoordinatesTests 7，全过
 #   2 条失败就是上面那对 KeychainSecretStoreTests（沙箱内 100001 假阴性），与 P5 无关
@@ -1750,7 +1750,7 @@ tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platfor
 #   **（P8/P9 时补到了沙箱外的数字，见下。）**
 
 # P8 + P9 之后（Platform.MacOS.Tests；**沙箱外**，输出里能看到 "Sandbox bypassed"）：
-tests/RemoteDesktop.Platform.MacOS.Tests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.Tests -noColor
+tests/RemoteDesktop.Platform.MacOS.UnitTests/bin/Debug/net10.0/RemoteDesktop.Platform.MacOS.UnitTests -noColor
   → 78 总计 / 78 成功 / 0 失败 / 0 跳过
 #   P8 新增 4 条（MacCameraEnumerator 相关）+ P9 新增 11 条 = MacAudioPlayerTests 8 + MacAudioCapturerTests 3
 #   ServiceCollectionExtensionsTests 新增 1 条（audio/camera 工厂独立性）

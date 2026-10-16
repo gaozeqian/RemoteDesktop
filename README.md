@@ -346,7 +346,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
   `msiexec /x RemoteDesktop-0.3.0.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
 - **签名是自动的**：脚本在本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名、加时间戳并验证；
   没有证书就跳过并提示，也可以用 `-SignCertificate <指纹或 CN>` 指定、`-SkipSigning` 明确跳过。
-- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示 `build/installer/License.txt`
+- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示仓库根 `LICENSE`
   里的专有 EULA，构建时由 `New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
   该文件里若还有**【方括号】占位符**，打包脚本会拒绝出包——那是留给"换个人/换主体来发布"时的闸门，
   不是待办事项（当前内容是完整的）。
@@ -368,7 +368,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 详细的系统架构与分层规则设计，请参见 **[系统架构设计文档](docs/architecture.md)**。
 
 依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`。
-`Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.ArchitectureTests` 强制检查。
+`Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.Architecture.UnitTests` 强制检查。
 
 | 目录 | 内容 |
 |---|---|
@@ -383,7 +383,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
 | `src/Platform/RemoteDesktop.Platform.MacOS` | macOS (Apple Silicon) 平台实现：ScreenCaptureKit 采集、CGEvent 输入注入、VideoToolbox 编解码、AVFoundation 摄像头、ScreenCaptureKit/AudioQueue 音频、AVAssetWriter 录制、Keychain 密钥、SMAppService 登录项（原生辅助库见 `native/macos`） |
 | `src/Platform/RemoteDesktop.Platform.Linux` | Linux 平台实现：portal + PipeWire 屏幕采集、libei 输入注入、libavcodec 编解码（NVENC / VA-API / x264）、PulseAudio、logind 防休眠 |
-| `src/Platform/RemoteDesktop.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
+| `src/Platform/RemoteDesktop.Platform.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
 | `src/Hosts/RemoteDesktop.HostService` | 被控端宿主：注册设备、鉴权、分发通道、给 UI 提供控制管道。Windows 上是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上是一个直接干这些的 `systemd --user` 服务；macOS 上不用它——客户端进程自己就是被控端 |
 | `src/Hosts/RemoteDesktop.SessionAgent` | **仅 Windows**：由服务在交互会话（用户桌面或登录界面）里启动的 Agent，屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份）。Linux 与 macOS 上都没有它——见 [Linux 一节](#linux-支持与限制) |

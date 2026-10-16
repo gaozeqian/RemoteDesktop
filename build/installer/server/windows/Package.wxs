@@ -174,9 +174,9 @@
     <util:CloseApplication Id="CloseRelay" Target="RemoteDesktop.Server.Relay.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
 
-    <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package:
-         build/installer/License.txt is turned into one RTF next to it while this builds, and both packages point at
-         that one file, so they cannot show different agreements. -->
+    <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package: the
+         repository's LICENSE is turned into one RTF under build/installer while this builds, and both packages point
+         at that one file, so they cannot show different agreements. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="..\..\License.rtf" />
 

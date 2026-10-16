@@ -87,9 +87,9 @@ param(
     # not needed for a normal installation.
     [switch]$KeepSymbols,
 
-    # Build even though License.txt (the client's, which this package shows too) still has 【placeholders】 in it. For a
-    # test build that nobody will be handed; a build meant to be published should have the real details in the license
-    # instead.
+    # Build even though LICENSE at the repository root (the same text the client package shows) still has
+    # 【placeholders】 in it. For a test build that nobody will be handed; a build meant to be published should have the
+    # real details in the license instead.
     [switch]$AllowDraftLicense
 )
 
@@ -109,10 +109,10 @@ if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'artifacts\installer\windows' }
 
 # The license text is the product's, shared by every package (the agreement covers running the server components too),
-# and it lives one level above the packages, next to the script that turns it into the RTF an MSI license page needs.
-# One text, one RTF, both packages pointing at it: no package can show an agreement another one no longer has.
+# and it is the repository's own LICENSE rather than a copy kept beside the packages: one text, and the RTF the MSI
+# license page needs is generated from it. No package can show an agreement the repository no longer states.
 $sharedDirectory = Join-Path $installerDirectory '..\..'
-$licenseText = Join-Path $sharedDirectory 'License.txt'
+$licenseText = Join-Path $repoRoot 'LICENSE'
 $licenseRtf = Join-Path $sharedDirectory 'License.rtf'
 
 # Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
@@ -124,7 +124,7 @@ foreach ($name in 'CertificateFile', 'PrivateKeyFile') {
 
 # The license is a draft with the company's own details left as 【placeholders】. Shipping one is publishing a
 # document that says "insert your company name here" to whoever installs the product, so the build stops instead.
-# Fill in build/installer/License.txt (or pass -AllowDraftLicense for a build that is not going anywhere).
+# Fill in LICENSE at the repository root (or pass -AllowDraftLicense for a build that is not going anywhere).
 # Checked here for the same reason as the certificate paths above: a release that is going to stop should stop in the
 # first second, not after the servers have been published.
 $placeholders = Select-String -Path $licenseText -Pattern '【[^】]+】' -AllMatches |
@@ -568,7 +568,7 @@ $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 # The two files that make an installation maintainable rather than only installable: a script that writes the settings
 # the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
 # servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
-foreach ($extra in 'configure-server.ps1', '如何配置.txt') {
+foreach ($extra in 'configure-server.ps1', 'HOW-TO-CONFIGURE.txt') {
     Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
 }
 
@@ -629,6 +629,9 @@ if ($LASTEXITCODE -ne 0) { throw 'The installer custom actions failed to build.'
 # "x64" in the path is part of the path on purpose: the project sets Platform=x64 so that SfxCA packs the 64-bit native
 # host stub, and that is what satisfies the x64 package below. Packed with the x86 stub instead, msiexec cannot load the
 # action at all and it fails without a word in the log, so the folder spelling out the bitness is worth keeping.
+# bin\ and not artifacts\bin\ is also on purpose: the installer projects carry their own (empty) Directory.Build.props,
+# so they never import the root one and never pick up its ArtifactsPath — see build/installer/client/windows/
+# Directory.Build.props. The path here is relative to the project, as it has always been.
 $customActions = Resolve-Path (Join-Path $installerDirectory "CustomActions\bin\x64\$Configuration\net48\RemoteDesktop.Server.Installer.CustomActions.CA.dll")
 if (-not (Test-Path -LiteralPath $customActions)) { throw "The custom actions were not packaged into $customActions." }
 
@@ -732,7 +735,7 @@ $env:RD_SERVER_INSTALLER_MSI = $package.FullName
 
 # 完全限定类名，和客户端脚本同样的原因（见那里的注释）：--filter-class 不认通配形式的"精确匹配"，
 # 而 --nologo 在新的 dotnet test 下会让测试程序以退出码 5 拒绝整次运行。
-dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.Tests') --filter-class RemoteDesktop.Platform.Windows.Tests.ServerInstallerPackageTests -v quiet
+dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.UnitTests') --filter-class RemoteDesktop.Platform.Windows.UnitTests.ServerInstallerPackageTests -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
 Remove-Item Env:\RD_SERVER_INSTALLER_MSI
 
