@@ -42,8 +42,9 @@
   Linux 的版本检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal、显示布局、PipeWire、libei、
   libavcodec 版本与可用的 H.264 编码器。全部只读、不弹对话框，在一台起不来的机器上照样能跑；
   有必需项不通过时退出码 1。**两个包都带**，不只客户端——只装被控端的机器更需要它。
-- **发布流水线产出三平台产物**：`release.yml` 现在有四个打包 job，两个 MSI、两个 `.pkg` 和三个 `.deb`
-  一起发出；CI 在每个 PR 上构建三平台并检查包内容——不检查的话，构建脚本坏了要等到发版才知道。
+- **发布流水线产出三平台产物**：`release.yml` 的三个打包 job（`build-linux` / `build-macos` / `build-and-release`）
+  把两个 MSI、两个 `.pkg` 和三个 `.deb` 一起发出；CI 在每个 PR 上构建三平台的包并检查包内容——不检查的话，
+  构建脚本坏了要等到发版才知道。
 
 ### Changed
 - **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
@@ -65,6 +66,22 @@
   **静默不工作**。
 - [Tests] Windows 专有用例改为 `SkipUnless` 跳过（其他平台上不再计为失败）；`SystemSetupTests` 里与注册表
   无关的用例现在在三个平台都真跑。
+- [CI] **三个平台的 CI 与发布流程对齐**。依赖漏洞审计与"Linux runner 跑测试前的准备"各自抽成共享组合动作
+  （`audit-packages`、`prepare-linux-tests`），与 `run-test-suite` 一样只有一份，六处调用不会各改一半；
+  作业名统一为 `build-windows` / `build-linux` / `build-macos`（Release 侧另有 `build-and-release`）。
+  两个 workflow 都声明顶层 `permissions: contents: read`，只有发版那个 job 自己申请 `contents: write`。
+- [CI] **CI 现在构建三平台的安装包**：Windows 的两个 MSI 与 macOS 的两个 `.pkg` 也在每个 PR 上构建并校验
+  包内容（此前只有 Linux 的三个 `.deb`）。这些脚本原本只在打 tag 时跑，坏了要等到发版才发现；而 `.pkg`
+  那条路径此前**一次都没在 runner 上执行过**。
+- [CI] **Release 三个平台都自己跑测试与依赖审计**：Linux 那个 job 此前只做 `dotnet publish`（既不跑测试也
+  不审依赖），现在与另外两个平台调用同一批共享动作；它的 runner 从 `ubuntu-latest` 钉到 `ubuntu-26.04`，
+  与 CI 验证过的那台一致。Windows 那个 job 里内联复制的一份测试脚本（不上传 TRX、不写汇总表）改回调用
+  共享动作；macOS 那个 job 补上了此前缺失的依赖审计。
+- [CI] **三平台的安装包校验统一成一份共享动作**（`verify-packages`）：打开每个包看里面有什么，而不是数文件
+  个数——`.deb` 用 `dpkg-deb --contents` 列内容并读它必须带的手写依赖行，`.pkg` 用 `pkgutil --payload-files`
+  列 payload（客户端要带 `Info.plist`、服务端要带各自的 launchd plist），MSI 用仓库自己的
+  `InstallerPackageTests` 打开数据库（payload、服务崩溃重启、防火墙规则、快捷方式、向导页与许可文本）。
+  CI 与 Release 各三处调用，发版路径上 Linux 与 macOS 的包此前**只被数过数量**：内容不对的包照样会被数到。
 
 ### Fixed
 - **`SpaPod` 解析器少读 4 个字节**：SPA 对象体是 `{type, id}`，没有属性个数，而解析器在 id 后面读了一个"个数"
@@ -83,6 +100,11 @@
   且所有不真正加载的检查（文件在、`otool` 正常、签名已打）都会放行。现在依赖从 bottle 的声明里读、
   引用按二进制里的实际形状收集（bottle 占位符与 `@loader_path` 两种），并且**结束前把每个 staged
   文件真的 `dlopen` 一遍**，缺件当场报出 dyld 的原因而不是等到运行时"QUIC is not supported"。
+- [CI/发布] **`release.yml` 按错的名字去找两个 MSI**：构建产物叫 `RemoteDesktop-<版本>-x64.msi` 与
+  `RemoteDesktop.Server-<版本>-x64.msi`（两个 wixproj 的 `OutputName`），而重命名那一步按**发布产物**的名字
+  （`RemoteDesktop-Windows-*.msi`）去 glob，两个都找不到，会在"少一个就什么都不发"的检查上直接抛错。
+  这条路径在 v0.3.0 之后一次都没跑过，所以一直没被发现；同一次改动把三平台的产物校验统一成了共享动作，
+  它按构建产物的真实名字找包，并断言"一个 glob 恰好命中一个"。
 
 ### 平台上的边界与未验证项
 

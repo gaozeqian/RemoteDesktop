@@ -1,0 +1,142 @@
+name: Verify the packages hold what they are supposed to
+description: >-
+  Opens every installer this platform just built and checks what is inside it, instead of counting files: the Linux
+  branch lists the .deb contents with dpkg-deb and reads the dependency lines its control file has to carry, the macOS
+  branch lists the .pkg payload with pkgutil, and the Windows branch reads the MSI database through the repository's
+  own installer package tests. Shared by ci.yml and release.yml and by all three platforms, so that the same claim is
+  made about every package in the same way. Every one of these build scripts can exit zero without having produced
+  something usable, and a package that installs nothing is still a package.
+
+runs:
+  using: composite
+  steps:
+    - name: Verify the .deb packages
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -eu
+
+        count=$(ls -1 artifacts/debian/*.deb 2>/dev/null | wc -l)
+        if [ "$count" -ne 3 ]; then
+          echo "Expected three packages, found $count:" >&2
+          ls -la artifacts/debian/ >&2 || true
+          exit 1
+        fi
+
+        # The dependencies have to be written by hand — our libraries are reached through DllImport, which
+        # dpkg-shlibdeps cannot see — so a control file that has lost them installs cleanly and then fails on first
+        # use. Every package declares something, whether in Depends or in Recommends (the server's msquic is
+        # optional, so it is a Recommends).
+        check() {
+          package=$1
+          binary=$2
+
+          # The listing is read into a variable rather than piped into grep: grep stops at the first match and
+          # closes the pipe, which leaves dpkg's tar writing into nothing and printing a broken-pipe error that
+          # reads like a failure in a log that is otherwise green.
+          contents=$(dpkg-deb --contents "$package")
+          case "$contents" in
+            *"$binary"*) ;;
+            *)
+              echo "$package does not contain $binary." >&2
+              exit 1
+              ;;
+          esac
+
+          declared=$(dpkg-deb --field "$package" Depends Recommends 2>/dev/null || true)
+          if [ -z "$declared" ]; then
+            echo "$package declares no dependencies or recommendations; the control file has probably lost them." >&2
+            exit 1
+          fi
+
+          echo "--- $(dpkg-deb --field "$package" Package) $($(command -v stat) -c%s "$package") bytes"
+          dpkg-deb --info "$package" | sed -n '1,10p'
+        }
+
+        check artifacts/debian/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
+        check artifacts/debian/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
+        check artifacts/debian/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous
+
+    - name: Verify the .pkg installers
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -eu
+
+        count=$(ls -1 artifacts/installer/macos/*.pkg 2>/dev/null | wc -l)
+        if [ "$count" -ne 2 ]; then
+          echo "Expected two packages, found $count:" >&2
+          ls -la artifacts/installer/macos/ >&2 || true
+          exit 1
+        fi
+
+        # Same two questions as the .deb branch: is the program the package exists to install in there, and is the
+        # thing that makes it run in there with it. On macOS that second part is the launchd job for each server and
+        # the bundle's Info.plist for the client — a .pkg without them installs something that does nothing, and
+        # pkgbuild would still have built it without a word.
+        check() {
+          package=$1
+          shift
+
+          payload=$(pkgutil --payload-files "$package")
+          for expected in "$@"; do
+            case "$payload" in
+              *"$expected"*) ;;
+              *)
+                echo "$package does not contain $expected." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "--- $(basename "$package") $($(command -v stat) -f%z "$package") bytes, $(printf '%s\n' "$payload" | wc -l | tr -d ' ') payload entries"
+        }
+
+        check artifacts/installer/macos/RemoteDesktop-macOS-*.pkg \
+          RemoteDesktop.Client RemoteDesktop.app/Contents/Info.plist
+        check artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg \
+          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay \
+          com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist
+
+    - name: Verify the MSI installers
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installerFolder = 'artifacts/installer/windows'
+
+        # The build produces RemoteDesktop-<version>-x64.msi and RemoteDesktop.Server-<version>-x64.msi, both into the
+        # one folder because the role is already in the file name. "RemoteDesktop-*" matches the server's as well, so
+        # the client is what is left after excluding it. (The names carrying "Windows" are the *release assets*, made
+        # by the rename step: globbing for those against a fresh build finds nothing, which is a mistake this
+        # repository has already made once.)
+        $client = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-*-x64.msi" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' })
+        $server = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop.Server-*-x64.msi" -ErrorAction SilentlyContinue)
+
+        # One glob must find exactly one package each. Two would mean a stale one from an earlier build is sitting
+        # next to the fresh one, which is how a release ends up shipping the wrong bytes.
+        if ($client.Count -ne 1) { throw "Expected one client installer in $installerFolder, found $($client.Count)." }
+        if ($server.Count -ne 1) { throw "Expected one server installer in $installerFolder, found $($server.Count)." }
+
+        # The same question as the other two branches — is the program in there, and what makes it run — answered by
+        # opening the MSI database (no installation, no elevation). The assertions live in C# because they read half a
+        # dozen tables: the payload, the service and its restart behaviour, the firewall rule, the shortcut, the
+        # dialogs and the licence text. WiX 5 drops things without a word, and a package missing them builds,
+        # installs, and quietly does nothing.
+        #
+        # The build scripts run these tests once themselves as part of building, so on Windows this is a second pass
+        # over the same packages. That is deliberate: it is what makes this the same claim on all three platforms,
+        # and it is the pass that verifies the package the release job has on disk rather than the one the build
+        # script had in hand.
+        $checks = @(
+          @{ Msi = $client[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.Tests.InstallerPackageTests' }
+          @{ Msi = $server[0].FullName; Variable = 'RD_SERVER_INSTALLER_MSI'; Class = 'RemoteDesktop.Platform.Windows.Tests.ServerInstallerPackageTests' }
+        )
+
+        foreach ($check in $checks) {
+          Write-Host "--- $(Split-Path -Leaf $check.Msi) ($([math]::Round((Get-Item $check.Msi).Length / 1MB, 1)) MB)"
+          Set-Item -Path "Env:$($check.Variable)" -Value $check.Msi
+          dotnet test --project tests/RemoteDesktop.Platform.Windows.Tests --filter-class $check.Class -v quiet
+          if ($LASTEXITCODE -ne 0) { throw "$($check.Msi) is missing something (see the test output above)." }
+          Remove-Item "Env:$($check.Variable)" -ErrorAction SilentlyContinue
+        }

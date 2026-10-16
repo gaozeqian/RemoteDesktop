@@ -859,12 +859,16 @@ RemoteDesktop-Host-Linux-amd64-0.3.0.deb
   PulseAudio、libavcodec。它们全是**运行时按名字加载**的，`dpkg-shlibdeps` 看不见——漏写的结果是程序装得上、
   窗口打得开、然后什么都不显示。
 
-`release.yml` 加了 `linux-packages` job（ubuntu），产出三个包，由原来的 Windows job 取回来一起发。
+`release.yml` 加了 Linux 打包 job（当时叫 `linux-packages`，2026-10-16 改名 `build-linux`），产出三个包，
+由原来的 Windows job 取回来一起发。改名那次也把它缺的测试与依赖审计补上了：三个平台在发版时必须做同样的事，
+否则 Linux 会成为唯一一个发出去之前从没被验证过的产物。
 **Linux 用 `amd64`、Windows 用 `x64`，各随各的约定**，不为了让发布列表整齐而互相将就。
 
 文档（`README.md` / `docs/architecture.md` / `docs/deployment.md`）已按 Linux 更新；
 `ci.yml` 现在每次 PR 都构建三个 `.deb` 并检查包里的主程序与手写的依赖行（此前只在 release 时构建，
-构建脚本坏了要等到发版才知道）。
+构建脚本坏了要等到发版才知道）。**2026-10-16**：同一条理由对 Windows 的 MSI 与 macOS 的 `.pkg` 一样成立，
+那两个现在也在 CI 里构建并校验包内容——`.pkg` 那条路径此前一次都没在 runner 上跑过。三平台的校验此后是
+同一份共享动作（`verify-packages`），发版路径上也调用它：此前发出去的三个 `.deb` 只被数过数量。
 
 
 ---

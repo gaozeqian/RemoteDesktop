@@ -138,7 +138,11 @@ macOS 实现的是与 Windows **完全相同**的 ~16 个端口接口，因此�
   - `Exportable`：macOS 上不加载可导出私钥则 MsQuic 握手失败；Windows SChannel 不关心该标志 —— **一个代码路径服务两个平台**，注释写明了原因。
   - FileTransfer 两处：是**修既有 bug**（`Combine` 硬编码 `\`、`/var→/private/var` 误判），对两个平台都是改进。
   - 平台选择 / OS 守卫：`ClientPlatformRegistration` 本就是为多平台预留的既有设计。
-- **CI 对称**：`build`（windows-latest）与 `build-macos`（macos-26）共用 `run-test-suite` 组合动作；Release 只在 Windows（因 macOS 暂无安装包），边界清晰并已注释。
+- **CI 对称**：`build-windows`（windows-latest）与 `build-macos`（macos-26）共用 `run-test-suite` 组合动作；
+  Release 三个平台各有自己的打包 job（`build-linux` / `build-macos` / `build-and-release`），且都在发版时
+  自己跑测试与依赖审计。
+  （2026-10-16 更新：原文是"`build` … Release 只在 Windows（因 macOS 暂无安装包）"。macOS 后来有了 `.pkg`，
+  Release 随之分成三个 job；作业名与共享动作也随之统一。）
 - **构建耦合**：`Platform.MacOS.csproj` 通过相对路径引 `native/macos` 并触发 `build-native.sh`。这是"平台项目自建原生产物"的合理做法，`IsOSPlatform('OSX')` 条件已保证非 Mac 上不触发；唯一代价是该项目在 Mac 上构建依赖 clang。**可接受。**
 
 ### 3.3 影响结论

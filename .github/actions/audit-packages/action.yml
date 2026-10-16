@@ -1,0 +1,18 @@
+name: Audit packages for known vulnerabilities
+description: >-
+  Walks the whole dependency graph, including everything the packages a project references drag in, and fails the build
+  when any of them has a published vulnerability. Shared by ci.yml and release.yml so that the two cannot drift apart:
+  a release is the one build nobody gets to re-check before it is public, so it has to apply exactly the rule CI
+  applied. The build itself only reports what is wrong with the packages a project references directly.
+
+runs:
+  using: composite
+  steps:
+    - name: Audit
+      shell: pwsh
+      run: |
+        $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+        $report
+        if ($report -match 'has the following vulnerable packages') {
+          throw "Vulnerable packages found; the report is above."
+        }

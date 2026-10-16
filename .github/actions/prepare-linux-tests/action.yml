@@ -1,0 +1,48 @@
+name: Prepare a Linux runner for the test suite
+description: >-
+  Everything the platform tests reach for that a runner does not have: libmsquic (System.Net.Quic is a thin managed
+  wrapper over it, and Linux does not get it from the runtime pack), the FFmpeg 8 and PulseAudio client libraries the
+  platform bindings load by soname, and a sound server with a sink for the audio tests to talk to. Shared by ci.yml's
+  build-linux job and release.yml's build-linux job, because their absence does not read as "a machine without
+  ffmpeg" — it reads as twenty broken code paths, and the two jobs would have to be kept in step by hand.
+
+runs:
+  using: composite
+  steps:
+    # System.Net.Quic is a thin managed wrapper over the native MsQuic library. Windows gets it from the runtime
+    # pack; on Linux it is a separate package, and without it every test that opens a QUIC connection fails with
+    # "QUIC is not supported on this system" rather than a missing-dependency error. Microsoft's own repository is
+    # asked for the build matching whatever release the runner is on, so this does not have to be kept in step with
+    # the runner image by hand.
+    - name: Install libmsquic
+      shell: bash
+      run: |
+        . /etc/os-release
+        curl -fsSL -o /tmp/packages-microsoft-prod.deb \
+          "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+        sudo dpkg -i /tmp/packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libmsquic
+
+    # What the platform tests reach for beyond .NET: the FFmpeg 8 libraries the video bindings load by soname (the
+    # recorder converts pixel formats through swscale as well), and the PulseAudio client for the audio ones. A
+    # desktop machine has these through its own packages; a runner does not.
+    - name: Install the native libraries the platform tests need
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libavcodec62 libavformat62 libavutil60 libswresample6 libswscale9 libpulse0
+
+    # A sound server for the audio tests, and a sink for them to talk about: a runner has the client library but
+    # nobody to talk to. Nothing here needs hardware -- the tests exercise the client protocol, and the ones that
+    # need a real device skip themselves when none is present. The null sink also gives the capturer the monitor
+    # source it watches.
+    - name: Start a sound server for the audio tests
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends pulseaudio
+        pulseaudio --daemonize --exit-idle-time=-1
+        pactl load-module module-null-sink sink_name=remote-desktop-test
+        pactl set-default-sink remote-desktop-test
+        pactl info

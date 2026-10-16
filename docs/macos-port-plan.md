@@ -1897,3 +1897,11 @@ build-macos  → runs-on: macos-26（arm64；macOS 26 GA 于 2026-02-26，当前
 两个 job 共用 .github/actions/run-test-suite（重试一次 + TRX 上传 + 汇总表）
 # 汇总脚本用本机 pwsh 对着真实 TRX 跑过：表格行数与上面的总计/成功/失败/跳过完全对得上
 ```
+
+> **2026-10-16 更新**：上面这段记录的是当时存在的两个作业。现在 `ci.yml` 有三个
+> （`build-windows` / `build-linux` / `build-macos`，每个都在末尾构建并校验本平台的安装包），
+> `release.yml` 也有三个（`build-linux` / `build-macos` / `build-and-release`，都自己跑测试与依赖审计）。
+> 共享的组合动作从一个增加到四个：除 `run-test-suite` 外，还有 `audit-packages`（依赖漏洞审计，六处调用）、
+> `prepare-linux-tests`（Linux runner 跑测试前的准备：libmsquic / FFmpeg / PulseAudio / 声音服务器）与
+> `verify-packages`（打开每个安装包看内容：`.deb` 用 dpkg-deb、`.pkg` 用 pkgutil、MSI 用仓库自己的
+> InstallerPackageTests，六处调用）。
