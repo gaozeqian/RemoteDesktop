@@ -40,7 +40,7 @@
     <Exec Command="&quot;$(MSBuildThisFileDirectory)..\..\..\native\macos\build-native.sh&quot;"
           StandardOutputImportance="low" />
     <ItemGroup>
-      <None Include="$(MSBuildThisFileDirectory)..\..\..\artifacts\native\macos\libRemoteDesktopMacNative.dylib"
+      <None Include="$(MSBuildThisFileDirectory)..\..\..\artifacts\lib\macos\libRemoteDesktopMacNative.dylib"
             Link="libRemoteDesktopMacNative.dylib"
             CopyToOutputDirectory="PreserveNewest"
             CopyToPublishDirectory="PreserveNewest" />

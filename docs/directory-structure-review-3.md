@@ -495,3 +495,33 @@ CI 那处指向 `artifacts/test-results/windows`。实测两条形式（bash 形
 自查发现的。上一节记着"逐条对了一遍现状"——那次对的是**问题清单**，对的依据是"我改过相关文件"，而不是
 "我复现过现象"。补上的那两条（D-3、D-8）是同一类错误的温和版本：凭"我提到过这个文件"当作"我处理了这件事"。
 以后这类结论应当以**可复现的观察**为准，而不是以改动过哪些文件为准。
+
+---
+
+## 十一、CI 抓到的另一处漏网
+
+推上去之后 macOS job 失败（Windows 与 Linux 通过），报的是：
+
+    error MSB3030: Could not copy the file
+    ".../artifacts/native/macos/libRemoteDesktopMacNative.dylib" because it was not found.
+
+第十节那条说的是"清单上打了勾、实际只做了一半"。这一条是同一类的另一面：**做完之后用错了验证方法**。
+
+`artifacts/native/` 改名 `artifacts/lib/` 时，我是用带正斜杠的模式 `artifacts/native` 去搜引用的。结果是它
+匹配到了注释行（注释里写的是正斜杠），却**漏掉了两个 `.csproj` 里真正的 `<None Include>`**——那些路径写的是
+反斜杠（`artifacts\native\macos\...`）。而 macOS 的构建脚本本身是改对了的（它把 dylib 写进了
+`artifacts/lib/macos`，CI 日志里那句 `replacing existing signature` 就是证据），坏的是引用端还在找旧位置。
+
+所以这次的问题不是"没改全"那么简单，而是**"我改完并复查过"这句话本身不成立**：复查用的模式与被复查的内容
+不在同一个表示法里（正斜杠 vs 反斜杠），复查就只是确认了我自己的假设。改名同时牵动源码树名与产物目录名时
+（`native/` 与 `artifacts/native/` 同名不同义正是这次要修的东西），任何带路径分隔符的搜索模式都会在斜杠方向
+上静默失效。
+
+已修：两个 `.csproj` 里那两行改为 `..\..\..\artifacts\lib\macos\...`；同文件里 `..\..\..\native\macos\` 那两处
+指向的是**源码树**，不动。复查改用斜杠无关的模式（`artifacts[\/]native`），全仓无残留。
+
+**这一条只能由 CI 验**：那两个 `<None Include>` 都带 `Condition="$([MSBuild]::IsOSPlatform('OSX'))"`，在
+Windows 上根本不求值，所以本机构建永远是绿的。上一节末尾列"本机无法验证、需 CI 实跑确认"的项时写的是
+"`artifacts/lib/<平台>/` 在 macOS/Linux 上的产出"——它确实在名单上，也确实被 CI 抓到了。这条写在这里不是
+为了说明流程没起作用，恰恰相反：**那份名单是有效的，而这份评审里所有声称"已修"的项都应当先问一句
+"它是怎么被验的"。**
