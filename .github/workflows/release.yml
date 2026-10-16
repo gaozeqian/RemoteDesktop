@@ -48,9 +48,9 @@ jobs:
       # 时自己去取——那是包必须带上的东西，.NET 运行时在 Linux 上不提供它。
       - name: Build the three .deb packages
         run: |
-          build/debian/client/build-deb.sh
-          build/debian/host/build-deb.sh
-          build/debian/server/build-deb.sh
+          build/installer/linux/client/build-deb.sh
+          build/installer/linux/host/build-deb.sh
+          build/installer/linux/server/build-deb.sh
 
       # 打开每个包看里面有什么，而不是数文件个数——与 ci.yml 及另外两个平台调用同一份共享动作。发出去的这三个
       # 包此前只被数过数量：内容不对的包照样会被数到。
@@ -79,7 +79,7 @@ jobs:
   # 只发出 Windows 的两个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
   build-macos:
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
-    # dyld 拒绝在更老的系统上加载（docs/macos-port-plan.md §3.4）。macos-26 就是 arm64 镜像。
+    # dyld 拒绝在更老的系统上加载（docs/ports/macos-port-plan.md §3.4）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
     # 证书与公证凭据都是可选的：没配就出一个**未签名**的 .pkg（Gatekeeper 会提示"身份不明的开发者"，
     # 右键 → 打开即可），配了就签名 + 公证（下载即开）。四个证书 Secret 与三个公证 Secret 见下面的注释。
@@ -173,8 +173,8 @@ jobs:
             echo "::warning title=Unsigned .pkg::No Developer ID certificates configured (MACOS_APP_CERT_BASE64 / MACOS_INSTALLER_CERT_BASE64). The .pkg files will be unsigned and Gatekeeper will report 'unidentified developer' on other machines."
           fi
 
-          ./build/installer/client/macos/make-pkg.sh "${args[@]}"
-          ./build/installer/server/macos/make-pkg.sh "${args[@]}"
+          ./build/installer/macos/client/make-pkg.sh "${args[@]}"
+          ./build/installer/macos/server/make-pkg.sh "${args[@]}"
 
       # 打开两个包的 payload 看里面有什么（客户端那个必须带着 Info.plist，服务端那两个必须带着各自的 launchd
       # plist），与 ci.yml 及另外两个平台调用同一份共享动作。这两个包此前在发版路径上一次都没被检查过内容。
@@ -270,7 +270,7 @@ jobs:
                   '> [!IMPORTANT]'
                   '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
                   '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
-                  '> 部署步骤见 [docs/deployment.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/deployment.md)。'
+                  '> 部署步骤见 [docs/ops/deployment.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/deployment.md)。'
               ) -join "`n"
           }
 
@@ -305,7 +305,7 @@ jobs:
               $arguments.SkipSigning = $true
           }
 
-          .\build\installer\client\windows\build-installer.ps1 @arguments
+          .\build\installer\windows\client\build-installer.ps1 @arguments
 
       # 服务端（信令 + 中继）的安装包。和上面那个用同一套签名参数、同一个版本号，但是两个各自独立安装的包：
       # 一台机器可以只做被控端、只做服务器，或者两个都做。
@@ -313,9 +313,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
-              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword $env:PFX_PASSWORD
+              .\build\installer\windows\server\build-server-installer.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword $env:PFX_PASSWORD
           } else {
-              .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -SkipSigning
+              .\build\installer\windows\server\build-server-installer.ps1 -Configuration Release -SkipSigning
           }
 
       # 打开两个 MSI 的数据库看里面有什么（payload、服务与崩溃重启、防火墙规则、快捷方式、向导页与许可文本），

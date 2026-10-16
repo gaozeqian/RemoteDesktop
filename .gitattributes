@@ -24,12 +24,14 @@
 Dockerfile*         text eol=lf
 
 # Debian control files and maintainer scripts carry no extension of their own,
-# so they have to be named individually.
-build/debian/**/control                             text eol=lf
-build/debian/**/postinst                            text eol=lf
-build/debian/**/postrm                              text eol=lf
-build/debian/**/default                             text eol=lf
-build/installer/server/macos/scripts/postinstall    text eol=lf
+# so they have to be named individually. Same for the systemd environment file
+# and the macOS package's postinstall: no extension, and the kernel (or launchd)
+# reads them literally.
+build/installer/linux/**/control                             text eol=lf
+build/installer/linux/**/postinst                            text eol=lf
+build/installer/linux/**/postrm                              text eol=lf
+build/installer/macos/server/scripts/postinstall             text eol=lf
+build/service/linux/default                                  text eol=lf
 
 *.plist             text eol=lf
 *.service           text eol=lf

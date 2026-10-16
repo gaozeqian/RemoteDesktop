@@ -31,7 +31,7 @@ public interface IRecentDevicesStore
 /// Passwords are not part of it: they live in the OS-protected <see cref="ISecretStore"/>, so they cannot be
 /// decrypted on another machine and can never be carried along if the list is synced to an account later. Entries
 /// carry <see cref="RecentDeviceEntry.UpdatedAtUtc"/> and a tombstone on removal for the same reason — see
-/// <c>docs/device-list-storage.md</c> for what a future account sync is expected to do with them.
+/// <c>docs/ops/device-list-storage.md</c> for what a future account sync is expected to do with them.
 /// </remarks>
 public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 {

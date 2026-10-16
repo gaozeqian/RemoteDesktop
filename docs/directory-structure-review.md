@@ -158,7 +158,7 @@
 
 **11. `docs/README.md` 索引漏项**
 
-`docs/` 实有 10 个文件，索引列出 9 个（含自身），漏掉 `docs/security-review.md`。而 `macos-port-review.md` 已在索引中，说明这是遗漏而非有意排除。
+`docs/` 实有 10 个文件，索引列出 9 个（含自身），漏掉 `docs/design/security-review.md`。而 `macos-port-review.md` 已在索引中，说明这是遗漏而非有意排除。
 
 **12. 缺 `LICENSE`**
 
@@ -221,7 +221,7 @@ RemoteDesktop/
 | 优先级 | 事项 | 状态 | 落地内容 |
 |---|---|---|---|
 | 1 | 缺 `.gitattributes` | ✅ | 新增 `.gitattributes`；`.sh`/`Dockerfile`/Debian 维护脚本/`.plist`/`.service`/`.desktop`/`.yml` 为 LF，`.ps1`/`.wxs`/`.wixproj`/`.csproj`/`.props`/`.slnx` 为 CRLF，图片与库文件为二进制。实测：42 个文件 `w/lf`、53 个 `w/crlf`、0 个混合、0 个与声明不符 |
-| 2 | `artifacts/debian/` 越位 | ✅ | 三个 `build-deb.sh` 改为 `artifacts/installer/linux`；CI 的 `verify-packages`、`release.yml` 与 `docs/deployment.md` 同步 |
+| 2 | `artifacts/debian/` 越位 | ✅ | 三个 `build-deb.sh` 改为 `artifacts/installer/linux`；CI 的 `verify-packages`、`release.yml` 与 `docs/ops/deployment.md` 同步 |
 | 3 | `build/` 根下散落脚本 | ✅ | 移入 `build/tools/` 并统一命名（`Invoke-SecurityAudit.ps1`、`New-AppIcons.ps1`），新增 `build/tools/README.md` 说明三份脚本各自的平台能力；两个跨平台脚本已实跑验证（许可清单生成 66 个包；审计脚本对缺失文件返回退出码 3） |
 | 4 | `.editorconfig` / `LICENSE` / docs 索引 | ✅ | 新增根 `.editorconfig`（只管编码与缩进，行尾交给 `.gitattributes`）；`build/installer/License.txt` 上移为根 `LICENSE`，MSI 与 `.pkg` 都从它生成（`License.rtf` 重新生成后与改动前**字节完全相同**，证明迁移对许可页透明）；`docs/README.md` 补上 `security-review.md` |
 | 5 | 非 ASCII 文件名 | ✅ | 两份 `如何配置.txt` → `HOW-TO-CONFIGURE.txt`（快捷方式显示名「服务器配置说明」不变）；全仓已无非 ASCII 路径 |

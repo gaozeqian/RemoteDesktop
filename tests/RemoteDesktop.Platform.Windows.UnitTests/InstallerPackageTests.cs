@@ -13,7 +13,7 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 /// built that way looks fine, builds without warnings, and quietly does nothing on the custom-action side. ICE
 /// validation does not catch it either, because nothing in the database is inconsistent - things are simply absent.
 /// <para>
-/// The test skips unless an installer has been built (build\installer\client\windows\build-installer.ps1), or unless the path
+/// The test skips unless an installer has been built (build\installer\windows\client\build-installer.ps1), or unless the path
 /// is given in RD_INSTALLER_MSI.
 /// </para>
 /// </remarks>

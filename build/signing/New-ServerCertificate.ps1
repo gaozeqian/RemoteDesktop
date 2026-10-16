@@ -14,7 +14,7 @@
 
   It is not put into any certificate store: the server reads the .pfx, and the files are the only copies.
 
-  The server side then needs two settings in its appsettings.json (see docs/deployment.md):
+  The server side then needs two settings in its appsettings.json (see docs/ops/deployment.md):
     "Urls": "https://0.0.0.0:5080"
     "Kestrel": { "Certificates": { "Default": { "Path": "<Name>.pfx", "Password": "<the password>" } } }
 
@@ -132,12 +132,12 @@ if ($addresses.Count) { Write-Host "                IP=$($addresses -join ', IP=
 Write-Host "  server file:  $pfxPath"
 Write-Host "  trust file:   $cerPath"
 Write-Host ''
-Write-Host 'On the signaling server, point Kestrel at the .pfx and serve https (docs/deployment.md):'
+Write-Host 'On the signaling server, point Kestrel at the .pfx and serve https (docs/ops/deployment.md):'
 Write-Host '  "Urls": "https://0.0.0.0:5080",'
 Write-Host "  `"Kestrel`": { `"Certificates`": { `"Default`": { `"Path`": `"$pfxPath`", `"Password`": `<the password>` } } }"
 Write-Host ''
 Write-Host 'Build the installer that makes client machines trust it:'
-Write-Host "  pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
+Write-Host "  pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri wss://$($names[0]):5080/ws -ServerCertificate `"$cerPath`""
 Write-Host ''
 Write-Host 'Machines that already have the software can be given the certificate without reinstalling, as an administrator:'
 Write-Host "  Import-Certificate -FilePath `"$cerPath`" -CertStoreLocation Cert:\LocalMachine\Root"

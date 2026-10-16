@@ -21,7 +21,7 @@
 #     native/macos/fetch-libmsquic.sh
 #
 # Homebrew's bottles are built for the newest macOS and record that as their minimum, so whatever is produced here
-# runs on that macOS or newer. See docs/macos-port-plan.md §3.4 before shipping it to older systems.
+# runs on that macOS or newer. See docs/ports/macos-port-plan.md §3.4 before shipping it to older systems.
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)

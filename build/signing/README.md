@@ -11,7 +11,7 @@
 | `certificates/` | 生成的证书和私钥（已 gitignore，永远不进仓库） |
 
 macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，它属于打包流程，落在
-`build/installer/client/macos/make-app.sh`（签 `.app`）与 `make-pkg.sh`（签 `.pkg` + 公证）里，见本文末尾的
+`build/installer/macos/client/make-app.sh`（签 `.app`）与 `make-pkg.sh`（签 `.pkg` + 公证）里，见本文末尾的
 "macOS"一节。Linux（gpg / dpkg-sig）将来再建文件夹。
 签名脚本的默认输出目录是"脚本自己旁边"，所以跨平台脚本的证书落在 `certificates/`，Windows 那两个的落在 `windows/certificates/`。
 
@@ -61,7 +61,7 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 CI 上最常见的用法（证书以 Base64 放在 Secrets 里，解码成 .pfx 再传给脚本）：
 
 ```powershell
-.\build\installer\client\windows\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws `
+.\build\installer\windows\client\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws `
     -CertificateFile .\sign.pfx -CertificatePassword $env:PFX_PASSWORD
 ```
 
@@ -76,17 +76,17 @@ brew install osslsigncode
 
 ```powershell
 # PKCS#12（.pfx/.p12）：-SingingTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
-pwsh -File build/installer/client/windows/build-installer.ps1 `
+pwsh -File build/installer/windows/client/build-installer.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # 指定 osslsigncode 也可以（Linux/macOS 上只有它），密码也可以放在环境变量 RD_SIGNING_PASSWORD 里
-pwsh -File build/installer/client/windows/build-installer.ps1 `
+pwsh -File build/installer/windows/client/build-installer.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）——这一种只有 osslsigncode 支持
-pwsh -File build/installer/client/windows/build-installer.ps1 `
+pwsh -File build/installer/windows/client/build-installer.ps1 `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.crt.pem -PrivateKeyFile C:\keys\codesign.key.pem
 ```
 
@@ -126,7 +126,7 @@ pwsh -File build/signing/windows/New-SigningCertificate.ps1 -Years 5
 #    → build/signing/windows/certificates/RemoteDesktop.pfx  .cer
 
 # 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用）
-pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
 #    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要
@@ -172,7 +172,7 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 .\build\signing\New-ServerCertificate.ps1 -DnsName rd.lan -IpAddress 192.168.1.10
 ```
 
-完整的部署步骤见 [docs/deployment.md](../../docs/deployment.md) 的"生产环境：信令必须走 TLS"。
+完整的部署步骤见 [docs/ops/deployment.md](../../docs/ops/deployment.md) 的"生产环境：信令必须走 TLS"。
 同样是那句话：把自签证书装进受信任根，等于持有它私钥的人能在这些机器上冒充任何服务器，私钥不要外传。
 
 **它买到什么、买不到什么**
@@ -193,20 +193,20 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 
 ```powershell
 # 自动找证书并签名（默认行为）
-pwsh -File build/installer/client/windows/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定证书（指纹或 CN 名称的一部分）
-pwsh -File build/installer/client/windows/build-installer.ps1 -SignCertificate 1A2B3C... 
-pwsh -File build/installer/client/windows/build-installer.ps1 -SignCertificate "CN=你的公司名"
+pwsh -File build/installer/windows/client/build-installer.ps1 -SignCertificate 1A2B3C... 
+pwsh -File build/installer/windows/client/build-installer.ps1 -SignCertificate "CN=你的公司名"
 
 # 明确不签名
-pwsh -File build/installer/client/windows/build-installer.ps1 -SkipSigning
+pwsh -File build/installer/windows/client/build-installer.ps1 -SkipSigning
 
 # 跳过签名验证（一般不需要：自签名证书只是"不受信任的根"警告，不会让构建失败）
-pwsh -File build/installer/client/windows/build-installer.ps1 -SkipSignatureVerification
+pwsh -File build/installer/windows/client/build-installer.ps1 -SkipSignatureVerification
 
 # 换时间戳服务器（默认 DigiCert；留空则不时间戳，正式发布不建议）
-pwsh -File build/installer/client/windows/build-installer.ps1 -TimestampServer http://timestamp.sectigo.com
+pwsh -File build/installer/windows/client/build-installer.ps1 -TimestampServer http://timestamp.sectigo.com
 ```
 
 **时间戳为什么重要**：不时间戳的签名在证书过期后失效，已经发出去的安装包会突然"签名无效"；有时间戳的签名在证书过期后依然有效。
@@ -265,11 +265,11 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 
 ```bash
 # 签名（证书在钥匙串里，自动找；多于一张时用 --app-identity / --identity 指定）
-build/installer/client/macos/make-pkg.sh --distribution
+build/installer/macos/client/make-pkg.sh --distribution
 
 # 签名 + 公证（公证会把 .pkg 上传到 Apple，通常几分钟）
 NOTARY_KEY_PATH=AuthKey.p8 NOTARY_KEY_ID=XXXXXXXXXX NOTARY_ISSUER_ID=<uuid> \
-  build/installer/client/macos/make-pkg.sh --distribution --notarize
+  build/installer/macos/client/make-pkg.sh --distribution --notarize
 ```
 
 ### 验证

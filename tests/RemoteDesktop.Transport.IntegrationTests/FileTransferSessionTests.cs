@@ -20,7 +20,7 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
     /// <c>RemoteFileSource.Combine</c> joins with a literal backslash ("Hosts are Windows in this phase"), and
     /// <see cref="FileAccessPolicy"/> compares an allowed root that was <em>not</em> link-resolved against a path that
     /// was, so any root under a symlink — every macOS temp path, since /var links to /private/var — is refused as
-    /// "not shared". Both are P7 in docs/macos-port-plan.md. The rest of the class is platform independent and keeps
+    /// "not shared". Both are P7 in docs/ports/macos-port-plan.md. The rest of the class is platform independent and keeps
     /// running everywhere.
     /// </summary>
     private const string WindowsHostReason =

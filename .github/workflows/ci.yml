@@ -31,7 +31,7 @@ jobs:
         with:
           artifact-name: test-results-windows
       # The two MSIs are built here as well as at release time, and that is the whole point of the step. The scripts
-      # under build/installer/*/windows otherwise only ever run when a tag is pushed, so anything that breaks them —
+      # under build/installer/windows/* otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a WiX component that silently
       # drops content — would first be discovered while publishing a release, which is the one build nobody gets to
       # re-check before it is public. Here it is an ordinary red pull request.
@@ -41,8 +41,8 @@ jobs:
       - name: Build the Windows installers (MSI)
         shell: pwsh
         run: |
-          .\build\installer\client\windows\build-installer.ps1 -Configuration Release -SkipSigning
-          .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\client\build-installer.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\server\build-server-installer.ps1 -Configuration Release -SkipSigning
 
       # Both packages are opened and their contents checked, by the same shared action the other two platforms call:
       # one place answers "does this package hold what it is supposed to" for all three.
@@ -70,7 +70,7 @@ jobs:
         with:
           artifact-name: test-results-linux
       # The three .deb packages are built here as well as at release time, and that is the whole point of the step.
-      # The scripts under build/debian/ otherwise only ever run when a tag is pushed, so anything that breaks them —
+      # The scripts under build/installer/linux/ otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a version that stops being
       # readable out of Directory.Build.props — would first be discovered while publishing a release, which is the one
       # build nobody gets to re-check before it is public. Here it is an ordinary red pull request.
@@ -79,9 +79,9 @@ jobs:
       # release job builds its own. What is being checked is that the scripts still work, not the bytes.
       - name: Build the Linux packages
         run: |
-          build/debian/client/build-deb.sh
-          build/debian/host/build-deb.sh
-          build/debian/server/build-deb.sh
+          build/installer/linux/client/build-deb.sh
+          build/installer/linux/host/build-deb.sh
+          build/installer/linux/server/build-deb.sh
 
       # A script that exits zero without producing a usable package is the failure this is here for: a package with
       # nothing in it would still be a package. The contents are checked by the same shared action the other two
@@ -90,7 +90,7 @@ jobs:
 
   build-macos:
     # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
-    # minos 26.0 and dyld refuses to load them on anything older (docs/macos-port-plan.md 3.4). That is also what makes
+    # minos 26.0 and dyld refuses to load them on anything older (docs/ports/macos-port-plan.md 3.4). That is also what makes
     # this job possible at all: on macos-latest (macos-14/15) every transport test would fail with "Unable to load
     # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
     runs-on: macos-26
@@ -112,7 +112,7 @@ jobs:
         with:
           artifact-name: test-results-macos
       # The two .pkg files are built here as well as at release time, and that is the whole point of the step: the
-      # scripts under build/installer/*/macos otherwise only ever run when a tag is pushed, so a broken one — a project
+      # scripts under build/installer/macos/* otherwise only ever run when a tag is pushed, so a broken one — a project
       # reference that no longer resolves, a native library the publish stops carrying, a payload the launchd plists
       # no longer point at — would first be discovered while publishing a release, which is the one build nobody gets
       # to re-check before it is public. Here it is an ordinary red pull request.
@@ -121,8 +121,8 @@ jobs:
       # says so loudly. What is being checked is that the scripts still work, not the signature.
       - name: Build the macOS installers (.pkg)
         run: |
-          ./build/installer/client/macos/make-pkg.sh --configuration Release
-          ./build/installer/server/macos/make-pkg.sh --configuration Release
+          ./build/installer/macos/client/make-pkg.sh --configuration Release
+          ./build/installer/macos/server/make-pkg.sh --configuration Release
 
       # The payload is what has to be right: a package that installs nothing would still be a package, and the scripts
       # do not assert that what they packed is in there. Same shared action as the other two platforms.

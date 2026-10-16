@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the client bundle.
+
+  Deliberately minimal. In particular there is NO `keychain-access-groups`: an app reaches its own keychain items
+  through the access group its team identifier already gives it, and adding the entitlement explicitly was measured to
+  make the process die on launch under an ad-hoc signature rather than fix anything (docs/ports/macos-port-plan.md §3.7).
+
+  The two JIT entitlements are what a .NET runtime needs once the hardened runtime is switched on, which is required
+  for notarization. They are harmless before that, so they are carried from the start rather than remembered later.
+  TCC permissions (screen recording, accessibility, camera) are NOT entitlements — the user grants those, and macOS
+  ties the grant to this bundle's signing identity.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

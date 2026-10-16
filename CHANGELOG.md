@@ -63,6 +63,23 @@
 - **测试项目命名统一为 `<区域>.<种类>Tests`**：`ArchitectureTests` → `Architecture.UnitTests`、
   `Platform.{Windows,Linux,MacOS}.Tests` → `Platform.{Windows,Linux,MacOS}.UnitTests`，命名空间同步。
   此前同一层混用三种后缀，按 `**/*.UnitTests` 之类的模式筛选会**静默漏掉**项目；规则写进了 `CONTRIBUTING.md`。
+- **`build/` 的分层统一为 `<平台>/<角色>`**：原先 Linux 的打包脚本住在 `build/debian/{client,host,server}/`
+  （按发行版分），Windows 与 macOS 的住在 `build/installer/{client,server}/{windows,macos}/`（按角色再按平台），
+  加一个平台时要先选边站。现在一律是 `build/installer/<平台>/<角色>/`——平台在外，因为它决定一个脚本能不能在
+  这台机器上运行；平台名取 `windows` / `macos` / `linux`，不是发行版也不是包格式。分层规则写在新增的
+  `build/README.md` 里。
+- **服务定义收敛到 `build/service/<平台>/`**：systemd unit 与 `/etc/default` 原先随 `.deb` 脚本放在
+  `build/installer/linux/{host,server}/`，launchd plist 原先放在 `build/installer/macos/server/`，Windows 的
+  服务安装脚本在 `build/service/windows/`。现在三个平台的服务定义同层并列，"改一个服务的启动方式"只有一个地方
+  要找。
+- **`build/installer/License.rtf` 不再进仓库**：它是 `New-LicenseRtf.ps1` 从根 `LICENSE` 生成的产物，而两个
+  Windows 打包脚本每次构建都会重新生成它。原来它躺在版本库里，改了 `LICENSE` 却忘了重跑脚本时，安装器的许可页
+  会静默停留在旧版本，且没有任何构建步骤会发现。现在已 gitignore。
+- **`docs/` 按读者分层**：`design/`（架构、协议、安全及其评审）、`ops/`（部署、存储）、`ports/`（macOS / Linux
+  移植计划与评审）；文档索引与两份目录结构评审留在 `docs/` 根。`docs/README.md` 同时补上了此前漏掉的
+  `directory-structure-review.md`。
+- **`build-deb.sh` 不再依赖 GNU 专属的 `sed -i`**：改用 `awk` 写临时文件再 `mv`（BSD 的 `sed -i` 把参数当成备份
+  后缀，替换里的 `\n` 也不是换行）。
 
 ### Changed
 - **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
@@ -149,7 +166,7 @@
 
 **macOS**
 - 最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
-  （见 `docs/macos-port-plan.md` §3.4）。降低下限需改走"从源码构建 MsQuic"。
+  （见 `docs/ports/macos-port-plan.md` §3.4）。降低下限需改走"从源码构建 MsQuic"。
 - 已知未覆盖（需人工授权，自动化测试无法验证）：辅助功能授权下的真实输入注入、受保护目录
   （`~/Desktop` / `~/Documents` / `~/Downloads`）的 TCC 弹窗路径。
 
@@ -240,7 +257,7 @@
   （`HostServiceSetup`），地址先经严格解析。此前一个伪装成服务器地址的字符串能以管理员权限执行。
 - [Protocol] **密码证明改用 PBKDF2 派生密钥**（60 万轮，nonce 作盐），**临时密码从 8 位加长到 12 位**
   （约 2^40 → 2^60）。两者合起来让"拿到证明后离线猜口令"从几天变成不现实；这仍不是 PAKE，
-  固定密码仍需要它，见 `docs/security.md`。协议主版本随之升到 2，新旧版本会明确报"版本不兼容"。
+  固定密码仍需要它，见 `docs/design/security.md`。协议主版本随之升到 2，新旧版本会明确报"版本不兼容"。
 - [Server] **注册与连接请求限流、连接配额**：单地址注册速度、单设备连接请求速度、挂起请求上限、
   同时连接数与单地址连接数（超出的在 WebSocket 升级前拒绝）。身份是这台服务器上所有限额的计量单位，
   所以注册限流是让其余限额真正有效的那一条。
@@ -281,8 +298,8 @@
 - [CI] 依赖漏洞审计（含传递依赖）、Dependabot、发布前跑测试。
 - [CI] 打 Tag 出的 Release 现在**同时带客户端与服务端两个安装包**（`RemoteDesktop-Server-Windows-x64-<tag>.msi`），
   不再只发客户端——服务端安装包此前只能在本地构建。
-- [Docs] 新增系统架构设计文档 (`docs/architecture.md`)。
-- [Docs] 新增网络通信协议规范文档 (`docs/protocol.md`)。
+- [Docs] 新增系统架构设计文档 (`docs/design/architecture.md`)。
+- [Docs] 新增网络通信协议规范文档 (`docs/design/protocol.md`)。
 - [Docs] 新增文档中心索引与贡献指南 (`CONTRIBUTING.md`)。
 - [Docs] 部署文档新增"生产环境：信令必须走 TLS"（自带证书或反向代理两种做法）与"公网上的限额"两节。
 - [Installer] 引入基于 WiX v5 的 Windows 安装包打包脚本。

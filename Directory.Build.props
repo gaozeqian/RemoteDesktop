@@ -28,7 +28,7 @@
 
     Not every project in the repository is affected: the WiX and installer projects under build/installer/ carry their
     own (deliberately empty) Directory.Build.props, so they do not import this file at all — see the note in
-    build/installer/client/windows/Directory.Build.props.
+    build/installer/windows/client/Directory.Build.props.
   -->
   <PropertyGroup>
     <UseArtifactsOutput>true</UseArtifactsOutput>

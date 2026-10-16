@@ -55,9 +55,15 @@ dotnet test RemoteDesktop.slnx
 | `artifacts/publish/<项目>/<pivot>/` | `dotnet publish` 的输出（**不在** `bin/` 下面，这是 SDK 的约定） |
 | `artifacts/packages/` | `dotnet pack` 的输出 |
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：23 个项目不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与
-`artifacts/obj` 即可，不必逐个项目找。`build/installer/` 下的安装器项目（WiX 与 net48 的 CustomActions）是例外，
-它们带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在项目内。
+所以项目目录里**没有** `bin/` 和 `obj/` 了：27 个项目（21 个产品项目 + 6 个测试项目）不再各长出两个目录。要清空
+构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
+
+**唯一的例外**是 `build/installer/windows/` 下的三个安装器工程（两个 WiX 工程与 net48 的 `CustomActions`）：它们
+带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在工程目录内（`bin/`、`obj/`、
+`bin/x64/`）。所以"删 `artifacts/bin` 与 `artifacts/obj`"清不掉它们——要连它们一起清，用
+`git clean -xdf build/installer`（`-x` 会连被忽略的文件一起删，用之前先看一眼 `git clean -xdn`）。
+
+打包脚本的位置另有一套分层（`<平台>/<角色>`），见 [`build/README.md`](build/README.md)。
 
 **只有一个产物根目录。** 新增平台照 `<类别>/<平台>/` 加一层即可；不要再另起一个 `artifacts/` 目录（比如写在 `build/` 里面）—— 那样"产物在哪"就会有两个答案，每加一个平台都要重新选边。
 

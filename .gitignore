@@ -88,6 +88,11 @@ project.fragment.lock.json
 artifacts/
 .artifacts/
 
+# Written by build/installer/New-LicenseRtf.ps1 from the repository's LICENSE every time a Windows package is built,
+# and read by both WiX projects (WixUILicenseRtf). Keeping it out of the repository is the point: a committed copy is
+# a copy that can go on showing an agreement the LICENSE no longer states, and nothing in the build would notice.
+build/installer/License.rtf
+
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
 
@@ -430,8 +435,8 @@ FodyWeavers.xsd
 
 # Generated from the publish output by the installer build scripts (never edit or commit). One per package; when a
 # package for another platform arrives it follows the same shape, so add its line here with it.
-build/installer/client/windows/Files.generated.wxs
-build/installer/server/windows/Files.generated.wxs
+build/installer/windows/client/Files.generated.wxs
+build/installer/windows/server/Files.generated.wxs
 
 # Private keys and exported certificates never belong in the repository. Written next to the script that made them,
 # so the pattern covers the folder and every platform folder under it.
@@ -440,7 +445,7 @@ build/signing/*/certificates/
 
 # The macOS client's signing identity is a per-machine decision, not a project fact: it names a personal certificate,
 # and macOS keys the screen-recording and accessibility grants to it. Pinned locally by make-app.sh, never committed.
-build/installer/client/macos/development-identity
+build/installer/macos/client/development-identity
 
 # Finder writes these into any directory it has displayed; they are per-machine noise with no meaning in a repository.
 .DS_Store

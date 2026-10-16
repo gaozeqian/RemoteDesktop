@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   这份脚本对部署者、发布流水线或上线前自查都有用：它不修任何东西，只指出哪些设置会让一台放在公网上的
-  服务器处于危险状态。每一项检查对应 docs/security.md 里"部署者必须自己做的事"。
+  服务器处于危险状态。每一项检查对应 docs/design/security.md 里"部署者必须自己做的事"。
 
   退出码：
     0  一切正常（没有发现不安全默认值）
@@ -106,7 +106,7 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
         Add-Ok "$Where 信令走 TLS（$Url）。"
     }
     elseif ($Url.StartsWith('http://')) {
-        Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/deployment.md 的 TLS 一节。"
+        Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/deployment.md 的 TLS 一节。"
     }
     else {
         Add-Finding "$Where 的信令地址 $Url 既不是 http:// 也不是 https://。"
@@ -128,7 +128,7 @@ function Test-RendezvousUri([string]$Uri, [string]$Where) {
         Add-Finding "$Where 还在连本机（$Uri）：装到别的机器上谁都连不上。"
     }
     elseif ($Uri.StartsWith('ws://')) {
-        Add-Finding "$Where 信令是明文 ws://（$Uri）：见 docs/deployment.md 的 TLS 一节。"
+        Add-Finding "$Where 信令是明文 ws://（$Uri）：见 docs/ops/deployment.md 的 TLS 一节。"
     }
     else {
         Add-Finding "$Where 的服务器地址 $Uri 格式不对（应为 ws:// 或 wss://）。"
@@ -219,5 +219,5 @@ if ($findings.Count -eq 0) {
     exit 0
 }
 
-Write-Host "发现 $($findings.Count) 处不安全默认值（上面标 [不安全] 的）。上线公网前请逐条处理。见 docs/security.md 与 docs/deployment.md。" -ForegroundColor Red
+Write-Host "发现 $($findings.Count) 处不安全默认值（上面标 [不安全] 的）。上线公网前请逐条处理。见 docs/design/security.md 与 docs/ops/deployment.md。" -ForegroundColor Red
 exit 2
