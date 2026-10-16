@@ -24,6 +24,27 @@ jobs:
           global-json-file: global.json
       - run: dotnet restore RemoteDesktop.slnx
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
+      # THIRD-PARTY-NOTICES.md is generated from the dependency graph and then committed, because it ships inside the
+      # installers. Nothing regenerates it when a package is bumped, and it had already drifted once in this
+      # repository: it was missing FFmpeg.AutoGen entirely and still named two versions nothing referenced. That
+      # drift is invisible in review, which is exactly why it survived. Regenerating here and failing on any
+      # difference turns it into a red pull request.
+      #
+      # Only on this job, not on all three: the list is read with "dotnet list package" and no runtime identifier, so
+      # it is identical on every platform — the committed list carries Avalonia.Win32, .X11 and .Native at once — and
+      # there is one file. Running it three times would only mean three chances to be flaky.
+      - name: Check the third-party notices are current
+        shell: pwsh
+        run: |
+          pwsh -File build/tools/Export-ThirdPartyNotices.ps1
+
+          # Test $LASTEXITCODE rather than the command's output: --quiet writes nothing, so PowerShell would evaluate
+          # the call to an empty value and this step would fail on every pull request instead of on a stale file.
+          git diff --quiet -- THIRD-PARTY-NOTICES.md
+          if ($LASTEXITCODE -ne 0) {
+              git --no-pager diff -- THIRD-PARTY-NOTICES.md
+              throw 'THIRD-PARTY-NOTICES.md is out of date. Run build/tools/Export-ThirdPartyNotices.ps1 and commit the result.'
+          }
       # The build reports what is wrong with the packages a project references directly; this walks the whole graph,
       # including everything those packages drag in. A known-vulnerable dependency fails the build.
       - uses: ./.github/actions/audit-packages
@@ -31,7 +52,7 @@ jobs:
         with:
           artifact-name: test-results-windows
       # The two MSIs are built here as well as at release time, and that is the whole point of the step. The scripts
-      # under build/installer/*/windows otherwise only ever run when a tag is pushed, so anything that breaks them —
+      # under build/installer/windows/* otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a WiX component that silently
       # drops content — would first be discovered while publishing a release, which is the one build nobody gets to
       # re-check before it is public. Here it is an ordinary red pull request.
@@ -41,8 +62,8 @@ jobs:
       - name: Build the Windows installers (MSI)
         shell: pwsh
         run: |
-          .\build\installer\client\windows\build-installer.ps1 -Configuration Release -SkipSigning
-          .\build\installer\server\windows\build-server-installer.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\client\Build-ClientInstaller.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
 
       # Both packages are opened and their contents checked, by the same shared action the other two platforms call:
       # one place answers "does this package hold what it is supposed to" for all three.
@@ -70,7 +91,7 @@ jobs:
         with:
           artifact-name: test-results-linux
       # The three .deb packages are built here as well as at release time, and that is the whole point of the step.
-      # The scripts under build/debian/ otherwise only ever run when a tag is pushed, so anything that breaks them —
+      # The scripts under build/installer/linux/ otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a version that stops being
       # readable out of Directory.Build.props — would first be discovered while publishing a release, which is the one
       # build nobody gets to re-check before it is public. Here it is an ordinary red pull request.
@@ -79,9 +100,9 @@ jobs:
       # release job builds its own. What is being checked is that the scripts still work, not the bytes.
       - name: Build the Linux packages
         run: |
-          build/debian/client/build-deb.sh
-          build/debian/host/build-deb.sh
-          build/debian/server/build-deb.sh
+          build/installer/linux/client/build-deb.sh
+          build/installer/linux/host/build-deb.sh
+          build/installer/linux/server/build-deb.sh
 
       # A script that exits zero without producing a usable package is the failure this is here for: a package with
       # nothing in it would still be a package. The contents are checked by the same shared action the other two
@@ -90,7 +111,7 @@ jobs:
 
   build-macos:
     # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
-    # minos 26.0 and dyld refuses to load them on anything older (docs/macos-port-plan.md 3.4). That is also what makes
+    # minos 26.0 and dyld refuses to load them on anything older (docs/ports/macos-port-plan.md 3.4). That is also what makes
     # this job possible at all: on macos-latest (macos-14/15) every transport test would fail with "Unable to load
     # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
     runs-on: macos-26
@@ -100,7 +121,7 @@ jobs:
         with:
           global-json-file: global.json
       # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
-      # this. It stages artifacts/native/macos, and RemoteDesktop.Transport copies that directory next to every
+      # this. It stages artifacts/lib/macos, and RemoteDesktop.Transport copies that directory next to every
       # executable that references it -- the test hosts included. It has to run before the build, because that copy is
       # an MSBuild glob over a directory that would otherwise not exist yet.
       - name: Stage the native MsQuic library
@@ -112,7 +133,7 @@ jobs:
         with:
           artifact-name: test-results-macos
       # The two .pkg files are built here as well as at release time, and that is the whole point of the step: the
-      # scripts under build/installer/*/macos otherwise only ever run when a tag is pushed, so a broken one — a project
+      # scripts under build/installer/macos/* otherwise only ever run when a tag is pushed, so a broken one — a project
       # reference that no longer resolves, a native library the publish stops carrying, a payload the launchd plists
       # no longer point at — would first be discovered while publishing a release, which is the one build nobody gets
       # to re-check before it is public. Here it is an ordinary red pull request.
@@ -121,8 +142,8 @@ jobs:
       # says so loudly. What is being checked is that the scripts still work, not the signature.
       - name: Build the macOS installers (.pkg)
         run: |
-          ./build/installer/client/macos/make-pkg.sh --configuration Release
-          ./build/installer/server/macos/make-pkg.sh --configuration Release
+          ./build/installer/macos/client/make-pkg.sh --configuration Release
+          ./build/installer/macos/server/make-pkg.sh --configuration Release
 
       # The payload is what has to be right: a package that installs nothing would still be a package, and the scripts
       # do not assert that what they packed is in there. Same shared action as the other two platforms.

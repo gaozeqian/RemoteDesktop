@@ -1,0 +1,46 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <!-- WiX v5 on purpose: from v6 the Open Source Maintenance Fee applies to commercial use. v5 gets no more
+         community fixes, so the installer is kept to standard features (no custom actions of our own beyond calling
+         the service executable) to keep a later move to another tool cheap. -->
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputName>RemoteDesktop-$(ProductVersion)-x64</OutputName>
+    <OutputType>Package</OutputType>
+    <SuppressIces>ICE61</SuppressIces>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Passed by Build-ClientInstaller.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
+    <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>
+    <DefineConstants>ProductVersion=$(ProductVersion);SourceRoot=$(SourceRoot);DefaultRendezvousUri=$(DefaultRendezvousUri)</DefineConstants>
+    <!-- The public half of the signing certificate, and only when the build signed with a self-signed one: its presence
+         is what compiles the component that installs it into the machine's trusted root store. Built by hand, without
+         it, the package simply has no certificate in it (see Components.wxs). -->
+    <DefineConstants Condition="'$(TrustedRootCertificate)' != ''">$(DefineConstants);TrustedRootCertificate=$(TrustedRootCertificate)</DefineConstants>
+    <!-- The same for the signaling server's certificate (-ServerCertificate). A variable that is passed to the build
+         but not named here is not defined for the preprocessor, and the component it guards is dropped without a
+         word - which is why Build-ClientInstaller.ps1 checks the finished package for the certificates it meant to put in. -->
+    <DefineConstants Condition="'$(TrustedServerCertificate)' != ''">$(DefineConstants);TrustedServerCertificate=$(TrustedServerCertificate)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Iis.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+  <!-- The WiX SDK already compiles every *.wxs in this folder (EnableDefaultCompileItems); listing them again
+       would compile each one twice and the linker would see two packages. -->
+
+  <Target Name="RequireGeneratedFiles" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Files.generated.wxs')"
+           Text="Files.generated.wxs is missing. Run build\installer\windows\client\Build-ClientInstaller.ps1, which publishes the applications and generates the file list from the publish output." />
+    <Error Condition="'$(SourceRoot)' == ''"
+           Text="SourceRoot is not set. Run build\installer\windows\client\Build-ClientInstaller.ps1 -SourceDirectory &lt;publish folder&gt;." />
+  </Target>
+
+</Project>

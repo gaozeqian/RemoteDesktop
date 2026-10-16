@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One installer for the two server programs: the rendezvous server (signaling) and the relay. They go side by side
+  into one folder, each in a subfolder of its own, because each is a self-contained application with its own runtime.
+  This is the server side of the product; the client installer (build/installer/windows/client) is a separate package with a
+  separate UpgradeCode, so a machine can be both a server and a client.
+  Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Remote Desktop Server" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
+           UpgradeCode="7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
+           Scope="perMachine" Compressed="yes" InstallerVersion="500"
+           Codepage="936">
+    <!-- Codepage 936 (GBK) because the settings page below is the first thing in this package whose *strings live in
+         the MSI tables* rather than in a file: the license text is an RTF file, and the summary information is
+         English, so until now the default (1252) was never a problem. A Chinese-only UI on a Windows-only package
+         makes this the code page that fits; an MSI built this way renders its own strings correctly on any
+         locale. -->
+
+    <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
+         somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
+    <SummaryInformation Description="Remote desktop servers: signaling (rendezvous) and relay. Chinese UI." />
+
+    <!-- Same-version installs upgrade in place, which is what rebuilding the same version while testing needs. The UpgradeCode is
+         the server package's own, so it never touches a client installation on the same machine. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of Remote Desktop Server is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      What the two servers are configured with, once their files are in place. Every one of these is written into both
+      appsettings.json files by the configuration step the rendezvous executable carries (configure-system), which the
+      deferred custom action below runs; each is also the answer to "what does this deployment need that a build
+      cannot know".
+
+      Every property has a value (rather than none) on purpose: a property without one is left out of the property
+      table altogether, and the deferred custom action that reads it would find nothing. Secure so that the action,
+      which runs as the system rather than as the person installing, receives it.
+    -->
+
+    <!-- The address the signaling server listens on, e.g. http://0.0.0.0:5080, or https://0.0.0.0:5080 together with a
+         certificate below. The default is the address baked in when the installer was built
+         (Build-ServerInstaller.ps1 -RendezvousUrl); it can be given at install time instead:
+         msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080
+         This is what the server binds to, not what clients are told to use - that is the relay endpoint just below,
+         and clients reach this address through whatever name and port the deployment puts in front of it. -->
+    <Property Id="RENDEZVOUSURL" Value="$(var.DefaultRendezvousUrl)" Secure="yes" />
+
+    <!-- Where clients are told to reach the relay: "auto" (the default) means the configuration step picks this
+         machine's first address that is not loopback, says in its notes which one it picked, and takes the relay's
+         default port (5082). The value has to end up an address rather than a name - the client is handed it and sends
+         UDP straight there - so "auto" is the default that cannot be wrong: a step that cannot fail over a value
+         nobody chose. A server whose clients come in over the internet wants the address they can actually reach
+         rather than one of this machine's own:
+         msiexec /i <msi> RELAYPUBLICENDPOINT=relay.example.com:5082
+         A name may be given, and is resolved once, while installing: the address it resolved to is what clients are
+         sent to, so it has to be one they can reach, and a name that does not resolve here fails the step. -->
+    <Property Id="RELAYPUBLICENDPOINT" Value="auto" Secure="yes" />
+
+    <!-- The base64 key that signs the relay tickets, shared by both servers. "auto" (the default) keeps the key this
+         machine already has and generates one where there is none, which is what lets the two servers agree without
+         anybody carrying a secret between them; a key already in appsettings.json is never replaced, because a relay
+         on another machine was configured with the one printed when it was set up. Given a key (at least 32 bytes,
+         base64), both servers are set to it. -->
+    <Property Id="RELAYSHAREDKEY" Value="auto" Secure="yes" />
+
+    <!-- Where device codes are kept. "auto" (the default) means no database at all: codes live in memory and every
+         device gets a new one whenever the server restarts. A PostgreSQL connection string keeps them across restarts
+         and across a second server behind a load balancer, and is the right answer for anything long-lived:
+         msiexec /i <msi> POSTGRESCONNECTIONSTRING="Host=db;Database=remotedesktop;Username=...;Password=..." -->
+    <Property Id="POSTGRESCONNECTIONSTRING" Value="auto" Secure="yes" />
+
+    <!-- A .pfx the signaling server should serve TLS with. "auto" (the default) means no certificate and plain http,
+         which is what a deployment behind a reverse proxy, or one on a network nobody else shares, wants; any other
+         value that is not empty is the path of the file:
+         msiexec /i <msi> TLSCERTIFICATEPATH=C:\certs\signaling.pfx TLSCERTIFICATEPASSWORD=...
+         The path is read at every start-up, so the file has to stay where it is, and the address above should be
+         https:// when it is given - given a certificate and an http address, the configuration step switches it to
+         https itself, because serving plain http where TLS was asked for is not something to do quietly.
+
+         "auto" is the word every property here uses for "decide for me", and this installer's answer for TLS is to
+         leave it alone. It is never handed to the server: the condition that picks between the two configuration
+         command lines reads it, and only a value that is neither "auto" nor empty is passed as a path - which is why
+         the default is a word and not nothing. A property with no value never reaches the property table at all, and
+         the deferred action that reads it would find nothing. -->
+    <Property Id="TLSCERTIFICATEPATH" Value="auto" Secure="yes" />
+
+    <!-- What the certificate file box on the settings page shows, and what the browse button writes. Separate from
+         TLSCERTIFICATEPATH above because that one holds a word rather than a path whenever TLS is off or the
+         certificate is to be generated, and a box labelled "path" showing the word generate is worse than useless.
+
+         The single space is the value that makes the box look empty while keeping it usable: a property with no value
+         never reaches the property table, and a control bound to it comes out greyed and untypable — which is exactly
+         what happened to the certificate path box when it had none. A space is invisible, and the server already reads
+         a value of nothing but spaces as "no certificate", the same as auto. -->
+    <Property Id="TLSCERTIFICATEFILE" Value=" " Secure="yes" />
+
+    <!-- The password of that .pfx. Nothing is the normal case: a .pfx made for a service is usually protected by where
+         the file lives rather than by a password the installer would have to pass around. Whatever is passed here ends
+         up in the installer's own log like any command-line value, which is the reason to prefer a passwordless file.
+         A value of nothing but spaces reaches the server as "no password", which it already understood before this
+         property existed.
+
+         The space is here because the property has to be. A control is only editable while the property it is bound to
+         is defined, and a property with no value never reaches the property table at all — take the value away and the
+         password box on the settings page comes out greyed and untypable, the same way the certificate path box did
+         before it was given one. So the box has to hold something, and a space is the something that reads as nothing.
+         The box is a plain one rather than a masked one on purpose: a masked box draws a dot for every character, so a
+         property that has to hold a value can never make the field look empty. The password is therefore visible while
+         it is typed, which is a real cost, taken because the installer runs on the machine being set up and behind an
+         elevation prompt. It is trimmed to nothing on the way out if it is left alone - see NormalizeSettings. -->
+    <Property Id="TLSCERTIFICATEPASSWORD" Value=" " Secure="yes" />
+
+    <!--
+      The four arguments both configuration command lines carry - the address, the relay endpoint, the key and the
+      database - assembled once by the setter action in Components.wxs and read by the certificate's command line,
+      which cannot spell them out a second time (the note there has the numbers).
+
+      It is declared here, and Secure, for one reason: a deferred custom action runs out of the installation script,
+      past the elevation boundary, and only the properties in the secure list have their values carried into that
+      script. Without this declaration the certificate's line would read an empty property and quietly configure
+      those four values to their defaults instead of the ones the installation was given.
+    -->
+    <Property Id="CONFIGUREARGUMENTS" Secure="yes" />
+
+    <!-- Adds no firewall rules when it is 1: msiexec /i <msi> NOFIREWALL=1. For a machine whose rules are managed
+         centrally, or one whose server only listens on a network the rules are not wanted on. "0" is the default and
+         means the three inbound rules in Components.wxs are installed. -->
+    <Property Id="NOFIREWALL" Value="0" Secure="yes" />
+
+    <!-- Which of the three TLS answers the settings page has chosen. This one is the page's own business: it never
+         reaches the deferred action, it only decides what TLSCERTIFICATEPATH is set to when Next is pressed. A
+         property with no value would not be in the property table at all, and the radio group would start with
+         nothing selected. -->
+    <Property Id="TLSCHOICE" Value="none" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />
+    </StandardDirectory>
+    <!-- Somewhere to point "where do I change this" at. The shortcut goes to the page in the installation folder rather
+         than to a URL: this repository is private, and whoever runs the server may never have seen it. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ServerShortcutFolder" Name="Remote Desktop Server" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Remote Desktop Server" Level="1" AllowAbsent="no">
+      <!-- The signaling server and the relay, one folder each. -->
+      <ComponentRef Id="RendezvousService" />
+      <ComponentRef Id="RelayService" />
+      <!-- Inbound rules for the two of them, in a component of their own (see Components.wxs). -->
+      <ComponentRef Id="FirewallRules" />
+      <!-- The settings each server reads at start-up, which an upgrade must not put back to their built-in defaults. -->
+      <ComponentRef Id="RendezvousSettings" />
+      <ComponentRef Id="RelaySettings" />
+      <ComponentRef Id="ServerShortcut" />
+      <!-- Everything else: the runtime, libraries and the settings templates' neighbours. -->
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+
+    <!--
+      A server left running in console mode (an operator watching the log, or a deployment that starts the two
+      programs from a script instead of from the services this package registers) holds its own executable open, and
+      then the installer can neither replace that file nor start it as a service. Windows' own Restart Manager cannot
+      help: it refuses to restart an application that belongs to another user's session ("Application SID does not
+      match Conductor SID"), so the installer closes them itself. The services are stopped by their ServiceControl
+      rows in Components.wxs, which is what covers the normal case.
+    -->
+    <util:CloseApplication Id="CloseRendezvous" Target="RemoteDesktop.Server.Rendezvous.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <util:CloseApplication Id="CloseRelay" Target="RemoteDesktop.Server.Relay.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+
+    <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package: the
+         repository's LICENSE is turned into one RTF under build/installer while this builds, and both packages point
+         at that one file, so they cannot show different agreements. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="..\..\License.rtf" />
+
+  </Package>
+</Wix>

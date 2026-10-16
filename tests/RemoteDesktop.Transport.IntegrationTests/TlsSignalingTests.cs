@@ -7,7 +7,7 @@ namespace RemoteDesktop.Transport.IntegrationTests;
 /// <summary>
 /// Signaling over TLS. Without it every device code, address and connect request travels in clear text, and an
 /// on-path attacker can also take a relay ticket out of the traffic. The settings checked here are the ones
-/// docs/deployment.md tells an operator to use, so this is what keeps that page honest.
+/// docs/ops/deployment.md tells an operator to use, so this is what keeps that page honest.
 /// </summary>
 public class TlsSignalingTests
 {

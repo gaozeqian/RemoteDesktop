@@ -3,11 +3,11 @@
 本产品使用以下开源组件。它们按各自的许可条款提供，版权归各自的作者所有（许可证全文见各组件的项目主页）。
 列表取自三个随安装包发布的程序的依赖闭包，因此也包含只在构建时用到的包。
 
-本文件由 `build/Generate-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
+本文件由 `build/tools/Export-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
 依赖变化后（例如 Dependabot 升级了某个包）重新运行一次：
 
 ```
-pwsh -File build/Generate-ThirdPartyNotices.ps1
+pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 ```
 
 此外，程序以自包含方式发布，因此还包含 .NET 运行时（MIT 许可，https://github.com/dotnet/runtime）。
@@ -16,15 +16,16 @@ pwsh -File build/Generate-ThirdPartyNotices.ps1
 |---|---|---|---|
 | Avalonia.Angle.Windows.Natives | 2.1.27548.20260419 | 见项目主页 | https://avaloniaui.net/ |
 | Avalonia.BuildServices | 11.3.2 | MIT | https://avaloniaui.net/ |
-| Avalonia.FreeDesktop | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.FreeDesktop.AtSpi | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.HarfBuzz | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Native | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Remote.Protocol | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Skia | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Win32 | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.X11 | 12.1.3 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.FreeDesktop | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.FreeDesktop.AtSpi | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.HarfBuzz | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Native | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Remote.Protocol | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Skia | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Win32 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.X11 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
 | Concentus | 2.2.2 | 见项目主页 | https://github.com/lostromb/concentus |
+| FFmpeg.AutoGen | 8.0.0 | 见项目主页 | https://github.com/Ruslan-B/FFmpeg.AutoGen |
 | Google.Protobuf | 3.36.2 | BSD-3-Clause | https://github.com/protocolbuffers/protobuf |
 | HarfBuzzSharp | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | HarfBuzzSharp.NativeAssets.Linux | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
@@ -73,7 +74,7 @@ pwsh -File build/Generate-ThirdPartyNotices.ps1
 | System.IO.Hashing | 10.0.12 | MIT | https://dot.net/ |
 | System.Numerics.Tensors | 9.0.0 | MIT | https://dot.net/ |
 | System.Security.Cryptography.ProtectedData | 10.0.12 | MIT | https://dot.net/ |
-| Tmds.DBus.Protocol | 0.94.1 | MIT | https://www.nuget.org/packages/Tmds.DBus.Protocol |
+| Tmds.DBus.Protocol | 0.95.1 | MIT | https://www.nuget.org/packages/Tmds.DBus.Protocol |
 | Vortice.Direct3D11 | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.Direct3D11 |
 | Vortice.DirectX | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.DirectX |
 | Vortice.DXGI | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.DXGI |

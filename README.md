@@ -2,7 +2,7 @@
 
 跨平台远程桌面软件（类 ToDesk）：远程控制、观看模式、文件传输、远程终端、远程摄像头。
 后端 .NET 10，前端 Avalonia 12。**支持 Windows、macOS (Apple Silicon) 与 Linux**；平台层的做法分别见
-[docs/macos-port-plan.md](docs/macos-port-plan.md) 与 [docs/linux-port-plan.md](docs/linux-port-plan.md)。
+[docs/ports/macos-port-plan.md](docs/ports/macos-port-plan.md) 与 [docs/ports/linux-port-plan.md](docs/ports/linux-port-plan.md)。
 
 三个平台的产品形状不同，因为桌面不同：Windows 上被控端是 LocalSystem 服务加一个用户会话里的 Agent；
 macOS 上客户端自己就是被控端（没有服务/Agent 拆分）；Linux 上是一个跑在图形会话里的 `systemd --user`
@@ -13,13 +13,8 @@ macOS 上客户端自己就是被控端（没有服务/Agent 拆分）；Linux �
 
 为了保证软件的可维护性与团队协作，请参阅以下专属文档：
 - **[📘 文档中心 (Docs Index)](docs/README.md)**：所有技术文档的入口。
-  - **[部署与运维文档 (Deployment)](docs/deployment.md)**
-  - **[系统架构设计 (Architecture)](docs/architecture.md)**
-  - **[网络通信协议 (Protocol)](docs/protocol.md)**
-  - **[安全机制说明 (Security)](docs/security.md)**
-  - **[设备列表存储设计 (Storage)](docs/device-list-storage.md)**
-  - **[macOS 移植计划 (macOS Port Plan)](docs/macos-port-plan.md)**
-  - **[macOS 移植评审 (macOS Port Review)](docs/macos-port-review.md)**
+  <!-- 这里只放这一条链接，不要在这里重列文档清单。曾经列过，然后漏掉了 4 份（security-review、
+       linux-port-plan 与两份结构评审）——两份手工维护的索引必然分叉，所以清单只在 docs/README.md 里有一份。 -->
 - **[🤝 贡献指南 (Contributing)](CONTRIBUTING.md)**：包含代码提交流程、环境要求与架构依赖规则。
 - **[📜 更新日志 (Changelog)](CHANGELOG.md)**：记录各里程碑的新增特性与修复。
 
@@ -34,13 +29,13 @@ dotnet test RemoteDesktop.slnx
 
 ```
 # Windows MSI（需要 .NET SDK 与网络还原 WiX 包）
-pwsh -File build/installer/client/windows/build-installer.ps1
-pwsh -File build/installer/server/windows/build-server-installer.ps1
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1
+pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 
 # Linux .deb（在 Linux 上构建；自包含发布，目标机器不需要装 .NET）
-build/debian/client/build-deb.sh
-build/debian/host/build-deb.sh
-build/debian/server/build-deb.sh
+build/installer/linux/client/build-deb.sh
+build/installer/linux/host/build-deb.sh
+build/installer/linux/server/build-deb.sh
 ```
 
 ## macOS (Apple Silicon)
@@ -50,19 +45,19 @@ build/debian/server/build-deb.sh
 
 ```
 # .app（bundle 目录，用 Apple Development 身份签名，便于本机开发调试）
-build/installer/client/macos/make-app.sh --configuration Release
+build/installer/macos/client/make-app.sh --configuration Release
 
 # .pkg（可分发安装包，装到 /Applications；默认未签名）
-build/installer/client/macos/make-pkg.sh --configuration Release
+build/installer/macos/client/make-pkg.sh --configuration Release
 
 # 服务端 .pkg（两个服务器 + launchd 守护进程，装到 /usr/local/remotedesktop-server）
-build/installer/server/macos/make-pkg.sh --configuration Release
+build/installer/macos/server/make-pkg.sh --configuration Release
 ```
 
 > macOS 侧最低系统版本为 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0`
 > 决定。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；首次构建前需运行
 > `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。平台细节与实测记录见
-> [docs/macos-port-plan.md](docs/macos-port-plan.md)，选型评审见 [docs/macos-port-review.md](docs/macos-port-review.md)。
+> [docs/ports/macos-port-plan.md](docs/ports/macos-port-plan.md)，选型评审见 [docs/ports/macos-port-review.md](docs/ports/macos-port-review.md)。
 >
 > `.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
 > "unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID 签名 + 硬化运行时）
@@ -168,7 +163,7 @@ libei 和显示都是它在用，而只装被控端的机器上未必有客户�
 | 输入 | `SendInput` | libei（**不需要 `/dev/uinput` 这种机器级特权**） |
 | 编解码 | Media Foundation | libavcodec |
 | 终端 | ConPTY + PowerShell / cmd | PTY + 登录 shell |
-| 密钥 | DPAPI | 0600 文件（威胁模型见 [docs/security.md](docs/security.md)） |
+| 密钥 | DPAPI | 0600 文件（威胁模型见 [docs/design/security.md](docs/design/security.md)） |
 | 防休眠 | `SetThreadExecutionState` | logind `Inhibit` |
 | 登录前的访问 | 支持 | **不支持**（见上） |
 
@@ -212,7 +207,7 @@ macOS 上做同样的联调，不需要 `dotnet run` —— 用上面那个服�
 sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
 curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
-# 两个实例直接跑 bundle 里的可执行文件（open --args 送不到参数，见 docs/macos-port-plan.md §3.11⑧）
+# 两个实例直接跑 bundle 里的可执行文件（open --args 送不到参数，见 docs/ports/macos-port-plan.md §3.11⑧）
 "artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd1
 "artifacts/app/macos/RemoteDesktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd2
 ```
@@ -229,7 +224,7 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 `--Transport:ForceRelay true` 强制走中继，`--Transport:RendezvousUri ws://<服务器>:5080/ws` 连接其他服务器。
 跨机器测试时需要放通服务器的 TCP 5080、UDP 5081（地址反射）和 UDP 5082（中继），并把 Rendezvous 的
 `Rendezvous:RelayEndpoint` 配置为客户端可达的中继公网地址。生产环境必须为两个服务配置新的 `RelaySharedKey`，
-并且**信令要走 `wss://`**（做法见 [docs/deployment.md](docs/deployment.md) 的"生产环境：信令必须走 TLS"）。
+并且**信令要走 `wss://`**（做法见 [docs/ops/deployment.md](docs/ops/deployment.md) 的"生产环境：信令必须走 TLS"）。
 
 ## 无人值守模式
 
@@ -309,8 +304,8 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 ```
 # 管理员 PowerShell
 dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/windows/host
-.\build\service\windows\install-service.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
-.\build\service\windows\uninstall-service.ps1
+.\build\service\windows\Install-HostService.ps1 -SourceDirectory artifacts\app\windows\host -RendezvousUri ws://<服务器>:5080/ws
+.\build\service\windows\Uninstall-HostService.ps1
 ```
 
 日志在 `%ProgramData%\RemoteDesktop\logs`（`service-*.log`、`agent-*.log`），设备身份在同目录的 `secrets`（仅 SYSTEM、管理员可访问）。
@@ -324,10 +319,10 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 ```
 # 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
 # 正式发布请带上自己服务器的地址（不带就用内置的 127.0.0.1，装到别的机器上连不上）
-.\build\installer\client\windows\build-installer.ps1 -RendezvousUri ws://<服务器>:5080/ws
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
-.\build\installer\client\windows\build-installer.ps1 -SignCertificate <证书指纹或 CN 名称>
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
 ```
 
 脚本会：发布三个可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名（见下）→
@@ -346,29 +341,30 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
   `msiexec /x RemoteDesktop-0.3.0.0-x64.msi REMOVEDATA=1` 会连数据一起删除。
 - **签名是自动的**：脚本在本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），找到就签名、加时间戳并验证；
   没有证书就跳过并提示，也可以用 `-SignCertificate <指纹或 CN>` 指定、`-SkipSigning` 明确跳过。
-- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示 `build/installer/License.txt`
+- 界面用的是 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成）：许可页显示仓库根 `LICENSE`
   里的专有 EULA，构建时由 `New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
   该文件里若还有**【方括号】占位符**，打包脚本会拒绝出包——那是留给"换个人/换主体来发布"时的闸门，
   不是待办事项（当前内容是完整的）。
 - `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
-- **部署见 [docs/deployment.md](docs/deployment.md)**：服务器（含 Docker：`build/docker/`）、客户端/被控端、排错。
+- **部署见 [docs/ops/deployment.md](docs/ops/deployment.md)**：服务器（含 Docker：`build/docker/`）、客户端/被控端、排错。
 - **签名见 [build/signing/README.md](build/signing/README.md)**：自动签名、不需要 Windows SDK、证书怎么选。
 - 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持，风险见方案）。
-  改动 `build/installer/client/windows` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
+  改动 `build/installer/windows/client` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
   自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——上面那个包内容检查就是为了这个。
 
 **服务端**（信令 + 中继）有自己的安装包，装的是另一套东西，和这个包互不影响：
-`build/installer/server/windows/build-server-installer.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
-把两个服务器注册成服务、开好防火墙、写好配置。见 [docs/deployment.md](docs/deployment.md) 的"最省事的一条路"。
+`build/installer/windows/server/Build-ServerInstaller.ps1` 产出 `RemoteDesktop.Server-<版本>-x64.msi`，
+把两个服务器注册成服务、开好防火墙、写好配置。见 [docs/ops/deployment.md](docs/ops/deployment.md) 的"最省事的一条路"。
 
-安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/security.md](docs/security.md)。
+安全相关的说明（保护了什么、部署者必须自己做什么、还没做什么）见 [docs/design/security.md](docs/design/security.md)。
 
 ## 代码结构
 
-详细的系统架构与分层规则设计，请参见 **[系统架构设计文档](docs/architecture.md)**。
+详细的系统架构与分层规则设计，请参见 **[系统架构设计文档](docs/design/architecture.md)**。
 
-依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts`。
-`Platform.*` 和 `Media` 只依赖 `Abstractions`（平台端口接口）。以上规则由 `tests/RemoteDesktop.ArchitectureTests` 强制检查。
+依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← {Features, Hosts}`。
+`Features` 与 `Hosts` 是**并列**的两层，都只依赖 `Application`，彼此之间不互相依赖。
+`Platform.*` 和 `Media` 只依赖 `Abstractions` 与 `Domain`（平台端口接口）。以上规则由 `tests/RemoteDesktop.Architecture.UnitTests` 强制检查。
 
 | 目录 | 内容 |
 |---|---|
@@ -383,7 +379,7 @@ dotnet publish src/Hosts/RemoteDesktop.HostService -c Release -o artifacts/app/w
 | `src/Platform/RemoteDesktop.Platform.Windows` | Windows 平台实现：DXGI 屏幕采集、SendInput、Media Foundation H.264 编解码（NVENC / QSV / AMF，回退到系统自带软件编码器）、DPAPI |
 | `src/Platform/RemoteDesktop.Platform.MacOS` | macOS (Apple Silicon) 平台实现：ScreenCaptureKit 采集、CGEvent 输入注入、VideoToolbox 编解码、AVFoundation 摄像头、ScreenCaptureKit/AudioQueue 音频、AVAssetWriter 录制、Keychain 密钥、SMAppService 登录项（原生辅助库见 `native/macos`） |
 | `src/Platform/RemoteDesktop.Platform.Linux` | Linux 平台实现：portal + PipeWire 屏幕采集、libei 输入注入、libavcodec 编解码（NVENC / VA-API / x264）、PulseAudio、logind 防休眠 |
-| `src/Platform/RemoteDesktop.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
+| `src/Platform/RemoteDesktop.Platform.Posix` | Linux 与 macOS 语义相同的部分：PTY（`posix_spawn`）、0600 文件密钥库、Unix 用户上下文守卫 |
 | `src/Hosts/RemoteDesktop.Client` | Avalonia 客户端 |
 | `src/Hosts/RemoteDesktop.HostService` | 被控端宿主：注册设备、鉴权、分发通道、给 UI 提供控制管道。Windows 上是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上是一个直接干这些的 `systemd --user` 服务；macOS 上不用它——客户端进程自己就是被控端 |
 | `src/Hosts/RemoteDesktop.SessionAgent` | **仅 Windows**：由服务在交互会话（用户桌面或登录界面）里启动的 Agent，屏幕采集、编码、输入注入、文件操作、终端和摄像头（以登录用户身份）。Linux 与 macOS 上都没有它——见 [Linux 一节](#linux-支持与限制) |

@@ -81,7 +81,7 @@ internal static class ClientHost
             .AddRemoteDesktopMedia()
             .AddSingleton(new ClientEnvironment(dataDirectory))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and
-            // gets its own list and remembered passwords) — see docs/device-list-storage.md.
+            // gets its own list and remembered passwords) — see docs/ops/device-list-storage.md.
             .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
             .AddSingleton<MainWindowViewModel>();
 

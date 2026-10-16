@@ -8,7 +8,7 @@
 #
 # This script covers the other case: a machine that has no access to Microsoft's repository, or a build that would
 # rather pin the version than depend on what a distribution happens to carry. It downloads the .deb, checks it against
-# a pinned digest, and unpacks just the shared library into artifacts/native/linux (artifacts/ is already ignored).
+# a pinned digest, and unpacks just the shared library into artifacts/lib/linux (artifacts/ is already ignored).
 #
 # Unlike the macOS script this does no relinking. There the library comes from Homebrew built for the Homebrew prefix
 # and linking OpenSSL by absolute path; here it links the distribution's own libssl/libcrypto, which are simply
@@ -19,7 +19,7 @@
 #     native/linux/fetch-libmsquic.sh
 #
 # Then set RD_MSQUIC_LIBRARY to the staged file, or copy it next to the executable and turn on the
-# System.Net.Quic.AppLocalMsQuic switch (see docs/linux-port-plan.md).
+# System.Net.Quic.AppLocalMsQuic switch (see docs/ports/linux-port-plan.md).
 set -eu
 
 # Pinned on purpose: the .NET runtime loads libmsquic without pinning a version, so an unnoticed upgrade changes
@@ -31,7 +31,7 @@ base="https://packages.microsoft.com/ubuntu/26.04/prod"
 file="pool/main/libm/libmsquic/libmsquic_${version}_amd64.deb"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-out="$root/artifacts/native/linux"
+out="$root/artifacts/lib/linux"
 
 # Named with the version, because that is what is actually staged further down: this asked for "libmsquic.so", which
 # nothing here ever creates, so the guard never fired and every run downloaded the package again.

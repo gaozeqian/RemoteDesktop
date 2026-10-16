@@ -1,0 +1,32 @@
+# Editor and analyser defaults for the whole repository.
+#
+# Line endings are deliberately NOT set here. .gitattributes owns them, because that is the only place that governs
+# what actually gets committed rather than what one person's editor happens to write. Setting end_of_line here as well
+# would give two answers to the same question, and the one that loses is the one that matters.
+#
+# This file is intentionally limited to encoding and whitespace. Code style rules (naming, ordering, analyser
+# severities) are not repeated here: Directory.Build.props turns on EnforceCodeStyleInBuild with
+# AnalysisLevel=latest-recommended, so the build already fails on a style violation. Restating those rules in a second
+# place is how the two end up disagreeing.
+
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# XML-shaped files: project files, the WiX sources, the XAML dialect, platform manifests and the generated SVG. Two
+# spaces is what every one of them in this repository already uses, and what the SDK's own templates produce.
+[*.{csproj,props,targets,wixproj,wxs,slnx,axaml,xml,config,manifest,plist,svg}]
+indent_size = 2
+
+[*.{json,jsonc,yml,yaml,proto}]
+indent_size = 2
+
+# Markdown: trailing whitespace is two-space line-break syntax in some flavours, and reflowing prose is not this
+# file's business.
+[*.md]
+trim_trailing_whitespace = false

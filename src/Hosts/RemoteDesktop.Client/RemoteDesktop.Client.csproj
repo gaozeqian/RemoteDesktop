@@ -9,7 +9,7 @@
        Note the two different icons: ApplicationIcon embeds the .exe's icon on Windows, while the windows themselves
        use Icon="/Assets/icon-256.png" — PNG rather than the .ico next to it, because .ico is a Windows container that
        the cross-platform decoder does not reliably read. The Dock/Finder icon on macOS comes from neither: it is the
-       bundle's CFBundleIconFile, built from these same PNGs by build/installer/client/macos/make-icns.sh. -->
+       bundle's CFBundleIconFile, built from these same PNGs by build/installer/macos/client/make-icns.sh. -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <OutputType>WinExe</OutputType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -20,7 +20,7 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- The client's own logic (recording file names, message wording) is worth testing where it lives. -->
-    <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.Tests" />
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.UnitTests" />
   </ItemGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />

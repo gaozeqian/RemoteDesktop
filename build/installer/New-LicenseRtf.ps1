@@ -7,10 +7,12 @@
   nobody can predict on the target machine. So every character outside ASCII is written as an RTF Unicode escape
   (\uN?), which is ASCII on the wire and renders as the right character in any locale.
 
-  The text itself is kept in License.txt, next to this script, because that is a file anybody can read and edit.
+  The text itself is kept in the repository's LICENSE, because that is the file anybody reads first, and a licence the
+  installers show that the repository does not state is a licence that can quietly stop being the same document. The
+  packages point at the RTF this writes, never at a second copy of the text.
 
 .EXAMPLE
-  .\New-LicenseRtf.ps1                       # writes License.rtf next to License.txt
+  .\New-LicenseRtf.ps1                       # reads <repo>/LICENSE, writes License.rtf next to this script
   .\New-LicenseRtf.ps1 -Text other.txt -Rtf other.rtf
 #>
 [CmdletBinding()]
@@ -25,7 +27,9 @@ Set-StrictMode -Version Latest
 
 # $PSScriptRoot is empty in parameter defaults on Windows PowerShell 5.1, so the default paths live here.
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $Text) { $Text = Join-Path $scriptDirectory 'License.txt' }
+# Two levels up from build/installer/: the licence text lives at the repository root.
+$repoRoot = Split-Path -Parent (Split-Path -Parent $scriptDirectory)
+if (-not $Text) { $Text = Join-Path $repoRoot 'LICENSE' }
 if (-not $Rtf) { $Rtf = Join-Path $scriptDirectory 'License.rtf' }
 
 if (-not (Test-Path $Text)) { throw "The license text '$Text' was not found." }

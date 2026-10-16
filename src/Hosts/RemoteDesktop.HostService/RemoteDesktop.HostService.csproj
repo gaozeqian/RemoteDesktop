@@ -26,11 +26,20 @@
   </ItemGroup>
   <!-- The service starts the agent from its own folder (see AgentGatewayOptions.ExecutablePath), so a plain build puts
        the agent's build output next to it. Publishing is a separate matter: the installer publishes each executable
-       self-contained into one folder (see build/installer/client/windows/build-installer.ps1), because a framework-dependent
+       self-contained into one folder (see build/installer/windows/client/Build-ClientInstaller.ps1), because a framework-dependent
        agent copied into a self-contained folder would look for the .NET runtime on the target machine. -->
-  <Target Name="CopySessionAgent" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+  <Target Name="CopySessionAgent" AfterTargets="Build" DependsOnTargets="ResolveProjectReferences"
+          Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <!-- Ask the agent's project where its output is instead of spelling out bin\<Configuration>\<TFM>\. A hand-written
+         path silently stops matching the moment the output layout moves — which is what happened when the repository
+         adopted UseArtifactsOutput: these globs matched nothing, MSBuild does not error on an empty item list, and the
+         copy quietly did nothing. GetTargetPath cannot drift from the layout; it does not build (the ProjectReference
+         above already orders it). -->
+    <MSBuild Projects="..\RemoteDesktop.SessionAgent\RemoteDesktop.SessionAgent.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_AgentTargetPath" />
+    </MSBuild>
     <ItemGroup>
-      <AgentFiles Include="$(MSBuildThisFileDirectory)..\RemoteDesktop.SessionAgent\bin\$(Configuration)\$(TargetFramework)\**\*" />
+      <AgentFiles Include="%(_AgentTargetPath.RootDir)%(_AgentTargetPath.Directory)**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(AgentFiles)" DestinationFiles="@(AgentFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>

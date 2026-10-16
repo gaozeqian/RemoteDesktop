@@ -20,28 +20,136 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
+> `dotnet test` 会在当前目录建一个**空的** `TestResults/`，这是 Microsoft.Testing.Platform 的默认值，不是本仓库
+> 的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
+> 根上那个空目录已被 gitignore，看到它不必处理；想自己留一份报告就加
+> `--results-directory artifacts/test-results/<平台>`。
+
+### 测试项目命名
+
+`tests/` 下的项目一律是 `<区域>.<种类>Tests`，种类只有两种：
+
+| 种类 | 含义 | 例子 |
+|---|---|---|
+| `UnitTests` | 不需要外部服务或网络，随时可跑 | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
+| `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
+
+**后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
+`**/*.UnitTests` 会漏掉它，而漏掉是静默的。加新测试项目时请照这个模式命名，别用 `FooTests` 或 `Foo.Test`。
+
+平台专有的用例（只在某个 OS 上有意义）仍然放在对应平台的 `UnitTests` 项目里，用 `Assert.SkipUnless(...)`
+在别的系统上跳过，而不是为每个平台单开一种后缀。
+
+**`<区域>` 指的是"被测代码在哪一块"，但它不总是等于 `src/` 下的某个目录名**，这一点容易看错：
+
+| 项目 | 实际覆盖 |
+|---|---|
+| `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
+| `RemoteDesktop.Transport.IntegrationTests` | 只有 Transport（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别） |
+| `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、以及 `RepositoryStructureTests` 里的结构约定 |
+| `RemoteDesktop.Platform.<OS>.UnitTests` | 那一个平台的实现 |
+
+所以"某个功能在哪测"不能只靠项目名推。默认是**功能层的单测放 `Core.UnitTests`**；只有平台专有的才进对应平台的
+项目，只有需要真网络/真进程/容器的才进 `IntegrationTests`。
+
 ## 📦 构建产物布局
 
-所有构建产物都在仓库根的 `artifacts/`（已 gitignore），按 `<类别>/<平台>/` 组织：
+所有构建产物都在仓库根的 `artifacts/`（已 gitignore）。仓库自己的脚本写的四类按 `<类别>/<平台>/` 组织：
 
 | 路径 | 是什么 |
 |---|---|
-| `artifacts/installer/<平台>/` | **交付物**：安装包（`.msi` / `.pkg` / 未来的 `.deb`）。角色写在文件名里（`RemoteDesktop-Windows-x64-*` 与 `RemoteDesktop-Server-Windows-*`） |
-| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 是各角色的 publish 输出（`app/windows/client/`、`app/windows/server/`），因为同一台机器上会同时出两个角色 |
-| `artifacts/native/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
+| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 两个 `.msi`（`RemoteDesktop-<版本>-x64.msi` 为客户端、`RemoteDesktop.Server-<版本>-x64.msi` 为服务端），macOS 是 `.pkg`，Linux 是 `.deb`。角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 的下一层是**交付物**而不是角色：`client/` 是客户端 MSI 的本体——一个 MSI 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`server/` 下再按程序分成 `Rendezvous/` 与 `Relay/` |
+| `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
+| `artifacts/test-results/<平台>/` | 测试报告（`dotnet test --report-trx` 产出的 `.trx`），按跑测试的机器分平台 |
+
+发布时 `release.yml` 会把上面这些包**改名**成用户看到的那份资产，形状是
+`<产品>-<角色?>-<平台>-<架构>-<tag>.<扩展名>`：
+
+| 平台 | 客户端 | 被控端 | 服务端 |
+|---|---|---|---|
+| Windows | `RemoteDesktop-Client-Windows-x64-<tag>.msi` | 并进客户端包 | `RemoteDesktop-Server-Windows-x64-<tag>.msi` |
+| macOS | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | 并进客户端包 | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` |
+| Linux | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | `RemoteDesktop-Server-Linux-amd64-<tag>.deb` |
+
+**七个资产一个形状**：`<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`。角色词一律写上，即使那个平台只有两个包——
+Linux 有三个包本来就是靠角色词区分的，另外两个平台跟着写，下载列表才是同一族。
+
+两处仍然不同，各有成因：
+
+* **架构词用各平台自己的说法**：Windows `x64`、macOS `arm64`、Linux `amd64`。Linux 那个是 dpkg 的词，与包内
+  `Architecture` 字段（`build/installer/linux/*/control`）保持一致——文件名与字段不同词只会更绕。
+* **只有 Windows 的资产名是在发布时才长成终态的。** macOS 与 Linux 的打包脚本产出的名字已经带齐了平台与角色，
+  发布时只加 tag；Windows 那边打出来的是 `RemoteDesktop-<版本>-x64.msi`，平台词与角色词由 `release.yml` 补上。
+
+后一条正是下面这个坑的来源，值得重复一遍：`artifacts/installer/windows/` 里**没有**带 `Windows` 的文件，
+照着发布资产名去那个目录里找会一无所获。`.github/actions/verify-packages` 的注释里专门记着"这个仓库已经踩过一次"。
+
+`dotnet build` / `dotnet publish` 的产物也在这里，用 SDK 自己的布局——`Directory.Build.props` 设了
+`UseArtifactsOutput` + `ArtifactsPath`：
+
+| 路径 | 是什么 |
+|---|---|
+| `artifacts/bin/<项目>/<pivot>/` | 编译输出（`pivot` 形如 `debug`、`release_linux-x64`） |
+| `artifacts/obj/<项目>/<pivot>/` | 中间产物 |
+| `artifacts/publish/<项目>/<pivot>/` | `dotnet publish` 的输出（**不在** `bin/` 下面，这是 SDK 的约定） |
+| `artifacts/package/<pivot>/` | `dotnet pack` 的输出（**单数**，且**没有**项目层——两点都是 SDK 定的，不是笔误） |
+
+**这两组不是同一条规则。** 上面那组是我们自己的脚本写的，`<类别>/<平台>/` 由我们定；下面那组由 SDK 写，
+第二层是 `<项目>` 与 `<pivot>`，**不按平台分**——加一个平台不会在这里多一层。所以"新增平台"是往
+`installer/`、`app/`、`lib/`、`test-results/` 各加一层，SDK 的那四个不动。`vstest` 默认的 `TestResults/`
+在仓库根，只有不带 `--results-directory` 手跑时才会出现；`dotnet test` 不带参数默认就写它，所以
+`.gitignore` 里留着这条规则。
+
+所以项目目录里**没有** `bin/` 和 `obj/` 了：27 个项目（21 个产品项目 + 6 个测试项目）不再各长出两个目录。要清空
+构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
+
+**唯一的例外**是 `build/installer/windows/` 下的三个安装器工程（两个 WiX 工程与 net48 的 `CustomActions`）：它们
+带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在工程目录内（`bin/`、`obj/`、
+`bin/x64/`）。所以"删 `artifacts/bin` 与 `artifacts/obj`"清不掉它们——要连它们一起清，用
+`git clean -xdf build/installer`（`-x` 会连被忽略的文件一起删，用之前先看一眼 `git clean -xdn`）。
+
+打包脚本的位置另有一套分层（`<平台>/<角色>`），见 [`build/README.md`](build/README.md)。
 
 **只有一个产物根目录。** 新增平台照 `<类别>/<平台>/` 加一层即可；不要再另起一个 `artifacts/` 目录（比如写在 `build/` 里面）—— 那样"产物在哪"就会有两个答案，每加一个平台都要重新选边。
 
+`<平台>` 取 `windows` / `macos` / `linux`——是**平台**，不是发行版或包格式：`.deb` 因此落在 `installer/linux/` 而不是 `installer/debian/`。
+
 ## 📐 架构与依赖规则
 
-本项目采用严格的**洋葱架构/整洁架构**，依赖方向只能**由外向内**。此规则由 `RemoteDesktop.ArchitectureTests` 强制校验。
+本项目采用严格的**洋葱架构/整洁架构**，依赖方向只能**由外向内**。此规则由 `RemoteDesktop.Architecture.UnitTests` 强制校验。
 
 * `Domain` (领域层) 不能引用任何其他层。
 * `Abstractions` (抽象端口) 只能引用 `Domain`。
-* `Platform.*` (平台实现) 和 `Media` (具体技术) **只能**依赖 `Abstractions`，绝不能直接引用其他实现或业务逻辑层。
+* `Platform.*` (平台实现) 和 `Media` (具体技术) **只能**依赖 `Abstractions` 与 `Domain`，绝不能直接引用其他实现或业务逻辑层。
 * `Features.*` (独立功能模块) 彼此之间禁止互相引用，它们通过 `Application` 层的统一接口交互。
 
 如果你引入了非法的依赖关系，`dotnet test` 将会失败。
+
+（上面几条与 `DependencyRuleTests` 里的禁止列表逐条对应。改成文档容易、改漏测试也容易，所以**以测试为准**：
+两者不一致时先怀疑文档。）
+
+## 🗂 仓库结构规则
+
+`tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 把下面几条变成了断言。以前它们只写在这份
+文档和 `build/README.md` 里，靠读到的人自觉——三轮目录结构评审每轮都能挑出新的违反，于是改成构建会红：
+
+| 规则 | 出处 |
+|---|---|
+| `tests/` 下的项目名一律 `<区域>.<种类>Tests`，且目录名 == `.csproj` 名 | §测试项目命名 |
+| `build/` 下每个目录名 == 它的 `.csproj` 名 | 同上 |
+| `.cs` 文件名要么是它声明的类型，要么是它分组的概念（此时必须声明 **两个以上** 类型） | 见下 |
+| `.sh` 用 kebab-case；`.ps1` 用 Verb-Noun，动词取自 PowerShell 的批准动词表 | `build/README.md` |
+| `build/installer/<平台>/<角色>/`、`build/service/<平台>/`，平台取 `windows`/`macos`/`linux` | `build/README.md` |
+
+第三条值得展开：一个文件承载"一个概念的接口族与它的 DTO"是允许的（`IAudio.cs` 里没有 `IAudio` 类型，
+但它是音频端口的整组契约），所以判据不是"文件名必须是类型名"，而是**"名字不是类型时，它必须是个分组"**。
+真正会被拦下的是只声明一个类型、名字却是另一个的单件文件。
+
+平台名的拼写也分三处，各有各的道理，别互相搬：**文件系统路径**用全小写（`build/installer/macos/`、
+`artifacts/installer/macos/`）；**C# 项目名与命名空间**用 PascalCase（`RemoteDesktop.Platform.MacOS`，
+因为 `MacOS` 在这里是 .NET 标识符的一部分）；**RID** 按 SDK 写（`osx-arm64`）；**散文**里写 Apple 的
+`macOS`。注意 `.app` bundle 里的 `Contents/MacOS/` 是 Apple 定的目录名，不是这里的拼写问题。
 
 ## 📝 提交规范
 

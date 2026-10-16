@@ -19,6 +19,6 @@
     <PackageReference Include="Vortice.MediaFoundation" />
   </ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.Tests" />
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.UnitTests" />
   </ItemGroup>
 </Project>

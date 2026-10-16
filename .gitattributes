@@ -1,0 +1,77 @@
+# Line endings and binary detection for the whole repository.
+#
+# Why this file exists. Every platform here reads files another platform wrote:
+# the .sh packaging scripts under build/ and native/ are run on Linux and macOS
+# out of the same checkout Windows uses, and the .ps1 / .wxs / .wixproj side is
+# the reverse. `core.autocrlf` is a per-machine setting and cannot express that
+# — a contributor with it turned off commits CRLF once and 13 `#!/bin/sh`
+# scripts start failing on Linux with "bad interpreter: /bin/sh^M". A
+# repository-level declaration applies to everyone, on every clone, with no
+# setup. The rules below are the contract; do not relax one to suit a local
+# editor.
+
+# Default: let git decide text vs binary, normalise to LF in the object store.
+* text=auto
+
+# --- Must keep LF on every platform ---------------------------------------
+# A CRLF in any of these is not a style question, it is a broken file: the
+# kernel reads the shebang line literally, and launchd / systemd / the XDG
+# desktop parser are no more forgiving. This also covers the WSL, Docker
+# bind-mount and copy-to-a-Linux-box workflows, where the checkout is read
+# directly by the other OS.
+*.sh                text eol=lf
+*.bash              text eol=lf
+Dockerfile*         text eol=lf
+
+# Debian control files and maintainer scripts carry no extension of their own,
+# so they have to be named individually. Same for the macOS package's postinstall,
+# which the kernel (or launchd) reads literally.
+#
+# The systemd environment file used to be named here too, as build/service/linux/default.
+# It is remotedesktop-server.default now -- named after the /etc/default/remotedesktop-server
+# it is installed as, rather than after the directory it happens to sit in -- so the glob
+# below covers it and anything else given the same shape.
+build/installer/linux/**/control                             text eol=lf
+build/installer/linux/**/postinst                            text eol=lf
+build/installer/linux/**/postrm                              text eol=lf
+build/installer/macos/server/scripts/postinstall             text eol=lf
+*.default                                                    text eol=lf
+
+*.plist             text eol=lf
+*.service           text eol=lf
+*.desktop           text eol=lf
+
+# Workflow files: their run: blocks are shell, and keeping them LF means the
+# file reads the same whichever OS a maintainer opens it on.
+*.yml               text eol=lf
+
+# --- Windows tooling and project files ------------------------------------
+# PowerShell accepts LF, but CRLF is what every Windows editor and the WiX
+# toolset produce; declaring it keeps a round trip through one of those from
+# showing up as a whole-file diff.
+*.ps1               text eol=crlf
+*.psm1              text eol=crlf
+*.cmd               text eol=crlf
+*.bat               text eol=crlf
+*.wxs               text eol=crlf
+*.wixproj           text eol=crlf
+*.slnx              text eol=crlf
+*.csproj            text eol=crlf
+*.props             text eol=crlf
+*.rtf               text eol=crlf
+
+# --- Binary assets ---------------------------------------------------------
+# Never diff, never convert. git would detect most of these on its own; saying
+# so keeps a future file that happens to look like text from being mangled.
+*.png               binary
+*.ico               binary
+*.icns              binary
+*.dylib             binary
+*.so                binary
+*.dll               binary
+*.exe               binary
+*.pdb               binary
+*.snk               binary
+*.pfx               binary
+*.nupkg             binary
+*.zip               binary
