@@ -361,7 +361,7 @@ jobs:
       # 三个 Linux 包在上一个 job 里打好，这里取回来。少了就什么都不发——和下面 MSI 一样的理由：只发出其中
       # 一部分，是发完才会被发现的那种错。
       - name: Download the Linux packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: linux-packages
           path: linux-packages
@@ -369,7 +369,7 @@ jobs:
       # 取回 build-macos 打好的 .pkg。用 artifact 而不是让 macOS job 自己上传 Release，是为了让"发版"只发生
       # 在这一处——否则 Windows 和 macOS 会各自尝试创建同一个 Release，谁先谁后不定。
       - name: Download the macOS installer
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: macos-installer
           path: macos-installer
