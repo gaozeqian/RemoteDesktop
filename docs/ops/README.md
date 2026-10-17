@@ -101,14 +101,18 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
 | `RENDEZVOUSURL` | `http://0.0.0.0:5080` | 信令监听的地址。给了证书会自动变成 `https://` |
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
-| `POSTGRESCONNECTIONSTRING` | `auto` | `auto` = 不用数据库 |
+| `DATABASEPROVIDER` | `auto` | 设备代码存在哪：`auto` / `none` / `postgres` / `sqlite`。`auto` = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库 |
+| `DATABASEPATH` | 空 | SQLite 文件。空 = `%ProgramData%\Remote Desktop Server\rendezvous.db` |
+| `POSTGRESCONNECTIONSTRING` | `auto` | PostgreSQL 连接串。`auto` 或空 = 不用 PostgreSQL，由 `DATABASEPROVIDER` 决定 |
 | `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
 
-三件必须知道的事：
+四件必须知道的事：
 
-- **安装包不装数据库。** 不填 `POSTGRESCONNECTIONSTRING` 时设备代码只存在内存里，**信令服务器一重启，
-  所有设备代码都会变**——被设成无人值守的机器会因此失联。长期使用请给它一个 PostgreSQL。
+- **安装包默认用 SQLite，装完就能用。** 不填连接串时设备代码存在本机的
+  `%ProgramData%\Remote Desktop Server\rendezvous.db`，重启、升级都不变。**这个文件要备份**：删掉它等于
+  所有设备码重发，无人值守的机器会因此失联；它也**只能放本地磁盘**，放网络共享上会损坏。
+  要回到内存模式（每次重启换码）用 `DATABASEPROVIDER=none`。
 - **中继装在另一台机器上时**，那把自动生成的密钥要抄过去：两边都传 `RELAYSHAREDKEY=<同一个值>`，
   或者把 `Rendezvous:RelaySharedKey` 的值填进那台的 `Relay\appsettings.json`。
 - **改了端口就要自己改防火墙规则**：三条规则是按 5080/5081/5082 开的，`RENDEZVOUSURL` 或中继端口改了
@@ -140,6 +144,8 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 | `RENDEZVOUSURL` | `--rendezvous-url` |
 | `RELAYPUBLICENDPOINT` | `--relay-endpoint` |
 | `RELAYSHAREDKEY` | `--relay-key` |
+| `DATABASEPROVIDER` | `--database` |
+| `DATABASEPATH` | `--database-path` |
 | `POSTGRESCONNECTIONSTRING` | `--postgres` |
 | `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `--tls-certificate` / `--tls-password` |
 | `NOFIREWALL` | 无对应项 —— macOS 没有"按端口加规则"这回事（见下） |
@@ -167,10 +173,11 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 
   ```powershell
   cd "C:\Program Files\Remote Desktop Server"
+  .\Set-ServerConfiguration.ps1 -DatabaseProvider sqlite
   .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
   .\Set-ServerConfiguration.ps1 -TlsGenerate            # 本机生成自签名证书并切 https
   .\Set-ServerConfiguration.ps1 -RelayPublicEndpoint 203.0.113.10:5082
-  .\Set-ServerConfiguration.ps1 -PostgresConnectionString '' -NoRestart   # 回到不用数据库，先不重启
+  .\Set-ServerConfiguration.ps1 -DatabaseProvider none -NoRestart   # 回到不用数据库，先不重启
   ```
 
   它会调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
@@ -179,6 +186,38 @@ curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活
 - 两个 `appsettings.json`（`Rendezvous\` 与 `Relay\`）—— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留。**注意它们在安装目录里，本机任何用户都能读**：
   带口令的连接串放这儿，等于本机所有用户都能看到。
+
+### 数据库怎么选
+
+设备代码（那 9 位数字）是无人值守访问的地址，它必须活过重启。两种存法：
+
+| | SQLite（默认） | PostgreSQL |
+|---|---|---|
+| 装之前要准备 | 什么都不用 | 一个库、一个账号 |
+| 适合 | 一台服务器 | 多台服务器，或已有备份与监控体系 |
+| 多实例 | **不行**：每个实例一个文件，同一台设备会拿到不同的码 | 可以，几个实例共用一个库 |
+| 备份 | 停服务后拷文件，或 `sqlite3 <db> ".backup out.db"` | `pg_dump` |
+| 换到另一种 | 设备码全部重发（除非按下面搬数据） | — |
+
+SQLite 文件的位置：Windows `%ProgramData%\Remote Desktop Server\rendezvous.db`、
+macOS `/usr/local/remotedesktop-server/var/rendezvous.db`、Linux `/var/lib/remotedesktop-server/rendezvous.db`。
+三件事要记住：
+
+- **只放本地磁盘。** SQLite 在网络共享（NFS/SMB）上会损坏，这不是配置问题。
+- **目录权限就是保护。** 目录是 0700 / 仅服务账号——能写这个文件的人可以改 `device_id`，等于能劫持设备码。
+- **它是唯一的一份数据。** 删掉文件、或挂载点没挂上，服务会建一个空库并继续跑：所有设备会在下一次连接时
+  拿到新码。`/health` 会因此变红（它查的是表在不在，不是连接通不通），但备份仍然只有你自己能做。
+
+从 PostgreSQL 换到 SQLite 会重发所有设备码，反过来也一样，除非先把行搬过去。`device_id` 必须原样搬——
+它就是那台设备的地址：
+
+```bash
+# 1. 先用 SQLite 启动一次，让服务把表建出来，然后停掉。
+# 2. 导出、导入。created_at / last_seen_at 是 TEXT，原样搬即可。
+psql "$PG" -c "\copy device_registrations TO 'devices.csv' CSV HEADER"
+sqlite3 rendezvous.db ".mode csv" ".import --skip 1 devices.csv device_registrations"
+# 3. 重启信令服务，curl http://127.0.0.1:5080/health 应为 Healthy。
+```
 
 ### 2. 手工构建
 
@@ -367,10 +406,13 @@ docker compose up -d --build
 - `RELAY_PUBLIC_ENDPOINT` 必须是客户端可达的地址。写成 `127.0.0.1:5082` 只有所有东西都在同一台机器上时才对。
 - 健康检查：`curl http://<服务器>:5080/health` 返回 `Healthy`；`docker compose ps` 里 rendezvous 会显示 `(healthy)`。
 - 停掉：`docker compose down`（加 `-v` 会连同数据库数据卷一起清掉，慎用）。
-- **设备代码持久化（PostgreSQL）**：Compose 默认启动 PostgreSQL 服务与独立数据卷（`postgres-data`）。
+- **设备代码持久化（PostgreSQL 或 SQLite）**：Compose 默认启动 PostgreSQL 服务与独立数据卷（`postgres-data`）。
   Rendezvous 会自动建立数据表，将设备证书指纹与 9 位设备代码的映射持久化在数据库中；
   即使服务重启、升级或重建容器，所有被控端的设备代码永久固定不变，完全保障无人值守长效可用。
-  如果本地开发不需要 PostgreSQL，留空 `Rendezvous:PostgresConnectionString` 会自动回退为纯内存模式。
+  如果本地开发不需要 PostgreSQL，留空 `Rendezvous__PostgresConnectionString` 会回退为纯内存模式。
+  单机部署也可以去掉 `postgres` 服务，改成 `Rendezvous__Database__Provider=sqlite` +
+  `Rendezvous__Database__Path=/data/rendezvous.db` 并给 `/data` 挂一个卷；但**不要**同时起两个 Rendezvous
+  容器——两个文件会给同一台设备发不同的码。
 
 ### 8. 防火墙
 
@@ -900,9 +942,9 @@ IRecentDevicesStore
 
 能这么接的前提正是"条目里没有密码"——同步层搬运 `RecentDeviceEntry` 这件事本身就不可能泄漏密码。
 
-**服务端**：PostgreSQL 已经在跑（Rendezvous 的 `PostgresDeviceRegistry`，裸 Npgsql + 启动时
-`EnsureSchemaAsync`，连接串为空则回退内存），设备代码与证书指纹的映射已经持久化在
-`device_registrations` 里，新表直接引用它的 `device_id`：
+**服务端**：设备代码已经持久化（Rendezvous 经 `RemoteDesktop.Server.Storage`，裸 SQL + 启动时
+`EnsureSchemaAsync`；按 `Rendezvous:Database:Provider` 选 PostgreSQL 或 SQLite，没配则回退内存），
+映射在 `device_registrations` 里，新表直接引用它的 `device_id`：
 
 ```sql
 CREATE TABLE IF NOT EXISTS account_devices (
@@ -916,7 +958,7 @@ CREATE TABLE IF NOT EXISTS account_devices (
 );
 ```
 
-沿用既有的写法（裸 SQL、启动建表、`Rendezvous:PostgresConnectionString` 配置），不要为这一张表引入 EF Core。
+沿用既有的写法（裸 SQL、启动建表、`Rendezvous:Database` 配置），不要为这一张表引入 EF Core。
 
 两点别低估：
 

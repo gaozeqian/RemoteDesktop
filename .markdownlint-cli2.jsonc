@@ -35,6 +35,7 @@
     "artifacts/**",
     "TestResults/**",
     ".workbuddy/**",
+    ".workbuddy-ai/**",
     "node_modules/**",
     "**/bin/**",
     "**/obj/**",

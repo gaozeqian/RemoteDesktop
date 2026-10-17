@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Storage\RemoteDesktop.Server.Storage.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests build registries by hand, which means passing a logger and, for the WAL assertion, opening the
+         database file directly. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
+using RemoteDesktop.Server.Storage;
 
 namespace RemoteDesktop.Server.Rendezvous;
 
@@ -14,26 +15,31 @@ public static class RendezvousServer
 
     public static IServiceCollection AddRendezvous(this IServiceCollection services, IConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
         services.AddOptions<RendezvousOptions>()
             .Bind(configuration.GetSection(RendezvousOptions.SectionName))
             .Validate(options => { options.Validate(); return true; }, "Rendezvous settings are not usable.")
             .ValidateOnStart();
         services.AddSingleton(TimeProvider.System);
 
-        services.AddSingleton<IDeviceRegistry>(sp =>
+        // Where device ids are kept. Resolved and checked here rather than in the options validator because the
+        // legacy fallback (ConnectionStrings:Postgres) lives in configuration rather than in the bound section —
+        // and resolving it here still stops a misconfigured deployment at start-up, which is what the validator is
+        // for. The bound section is read twice; that is the same thing the previous version did for one key.
+        var options = configuration.GetSection(RendezvousOptions.SectionName).Get<RendezvousOptions>() ?? new RendezvousOptions();
+        var database = DatabaseSettings.Resolve(options.Database, LegacyConnectionString(options, configuration));
+        database.Validate();
+        services.AddDeviceRegistry(database);
+
+        // A store is a database, and a database has a schema to create and a connection to watch. A registry that
+        // is not a store — the in-memory one — has neither, so this is the whole condition.
+        var persistent = database.Provider != DatabaseSettings.None;
+        if (persistent)
         {
-            var connectionString = PostgresConnectionString(configuration);
-            if (connectionString is not null)
-            {
-                var logger = sp.GetRequiredService<ILogger<PostgresDeviceRegistry>>();
-                return new PostgresDeviceRegistry(connectionString, logger);
-            }
-
-            return new InMemoryDeviceRegistry();
-        });
-
-        // If Postgres is in use, initialize the schema on startup.
-        services.AddHostedService<PostgresSchemaInitializer>();
+            services.AddHostedService<DeviceRegistryInitializer>();
+        }
 
         // The counters exist whether or not the endpoint is served: the paths that count never ask whether anyone is
         // reading, and an increment nobody scrapes is cheaper than a branch around it.
@@ -58,29 +64,18 @@ public static class RendezvousServer
         services.AddSingleton<SignalingEndpoint>();
         services.AddSingleton<AddressReflector>();
         services.AddHostedService(sp => sp.GetRequiredService<AddressReflector>());
+
         // /health answers for the whole service, the device registry included: a rendezvous that cannot reach its
         // database cannot hand out the device id it already promised, so calling it healthy would be a lie that
-        // monitoring believes. Reaching into the registry's own store is the only way to know.
+        // monitoring believes. Asking the registered store is the only way to know — and the only way that cannot
+        // disagree with the registry about which database it is.
         var health = services.AddHealthChecks();
-        if (IsPostgres(configuration))
+        if (persistent)
         {
-            health.AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"]);
+            health.AddCheck<DeviceRegistryHealthCheck>("database", tags: ["ready"]);
         }
 
         return services;
-    }
-
-    private sealed class PostgresSchemaInitializer(IDeviceRegistry registry) : IHostedService
-    {
-        public async Task StartAsync(CancellationToken cancellationToken)
-        {
-            if (registry is PostgresDeviceRegistry postgres)
-            {
-                await postgres.EnsureSchemaAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     public static WebApplication MapRendezvous(this WebApplication app)
@@ -104,16 +99,17 @@ public static class RendezvousServer
         return app;
     }
 
-    /// <summary>The registry's connection string, or <c>null</c> when ids are kept in memory only.</summary>
-    private static string? PostgresConnectionString(IConfiguration configuration)
-    {
-        var configured = configuration.GetSection(RendezvousOptions.SectionName).Get<RendezvousOptions>()?.PostgresConnectionString
-            ?? configuration.GetConnectionString("Postgres");
-
-        return string.IsNullOrWhiteSpace(configured) ? null : configured;
-    }
-
-    private static bool IsPostgres(IConfiguration configuration) => PostgresConnectionString(configuration) is not null;
+    /// <summary>
+    /// The connection string earlier versions were configured with, or <c>null</c> when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Two keys, in the order they were introduced. They still mean "use PostgreSQL": a deployment that has one and
+    /// upgrades must keep every device code it has handed out, so this fallback outlives the settings that name it.
+    /// </remarks>
+    private static string? LegacyConnectionString(RendezvousOptions options, IConfiguration configuration) =>
+        string.IsNullOrWhiteSpace(options.PostgresConnectionString)
+            ? configuration.GetConnectionString("Postgres")
+            : options.PostgresConnectionString;
 
     /// <summary>
     /// The addresses the per-address limits are counted against. Behind a reverse proxy the socket address is the

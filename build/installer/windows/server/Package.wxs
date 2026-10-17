@@ -68,10 +68,20 @@
          base64), both servers are set to it. -->
     <Property Id="RELAYSHAREDKEY" Value="auto" Secure="yes" />
 
-    <!-- Where device codes are kept. "auto" (the default) means no database at all: codes live in memory and every
-         device gets a new one whenever the server restarts. A PostgreSQL connection string keeps them across restarts
-         and across a second server behind a load balancer, and is the right answer for anything long-lived:
-         msiexec /i <msi> POSTGRESCONNECTIONSTRING="Host=db;Database=remotedesktop;Username=...;Password=..." -->
+    <!-- Where device codes are kept. "auto" (the default) means "decide for this machine": PostgreSQL when this
+         machine already has a connection string, and otherwise a SQLite database of its own. Without either, codes
+         live in memory and every device gets a new one whenever the server restarts. Explicit values are none,
+         postgres and sqlite:
+         msiexec /i <msi> DATABASEPROVIDER=postgres POSTGRESCONNECTIONSTRING="Host=db;Database=remotedesktop;Username=...;Password=..." -->
+    <Property Id="DATABASEPROVIDER" Value="auto" Secure="yes" />
+
+    <!-- The SQLite file. Empty means the platform default, %ProgramData%\Remote Desktop Server\rendezvous.db, which
+         is what almost every installation wants; set it to put the file somewhere with more room, or on a disk that
+         is backed up. It has to be a local disk: SQLite corrupts on a network share. -->
+    <Property Id="DATABASEPATH" Value="" Secure="yes" />
+
+    <!-- PostgreSQL connection string, for a deployment that has a database server. "auto" and empty both mean "not
+         this one", and then DATABASEPROVIDER decides; a value here means PostgreSQL whatever that property says. -->
     <Property Id="POSTGRESCONNECTIONSTRING" Value="auto" Secure="yes" />
 
     <!-- A .pfx the signaling server should serve TLS with. "auto" (the default) means no certificate and plain http,

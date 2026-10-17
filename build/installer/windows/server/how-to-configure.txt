@@ -11,12 +11,16 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 在**管理员** PowerShell 里：
 
     cd "C:\Program Files\Remote Desktop Server"
+    .\Set-ServerConfiguration.ps1 -DatabaseProvider sqlite
     .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 
 它会做两件事：把设置写进两个 appsettings.json，然后重启两个服务让它们生效。
 只给想改的项就行，没给的保持不动。可用的项：
 
-    -PostgresConnectionString   PostgreSQL 连接串；传空字符串回到"不用数据库"
+    -DatabaseProvider           设备代码存在哪：auto / none / postgres / sqlite。
+                                auto（安装包的默认值）= 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库
+    -DatabasePath               SQLite 文件路径；不给就用 %ProgramData%\Remote Desktop Server\rendezvous.db
+    -PostgresConnectionString   PostgreSQL 连接串；传空字符串表示不再用 PostgreSQL
     -RelayPublicEndpoint        让客户端去哪里找中继，IP:端口
     -RendezvousUrl              信令自己绑定的地址，如 https://0.0.0.0:5080
     -RelaySharedKey             中继票据的签名密钥（中继在另一台机器上时两边必须一致）
@@ -33,8 +37,10 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 二、两个必须知道的默认值
 ------------------------
 
-1. 不配数据库时，设备代码只存在内存里 —— 信令服务一重启，所有设备代码都会变，
-   被设成无人值守的机器会因此失联。长期使用请给它一个 PostgreSQL。
+1. 设备代码默认存在本机的一个 SQLite 文件里（%ProgramData%\Remote Desktop Server\rendezvous.db），
+   重启后不变。只有明确用 -DatabaseProvider none 才回到内存模式 —— 那种情况下信令服务一重启，
+   所有设备代码都会变，被设成无人值守的机器会因此失联。
+   **这个文件要备份**：删掉它等于所有设备码重发。它只支持本地磁盘，放在网络共享上会损坏。
 
 2. 不配证书时信令走明文 http —— 设备代码、谁在连谁、以及中继票据都在明文里。
    用 -TlsGenerate 一条命令就能切到 https；生成的证书在本机证书存储里，

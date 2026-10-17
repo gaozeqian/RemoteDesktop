@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Google.Protobuf;
+using RemoteDesktop.Server.Storage;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 

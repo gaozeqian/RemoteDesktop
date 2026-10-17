@@ -90,7 +90,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
   创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有
   Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
 * **`RemoteDesktop.Server.*`**: 包含 Rendezvous（信令协调）和 Relay（流量中继）服务器。
-  可以部署在 Linux/Docker 上。
+  可以部署在 Linux/Docker 上。Rendezvous 还引用 `RemoteDesktop.Server.Storage`（见下）。
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的
@@ -103,6 +103,38 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
   的权限执行，而非服务宿主 (System)。
 * **模块级隔离**：在握手与 `AccessGrant` 分发时，各子 Feature (如剪贴板、文件) 是按需授权的；
   一旦控制端被降级为"观看模式"，相关的上行通信 Channel 会被立即熔断。
+
+### 服务端持久化 (Storage)
+
+信令服务器唯一需要活过重启的状态，是**设备证书指纹 → 9 位设备代码**的映射。它落在一个表
+`device_registrations` 里，其余状态（在线状态、配额、限流、会话、指标）全在内存。
+
+```text
+Rendezvous ──▶ Storage ──▶ Npgsql
+（宿主：DI、健康检查、生命周期）  （端口、算法、方言、配置）  └─▶ Microsoft.Data.Sqlite
+```
+
+* **两个端口。** `IDeviceRegistry` 是"指纹换设备码"；`IDeviceRegistryStore` 在它之上加"建表"和"探活"。
+  内存实现**不**实现后者——于是宿主判断"要不要建表、要不要挂健康检查"的方式是"这个服务注册了没有"，
+  而不是 `is PostgresDeviceRegistry` 这样的类型嗅探。
+* **一份算法，每种数据库一个方言。** 缓存、随机九位数、撞车重试、"这次调用是不是它给了设备码"都在
+  `RelationalDeviceRegistry` 里；方言只提供四句 SQL、唯一冲突的判定、以及是否需要串行写
+  （SQLite 只有一个写者）。插入用 `INSERT … ON CONFLICT (fingerprint) DO NOTHING` 加受影响行数，
+  而不是 `RETURNING` 猜 id——MySQL 没有 `RETURNING`，这个形状才搬得过去；时间戳由 .NET 传参，
+  方言里就没有 `NOW()` 与 `datetime('now')` 的差别。
+* **加一种数据库要动五处**：`Directory.Packages.props` 加包、Storage 的 csproj 加引用、写一个
+  `XxxDeviceRegistry.cs`（子类 + 内嵌方言，约 120 行）、`DeviceRegistryRegistration` 的 switch 加一支、
+  契约测试加一个派生类。宿主与端口都不用动。
+* **配置是显式的**：`Rendezvous:Database:{Provider,ConnectionString,Path}`，`Provider` 取
+  `none` / `postgres` / `sqlite`。旧的 `Rendezvous:PostgresConnectionString` 与
+  `ConnectionStrings:Postgres` 仍然生效且含义不变——它们是已装机器的配置，读它们就是升级不换设备码。
+* **不引入 EF Core**：一张表、没有跨表事务、也没有迁移需求（建表在启动时做，`IF NOT EXISTS`）。
+  表数量上到五张、或需要跨表事务时，这笔账要重算。
+
+SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串行化（它只允许一个写者）、
+`CHECK (device_id BETWEEN …)`（SQLite 按值定类型，没有约束就会把文本存进数字列）。
+`/health` 探的是"表在不在"，不是"连接通不通"——SQLite 打开一个不存在的文件会**新建空库**，
+只问连接的话，一个刚丢光设备码的服务器会回答 Healthy。
 
 ## 2. 通信协议
 

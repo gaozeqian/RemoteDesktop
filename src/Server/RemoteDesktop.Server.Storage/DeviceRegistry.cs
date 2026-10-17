@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 
-namespace RemoteDesktop.Server.Rendezvous;
+namespace RemoteDesktop.Server.Storage;
 
 /// <param name="DeviceId">The stable id belonging to the fingerprint.</param>
 /// <param name="Created">
@@ -18,9 +18,13 @@ public interface IDeviceRegistry
 }
 
 /// <summary>
-/// Process-local registry: ids survive reconnects but not a server restart. Used in tests and local development.
-/// In production, <see cref="PostgresDeviceRegistry"/> persists device ids across server restarts.
+/// Process-local registry: ids survive reconnects but not a server restart. Used in tests and local development, and
+/// when no database is configured. <see cref="RelationalDeviceRegistry"/> persists them across restarts.
 /// </summary>
+/// <remarks>
+/// Deliberately not an <see cref="IDeviceRegistryStore"/>: there is no schema to create and nothing to probe, and the
+/// host reads that absence as "do not start an initializer, do not add a health check".
+/// </remarks>
 public sealed class InMemoryDeviceRegistry : IDeviceRegistry
 {
     private readonly ConcurrentDictionary<string, uint> _byFingerprint = new(StringComparer.Ordinal);

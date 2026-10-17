@@ -60,7 +60,7 @@ public class DocumentationTests
     /// space (gitignored), and bin/obj hold whatever an exception to ArtifactsPath left behind.
     /// </summary>
     private static readonly string[] ExcludedDirectories =
-        ["artifacts", "TestResults", ".git", ".workbuddy", "node_modules", "bin", "obj"];
+        ["artifacts", "TestResults", ".git", ".workbuddy", ".workbuddy-ai", "node_modules", "bin", "obj"];
 
     [Fact]
     public void Required_documents_exist()

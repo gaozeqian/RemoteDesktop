@@ -10,8 +10,9 @@
   --configure-system), so the two cannot drift apart, and what it did is appended to server-setup.log in this folder.
 
 .EXAMPLE
-  # Point the servers at a database (the one setting whose default has the worst consequence: without it device codes
-  # only live in memory and change on every restart).
+  # Keep device codes across restarts, which is the one setting whose default has the worst consequence: without it
+  # they live in memory and change on every restart, and unattended machines stop being reachable.
+  .\Set-ServerConfiguration.ps1 -DatabaseProvider sqlite
   .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 
 .EXAMPLE
@@ -34,7 +35,15 @@ param(
     # first address of this machine that is not loopback, which picks a VPN adapter when there is one).
     [string]$RelayPublicEndpoint,
 
-    # PostgreSQL connection string. Pass an empty string to go back to the in-memory registry.
+    # Where device codes are kept: auto, none, postgres or sqlite. "auto" keeps the PostgreSQL this machine already
+    # has and otherwise starts a SQLite database of its own. Omit to leave it as it is.
+    [string]$DatabaseProvider,
+
+    # The SQLite file, when the provider is sqlite. Omit for the default under %ProgramData%\Remote Desktop Server.
+    [string]$DatabasePath,
+
+    # PostgreSQL connection string. Pass an empty string to stop using PostgreSQL; a value here means PostgreSQL
+    # whatever -DatabaseProvider says.
     [string]$PostgresConnectionString,
 
     # The signing key relay tickets are protected with. Only for a relay that runs elsewhere: both machines need the
@@ -73,6 +82,8 @@ if ($TlsGenerate -and $TlsCertificatePath) {
 $arguments = @('--configure-system', '--install-directory', $installDirectory)
 if ($PSBoundParameters.ContainsKey('RendezvousUrl')) { $arguments += @('--urls', $RendezvousUrl) }
 if ($PSBoundParameters.ContainsKey('RelayPublicEndpoint')) { $arguments += @('--relay-endpoint', $RelayPublicEndpoint) }
+if ($PSBoundParameters.ContainsKey('DatabaseProvider')) { $arguments += @('--database', $DatabaseProvider) }
+if ($PSBoundParameters.ContainsKey('DatabasePath')) { $arguments += @('--database-path', $DatabasePath) }
 if ($PSBoundParameters.ContainsKey('PostgresConnectionString')) { $arguments += @('--postgres', $PostgresConnectionString) }
 if ($PSBoundParameters.ContainsKey('RelaySharedKey')) { $arguments += @('--relay-key', $RelaySharedKey) }
 if ($TlsGenerate) { $arguments += @('--tls-certificate', 'generate') }
@@ -80,7 +91,7 @@ if ($PSBoundParameters.ContainsKey('TlsCertificatePath')) { $arguments += @('--t
 if ($PSBoundParameters.ContainsKey('TlsCertificatePassword')) { $arguments += @('--tls-password', $TlsCertificatePassword) }
 
 if ($arguments.Count -le 3) {
-    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsGenerate.'
+    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -DatabaseProvider, -DatabasePath, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsGenerate.'
 }
 
 $target = $arguments -join ' '

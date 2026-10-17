@@ -151,7 +151,7 @@
     -->
     <CustomAction Id="ConfigureSystem"
                   Directory="SystemFolder"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system --urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;&quot;"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system --urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --database &quot;[DATABASEPROVIDER]&quot; --database-path &quot;[DATABASEPATH]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
 
     <!--
@@ -170,7 +170,7 @@
     -->
     <CustomAction Id="SetConfigureArguments"
                   Property="CONFIGUREARGUMENTS"
-                  Value="--urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;"
+                  Value="--urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --database &quot;[DATABASEPROVIDER]&quot; --database-path &quot;[DATABASEPATH]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;"
                   Execute="immediate" />
 
     <!--
@@ -276,14 +276,13 @@
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
       <Control Id="BottomLine" Type="Line" X="0" Y="328" Width="370" Height="0" />
 
-      <!-- The database: optional, but leaving it out is the single most consequential default in this package.
-
-           The box arrives filled with a template pointing at this machine, because a connection string is a shape
-           nobody remembers and an empty box teaches nothing. That is only safe because of the check below: whatever
-           is in this box is tried before anything is installed, and the install stops if it does not answer. -->
-      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="数据库连接串（仅支持 PostgreSQL；留空 = 不使用数据库）" />
+      <!-- The database. This box is for the advanced case — a PostgreSQL server that already exists — and it arrives
+           empty on purpose: an empty box means "decide for this machine", which now starts a SQLite database in
+           %ProgramData% and keeps every device code across restarts. It used to arrive holding a template pointing at
+           a PostgreSQL on this machine, which only made sense while the alternative was no database at all. -->
+      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="PostgreSQL 连接串（留空 = 用本机 SQLite，自动创建）" />
       <Control Id="PostgresEdit" Type="Edit" X="20" Y="64" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" />
-      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="会自建表，不会自建库：库要先建好。留空则设备代码只在内存里，服务重启后全部改变。" />
+      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="填了就用 PostgreSQL（库要先建好，只建表）。留空则用 SQLite：文件在本机数据目录，重启后设备码不变。" />
 
       <!-- Where clients are told to reach the relay. "auto" picks this machine's first non-loopback address, which on
            a machine with a VPN is the VPN's. -->

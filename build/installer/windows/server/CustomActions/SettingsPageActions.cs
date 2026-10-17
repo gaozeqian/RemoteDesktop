@@ -148,13 +148,15 @@ public static class SettingsPageActions
     private static extern nint GetForegroundWindow();
 
     /// <summary>
-    /// Fills in the two addresses that this machine already knows, before the settings page is shown.
+    /// Fills in the address that this machine already knows, before the settings page is shown.
     /// </summary>
     /// <remarks>
-    /// A connection string and an address are shapes nobody types correctly from memory, and an empty box next to a
-    /// warning teaches nothing — so the box arrives holding the answer for this machine, which the person installing
-    /// can then correct. It is only the starting point: whatever is left there is what the servers are configured with,
-    /// and the database is tried before anything is installed.
+    /// An address is a shape nobody types correctly from memory, and an empty box next to a warning teaches nothing —
+    /// so the box arrives holding the answer for this machine, which the person installing can then correct.
+    ///
+    /// The database box is deliberately left empty. Empty means "decide for this machine", which starts a SQLite
+    /// database in the local data folder; filling in a PostgreSQL template here would point almost every installation
+    /// at a database server that is not there.
     /// </remarks>
     [CustomAction]
     public static ActionResult PrefillSettings(Session session) => Run(session, () => Prefill(session));
@@ -170,11 +172,10 @@ public static class SettingsPageActions
 
         if (IsUnset(session["POSTGRESCONNECTIONSTRING"]))
         {
-            // The same shape the page used to describe in a note, now filled in: nothing about it is specific to this
-            // machine except that the database is expected to be on it, which is the common case and the one worth
-            // spelling out. The password is the one a fresh local PostgreSQL is set up with, so the whole string can be
-            // accepted as it stands on the machine most people are installing onto.
-            session["POSTGRESCONNECTIONSTRING"] = $"Host=127.0.0.1;Port=5432;Database=remotedesktop;Username=postgres;Password=postgres";
+            // Not a space: an empty box here means "decide for this machine", and the configuration step reads the
+            // word the package ships as exactly that. A space would reach it as an empty string, which means "no
+            // database at all" — the one reading that would lose every device code on the next restart.
+            session["POSTGRESCONNECTIONSTRING"] = "auto";
         }
 
         return ActionResult.Success;
@@ -193,9 +194,13 @@ public static class SettingsPageActions
     /// box whose way of saying "no password" is a space; the cost is that a password that genuinely begins or ends with
     /// one cannot be given here.
     ///
-    /// The other three boxes are put back to a space when they are left empty. Not cosmetic: a box the user clears has
-    /// its property removed, and if they then go back a page and return, the control is built again against a property
+    /// The other boxes are put back to a value when they are left empty. Not cosmetic: a box the user clears has its
+    /// property removed, and if they then go back a page and return, the control is built again against a property
     /// that is no longer there and comes out greyed — with no way left to type the value back in.
+    ///
+    /// The database box gets the word the package ships rather than a space, because empty has a meaning of its own
+    /// there: "decide for this machine", which is a SQLite database. A space would reach the configuration step as an
+    /// empty string, and an empty connection string means "no database at all" — every device code lost on restart.
     /// </remarks>
     [CustomAction]
     public static ActionResult NormalizeSettings(Session session) => Run(session, () => Normalize(session));
@@ -205,12 +210,17 @@ public static class SettingsPageActions
         var password = (session["TLSCERTIFICATEPASSWORD"] ?? string.Empty).Trim();
         session["TLSCERTIFICATEPASSWORD"] = password.Length == 0 ? Space : password;
 
-        foreach (var name in new[] { "TLSCERTIFICATEFILE", "POSTGRESCONNECTIONSTRING", "RELAYPUBLICENDPOINT" })
+        foreach (var name in new[] { "TLSCERTIFICATEFILE", "RELAYPUBLICENDPOINT" })
         {
             if (string.IsNullOrWhiteSpace(session[name]))
             {
                 session[name] = Space;
             }
+        }
+
+        if (string.IsNullOrWhiteSpace(session["POSTGRESCONNECTIONSTRING"]))
+        {
+            session["POSTGRESCONNECTIONSTRING"] = "auto";
         }
 
         return ActionResult.Success;

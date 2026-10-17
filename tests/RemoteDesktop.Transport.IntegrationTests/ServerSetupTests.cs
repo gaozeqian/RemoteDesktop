@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Rendezvous;
 using RemoteDesktop.Server.Shared;
+using RemoteDesktop.Server.Storage;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -142,15 +143,102 @@ public sealed class ServerSetupTests : IDisposable
     }
 
     /// <summary>
+    /// Nothing said about the database means nothing changed. The installers pass only what somebody filled in, and
+    /// this is also the step used months later to fix an address or rotate a certificate — reading "not given" as
+    /// "clear it" would drop the connection string, and every device code with it, on an installation that only meant
+    /// to change something else.
+    /// </summary>
+    [Fact]
+    public void Nothing_said_about_the_database_leaves_it_alone()
+    {
+        const string ConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x";
+        ServerSetup.Configure(_folder, new ServerSetupOptions { PostgresConnectionString = ConnectionString });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5081" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.Postgres, rendezvous.Database.Provider);
+        Assert.Equal(ConnectionString, rendezvous.Database.ConnectionString);
+        Assert.Equal(ConnectionString, rendezvous.PostgresConnectionString); // what an older server reads
+    }
+
+    /// <summary>
     /// Without a database the device codes live in memory, which means every restart hands out different ones — the
     /// machines that were set up to be reached without anybody present stop being reachable. Worth saying out loud.
     /// </summary>
     [Fact]
     public void Having_no_database_is_said_out_loud()
     {
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "none" });
 
-        Assert.Empty(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).PostgresConnectionString!);
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.None, rendezvous.Database.Provider);
+        Assert.Contains(notes, note => note.Contains("memory only", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// <c>auto</c> is what the packages ship: keep the database this machine already has, so that upgrading or
+    /// re-running the step never changes which one the server uses.
+    /// </summary>
+    [Fact]
+    public void Auto_keeps_postgres_when_the_machine_already_has_one()
+    {
+        const string ConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x";
+        ServerSetup.Configure(_folder, new ServerSetupOptions { PostgresConnectionString = ConnectionString });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "auto" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.Postgres, rendezvous.Database.Provider);
+        Assert.Equal(ConnectionString, rendezvous.Database.ConnectionString);
+    }
+
+    /// <summary>And starts one when the machine has none — which is the case a single-machine installation is in.</summary>
+    [Fact]
+    public void Auto_starts_sqlite_when_the_machine_has_no_database()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "auto" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.Sqlite, rendezvous.Database.Provider);
+        Assert.False(string.IsNullOrWhiteSpace(rendezvous.Database.Path));
+        Assert.EndsWith(".db", rendezvous.Database.Path, StringComparison.Ordinal);
+        Assert.Contains(notes, note => note.Contains("SQLite", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_sqlite_file_the_installer_names_is_the_one_written()
+    {
+        var path = Path.Combine(_folder, "data", "rendezvous.db");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite", DatabasePath = path });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.Sqlite, rendezvous.Database.Provider);
+        Assert.Equal(path, rendezvous.Database.Path);
+        Assert.Null(rendezvous.PostgresConnectionString);
+    }
+
+    /// <summary>
+    /// An empty connection string is how the installers have always said "no database", and it has to keep meaning
+    /// that: a deployment that deliberately runs without one must not be given a file to lose instead.
+    /// </summary>
+    [Fact]
+    public void An_empty_connection_string_still_means_no_database()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { PostgresConnectionString = "" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.None, rendezvous.Database.Provider);
+    }
+
+    [Fact]
+    public void An_unknown_database_provider_is_refused_before_anything_is_written()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "mysql" }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
     }
 
     [Fact]

@@ -1,3 +1,5 @@
+using RemoteDesktop.Server.Storage;
+
 namespace RemoteDesktop.Server.Rendezvous;
 
 public sealed class RendezvousOptions
@@ -18,7 +20,18 @@ public sealed class RendezvousOptions
 
     public TimeSpan RelayTicketLifetime { get; set; } = TimeSpan.FromMinutes(2);
 
-    /// <summary>Optional PostgreSQL connection string. When provided, device ids are persisted across restarts.</summary>
+    /// <summary>
+    /// Where device ids are kept: none (memory), PostgreSQL or SQLite. The provider is explicit; when this section
+    /// says nothing, <see cref="PostgresConnectionString"/> and <c>ConnectionStrings:Postgres</c> are still read, so
+    /// an existing deployment keeps working without touching its settings.
+    /// </summary>
+    public DatabaseSettings Database { get; set; } = new();
+
+    /// <summary>
+    /// PostgreSQL connection string, as earlier versions spelled it. Superseded by
+    /// <c>Rendezvous:Database:ConnectionString</c>; still honoured, because it is what every installed deployment has
+    /// in its settings file and what every installer writes unless told otherwise.
+    /// </summary>
     public string? PostgresConnectionString { get; set; }
 
     /// <summary>

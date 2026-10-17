@@ -33,11 +33,27 @@ RD_RELAY_ENDPOINT="auto"
 #     openssl rand -base64 48
 RD_RELAY_KEY="auto"
 
-# PostgreSQL connection string, or empty for none.
+# Where device codes are kept.
+#
+#   auto      keep the PostgreSQL this machine already has, and otherwise start a
+#             SQLite database in /var/lib/remotedesktop-server (the default)
+#   sqlite    always SQLite
+#   postgres  always PostgreSQL; RD_POSTGRES below has to hold a connection string
+#   none      memory only — every device gets a different code each time the
+#             server restarts, which breaks unattended access
 #
 # With a database the device codes survive a restart, which is what makes a
-# machine reachable without anybody present. Without one the codes live in memory
-# and every device gets a different code each time the server restarts.
+# machine reachable without anybody present.
+RD_DATABASE="auto"
+
+# The SQLite file. Empty means /var/lib/remotedesktop-server/rendezvous.db.
+#
+# It has to be on a local disk: SQLite corrupts on a network share. Back it up —
+# losing it gives every device a new code.
+RD_DATABASE_PATH=""
+
+# PostgreSQL connection string, or empty for none. A value here means PostgreSQL
+# whatever RD_DATABASE says.
 #
 # The database itself has to exist already; the server creates its table but not
 # the database.

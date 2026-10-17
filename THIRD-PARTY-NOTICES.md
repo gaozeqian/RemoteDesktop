@@ -1,7 +1,7 @@
 # 第三方组件声明
 
 本产品使用以下开源组件。它们按各自的许可条款提供，版权归各自的作者所有（许可证全文见各组件的项目主页）。
-列表取自三个随安装包发布的程序的依赖闭包，因此也包含只在构建时用到的包。
+列表取自随安装包发布的程序的依赖闭包（客户端、被控端、信令服务器、中继服务器），因此也包含只在构建时用到的包。
 
 本文件由 `build/tools/Export-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
 依赖变化后（例如 Dependabot 升级了某个包）重新运行一次：
@@ -33,6 +33,8 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | HarfBuzzSharp.NativeAssets.WebAssembly | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | HarfBuzzSharp.NativeAssets.Win32 | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | MicroCom.Runtime | 0.11.6 | MIT | https://www.nuget.org/packages/MicroCom.Runtime |
+| Microsoft.Data.Sqlite | 10.0.13 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
+| Microsoft.Data.Sqlite.Core | 10.0.13 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
 | Microsoft.Extensions.Configuration | 10.0.12 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.12 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Configuration.Binder | 10.0.12 | MIT | https://dot.net/ |
@@ -61,6 +63,7 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | Microsoft.Extensions.Primitives | 10.0.12 | MIT | https://dot.net/ |
 | NAudio.Core | 3.1.0 | MIT | https://naudio.github.io/NAudio/ |
 | NAudio.Wasapi | 3.1.0 | MIT | https://naudio.github.io/NAudio/ |
+| Npgsql | 10.0.3 | PostgreSQL | https://github.com/npgsql/npgsql |
 | Serilog | 4.3.0 | Apache-2.0 | https://serilog.net/ |
 | Serilog.Extensions.Logging | 10.0.0 | Apache-2.0 | https://github.com/serilog/serilog-extensions-logging |
 | SharpGen.Runtime | 2.4.2-beta | MIT | https://github.com/SharpGenTools/SharpGenTools |
@@ -70,10 +73,15 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | SkiaSharp.NativeAssets.macOS | 3.119.4 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | SkiaSharp.NativeAssets.WebAssembly | 3.119.4 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | SkiaSharp.NativeAssets.Win32 | 3.119.4 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
+| SQLitePCLRaw.bundle_e_sqlite3 | 2.1.13 | Apache-2.0 | https://www.nuget.org/packages/SQLitePCLRaw.bundle_e_sqlite3 |
+| SQLitePCLRaw.core | 2.1.13 | Apache-2.0 | https://www.nuget.org/packages/SQLitePCLRaw.core |
+| SQLitePCLRaw.lib.e_sqlite3 | 2.1.13 | Apache-2.0 | https://www.nuget.org/packages/SQLitePCLRaw.lib.e_sqlite3 |
+| SQLitePCLRaw.provider.e_sqlite3 | 2.1.13 | Apache-2.0 | https://www.nuget.org/packages/SQLitePCLRaw.provider.e_sqlite3 |
 | System.Diagnostics.EventLog | 10.0.12 | MIT | https://dot.net/ |
 | System.IO.Hashing | 10.0.12 | MIT | https://dot.net/ |
 | System.Numerics.Tensors | 9.0.0 | MIT | https://dot.net/ |
 | System.Security.Cryptography.ProtectedData | 10.0.12 | MIT | https://dot.net/ |
+| System.ServiceProcess.ServiceController | 10.0.12 | MIT | https://dot.net/ |
 | Tmds.DBus.Protocol | 0.95.1 | MIT | https://www.nuget.org/packages/Tmds.DBus.Protocol |
 | Vortice.Direct3D11 | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.Direct3D11 |
 | Vortice.DirectX | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.DirectX |

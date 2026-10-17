@@ -135,13 +135,33 @@ function Test-RendezvousUri([string]$Uri, [string]$Where) {
     }
 }
 
-function Test-Database([string]$ConnectionString, [string]$Where) {
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+function Test-Database([string]$Provider, [string]$ConnectionString, [string]$Path, [string]$Where) {
+    # 没有 provider、或者 provider 是 none：设备代码只在内存里。这是最容易被当成"配好了"的一处。
+    if ([string]::IsNullOrWhiteSpace($Provider) -or $Provider -eq 'none') {
         Add-Finding "$Where 没有数据库：设备代码只存在内存里，服务器一重启所有设备代码都会变，无人值守的机器会失联。"
+        return
     }
-    else {
-        Add-Ok "$Where 配置了数据库。"
+
+    if ($Provider -eq 'sqlite') {
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            Add-Finding "$Where 配的是 SQLite 但没写文件路径（Rendezvous:Database:Path），服务器起不来。"
+        }
+        elseif (-not (Test-Path -LiteralPath $Path)) {
+            Add-Finding "$Where 配的 SQLite 文件 $Path 还不存在：第一次启动会创建它，但如果服务账号写不了那个目录，服务器就起不来。"
+        }
+        else {
+            Add-Ok "$Where 用 SQLite 保存设备代码（$Path）。这个文件要备份：丢了等于所有设备码重发。"
+        }
+
+        return
     }
+
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        Add-Finding "$Where 配的是 $Provider 但没有连接串（Rendezvous:Database:ConnectionString），服务器起不来。"
+        return
+    }
+
+    Add-Ok "$Where 用 $Provider 保存设备代码。"
 }
 
 # ---- 收集要查的配置 ----
@@ -191,11 +211,26 @@ foreach ($entry in $settingsToCheck) {
     # 信令监听地址。
     if ($settings.PSObject.Properties['Urls']) { Test-SignalingUrl -Url ([string]$settings.Urls) -Where $entry.Role }
 
-    # 数据库（只有 Rendezvous 才有意义）。
+    # 数据库（只有 Rendezvous 才有意义）。新的写法是 Rendezvous:Database:{Provider,ConnectionString,Path}；
+    # 老机器上只有 PostgresConnectionString，它仍然意味着"用 PostgreSQL"，所以在这里折算成同一个 provider。
     if ($settings.PSObject.Properties['Rendezvous']) {
+        $provider = $null
         $cs = $null
-        if ($settings.Rendezvous.PSObject.Properties['PostgresConnectionString'] -and $settings.Rendezvous.PostgresConnectionString) { $cs = [string]$settings.Rendezvous.PostgresConnectionString }
-        Test-Database -ConnectionString $cs -Where $entry.Role
+        $dbPath = $null
+
+        if ($settings.Rendezvous.PSObject.Properties['Database'] -and $settings.Rendezvous.Database) {
+            $db = $settings.Rendezvous.Database
+            if ($db.PSObject.Properties['Provider']) { $provider = [string]$db.Provider }
+            if ($db.PSObject.Properties['ConnectionString']) { $cs = [string]$db.ConnectionString }
+            if ($db.PSObject.Properties['Path']) { $dbPath = [string]$db.Path }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($provider) -and $settings.Rendezvous.PSObject.Properties['PostgresConnectionString'] -and $settings.Rendezvous.PostgresConnectionString) {
+            $provider = 'postgres'
+            $cs = [string]$settings.Rendezvous.PostgresConnectionString
+        }
+
+        Test-Database -Provider $provider -ConnectionString $cs -Path $dbPath -Where $entry.Role
     }
 
     Write-Host ''

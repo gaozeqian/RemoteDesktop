@@ -21,6 +21,7 @@
 #                                            [--rendezvous-url <http://0.0.0.0:5080>]
 #                                            [--relay-endpoint <ip:port>]
 #                                            [--relay-key <base64>]
+#                                            [--database <auto|none|postgres|sqlite>] [--database-path <file>]
 #                                            [--postgres <connection string>]
 #                                            [--tls-certificate <file.pfx>] [--tls-password <password>]
 #
@@ -49,6 +50,8 @@ PKG_IDENTITY=""
 OPT_URLS=""
 OPT_RELAY_ENDPOINT=""
 OPT_RELAY_KEY=""
+OPT_DATABASE=""
+OPT_DATABASE_PATH=""
 OPT_POSTGRES=""
 OPT_TLS_CERTIFICATE=""
 OPT_TLS_PASSWORD=""
@@ -66,6 +69,8 @@ while [[ $# -gt 0 ]]; do
         --rendezvous-url)  OPT_URLS="$2";            shift 2 ;;
         --relay-endpoint)  OPT_RELAY_ENDPOINT="$2";  shift 2 ;;
         --relay-key)       OPT_RELAY_KEY="$2";       shift 2 ;;
+        --database)        OPT_DATABASE="$2";        shift 2 ;;
+        --database-path)   OPT_DATABASE_PATH="$2";   shift 2 ;;
         --postgres)        OPT_POSTGRES="$2";        shift 2 ;;
         --tls-certificate) OPT_TLS_CERTIFICATE="$2"; shift 2 ;;
         --tls-password)    OPT_TLS_PASSWORD="$2";    shift 2 ;;
@@ -145,6 +150,12 @@ options_file="$SERVER_DIR/setup-options"
     [[ -n "$OPT_URLS" ]]            && printf -- '--urls=%s\n'            "$OPT_URLS"
     [[ -n "$OPT_RELAY_ENDPOINT" ]]  && printf -- '--relay-endpoint=%s\n'  "$OPT_RELAY_ENDPOINT"
     [[ -n "$OPT_RELAY_KEY" ]]       && printf -- '--relay-key=%s\n'       "$OPT_RELAY_KEY"
+
+    # Always passed, never left out: a package with no database answer gets "auto", which keeps the PostgreSQL this
+    # machine already has and otherwise starts a SQLite database. Leaving it out would mean "change nothing", and on a
+    # fresh installation there is nothing to keep — device codes would live in memory.
+    printf -- '--database=%s\n' "${OPT_DATABASE:-auto}"
+    [[ -n "$OPT_DATABASE_PATH" ]]   && printf -- '--database-path=%s\n'   "$OPT_DATABASE_PATH"
     [[ -n "$OPT_POSTGRES" ]]        && printf -- '--postgres=%s\n'        "$OPT_POSTGRES"
     [[ -n "$OPT_TLS_CERTIFICATE" ]] && printf -- '--tls-certificate=%s\n' "$OPT_TLS_CERTIFICATE"
     [[ -n "$OPT_TLS_PASSWORD" ]]    && printf -- '--tls-password=%s\n'    "$OPT_TLS_PASSWORD"
@@ -174,8 +185,9 @@ cat > "$RES_DIR/conclusion.html" <<'HTML'
 <p style="font-family: ui-monospace, Menlo, monospace;">curl http://127.0.0.1:5080/health</p>
 <p>Two defaults are worth knowing, because their consequences are the worst ones:</p>
 <ul>
-  <li>Without a PostgreSQL connection string, <b>device codes live only in memory</b> and change every time the
-      signaling server restarts — an unattended machine set up to be controlled would lose its code.</li>
+  <li>Device codes are kept in a <b>SQLite database</b> under <b>var/</b>, so they survive a restart and an unattended
+      machine keeps its code. To use a PostgreSQL server instead, build the package with <b>--postgres</b>; to keep
+      nothing at all, <b>--database none</b> — and then every restart gives every device a new code.</li>
   <li>Without a certificate, signaling is <b>plain http</b>: device codes, who is connecting to whom, and the relay
       tickets are all readable on the way.</li>
 </ul>

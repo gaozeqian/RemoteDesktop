@@ -37,6 +37,8 @@ public static class SetupCommands
             Urls = Argument(args, "--urls"),
             RelayPublicEndpoint = Argument(args, "--relay-endpoint"),
             RelaySharedKey = Argument(args, "--relay-key"),
+            DatabaseProvider = Argument(args, "--database"),
+            DatabasePath = Argument(args, "--database-path"),
             PostgresConnectionString = Argument(args, "--postgres"),
             TlsCertificatePath = Argument(args, "--tls-certificate"),
             TlsCertificatePassword = Argument(args, "--tls-password"),

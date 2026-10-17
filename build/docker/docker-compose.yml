@@ -8,6 +8,10 @@
 #
 # Device codes are stored persistently in PostgreSQL (volume postgres-data):
 # they survive restarts and upgrades, ensuring unattended access never loses its target device IDs.
+#
+# A single server does not need PostgreSQL: set Rendezvous__Database__Provider=sqlite and
+# Rendezvous__Database__Path=/data/rendezvous.db with a volume for /data, and drop the postgres service. That is one
+# file on one machine — two rendezvous containers on SQLite would each hand out their own device ids.
 name: remotedesktop
 
 services:

@@ -23,11 +23,15 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if ([string]::IsNullOrEmpty($OutputPath)) { $OutputPath = Join-Path $root 'THIRD-PARTY-NOTICES.md' }
 
-# The programs the MSI installs. Their dependencies together are what is redistributed.
+# The programs the installers ship. Their dependencies together are what is redistributed — the two servers included:
+# the server MSI and .pkg carry Npgsql and the SQLite driver, and a license file that omits them is the drift this
+# script exists to prevent.
 $shipped = @(
     'src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj'
     'src/Hosts/RemoteDesktop.HostService/RemoteDesktop.HostService.csproj'
     'src/Hosts/RemoteDesktop.SessionAgent/RemoteDesktop.SessionAgent.csproj'
+    'src/Server/RemoteDesktop.Server.Rendezvous/RemoteDesktop.Server.Rendezvous.csproj'
+    'src/Server/RemoteDesktop.Server.Relay/RemoteDesktop.Server.Relay.csproj'
 )
 
 $packages = @{}
@@ -105,7 +109,7 @@ $header = @'
 # 第三方组件声明
 
 本产品使用以下开源组件。它们按各自的许可条款提供，版权归各自的作者所有（许可证全文见各组件的项目主页）。
-列表取自三个随安装包发布的程序的依赖闭包，因此也包含只在构建时用到的包。
+列表取自随安装包发布的程序的依赖闭包（客户端、被控端、信令服务器、中继服务器），因此也包含只在构建时用到的包。
 
 本文件由 `build/tools/Export-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
 依赖变化后（例如 Dependabot 升级了某个包）重新运行一次：

@@ -2,6 +2,40 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · 服务端：SQLite 与可插拔存储
+
+信令服务器的设备代码不再只能存在 PostgreSQL 里。新增 SQLite（单机部署装完即用）和一个显式的 provider 设置，
+存储层独立成 `RemoteDesktop.Server.Storage`：再加一种数据库是一个文件加一行 switch，不是改一遍宿主。
+换库仍然意味着设备码重发，除非按 `docs/ops/README.md` 的手工步骤迁移。
+
+### Added
+
+- [Server] **SQLite 存储**：`SqliteDeviceRegistry`，WAL 模式、写串行化、`device_id` 的 `CHECK` 约束
+  （SQLite 按值定类型，没有约束就会存进文本）。文件位置由 `Rendezvous:Database:Path` 指定。
+- [Server] **`Rendezvous:Database:{Provider,ConnectionString,Path}`**：`none` / `postgres` / `sqlite`。
+  旧键 `Rendezvous:PostgresConnectionString` 与 `ConnectionStrings:Postgres` 继续生效，含义不变（= PostgreSQL）。
+- [Storage] **`RemoteDesktop.Server.Storage` 项目**：`IDeviceRegistry` + `IDeviceRegistryStore` 两个端口、
+  一份共享算法、每种数据库一个方言（四句 SQL + 唯一冲突判定 + 是否串行写）。
+  加一种数据库：加包、加一个方言文件、switch 加一支、契约测试派生一个类。
+- [Installer] **安装包默认改用 SQLite**：Windows MSI / macOS `.pkg` / Linux `.deb` 的 `auto` 现在是
+  "本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库"。装完重启设备码就不变了，不用先架数据库。
+- [Installer] `Set-ServerConfiguration.ps1` 的 `-DatabaseProvider` / `-DatabasePath`，
+  `configure-server.sh` 的 `--database` / `--database-path`，`.deb` 的 `RD_DATABASE` / `RD_DATABASE_PATH`，
+  MSI 的 `DATABASEPROVIDER` / `DATABASEPATH` 属性。
+
+### Changed
+
+- **`Rendezvous:Database` 的 provider 是显式的**，不再靠"有没有连接串"推断。没有新设置时行为与之前完全一致。
+- **健康检查改为询问已注册的存储实例**，不再自己读一遍连接串——那两处读的键本来就可能不是同一个
+  （注册表有 `ConnectionStrings:Postgres` 回退，健康检查没有），只配了回退键的部署会在 `/health` 上抛异常。
+- **契约测试**：`DeviceRegistryContractTests` 同时跑内存与 SQLite；原来那三条只测内存的用例已由它取代。
+
+### Fixed
+
+- **配置步骤不再清空没提到的数据库设置。** `--configure-system` 以前把"没给"和"给空"当成一回事：
+  `Set-ServerConfiguration.ps1 -TlsGenerate` 只传 TLS 参数，却会把 `PostgresConnectionString` 写成空串，
+  下次重启所有设备码改变——而文档承诺的是"没给的保持不动"。现在 null = 不动，`auto` / 空串才是明确表态。
+
 ## [未发布] · macOS (Apple Silicon) 与 Linux 平台支持
 
 新增 `RemoteDesktop.Platform.MacOS` 与 `RemoteDesktop.Platform.Linux` 两个平台项目（`net10.0`，与 Windows 侧

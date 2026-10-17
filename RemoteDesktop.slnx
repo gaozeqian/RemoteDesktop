@@ -36,12 +36,14 @@
   </Folder>
   <Folder Name="/src/Server/">
     <Project Path="src/Server/RemoteDesktop.Server.Shared/RemoteDesktop.Server.Shared.csproj" />
+    <Project Path="src/Server/RemoteDesktop.Server.Storage/RemoteDesktop.Server.Storage.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Rendezvous/RemoteDesktop.Server.Rendezvous.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Relay/RemoteDesktop.Server.Relay.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Architecture.UnitTests/RemoteDesktop.Architecture.UnitTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Server.Storage.UnitTests/RemoteDesktop.Server.Storage.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />
     <Project Path="tests/RemoteDesktop.Platform.Windows.UnitTests/RemoteDesktop.Platform.Windows.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Platform.Linux.UnitTests/RemoteDesktop.Platform.Linux.UnitTests.csproj" />

@@ -15,7 +15,11 @@
 # Usage:
 #   sudo ./configure-server.sh [options]
 #
-#   --postgres <connection string>   PostgreSQL connection string; '' goes back to the in-memory registry
+#   --database <auto|none|postgres|sqlite>
+#                                    where device codes are kept; auto keeps the PostgreSQL this machine already has
+#                                    and otherwise starts a SQLite database of its own
+#   --database-path <file>           the SQLite file (default: /usr/local/remotedesktop-server/var/rendezvous.db)
+#   --postgres <connection string>   PostgreSQL connection string; '' stops using PostgreSQL
 #   --relay-endpoint <ip:port>       where clients are told to reach the relay
 #   --urls <http://0.0.0.0:5080>     the address signaling binds to; https:// switches it to TLS
 #   --relay-key <base64>             the key relay tickets are signed with (must match a relay on another machine)
@@ -24,6 +28,7 @@
 #   --no-restart                     write the settings but leave the jobs running on the old ones
 #
 # Examples:
+#   sudo ./configure-server.sh --database sqlite
 #   sudo ./configure-server.sh --postgres 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 #   sudo ./configure-server.sh --relay-endpoint 203.0.113.10:5082
 #   sudo ./configure-server.sh --urls https://0.0.0.0:5080 --tls-certificate /etc/rd/signaling.pfx --tls-password pw
@@ -49,6 +54,8 @@ args=()
 restart=1
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --database)        shift; args[${#args[@]}]="--database";       args[${#args[@]}]="$1" ;;
+        --database-path)   shift; args[${#args[@]}]="--database-path";  args[${#args[@]}]="$1" ;;
         --postgres)        shift; args[${#args[@]}]="--postgres";        args[${#args[@]}]="$1" ;;
         --relay-endpoint)  shift; args[${#args[@]}]="--relay-endpoint";  args[${#args[@]}]="$1" ;;
         --urls)            shift; args[${#args[@]}]="--urls";            args[${#args[@]}]="$1" ;;

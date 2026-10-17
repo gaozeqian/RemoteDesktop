@@ -34,6 +34,8 @@ case "$1" in
         RD_URLS=${RD_URLS:-http://0.0.0.0:5080}
         RD_RELAY_ENDPOINT=${RD_RELAY_ENDPOINT:-auto}
         RD_RELAY_KEY=${RD_RELAY_KEY:-auto}
+        RD_DATABASE=${RD_DATABASE:-auto}
+        RD_DATABASE_PATH=${RD_DATABASE_PATH:-}
         RD_POSTGRES=${RD_POSTGRES:-}
         RD_TLS=${RD_TLS:-generate}
         RD_OPEN_FIREWALL=${RD_OPEN_FIREWALL:-0}
@@ -49,6 +51,8 @@ case "$1" in
             --urls "$RD_URLS" \
             --relay-endpoint "$RD_RELAY_ENDPOINT" \
             --relay-key "$RD_RELAY_KEY" \
+            --database "$RD_DATABASE" \
+            --database-path "$RD_DATABASE_PATH" \
             --postgres "$RD_POSTGRES" \
             --tls-certificate "$RD_TLS"
 
@@ -62,6 +66,10 @@ case "$1" in
 
         mkdir -p /var/lib/remotedesktop-server /var/log/remotedesktop-server
         chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/remotedesktop-server /var/log/remotedesktop-server
+
+        # Where the SQLite database lives, by default. 0700 and owned by the service account: the file holds the device
+        # ids, and SQLite creates it with the process umask rather than 0600, so the directory is what protects it.
+        chmod 0700 /var/lib/remotedesktop-server
 
         # Off by default. A package that changes a machine's firewall is deciding something that belongs to whoever
         # administers it, so this only happens when the settings file asks for it, and only through ufw — a machine

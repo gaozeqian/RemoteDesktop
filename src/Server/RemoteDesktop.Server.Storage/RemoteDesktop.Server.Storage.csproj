@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Where the device registry's ids are kept. A plain class library on purpose: it holds the port, the one algorithm
+    every relational provider shares, and the per-provider dialect, and it knows nothing about ASP.NET — health
+    checks and host lifetime are the host's business and stay in RemoteDesktop.Server.Rendezvous.
+
+    Both drivers are referenced from here rather than from the host, so that adding a database is a file in this
+    project plus one line in its switch, and the host never learns a provider's name. A deployment that uses one of
+    them still carries the other's assembly, which is a few hundred kilobytes next to a self-contained runtime.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The registry is constructed by its own tests with a fixed id allocator, so that the collision retry can be
+         reached without waiting for a 1-in-10^9 draw. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Server.Storage.UnitTests" />
+  </ItemGroup>
+</Project>
