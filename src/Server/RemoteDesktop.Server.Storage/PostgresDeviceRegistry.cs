@@ -37,10 +37,14 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
                 fingerprint VARCHAR(128) PRIMARY KEY,
                 device_id BIGINT UNIQUE NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                revoked_at TIMESTAMPTZ
             );
             CREATE INDEX IF NOT EXISTS idx_device_registrations_device_id ON device_registrations(device_id);
             """;
+
+        public string AddRevokedAtSql =>
+            "ALTER TABLE device_registrations ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;";
 
         public string SelectDeviceIdSql =>
             "SELECT device_id FROM device_registrations WHERE fingerprint = @fingerprint;";
@@ -55,9 +59,17 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
         public string TouchLastSeenSql =>
             "UPDATE device_registrations SET last_seen_at = @now WHERE fingerprint = @fingerprint;";
 
+        public string SetRevokedSql =>
+            "UPDATE device_registrations SET revoked_at = @revoked WHERE device_id = @device_id;";
+
+        public string IsRevokedSql =>
+            "SELECT revoked_at IS NOT NULL FROM device_registrations WHERE device_id = @device_id;";
+
         public bool SerializeWrites => false;
 
         public bool IsUniqueViolation(Exception exception) =>
             exception is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
+
+        public bool IsDuplicateColumn(Exception exception) => false;
     }
 }

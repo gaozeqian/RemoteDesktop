@@ -2,6 +2,177 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · 运维监控台：交付面
+
+M6：把控制台从"能跑"变成"干净机器按文档从零装到能登录"。核心是文档与打包，不是新功能。
+
+### Added
+
+- [Linux] **`remotedesktop-ops.service`**：systemd 单元，回环监听 `127.0.0.1:5090`，库落在
+  `/var/lib/remotedesktop-server/ops.db`，与信令/中继同账号、同样加固。
+- [Linux] **.deb 收编控制台**：`build-deb.sh` 一并发布 `RemoteDesktop.Server.Ops`，装上并启用 `remotedesktop-ops`；
+  `postrm` 移除时停用、卸载无残留单元。
+- [Docs] **`docs/ops/README.md` §二 10「运维监控台」**：启动三种方式、首个管理员、关键配置、让总览出现数字的三件事
+  （指标 + 登记节点 + 事件通道密钥）、管理动作与审计、安全边界。
+
+### Notes
+
+- 控制台是**可选**的：不装它远程桌面照常工作，装上后默认只在回环监听，对外是反向代理的决定。
+
+## [未发布] · 运维监控台：管理动作
+
+M5：控制台第一次能**反向影响数据面**——断开会话、封禁 / 解封设备。任何会改到设备或会话的动作都要两个人：
+一个发起、一个批准，发起人不能批准自己的动作，两步各留一条审计。
+
+### Added
+
+- [Signaling] **`ServerMessage.admin_command`** 与 **`Register.client_capabilities`**：能力位协商——被控端声明支持后，
+  信令才会下发 `AdminCommand`；旧客户端永远收不到。
+- [Client] **`AdminCommandService`**：读 `disconnect_session` 命令，落到 `HostSessionService.Disconnect`；日志里记命令
+  id，可与控制台的审计条目对上。
+- [Storage] **设备封禁**：`device_registrations.revoked_at`（含对旧表的迁移）；`IDeviceRegistry.SetRevokedAsync` /
+  `IsRevokedAsync`；注册路径在发 `Registered` 之前拒绝被封禁的设备。
+- [Rendezvous] **南向管理面**：`POST /internal/v1/admin/disconnect`（设备离线 404、不支持 409）与
+  `/internal/v1/admin/revoke`（封禁时顺带踢掉在线连接）。
+- [Ops] **`ops_admin_action` 复核队列** + `/api/actions`（发起 / 列表 / 批准）；库表迁移到 v3（`ops_session.client_session_id`
+  加一张动作表）。会话页"请求断开"、设备页"封禁 / 解封"、管理动作页。
+- [Tests] 集成 30（新增两段式复核闭环、发起人不能自批、封禁经批准到达节点），存储 29（新增封禁持久化与旧表迁移）。
+
+### Notes
+
+- 断开会话按**被控端所知的会话 id**（`client_session_id`，来自心跳）寻址：中继的 `correlation_id` 被控端并不认识。
+- `admin_command` 发后不管：控制台不等待被控端确认，被控端不支持时节点返回 409、动作记为 `failed` 并写审计。
+
+## [未发布] · 运维监控台：客户端心跳
+
+M4：控制台补上最后一块只有客户端才知道的事实——这次会话跑在什么系统上、延迟多少、走的是直连还是中继。
+**默认关闭**：打开 `Telemetry:Enabled` 之前，客户端不发一个字节。
+
+### Added
+
+- [Signaling] **`TelemetryReport`**（`ClientMessage.telemetry`）：会话 id、角色、模式、链路、RTT、平台、版本，
+  每 30 秒一条，走已有信令连接。字段集合是封闭的，没有设备名、地址、窗口标题或输入的位置。
+- [Signaling] **`RelayInfo.relay_session_id`** 与 **`Hello.session_id`**：前者让心跳落回中继已经写好的那条会话记录，
+  后者让两端对同一个会话用同一个 id——少了任何一个，一次 P2P 会话就会在控制台变成两行。
+- [Rendezvous] **`TelemetryReceiver`**：校验 + 每设备限流（60 条/分钟，先扣预算再校验），转成 `session.telemetry`
+  事件。`remotedesktop_telemetry_reports_total` / `_refused_total` 记两个计数。
+- [Ops] **`session.telemetry` 投影**：有 `relaySessionId` 的落在中继那一行（`source` 仍是 `relay`），没有的创建
+  `source=client` 的行；控制端的 RTT 不会被被控端的 0 覆盖。`transport` 在库里统一为 `relay`，协议里的 `relayed`
+  在投影时归一。
+- [Ops] **库表迁移到 v2**：`ops_session` 增加 `platform`、`version`，按版本号逐条在事务里执行；老库直接升级，
+  重启第二次不会重复 `ADD COLUMN`。
+- [Ops] **页面**：会话表新增"质量"列（平台 · RTT，没有心跳时显示"—"）；总览新增"链路与平台"卡片（近 24 小时）。
+- [Ops] **告警规则**：`session.rtt`（窗口内平均 RTT）与 `session.direct`（直连占比），阈值型，不需要指标名。
+- [Client] **`SessionTelemetry`**：开关关闭时不启动定时器；开启后第一个点等 5 秒（让第一次 ping 回来），之后按
+  `IntervalSeconds`。发送只入队，队列满或断线时丢弃，绝不阻塞会话。
+- [Docs] `docs/usage/README.md` §8 写明打开后到底有什么字段、没有什么字段。
+
+### Changed
+
+- [Transport] `IPeerConnection.RelaySessionId` 由连接自己携带，控制器与被控端都从服务端下发的中继信息里拿到它。
+
+### Notes
+
+- **丢包与码率仍未上报**：.NET 的 QUIC API 不暴露每条连接的丢包统计，编码器的码率是设置值不是实测吞吐量。
+  与其填两个永远是 0 的字段，不如让它们保持"—"。
+- 心跳的最坏滞后是一个上报周期（30 秒）：会话刚开始、或被控端刚连上时，质量列先是"—"。
+
+## [未发布] · 运维监控台：骨架、登录与审计
+
+运维监控台的第一个可运行版本（计划里的 M0）。它现在能做的是**登录一个空控制台**：账号、TOTP、CSRF、审计链、
+基线库表都已落地，数据源还没有接——页面上每个数字都是"—"，这是有意的，见 `docs/ops/README.md` 的
+"数据从哪来（范围合同）"一节。
+
+### Added
+
+- [Ops] **`RemoteDesktop.Server.Ops`**：独立部署的 Web 控制台，默认只监听 `127.0.0.1:5090`；Windows 服务
+  `RemoteDesktopOps` / systemd 单元 `remotedesktop-ops`。默认 SQLite，可换 PostgreSQL（`Ops:Database`）。
+- [Ops] **登录**：PBKDF2-HMAC-SHA256（60 万次迭代，参数随哈希存储）+ TOTP（RFC 6238，SHA-1/6 位/30 秒），
+  会话 Cookie 只存 SHA-256，登录时重新签发。首个管理员由 `--create-admin` 创建，没有默认口令，没有网页初始化入口。
+- [Ops] **CSRF 与响应头**：写操作要求 `X-Ops-CSRF` 与 Cookie 双提交；CSP `default-src 'self'` 等一组头由
+  中间件统一加，前端零外链、零内联脚本。
+- [Ops] **审计日志**：哈希链写入（长度前缀字段，避免字段移位撞哈希），登录成功 / 失败 / 账号禁用均有记录。
+- [Ops] **基线数据模型**：节点、指标采样与汇总、事件、会话投影、告警与规则、通知、静默、管理员、会话、租约、
+  模式版本共 16 张表；时间统一存 Unix 毫秒，两种数据库共用一份 DDL。
+- [Ops] **`ops_lease` 租约**：抓取、告警求值、保留清理将来都要独占运行；单实例下永远拿得到，多副本时不重复发通知。
+- [Shared] **事件信封与签名器**：`OpsEventEnvelope` 带 `v` / `eventId` / 服务端生成的 `correlationId`；
+  HMAC-SHA256 over `timestamp.body`，同一套代码给信令、中继、控制台用。
+- [Tests] 单元 51 项（口令、TOTP 的 RFC 向量、Base32、审计链、锁闭、签名、配置、指标类型），集成 8 项（真 Kestrel +
+  SQLite：401、登录全流程、CSRF、锁闭、伪造 Cookie）；架构测试新增"控制台分层"规则。
+
+## [未发布] · 运维监控台：告警与审计
+
+M3：控制台开始会喊人。规则是结构化的（单指标 / 比值 / 抓取失败），条件必须持续满足一段时间才开告警；每条告警
+只开一次、可认领、恢复后自动关闭。审计日志补上列表与哈希链校验。
+
+### Added
+
+- [Ops] **规则与求值**：`AlertStateMachine` 用 `forSeconds` 判断"持续多久"，未命中立刻清零；去重键同一时刻只允许
+  一条未恢复告警。求值每 15 秒一次（`Ops:AlertIntervalSeconds`），新建的部署自动种一条"节点抓取失败"规则。
+- [Ops] **指标口径**：counter 先求速率再比较，gauge 按 `avg/max/min` 聚合；`ratio` 用分子/分母；没有读数时规则
+  不触发——不知道不等于出事了。
+- [Ops] **告警生命周期**：`GET /api/alerts`、`POST /api/alerts/{id}/ack`（operator 及以上）；恢复由求值自动完成。
+  开、认领、恢复都写入审计。
+- [Ops] **Webhook**：`Ops:Notifications:WebhookUrl`，开/恢复各发一次 JSON；`ops_notification_attempt` 以
+  `(alert_id, channel, transition)` 去重，重启与重试都不会重复发。SMTP 未做。
+- [Ops] **审计**：`GET /api/audit`（管理员）、`GET /api/audit/verify` 重算哈希链并指出第一条不一致的记录。
+- [Ops] **页面**：告警页（列表、认领、规则表格与新增表单）与审计页（列表、一键校验）；总览的"今日告警"接上真实计数。
+- [Tests] 单元 86 项（新增状态机、比较器、哈希链篡改与删除检测），集成 22 项（新增完整告警闭环：失败节点 → 开告警
+  → 认领 → 停用节点 → 自动恢复，以及审计链校验）。
+
+## [未发布] · 运维监控台：事件与会话
+
+M2：信令与中继把"服务器看见了什么"推给控制台，控制台把它折成一条可以点开的会话；设备页通过信令服务的分页查询
+读注册表，控制台仍然不碰别人的数据库。
+
+### Added
+
+- [Shared] **`IOpsEventSink`**：有界队列（4096）+ 后台批量发送，HMAC-SHA256 签名（`X-Ops-Key-Id` /
+  `X-Ops-Timestamp` / `X-Ops-Signature`），失败重试三次后丢弃并计数。`Publish` 永不阻塞、永不抛——它站在握手与
+  转发路径上。未配置 `OpsEvents:Endpoint` 时是空实现，调用点完全不变。
+- [Rendezvous] **握手事件**：`session.requested` / `session.accepted` / `session.failed`（拒绝与超时）。
+  `correlationId` 由服务端铸造，恰好就是中继票据的 `SessionId`，因此中继侧不需要任何协议改动就能对上同一条会话。
+- [Relay] **配对事件**：`session.relay_paired` / `session.relay_closed`，后者带本次配对的双向字节数
+  （每个 `Pairing` 自己累计，不再只有全局计数）。
+- [Ops] **`POST /ingest/events`**：按 Key-Id 选密钥、校验签名与 60 秒时间窗；`ops_event` 以 `event_id` 唯一索引
+  做幂等，重投一批不会重复计数。事件表是事实，`ops_session` 是同一事务里的投影（`SessionProjection`，纯函数）。
+- [Ops] **会话 API 与页面**：`GET /api/sessions`（按开始时间分页）、`GET /api/sessions/{id}`（含事件时间线）；
+  页面显示传输方式、时长、入/出字节、来源与结束原因，点开可看四条事件。明确写出"P2P 会话服务器看不到"。
+- [Storage] **`IDeviceCatalog`**：设备按 id 分页，游标独占、按 id 排序；关系型注册表与内存注册表各实现一份，
+  时间戳由各自的存储格式解析成 Unix 毫秒（SQLite 存文本、PostgreSQL 存 timestamptz）。
+- [Rendezvous] **`GET /internal/v1/devices`**：一页设备（代码、首次注册、最后活跃、当前在线），多取一行判断是否还有
+  下一页；在线状态来自 presence，不是数据库里的猜测。
+- [Ops] **设备页**：`GET /api/devices?node=&cursor=` 代理到选定的信令节点，页面可按设备代码过滤、加载更多；
+  未选择或节点不可达时给 404 / 502，而不是一张空表。
+- [Tests] 单元 75 项（新增 8 项投影规则，含乱序到达与坏 payload），集成 20 项（新增签名入库、重放不重复、
+  伪造签名 401、过期时间戳 401、发送端签名可验证、设备代理与分页）；存储单测新增设备目录分页。
+
+## [未发布] · 运维监控台：节点抓取与总览
+
+M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，控制台每 10 秒抓一次，总览的四个 KPI 与流量图都从
+抓到的序列算出来——没有读数时仍然是"—"，不补 0。
+
+### Added
+
+- [Relay] **HTTP 面**：`/metrics`（Prometheus 文本）、`/health`、`/internal/v1/info`，默认监听
+  `http://127.0.0.1:5083`（`Relay:HttpEndpoint`）。宿主从 Worker SDK 改为 Web SDK，UDP 循环不变。
+- [Relay] **转发计数**：配对建立 / 关闭、双向字节数、转发报文数与配对总数。计数器用 `Interlocked` 维护，
+  HTTP 线程读取时不再遍历只属于接收循环的配对表。
+- [Rendezvous] **`remotedesktop_relay_tickets_issued_total`**：每签发一张中继票据加一；`/internal/v1/info` 返回名称、
+  角色、版本与启动时间；`/metrics` 与 `/internal/*` 可选 Bearer 校验（`Rendezvous:NodeToken`）。
+- [Ops] **抓取任务**：按 `Ops:ScrapeIntervalSeconds`（默认 10）并发抓取所有启用节点，失败也更新
+  `last_scrape_at`，节点卡片因此能显示"刚刚试过、失败了"而不是把上次成功当成现状。
+- [Ops] **节点管理**：`GET/POST /api/nodes`、`PATCH/DELETE /api/nodes/{id}`，仅管理员可写；登记是手动的，
+  不自动发现。节点页可启用 / 停用 / 删除，删除同时清掉该节点的历史读数。
+- [Ops] **总览**：`GET /api/overview` 返回四个 KPI、30 分钟双向流量（30 秒分桶）与节点状态；KPI 只取 60 秒内的读数，
+  过期的 gauge 视为缺失。告警数保持 `null`，等 M3 的规则引擎。
+- [Ops] **页面**：总览接上 KPI、Canvas 流量图与节点状态；新增节点管理页（登记表单仅管理员可见），
+  全部 DOM 用 `textContent` 构造，配 `default-src 'self'` 的 CSP。
+- [Core] **Prometheus 文本解析器**：标签规范化（排序、去空白、解转义）、`# TYPE` 决定 counter/gauge、
+  NaN 与畸形行跳过并计数；**计数器速率**处理重启归零，不产生负流量。
+- [Tests] 单元 67 项（新增解析器与速率），集成 12 项（新增假节点 HTTP 服务 → 登记 → 抓取 → 总览断言，
+  含抓取失败与重名拒绝）。
+
 ## [未发布] · 服务端：SQLite 与可插拔存储
 
 信令服务器的设备代码不再只能存在 PostgreSQL 里。新增 SQLite（单机部署装完即用）和一个显式的 provider 设置，

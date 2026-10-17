@@ -110,5 +110,5 @@ public class PresenceRateLimiterTests
     }
 
     private static DeviceSession Session(uint deviceId) =>
-        new(deviceId, "fingerprint", WebSocket.CreateFromStream(Stream.Null, isServer: true, subProtocol: null, keepAliveInterval: TimeSpan.Zero));
+        new(deviceId, "fingerprint", capabilities: 0, WebSocket.CreateFromStream(Stream.Null, isServer: true, subProtocol: null, keepAliveInterval: TimeSpan.Zero));
 }

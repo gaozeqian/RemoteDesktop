@@ -68,10 +68,14 @@ public sealed class SqliteDeviceRegistry : RelationalDeviceRegistry
                 fingerprint TEXT PRIMARY KEY,
                 device_id INTEGER NOT NULL UNIQUE CHECK (device_id BETWEEN 100000000 AND 999999999),
                 created_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL
+                last_seen_at TEXT NOT NULL,
+                revoked_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_device_registrations_device_id ON device_registrations(device_id);
             """;
+
+        public string AddRevokedAtSql =>
+            "ALTER TABLE device_registrations ADD COLUMN revoked_at TEXT;";
 
         public string SelectDeviceIdSql =>
             "SELECT device_id FROM device_registrations WHERE fingerprint = @fingerprint;";
@@ -86,9 +90,18 @@ public sealed class SqliteDeviceRegistry : RelationalDeviceRegistry
         public string TouchLastSeenSql =>
             "UPDATE device_registrations SET last_seen_at = @now WHERE fingerprint = @fingerprint;";
 
+        public string SetRevokedSql =>
+            "UPDATE device_registrations SET revoked_at = @revoked WHERE device_id = @device_id;";
+
+        public string IsRevokedSql =>
+            "SELECT revoked_at IS NOT NULL FROM device_registrations WHERE device_id = @device_id;";
+
         public bool SerializeWrites => true;
 
         public bool IsUniqueViolation(Exception exception) =>
             exception is SqliteException { SqliteExtendedErrorCode: UniqueConstraint };
+
+        public bool IsDuplicateColumn(Exception exception) =>
+            exception is SqliteException { Message: var message } && message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase);
     }
 }

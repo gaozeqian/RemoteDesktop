@@ -22,6 +22,7 @@ public sealed partial class SignalingEndpoint(
     ConnectionQuota quota,
     KeyedTokenBucket<IPAddress> registrationBudget,
     ServerMetrics metrics,
+    TelemetryReceiver telemetry,
     ILogger<SignalingEndpoint> logger)
 {
     private static readonly TimeSpan RegisterTimeout = TimeSpan.FromSeconds(10);
@@ -116,6 +117,15 @@ public sealed partial class SignalingEndpoint(
         }
 
         var registration = await registry.GetOrAllocateAsync(fingerprint, cancellationToken).ConfigureAwait(false);
+
+        // A revoked device proves its key like anyone else, but the id it proves has been taken out of service: the
+        // server must not hand it (back) out. Refused before the Registered message, so the device learns nothing new.
+        if (await registry.IsRevokedAsync(registration.DeviceId, cancellationToken).ConfigureAwait(false))
+        {
+            LogRefusedRevoked(logger, registration.DeviceId);
+            return null;
+        }
+
         // Counted once the identity exists, which is the point this server has spent something on the device, whether
         // the identity is new or one the registry already had.
         metrics.Registered();
@@ -126,7 +136,7 @@ public sealed partial class SignalingEndpoint(
             registrationBudget.Refund(address);
         }
 
-        var session = new DeviceSession(registration.DeviceId, fingerprint, socket);
+        var session = new DeviceSession(registration.DeviceId, fingerprint, message.Register.ClientCapabilities, socket);
         await session.SendAsync(
             new ServerMessage { Registered = new Registered { DeviceId = registration.DeviceId, ReflectorPort = (uint)reflector.Port } },
             cancellationToken).ConfigureAwait(false);
@@ -177,6 +187,11 @@ public sealed partial class SignalingEndpoint(
                 case ClientMessage.BodyOneofCase.PresenceQuery:
                     await presenceQueries.HandleQueryAsync(session, message.PresenceQuery, cancellationToken).ConfigureAwait(false);
                     break;
+                case ClientMessage.BodyOneofCase.Telemetry:
+                    // Fire-and-forget, and synchronous on purpose: it validates, rate-limits and queues, and the queue
+                    // drops rather than waits, so a flood of heartbeats cannot hold this loop.
+                    telemetry.Handle(session, message.Telemetry);
+                    break;
                 default:
                     // Unknown or out-of-order message: ignore so newer clients keep working.
                     break;
@@ -208,4 +223,7 @@ public sealed partial class SignalingEndpoint(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a registration from {Address}: the certificate proof did not verify.")]
     private static partial void LogRefusedRegistration(ILogger logger, string address);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a registration from device {DeviceId}: it has been revoked.")]
+    private static partial void LogRefusedRevoked(ILogger logger, uint deviceId);
 }

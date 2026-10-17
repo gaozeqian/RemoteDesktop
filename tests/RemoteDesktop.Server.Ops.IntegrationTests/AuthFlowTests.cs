@@ -1,0 +1,164 @@
+using System.Net;
+using System.Net.Http.Json;
+using RemoteDesktop.Server.Ops.Core;
+
+namespace RemoteDesktop.Server.Ops.IntegrationTests;
+
+/// <summary>
+/// The sign-in path over a real socket: status codes, cookies, CSRF and the lockout. These are the promises M0 makes,
+/// and every one of them is a place where a plausible-looking refactor turns "protected" into "looks protected".
+/// </summary>
+[Collection("ops-console")]
+public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
+{
+    private const string CsrfHeader = "X-Ops-CSRF";
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task Api_requires_a_session()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        var response = await client.GetAsync("/api/me", Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_static_shell_is_served_with_the_security_headers()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        var response = await client.GetAsync("/", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("运维监控台", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        Assert.True(response.Headers.Contains("Content-Security-Policy"));
+    }
+
+    [Fact]
+    public async Task A_password_alone_does_not_sign_anyone_in()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        var login = await LoginAsync(client, "admin");
+
+        Assert.Equal("totp-required", login.Status);
+        Assert.NotNull(login.Challenge);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_totp_step_issues_a_session_that_names_the_user_and_role()
+    {
+        var (client, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (client)
+        {
+            var jar = cookies.GetCookies(fixture.BaseAddress);
+            Assert.True(jar["ops_session"] is { HttpOnly: true }, "the session cookie must not be readable by scripts");
+            Assert.True(jar["ops_csrf"] is { HttpOnly: false }, "the CSRF cookie must be readable by the page");
+
+            var me = await client.GetFromJsonAsync<MeResponse>("/api/me", Ct);
+            Assert.NotNull(me);
+            Assert.Equal("admin", me.Name);
+            Assert.Equal(OpsRoles.Admin, me.Role);
+            Assert.False(string.IsNullOrEmpty(me.Csrf));
+        }
+    }
+
+    [Fact]
+    public async Task A_wrong_password_is_refused_without_revealing_whether_the_account_exists()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        var wrongPassword = await client.PostAsJsonAsync("/api/auth/login", new { username = "admin", password = "not the password" }, Ct);
+        var unknownUser = await client.PostAsJsonAsync("/api/auth/login", new { username = "nobody-here", password = "not the password" }, Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongPassword.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, unknownUser.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_mutating_call_without_the_csrf_header_is_refused()
+    {
+        var (client, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (client)
+        {
+            var withoutHeader = await client.PostAsync("/api/auth/logout", content: null, Ct);
+            Assert.Equal(HttpStatusCode.Forbidden, withoutHeader.StatusCode);
+
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+            request.Headers.Add(CsrfHeader, csrf);
+            var withHeader = await client.SendAsync(request, Ct);
+
+            Assert.Equal(HttpStatusCode.NoContent, withHeader.StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task Repeated_failures_lock_the_account_out_with_a_retry_after()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var refused = await client.PostAsJsonAsync("/api/auth/login", new { username = "lockme", password = "wrong" }, Ct);
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+        }
+
+        var locked = await client.PostAsJsonAsync("/api/auth/login", new { username = "lockme", password = OpsHostFixture.Password }, Ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, locked.StatusCode);
+        var body = await locked.Content.ReadFromJsonAsync<LoginResponse>(Ct);
+        Assert.Equal("locked", body!.Status);
+        Assert.True(body.RetryAfterSeconds > 0);
+    }
+
+    [Fact]
+    public async Task An_expired_or_forged_session_cookie_is_refused()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/me");
+        request.Headers.Add("Cookie", "ops_session=forged-token");
+
+        var response = await client.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    private static async Task<LoginResponse> LoginAsync(HttpClient client, string username)
+    {
+        var response = await client.PostAsJsonAsync("/api/auth/login", new { username, password = OpsHostFixture.Password }, Ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<LoginResponse>(Ct))!;
+    }
+
+    private async Task<(HttpClient Client, CookieContainer Cookies)> SignInAsync(string username, string secret)
+    {
+        var (client, cookies) = fixture.CreateClient();
+
+        var login = await LoginAsync(client, username);
+        var totp = await client.PostAsJsonAsync(
+            "/api/auth/totp",
+            new { challenge = login.Challenge, code = Totp.Compute(secret, DateTimeOffset.UtcNow) },
+            Ct);
+
+        Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
+        return (client, cookies);
+    }
+
+    /// <summary>The JSON the sign-in endpoints return, as much of it as the tests read.</summary>
+    public sealed record LoginResponse(string? Status, string? Challenge, int? RetryAfterSeconds);
+
+    /// <summary>The current-user response.</summary>
+    public sealed record MeResponse(string? Name, string? Role, string? Csrf);
+}

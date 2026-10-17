@@ -8,13 +8,17 @@ using RemoteDesktop.Transport;
 namespace RemoteDesktop.Application.Sessions;
 
 /// <summary>Use case "connect to a remote device": transport connection, version negotiation, password proof.</summary>
-public sealed class ControllerSessionService(IPeerConnector connector, TimeProvider time)
+public sealed class ControllerSessionService(IPeerConnector connector, SessionTelemetry telemetry, TimeProvider time)
 {
     /// <exception cref="PeerConnectException">No connection could be established.</exception>
     /// <exception cref="SessionException">The host refused the session.</exception>
     public async Task<RemoteSession> ConnectAsync(DeviceId target, string password, SessionMode mode, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(password);
+
+        // Minted here rather than after the handshake: the host adopts this id so both ends report telemetry under it,
+        // and one session stays one row in the console.
+        var sessionId = SessionId.New();
 
         var connection = await connector.ConnectAsync(target, cancellationToken).ConfigureAwait(false);
         IChannel? control = null;
@@ -31,6 +35,7 @@ public sealed class ControllerSessionService(IPeerConnector connector, TimeProvi
                     ProtocolMinor = ProtocolVersion.Current.Minor,
                     Mode = ControlMessages.ToMessage(mode),
                     RequestedPermissions = (uint)requested,
+                    SessionId = sessionId.ToString(),
                 },
             }, cancellationToken).ConfigureAwait(false);
 
@@ -58,8 +63,10 @@ public sealed class ControllerSessionService(IPeerConnector connector, TimeProvi
             // The host decided the grant; the controller only mirrors it (e.g. to hide unavailable features).
             var grantedMode = ControlMessages.FromMessage(result.Mode);
             var granted = ControlMessages.FromWire(result.GrantedPermissions);
-            var context = new SessionContext(SessionId.New(), SessionRole.Controller, connection, AccessGrant.Create(grantedMode, granted, granted));
-            return RemoteSession.Start(context, control, time);
+            var context = new SessionContext(sessionId, SessionRole.Controller, connection, AccessGrant.Create(grantedMode, granted, granted));
+            var session = RemoteSession.Start(context, control, time);
+            telemetry.Track(session);
+            return session;
         }
         catch
         {

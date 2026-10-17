@@ -91,7 +91,7 @@ public class RelayBindTests
         public static Task<TestRelay> StartAsync()
         {
             var time = new FakeTimeProvider();
-            var relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), Key, TimeSpan.FromMinutes(2), time, NullLogger<UdpRelay>.Instance);
+            var relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), Key, TimeSpan.FromMinutes(2), time, new NoopOpsEventSink(), "relay-test", NullLogger<UdpRelay>.Instance);
             var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
             var ticket = new RelayTicket(Guid.NewGuid(), time.GetUtcNow() + TimeSpan.FromMinutes(2)).Sign(Key);
             return Task.FromResult(new TestRelay(relay, client, ticket, time));

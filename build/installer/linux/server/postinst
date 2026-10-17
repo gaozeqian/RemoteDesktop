@@ -85,16 +85,18 @@ case "$1" in
         if command -v deb-systemd-helper >/dev/null 2>&1; then
             deb-systemd-helper enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper enable remotedesktop-relay.service >/dev/null 2>&1 || true
+            deb-systemd-helper enable remotedesktop-ops.service >/dev/null 2>&1 || true
         else
             systemctl enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             systemctl enable remotedesktop-relay.service >/dev/null 2>&1 || true
+            systemctl enable remotedesktop-ops.service >/dev/null 2>&1 || true
         fi
 
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service >/dev/null 2>&1 || true
+            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
         else
             systemctl --system daemon-reload >/dev/null 2>&1 || true
-            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service >/dev/null 2>&1 || true
+            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
         fi
         ;;
 

@@ -30,6 +30,10 @@ message Hello {
   SessionModeMessage mode = 3;
   // RemoteDesktop.Domain.Permissions flags.
   uint32 requested_permissions = 4;
+  // The controller's id for this session (32 hex chars). The host adopts it so both ends report telemetry under one
+  // id and the console keeps one row per session instead of two. Empty from a client that has none; the host then
+  // mints its own.
+  string session_id = 5;
 }
 
 // Host -> controller.

@@ -28,12 +28,25 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     private readonly Channel<IncomingConnection> _incoming = Channel.CreateBounded<IncomingConnection>(
         new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest });
 
+    // Unbounded on purpose: an admin command is authoritative and rare, and dropping one is not a retryable loss the
+    // way dropping a presence answer is. The only writer is the receive loop, which the server can only feed through
+    // the console's own approval flow.
+    private readonly Channel<AdminCommand> _admin = Channel.CreateUnbounded<AdminCommand>();
+
     private readonly ConcurrentDictionary<string, TaskCompletionSource<ConnectReady>> _pending = new(StringComparer.Ordinal);
 
     // A second map rather than a shared one: a presence answer travels an entirely different path from a connect, and
     // keeping it apart leaves the connect path exactly as it was.
     private readonly ConcurrentDictionary<string, TaskCompletionSource<PresenceResult>> _pendingPresence = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+
+    /// <summary>
+    /// Heartbeats waiting to go out. Bounded and drop-oldest: telemetry is a sample, not a ledger, and a device with
+    /// sixteen sessions must never be able to grow this queue while the connection is down.
+    /// </summary>
+    private readonly Channel<TelemetryReport> _telemetry = Channel.CreateBounded<TelemetryReport>(
+        new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.DropOldest });
+
     private ClientWebSocket? _socket;
 
     public RendezvousState State { get; private set; }
@@ -60,7 +73,22 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                 _socket = socket;
                 backoff = TimeSpan.FromSeconds(1);
                 SetState(RendezvousState.Online);
-                await ReceiveLoopAsync(socket, cancellationToken).ConfigureAwait(false);
+
+                // Two loops share the socket: the receive loop owns reads, the heartbeat loop owns the telemetry
+                // channel. Sends are still serialised by _sendLock, so a heartbeat cannot interleave with a connect
+                // request mid-frame.
+                using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var receive = ReceiveLoopAsync(socket, connection.Token);
+                var heartbeat = TelemetryLoopAsync(socket, connection.Token);
+                try
+                {
+                    await receive.ConfigureAwait(false);
+                }
+                finally
+                {
+                    await connection.CancelAsync().ConfigureAwait(false);
+                    await heartbeat.ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -98,6 +126,10 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         }
     }
 
+    /// <summary>Operator commands addressed to this device. Only present when it declared the capability.</summary>
+    public IAsyncEnumerable<AdminCommand> ReadAdminCommandsAsync(CancellationToken cancellationToken) =>
+        _admin.Reader.ReadAllAsync(cancellationToken);
+
     public async Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken)
     {
         var requestId = Guid.NewGuid().ToString("N");
@@ -132,6 +164,38 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     public Task RejectAsync(string requestId, CancellationToken cancellationToken) =>
         SendAsync(new ClientMessage { ConnectReject = new ConnectReject { RequestId = requestId } }, cancellationToken);
 
+    public void ReportTelemetry(TelemetryReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        // Silently dropped when the queue is full or the device is offline. The alternative — awaiting a send from a
+        // session's timer — would let the console's availability shape the session it is supposed to observe.
+        _telemetry.Writer.TryWrite(report);
+    }
+
+    /// <summary>Drains the queue onto the socket while this connection is up.</summary>
+    private async Task TelemetryLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var report in _telemetry.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await WebSocketMessaging.SendAsync(socket, new ClientMessage { Telemetry = report }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            // The receive loop reports the disconnect; a heartbeat that cannot be sent is not a second error.
+        }
+        finally
+        {
+            // Whatever was queued describes a connection that no longer exists.
+            while (_telemetry.Reader.TryRead(out _))
+            {
+            }
+        }
+    }
+
     private async Task RegisterAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
         var challenge = await WebSocketMessaging.ReceiveAsync(socket, ServerMessage.Parser, cancellationToken).ConfigureAwait(false);
@@ -144,6 +208,9 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         {
             Certificate = ByteString.CopyFrom(identity.Certificate.RawData),
             Signature = ByteString.CopyFrom(identity.Sign(challenge.RegisterChallenge.Nonce.Span)),
+
+            // The only capability this client has; the server gates admin_command on it.
+            ClientCapabilities = ClientCapabilities.AdminCommands,
         };
         await WebSocketMessaging.SendAsync(socket, new ClientMessage { Register = register }, cancellationToken).ConfigureAwait(false);
 
@@ -259,6 +326,9 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                         answered.TrySetResult(message.PresenceResult);
                     }
 
+                    break;
+                case ServerMessage.BodyOneofCase.AdminCommand:
+                    _admin.Writer.TryWrite(message.AdminCommand);
                     break;
                 default:
                     break;

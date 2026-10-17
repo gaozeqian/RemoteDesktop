@@ -13,6 +13,7 @@ message ClientMessage {
     ConnectAccept connect_accept = 3;
     ConnectReject connect_reject = 4;
     PresenceQuery presence_query = 5;
+    TelemetryReport telemetry = 6;
   }
 }
 
@@ -24,6 +25,7 @@ message ServerMessage {
     ConnectReady connect_ready = 4;
     ConnectFailed connect_failed = 5;
     PresenceResult presence_result = 6;
+    AdminCommand admin_command = 7;
   }
 }
 
@@ -36,6 +38,8 @@ message RegisterChallenge {
 message Register {
   bytes certificate = 1;
   bytes signature = 2;
+  // Bitmask of ClientCapabilities. The server only ever sends a capability's messages to a device that declared it.
+  uint32 client_capabilities = 3;
 }
 
 message Registered {
@@ -53,6 +57,10 @@ message RelayInfo {
   PeerEndpoint endpoint = 1;
   // Opaque to clients; validated by the relay.
   bytes ticket = 2;
+  // The relay session this ticket opens, as a UUID in "D" form. Clients echo it in telemetry so the console can attach
+  // quality to the relay's own record of the session instead of inventing a second one. Empty when no relay is
+  // configured; the relay itself only ever sees the ticket.
+  string relay_session_id = 3;
 }
 
 // Controller -> server.
@@ -116,4 +124,50 @@ message PresenceQuery {
 message PresenceResult {
   string request_id = 1;
   repeated uint32 online_device_ids = 2;
+}
+
+// Server -> host. An operator approved an action in the ops console; the console asked the signaling server, which
+// forwards it here. Only a device that declared the capability in Register receives one, and it never answers.
+message AdminCommand {
+  // UUID the console generated, so the host's log line can be matched to the console's audit entry.
+  string command_id = 1;
+  // One of the commands in ClientCapabilities, currently "disconnect_session".
+  string command = 2;
+  // Which session to act on, in the 32-hex form both ends of a session share.
+  string session_id = 3;
+}
+
+enum TelemetryRole {
+  TELEMETRY_ROLE_UNSPECIFIED = 0;
+  TELEMETRY_ROLE_CONTROLLER = 1;
+  TELEMETRY_ROLE_HOST = 2;
+}
+
+enum TelemetryTransport {
+  TELEMETRY_TRANSPORT_UNSPECIFIED = 0;
+  TELEMETRY_TRANSPORT_DIRECT = 1;
+  TELEMETRY_TRANSPORT_RELAYED = 2;
+}
+
+// Client -> server, sent every 30 s while a session is open and only when the client's telemetry switch is on. The
+// server never answers and never retries: a lost report is a lost sample, not an error.
+//
+// What it deliberately does not carry: device name, addresses, window titles, keystrokes, file names. And what it
+// cannot carry: packet loss and bitrate — the .NET QUIC API exposes neither per connection, and an encoder's target
+// bitrate is a setting, not a measurement. Both are absent rather than reported as zero.
+message TelemetryReport {
+  // The session both ends agree on (32 hex chars), announced by the controller in Hello.session_id.
+  string session_id = 1;
+  // UUID in "D" form when this session went through a relay; empty for a direct path.
+  string relay_session_id = 2;
+  TelemetryRole role = 3;
+  // "control" or "view" — a string rather than an enum so a new mode does not need a protocol change to be measured.
+  string mode = 4;
+  TelemetryTransport transport = 5;
+  // Controller only, measured by the control channel's ping. 0 when this side does not measure it.
+  uint32 rtt_millis = 6;
+  // Host only: "windows", "macos" or "linux". Empty from a controller.
+  string platform = 7;
+  // Product version of the reporting process, e.g. "0.3.0".
+  string version = 8;
 }

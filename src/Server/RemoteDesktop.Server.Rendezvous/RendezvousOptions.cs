@@ -9,6 +9,15 @@ public sealed class RendezvousOptions
     /// <summary>UDP port of the address reflector; 0 picks a free port (tests).</summary>
     public int ReflectorPort { get; set; } = 5081;
 
+    /// <summary>How the console's node list names this server.</summary>
+    public string Name { get; set; } = "rendezvous";
+
+    /// <summary>
+    /// Bearer token the console must present to <c>/metrics</c> and <c>/internal/*</c>. Empty means no check, which is
+    /// only acceptable on a loopback listener. The same value is configured on the relay and the console.
+    /// </summary>
+    public string NodeToken { get; set; } = string.Empty;
+
     /// <summary>How long a connect request may wait for the host to answer.</summary>
     public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(20);
 

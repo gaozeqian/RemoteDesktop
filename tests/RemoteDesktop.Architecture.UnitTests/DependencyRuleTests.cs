@@ -16,6 +16,9 @@ public class DependencyRuleTests
     private const string Media = "RemoteDesktop.Media";
     private const string Platform = "RemoteDesktop.Platform";
     private const string Server = "RemoteDesktop.Server";
+    private const string OpsHost = "RemoteDesktop.Server.Ops";
+    private const string OpsCore = "RemoteDesktop.Server.Ops.Core";
+    private const string OpsStorage = "RemoteDesktop.Server.Ops.Storage";
     private const string Client = "RemoteDesktop.Client";
     private const string HostService = "RemoteDesktop.HostService";
     private const string SessionAgent = "RemoteDesktop.SessionAgent";
@@ -77,7 +80,9 @@ public class DependencyRuleTests
         Assert.True(result.IsSuccessful, $"{Features}.{feature} depends on another feature: {string.Join(", ", result.FailingTypeNames ?? [])}");
     }
 
-    /// <summary>Loads every assembly next to the tests whose name starts with <paramref name="prefix"/>.</summary>
+    /// <summary>
+    /// Loads every assembly next to the tests whose name starts with <paramref name="prefix"/>.
+    /// </summary>
     private static Assembly[] LoadAssemblies(string prefix)
     {
         var assemblies = Directory.GetFiles(AppContext.BaseDirectory, prefix + "*.dll")
@@ -87,4 +92,32 @@ public class DependencyRuleTests
         Assert.NotEmpty(assemblies);
         return assemblies;
     }
+
+    /// <summary>
+    /// The console's three layers, in the direction the plan promised: policy knows nothing about persistence or HTTP,
+    /// persistence knows nothing about the host it runs in, and none of them reads the signaling server's database.
+    /// </summary>
+    /// <remarks>
+    /// Written against referenced assembly names rather than the rules above because the prefixes here nest — the host
+    /// is a prefix of its own children — and a prefix match on "RemoteDesktop.Server.Ops" would flag the console's core
+    /// for depending on itself. The exact-name comparison says what is meant.
+    /// </remarks>
+    [Fact]
+    public void The_console_layers_only_point_inwards()
+    {
+        List<string> violations =
+        [
+            .. ForbiddenReferences(OpsCore, [OpsStorage, OpsHost, "Microsoft.AspNetCore", Server + ".Storage"]),
+            .. ForbiddenReferences(OpsStorage, [OpsHost, Server + ".Storage"]),
+            .. ForbiddenReferences(OpsHost, [Server + ".Storage"]),
+        ];
+
+        Assert.True(violations.Count == 0, $"console layering violations: {string.Join(", ", violations)}");
+    }
+
+    private static IEnumerable<string> ForbiddenReferences(string assemblyName, string[] forbidden) =>
+        Assembly.Load(assemblyName)
+            .GetReferencedAssemblies()
+            .Where(reference => forbidden.Contains(reference.Name, StringComparer.Ordinal))
+            .Select(reference => $"{assemblyName} -> {reference.Name}");
 }

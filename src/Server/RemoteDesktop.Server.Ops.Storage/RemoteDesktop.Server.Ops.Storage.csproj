@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The console's persistence: the DDL, the two drivers, and nothing above them. A plain class library on purpose —
+    the host asks for a store, never for a provider's name, so adding a database is a case here rather than a change
+    in the web layer.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteDesktop.Server.Ops.Core\RemoteDesktop.Server.Ops.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+</Project>

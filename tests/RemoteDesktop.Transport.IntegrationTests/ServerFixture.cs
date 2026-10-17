@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Rendezvous;
+using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -24,7 +25,7 @@ public sealed class ServerFixture : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         var key = RandomNumberGenerator.GetBytes(32);
-        Relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), key, TimeSpan.FromMinutes(2), TimeProvider.System, NullLogger<UdpRelay>.Instance);
+        Relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), key, TimeSpan.FromMinutes(2), TimeProvider.System, new NoopOpsEventSink(), "relay-test", NullLogger<UdpRelay>.Instance);
         _relayLoop = Relay.RunAsync(_stop.Token);
 
         // The address limits are sized for a real site and every test device here is a new identity from loopback,

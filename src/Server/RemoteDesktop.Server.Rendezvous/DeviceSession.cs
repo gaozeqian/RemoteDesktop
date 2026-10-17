@@ -5,13 +5,19 @@ using RemoteDesktop.Signaling;
 namespace RemoteDesktop.Server.Rendezvous;
 
 /// <summary>A registered device's signaling connection. Sends are serialized because WebSocket allows one at a time.</summary>
-public sealed class DeviceSession(uint deviceId, string fingerprint, WebSocket socket) : IDisposable
+public sealed class DeviceSession(uint deviceId, string fingerprint, uint capabilities, WebSocket socket) : IDisposable
 {
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     public uint DeviceId { get; } = deviceId;
 
     public string Fingerprint { get; } = fingerprint;
+
+    /// <summary>What the device declared it understands, from <see cref="RemoteDesktop.Signaling.ClientCapabilities"/>.</summary>
+    public uint Capabilities { get; } = capabilities;
+
+    /// <summary>Whether the device declared <paramref name="capability"/>; an older client simply has not.</summary>
+    public bool Supports(uint capability) => (Capabilities & capability) == capability;
 
     public async Task SendAsync(IMessage message, CancellationToken cancellationToken)
     {

@@ -88,7 +88,8 @@ public sealed partial class QuicPeerListener(
                 var path = relay is not null && connection.RemoteEndPoint.Equals(relay) ? ConnectionPath.Relayed : ConnectionPath.Direct;
                 LogAccepted(logger, device, path, connection.RemoteEndPoint);
                 await _accepted.Writer.WriteAsync(
-                    new QuicPeerConnection(connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint),
+                    new QuicPeerConnection(
+                        connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint, incoming.Relay?.RelaySessionId),
                     cancellationToken).ConfigureAwait(false);
             }
         }

@@ -19,10 +19,16 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Session use cases. The host composition must also register a transport (e.g. <c>AddQuicTransport</c>).
     /// </summary>
-    public static IServiceCollection AddRemoteDesktopApplication(this IServiceCollection services)
+    /// <param name="telemetry">
+    /// Whether this device reports session quality, and how often. Off when omitted: the feature is opt-in per
+    /// deployment, not per call site.
+    /// </param>
+    public static IServiceCollection AddRemoteDesktopApplication(this IServiceCollection services, TelemetryOptions? telemetry = null)
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<ConnectionAdmission>();
+        services.AddSingleton(telemetry ?? new TelemetryOptions());
+        services.AddSingleton<SessionTelemetry>();
         services.AddSingleton<ChannelDispatcher>();
         services.AddSingleton(sp =>
         {
@@ -40,6 +46,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<HostSessionService>();
         services.AddHostedService<TransportWorker>();
         services.AddHostedService(sp => sp.GetRequiredService<HostSessionService>());
+        services.AddHostedService<AdminCommandService>();
         return services;
     }
 

@@ -16,6 +16,11 @@
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Rendezvous\RemoteDesktop.Server.Rendezvous.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Relay\RemoteDesktop.Server.Relay.csproj" />
+    <!-- Without these references the new assemblies never reach this project's output, LoadAssemblies finds nothing
+         to check, and the two ops rules below pass by not running. -->
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops.Core\RemoteDesktop.Server.Ops.Core.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops.Storage\RemoteDesktop.Server.Ops.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops\RemoteDesktop.Server.Ops.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NetArchTest.Rules" />

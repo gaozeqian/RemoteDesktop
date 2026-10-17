@@ -12,17 +12,19 @@ set -e
 case "$1" in
     remove)
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
         else
-            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service >/dev/null 2>&1 || true
+            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
         fi
 
         if command -v deb-systemd-helper >/dev/null 2>&1; then
             deb-systemd-helper disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper disable remotedesktop-relay.service >/dev/null 2>&1 || true
+            deb-systemd-helper disable remotedesktop-ops.service >/dev/null 2>&1 || true
         else
             systemctl disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             systemctl disable remotedesktop-relay.service >/dev/null 2>&1 || true
+            systemctl disable remotedesktop-ops.service >/dev/null 2>&1 || true
         fi
         ;;
 

@@ -27,6 +27,7 @@ public sealed partial class HostSessionService(
     HostCredentials credentials,
     AuthAttemptLimiter limiter,
     ConnectionAdmission admission,
+    SessionTelemetry telemetry,
     ILogger<HostSessionService> logger,
     ISystemKeepAwake? keepAwake = null) : BackgroundService
 {
@@ -115,6 +116,7 @@ public sealed partial class HostSessionService(
                 _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
                 keepAwake?.Acquire();
+                telemetry.Track(session, end.Token);
                 SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {
@@ -200,7 +202,14 @@ public sealed partial class HostSessionService(
             },
         }, cancellationToken).ConfigureAwait(false);
 
-        return new SessionContext(SessionId.New(), SessionRole.Host, connection, grant);
+        // The controller's id, adopted so both ends report under one session id. A collision — a controller picking an
+        // id another session already uses — falls back to a fresh one, which is the only case where the two ends
+        // disagree, and it is visible in the console as two rows rather than as one wrong one.
+        var id = SessionId.TryParse(hello.SessionId, out var announced) && !_hosted.ContainsKey(announced)
+            ? announced
+            : SessionId.New();
+
+        return new SessionContext(id, SessionRole.Host, connection, grant);
     }
 
     private async Task RunSessionAsync(HostedSession hosted)

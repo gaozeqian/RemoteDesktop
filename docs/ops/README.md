@@ -3,6 +3,9 @@
 给**要部署和运维的人**：架服务器、发版、把客户端与被控端装到机器上、出问题时查什么。
 打包脚本的内部细节见 §八，客户端本机存了什么见 §九。
 
+> 运维监控台（节点健康、会话、告警、审计）已经可用：怎么装、怎么让总览出现数字见 §二 10，
+> 它的构成与设计见 §十一。
+
 被控端与服务端各自需要什么系统见 §一；功能怎么用、哪些平台支持什么见 [使用说明](../usage/README.md)；
 "部署者必须自己做的事"（换共享密钥、信令上 TLS、装包签名）见 [系统设计](../design/README.md) §3。
 
@@ -444,6 +447,77 @@ scrape_configs:
     static_configs:
       - targets: ["127.0.0.1:5080"]
 ```
+
+### 10. 运维监控台（可选）
+
+控制台（`RemoteDesktop.Server.Ops`）是独立于信令与中继的第三个服务，用来**看**数字和**管**设备与会话。不装它，
+远程桌面照常工作。它默认**只监听 `127.0.0.1:5090`**：控制台有自己的登录面，暴露到公网是反向代理的决定，不是默认。
+
+#### 启动
+
+本地（开发或试用）：
+
+```bash
+dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin   # 建第一个账号
+dotnet run --project src/Server/RemoteDesktop.Server.Ops                          # http://127.0.0.1:5090
+```
+
+随 `.deb` 一起装（单元 `remotedesktop-ops.service` 已随包带上并启用）。数据库落在
+`/var/lib/remotedesktop-server/ops.db`，与信令服务的库同一个账号、同一个目录：
+
+```bash
+sudo -u remotedesktop /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+systemctl restart remotedesktop-ops
+```
+
+Windows 上同一个可执行文件也能作为服务跑（服务名 `RemoteDesktopOps`）：
+
+```powershell
+sc.exe create RemoteDesktopOps binPath= "\"C:\rd\ops\RemoteDesktop.Server.Ops.exe\"" start= auto
+sc.exe start RemoteDesktopOps
+```
+
+#### 首个管理员
+
+没有默认口令、没有网页初始化入口。`--create-admin <用户名>` 交互式设口令，打印 TOTP 密钥与 `otpauth://` URI，
+导入验证器即可。**密钥只显示这一次**，丢了只能再建一个管理员账号。口令之后还要过 TOTP 二次验证才能登录
+（`Ops:RequireTotp=true` 默认开着，别关）。
+
+#### 关键配置（`Ops` 段）
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `Ops:Listen` | `http://127.0.0.1:5090` | Kestrel 监听地址；对外由反向代理上 TLS |
+| `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString` |
+| `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
+| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 不校验（仅回环时安全），三个进程同一值 |
+| `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
+| `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
+| `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知 |
+| `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
+
+#### 让总览出现数字：三件事缺一不可
+
+1. **节点能上报指标**：信令服务设 `Rendezvous:MetricsEnabled=true`；中继默认就有 `/metrics`。
+2. **控制台里登记节点**：节点管理页登记两个节点的 `baseUrl`（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）。
+3. **事件通道**：信令/中继把会话事件推给控制台，三处要同一个 HMAC 密钥（`openssl rand -base64 32`）：
+
+   ```text
+   # 信令服务、中继服务的 appsettings.json（或环境变量）
+   "OpsEvents": { "Endpoint": "http://127.0.0.1:5090", "Key": "<Base64>", "KeyId": "k1" }
+   # 控制台
+   "Ops": { "Ingest": { "Keys": { "k1": "<同一个 Base64>" } } }
+   ```
+
+   密钥不配，控制台收不到任何事件——`/ingest/events` 返回 503，而不是收到伪造数据。会话、链路、告警、心跳
+   全是这条通道进来的；只有节点指标走抓取那条。
+
+#### 管理动作与审计
+
+- **断开会话 / 封禁设备**要两个人：一个发起、一个批准，发起人不能批准自己的动作；两步各留一条审计。
+- 断开会话需要被控端开着 `Telemetry:Enabled`（否则控制台不知道被控端所知的会话 id）。
+- 审计日志是哈希链，`审计日志 → 校验链` 能指出第一条被改动的记录。
+- 构成与设计见 §十一。
 
 ## 三、自动化发布到 GitHub Releases
 
@@ -1006,3 +1080,104 @@ remotedesktop --self-check
 | Linux：剪贴板不同步 | 桌面没有授予剪贴板（和键盘鼠标在同一次授权里，点"拒绝"就没有）；或内容超过 8 MB | 看一眼被控端日志：授予失败会有 "did not grant control"。超大内容会被丢弃而不是截断 |
 | Linux：摄像头列表是空的 | 两种可能：机器上确实没有摄像头（portal 的 `IsCameraPresent` 答 false），或者授权被拒了 | 被控端日志里会有 "did not grant access to the cameras"。这条路径**没有被验证过**——见 [平台移植总览](../ports/README.md) 的"未验证项" |
 | Linux：光标位置不更新 | 合成器没有送光标元数据 | 画面本身正常；被控端日志会警告一次 |
+
+## 十一、运维监控台设计
+
+给**要改监控台代码、或想理解它为什么这样**的人。怎么装、怎么让总览出现数字见 §二 10，这里只讲构成与设计。
+
+### 定位与边界
+
+第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：控制台宕机、重启、升级，
+不影响任何一次远程连接。
+
+**做什么**：节点健康、在线设备、会话、告警、审计，浅色/深色主题。
+
+**不做什么**（有意不做）：日志聚合、远程命令执行、存画面/剪贴板/文件内容、替代 Prometheus/Grafana。
+
+### 为什么独立成一个进程
+
+1. 控制台要跨节点聚合，而信令是无状态横向扩展的——UI 和库塞进去等于给信令加一个必须跨实例一致的状态。
+2. 信令在连接建立路径上，管理面的一次错误查询、一次库锁，都不该有机会影响握手。
+3. 认证面独立：后台账号被盗不该等于信令被接管。
+
+### 三条边界
+
+| 边界 | 方向 | 协议 | 用途 |
+|---|---|---|---|
+| 指标 | 控制台 → 节点 | Prometheus 文本 | 数字、趋势 |
+| 对象查询 / 管理 | 控制台 → 节点 | JSON `/internal/v1`，Bearer | 设备列表、断开会话、封禁 |
+| 事件 | 节点 → 控制台 | JSON 批量 POST，HMAC | 会话事实 |
+
+### 数据从哪来（范围合同）
+
+每块面板都要能指到来源，指不到的就不做。**"服务器没有这个数"是常态，不是缺陷**：
+
+| 面板 | 来源 | 状态 |
+|---|---|---|
+| 在线设备 | `remotedesktop_devices_online` gauge | 有 |
+| 中继带宽 / 流量图 | Relay 字节计数器求速率 | 有 |
+| 活跃会话 | Relay 配对事件 + 客户端心跳，`source` 分开计数 | 有 |
+| 链路类型 / 平台分布 | 客户端心跳（被控端报平台） | 有（心跳默认关） |
+| 会话 RTT | 客户端心跳（控制端测） | 有 |
+| 丢包 / 码率 | **无来源** | 不做，显示"—" |
+| 文件传输任务 / 审计 | **无来源** | 不做 |
+| 设备列表 | `/internal/v1/devices` | 有（代码、注册时间、最后活跃、在线、封禁） |
+
+**丢包与码率为什么没有**：.NET 的 QUIC API 不暴露每连接的丢包统计，编码器的码率是设置值不是吞吐量。
+两列保持"—"。想填只能改传输层去做字节计数或读 MsQuic 的 native 统计。
+
+### 代码落位与依赖
+
+| 项目 | 职责 |
+|---|---|
+| `RemoteDesktop.Server.Ops` | Web 宿主：端点、认证、静态页、后台任务 |
+| `RemoteDesktop.Server.Ops.Core` | 纯逻辑：Prometheus 解析、会话投影、规则求值、TOTP、审计链 |
+| `RemoteDesktop.Server.Ops.Storage` | 表结构、方言、读写 |
+| `RemoteDesktop.Server.Ops.UnitTests` / `.IntegrationTests` | 纯逻辑单测 / 真宿主 + 假节点 |
+
+两条强制的依赖规则（架构测试兜底）：`Ops.Core` 只依赖 BCL + `Server.Shared`（契约），不碰 Storage/宿主/ASP.NET；
+`Ops.Storage` 不依赖宿主。**不引用 `Server.Storage`**：设备注册表是信令服务的库，控制台经内部 API 拿设备数据，
+不直连对方数据库。
+
+### 事件与投影
+
+- 信封 `{ v, eventId, node, kind, occurredAt, correlationId, payload }`；`eventId` 唯一（重放无害），`correlationId`
+  由服务端生成——**绝不用客户端的 `RequestId`**（可被构造，能撞别人的时间线）。
+- 事件是事实（`ops_event`），会话是投影（`ops_session`），同事务写；投影可由事件重放重建。
+- `source ∈ {relay, signaling, client}` 是诚实性字段：不把三者加成一个"活跃会话总数"。
+
+### 数据模型
+
+基线表 + 三个迁移（`ops_schema_version` 只前进）：v1 基线；v2 加 `ops_session.platform / version`；v3 加
+`ops_session.client_session_id` 与 `ops_admin_action` 表。时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL。
+
+核心表：`ops_node`（节点）、`ops_metric_sample` / `_catalog`（指标）、`ops_event` / `ops_session`（事实与投影）、
+`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_admin_user` / `_session`（账号）、`ops_audit_log`（哈希链审计）、
+`ops_admin_action`（两段式复核）、`ops_lease`（单实例租约）。
+
+### 认证与安全
+
+| 项 | 决定 |
+|---|---|
+| 口令 | PBKDF2-HMAC-SHA256，60 万次迭代，16 字节盐，32 字节输出 |
+| 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开 |
+| 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时 |
+| 角色 | `viewer` 只读 / `operator` 确认告警、发起动作 / `admin` 改规则、管账号、批准动作、看审计 |
+| CSRF | 双提交 Cookie + `X-Ops-CSRF`，`SameSite=Strict` |
+| 审计 | `SHA256(prev_hash ‖ 字段)` 哈希链，`/api/audit/verify` 报第一条不一致 |
+| 管理动作 | 两段式：发起（operator）+ 批准（admin），发起人不能批准自己的 |
+
+### 告警
+
+规则是**结构化列，不是表达式**：`single`（单指标）、`ratio`（两指标比值）、`scrape`（抓取失败）、
+`session.rtt`、`session.direct`（直连率）。`forSeconds` 状态机——条件持续满足才开，抖动一次不叫人；
+去重键保证同一对象同时只有一条未恢复告警。通知走一个 Webhook（`Ops:Notifications:WebhookUrl`），开/恢复各一次。
+
+### 已知边界与未做
+
+- 丢包 / 码率：无来源（见上）。
+- 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
+- 节点鉴权只有部署级 `Ops:NodeToken`；每节点令牌未做。
+- 明确**单实例**：抓取/告警求值/保留清理都靠 `ops_lease` 抢独占；多副本需要再把带租约的 worker 拆出去，未做
+  SignalR backplane。
+- Windows 侧控制台用"可执行文件直接当服务"（`sc.exe`），未加 MSI 组件。

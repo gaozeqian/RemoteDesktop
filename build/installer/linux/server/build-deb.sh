@@ -37,8 +37,8 @@ done
 rm -rf "$work"
 mkdir -p "$work/DEBIAN" "$work/usr/lib/remotedesktop-server" "$work/lib/systemd/system" "$work/etc/default"
 
-echo "Publishing the two servers for $runtime (version $version)..."
-for server in Rendezvous Relay; do
+echo "Publishing the servers for $runtime (version $version)..."
+for server in Rendezvous Relay Ops; do
     dotnet publish "$root/src/Server/RemoteDesktop.Server.$server" \
         -c Release -r "$runtime" --self-contained true \
         -o "$work/usr/lib/remotedesktop-server/$server" \
@@ -47,12 +47,15 @@ done
 
 # The settings are not shipped in the package: the post-install step writes them from /etc/default, so that a first
 # install and every later upgrade go through the same code. The appsettings.json the publish produced sits next to
-# the program and is never read — the services start in /etc, and that is the content root.
+# the program and is never read — the services start in /etc, and that is the content root. The console is the same,
+# except its settings come from the environment the unit sets (see remotedesktop-ops.service).
 rm -f "$work/usr/lib/remotedesktop-server/Rendezvous/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Relay/appsettings"*.json
+rm -f "$work/usr/lib/remotedesktop-server/Ops/appsettings"*.json
 
 install -m 0644 "$root/build/service/linux/remotedesktop-rendezvous.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-relay.service" "$work/lib/systemd/system/"
+install -m 0644 "$root/build/service/linux/remotedesktop-ops.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-server.default" "$work/etc/default/remotedesktop-server"
 
 install -m 0755 "$root/build/installer/linux/server/postinst" "$work/DEBIAN/postinst"

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Signaling;
 
@@ -23,18 +24,30 @@ public sealed partial class UdpRelay : IDisposable
     private readonly byte[] _key;
     private readonly TimeSpan _idleTimeout;
     private readonly TimeProvider _time;
+    private readonly IOpsEventSink _events;
+    private readonly string _nodeName;
     private readonly ILogger<UdpRelay> _logger;
     private readonly Dictionary<Guid, Pairing> _pairings = [];
     private readonly Dictionary<IPEndPoint, Route> _routes = [];
     private DateTimeOffset _nextCleanup;
 
-    public UdpRelay(IPEndPoint bindEndPoint, byte[] sharedKey, TimeSpan idleTimeout, TimeProvider time, ILogger<UdpRelay> logger)
+    // Exported numbers. The receive loop owns the tables above and runs on one thread; these five are read from an HTTP
+    // thread, so they are touched only through Interlocked/Volatile and never while holding a reference to a pairing.
+    private long _bytesToController;
+    private long _bytesToHost;
+    private long _packetsForwarded;
+    private long _pairingsTotal;
+    private int _activePairings;
+
+    public UdpRelay(IPEndPoint bindEndPoint, byte[] sharedKey, TimeSpan idleTimeout, TimeProvider time, IOpsEventSink events, string nodeName, ILogger<UdpRelay> logger)
     {
         ArgumentNullException.ThrowIfNull(bindEndPoint);
 
         _key = sharedKey;
         _idleTimeout = idleTimeout;
         _time = time;
+        _events = events;
+        _nodeName = nodeName;
         _logger = logger;
         _socket = new Socket(bindEndPoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
         _socket.Bind(bindEndPoint);
@@ -43,7 +56,15 @@ public sealed partial class UdpRelay : IDisposable
     public IPEndPoint LocalEndPoint => (IPEndPoint)_socket.LocalEndPoint!;
 
     /// <summary>Number of fully paired sessions (for metrics and tests).</summary>
-    public int ActivePairings => _pairings.Values.Count(p => p.Controller is not null && p.Host is not null);
+    public int ActivePairings => Volatile.Read(ref _activePairings);
+
+    /// <summary>Counters and gauges for the metrics endpoint, read without touching the receive loop's tables.</summary>
+    public RelaySnapshot Snapshot() => new(
+        ActivePairings,
+        Interlocked.Read(ref _bytesToController),
+        Interlocked.Read(ref _bytesToHost),
+        Interlocked.Read(ref _packetsForwarded),
+        Interlocked.Read(ref _pairingsTotal));
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -96,6 +117,22 @@ public sealed partial class UdpRelay : IDisposable
         if (_routes.TryGetValue(from, out var route))
         {
             route.Pairing.LastActivity = _time.GetUtcNow();
+
+            // Counted before the send: a failed send still cost the peer the datagram, and attributing bytes to the
+            // direction that produced them is what makes the two counters add up to the traffic that was offered.
+            var bytes = packet.Length;
+            if (from.Equals(route.Pairing.Controller))
+            {
+                Interlocked.Add(ref _bytesToHost, bytes);
+                route.Pairing.BytesToHost += bytes;
+            }
+            else
+            {
+                Interlocked.Add(ref _bytesToController, bytes);
+                route.Pairing.BytesToController += bytes;
+            }
+
+            Interlocked.Increment(ref _packetsForwarded);
             await SendAsync(packet, route.Peer, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -179,6 +216,17 @@ public sealed partial class UdpRelay : IDisposable
         {
             _routes[pairing.Controller] = new Route(pairing, pairing.Host);
             _routes[pairing.Host] = new Route(pairing, pairing.Controller);
+
+            // Counted once per pairing, not once per bind: a rebind re-adds both routes and must not look like a new
+            // session on the dashboard.
+            if (!pairing.Routed)
+            {
+                pairing.Routed = true;
+                Interlocked.Increment(ref _activePairings);
+                Interlocked.Increment(ref _pairingsTotal);
+                Publish(OpsEventKinds.RelayPaired, pairing.SessionId, new { relaySessionId = pairing.SessionId.ToString("D"), pairedAt = pairing.LastActivity });
+            }
+
             LogPaired(_logger, pairing.SessionId, pairing.Controller, pairing.Host);
         }
 
@@ -215,8 +263,26 @@ public sealed partial class UdpRelay : IDisposable
         }
     }
 
-    private void CleanupIfDue()
+    /// <summary>Queues one fact for the console. Skipped entirely when no console is configured.</summary>
+    private void Publish(string kind, Guid correlationId, object payload)
     {
+        if (!_events.Enabled)
+        {
+            return;
+        }
+
+        _events.Publish(new OpsEventEnvelope
+        {
+            EventId = Guid.CreateVersion7().ToString("D"),
+            Node = _nodeName,
+            Kind = kind,
+            OccurredAt = _time.GetUtcNow(),
+            CorrelationId = correlationId.ToString("D"),
+            Payload = JsonSerializer.Serialize(payload, OpsEventJson.Options),
+        });
+    }
+
+    private void CleanupIfDue()    {
         var now = _time.GetUtcNow();
         if (now < _nextCleanup)
         {
@@ -228,6 +294,19 @@ public sealed partial class UdpRelay : IDisposable
         {
             Unroute(pairing);
             _pairings.Remove(pairing.SessionId);
+            if (pairing.Routed)
+            {
+                pairing.Routed = false;
+                Interlocked.Decrement(ref _activePairings);
+                Publish(OpsEventKinds.RelayClosed, pairing.SessionId, new
+                {
+                    relaySessionId = pairing.SessionId.ToString("D"),
+                    bytesToController = pairing.BytesToController,
+                    bytesToHost = pairing.BytesToHost,
+                    closedAt = now,
+                    reason = "idle",
+                });
+            }
         }
     }
 
@@ -270,6 +349,15 @@ public sealed partial class UdpRelay : IDisposable
         public IPEndPoint? Controller { get; set; }
 
         public IPEndPoint? Host { get; set; }
+
+        /// <summary>Whether this pairing is currently counted in <see cref="ActivePairings"/>.</summary>
+        public bool Routed { get; set; }
+
+        /// <summary>Bytes this pairing carried from hosts to controllers; reported when it closes.</summary>
+        public long BytesToController { get; set; }
+
+        /// <summary>Bytes this pairing carried from controllers to hosts.</summary>
+        public long BytesToHost { get; set; }
 
         public DateTimeOffset LastActivity { get; set; }
     }

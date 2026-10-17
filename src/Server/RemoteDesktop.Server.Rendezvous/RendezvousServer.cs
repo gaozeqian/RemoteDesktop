@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
+using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Server.Storage;
 
 namespace RemoteDesktop.Server.Rendezvous;
@@ -33,6 +35,10 @@ public static class RendezvousServer
         database.Validate();
         services.AddDeviceRegistry(database);
 
+        // No endpoint configured is the normal case for a deployment without a console: the no-op sink keeps every
+        // call site identical.
+        services.AddOpsEvents(configuration, options.Name);
+
         // A store is a database, and a database has a schema to create and a connection to watch. A registry that
         // is not a store — the in-memory one — has neither, so this is the whole condition.
         var persistent = database.Provider != DatabaseSettings.None;
@@ -40,6 +46,14 @@ public static class RendezvousServer
         {
             services.AddHostedService<DeviceRegistryInitializer>();
         }
+
+        // What this process is, for the console's node list. Registered here rather than computed per request so the
+        // start time is the start time.
+        services.AddSingleton(new NodeInfo(
+            options.Name,
+            "rendezvous",
+            typeof(RendezvousServer).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
         // The counters exist whether or not the endpoint is served: the paths that count never ask whether anyone is
         // reading, and an increment nobody scrapes is cheaper than a branch around it.
@@ -60,7 +74,9 @@ public static class RendezvousServer
             sp.GetRequiredService<TimeProvider>()));
 
         services.AddSingleton<PresenceService>();
+        services.AddSingleton<NodeEventPublisher>();
         services.AddSingleton<ConnectionBroker>();
+        services.AddSingleton<TelemetryReceiver>();
         services.AddSingleton<SignalingEndpoint>();
         services.AddSingleton<AddressReflector>();
         services.AddHostedService(sp => sp.GetRequiredService<AddressReflector>());
@@ -91,9 +107,65 @@ public static class RendezvousServer
         // count nor acknowledges that it has anything to hide there.
         if (app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.MetricsEnabled)
         {
-            app.MapGet(MetricsPath, (HttpContext context, ServerMetrics metrics, ConnectionQuota quota, DevicePresence presence) =>
-                metrics.WriteAsync(context, quota.Open, presence.Count));
+            app.MapGet(MetricsPath, async (HttpContext context, ServerMetrics metrics, ConnectionQuota quota, DevicePresence presence, IOptions<RendezvousOptions> options) =>
+            {
+                if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    return;
+                }
+
+                await metrics.WriteAsync(context, quota.Open, presence.Count).ConfigureAwait(false);
+            });
         }
+
+        // What this node is, for the console's node list. The same shape the relay serves, from the same contract.
+        app.MapGet("/internal/v1/info", (HttpContext context, NodeInfo info, IOptions<RendezvousOptions> options) =>
+            NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken)
+                ? Results.Ok(info)
+                : Results.Unauthorized());
+
+        // A page of registered devices. Read-only, paged by device id, and the only way the console learns about
+        // devices: it never opens this server's database.
+        app.MapGet("/internal/v1/devices", async (
+            HttpContext context,
+            IDeviceCatalog catalog,
+            DevicePresence presence,
+            IOptions<RendezvousOptions> options,
+            string? cursor,
+            int? limit,
+            CancellationToken cancellationToken) =>
+        {
+            if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            var after = uint.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+            var pageSize = Math.Clamp(limit ?? 50, 1, 200);
+
+            // One row more than asked for is how "is there a next page" is answered without counting the table.
+            var records = await catalog.ListAsync(after, pageSize + 1, cancellationToken).ConfigureAwait(false);
+            var hasMore = records.Count > pageSize;
+            var page = hasMore ? records.Take(pageSize).ToArray() : [.. records];
+            var online = presence.FilterOnline([.. page.Select(record => record.DeviceId)]).ToHashSet();
+
+            NodeDeviceSummary[] devices =
+            [
+                .. page.Select(record => new NodeDeviceSummary(
+                    record.DeviceId,
+                    record.FirstSeenUnixMilliseconds,
+                    record.LastSeenUnixMilliseconds,
+                    online.Contains(record.DeviceId),
+                    record.Revoked)),
+            ];
+
+            return Results.Ok(new NodeDevicePage(
+                devices,
+                hasMore ? page[^1].DeviceId.ToString(CultureInfo.InvariantCulture) : null));
+        });
+
+        app.MapNodeAdmin();
 
         app.Map(SignalingPath, (HttpContext context, SignalingEndpoint endpoint) => endpoint.HandleAsync(context));
         return app;

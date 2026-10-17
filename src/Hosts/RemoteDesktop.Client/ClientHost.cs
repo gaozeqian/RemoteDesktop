@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Client.ViewModels;
 using RemoteDesktop.Features.Camera;
@@ -85,20 +86,24 @@ internal static class ClientHost
             .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
             .AddSingleton<MainWindowViewModel>();
 
+        // Off unless the deployment turns it on. Read here rather than inside the application layer so both
+        // compositions of this process — controller only, or controller and host — get the same answer.
+        var telemetry = builder.Configuration.GetSection(TelemetryOptions.SectionName).Get<TelemetryOptions>() ?? new TelemetryOptions();
+
         if (useService)
         {
             // The service is the device others connect to; this process only makes outgoing connections.
             transport.AcceptIncoming = false;
             builder.Services
                 .AddQuicTransport(transport)
-                .AddRemoteDesktopApplication()
+                .AddRemoteDesktopApplication(telemetry)
                 .AddSingleton<IHostControl>(new PipeHostControl(pipeName));
         }
         else
         {
             builder.Services
                 .AddQuicTransport(transport)
-                .AddRemoteDesktopApplication()
+                .AddRemoteDesktopApplication(telemetry)
                 .AddDesktopFeature()
                 .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
                 .AddTerminalFeature()

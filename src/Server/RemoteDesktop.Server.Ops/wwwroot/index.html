@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RemoteDesktop · 运维监控台</title>
+<link rel="stylesheet" href="/console.css">
+</head>
+<body>
+
+<!-- ============ 登录 ============ -->
+<main class="login-view" id="loginView">
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="login-brand">
+      <div class="brand-logo">RD</div>
+      <div>
+        <div class="brand-name">RemoteDesktop</div>
+        <div class="brand-sub">运维监控台 · M1</div>
+      </div>
+    </div>
+
+    <div id="passwordStep">
+      <label class="field">
+        <span>账号</span>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+      </label>
+      <label class="field">
+        <span>口令</span>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="primary" type="submit" id="loginButton">继续</button>
+    </div>
+
+    <div id="totpStep" hidden>
+      <p class="hint" id="totpHint">输入验证器上的 6 位动态码。</p>
+      <label class="field">
+        <span>动态码</span>
+        <input id="totpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+      </label>
+      <button class="primary" type="submit" id="totpButton">登录</button>
+      <button class="link-button" type="button" id="backButton">换一个账号</button>
+    </div>
+
+    <p class="error" id="loginError" role="alert" hidden></p>
+    <p class="login-foot">未初始化？在服务器上运行 <code>--create-admin &lt;用户名&gt;</code> 创建第一个账号。</p>
+  </form>
+</main>
+
+<!-- ============ 控制台 ============ -->
+<div class="app" id="appView" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">RD</div>
+      <div>
+        <div class="brand-name">RemoteDesktop</div>
+        <div class="brand-sub">运维监控台</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="主导航">
+      <div class="nav-group">监控</div>
+      <button class="nav-item active" type="button" data-page="overview">总览</button>
+      <button class="nav-item" type="button" data-page="sessions">会话监控</button>
+      <button class="nav-item" type="button" data-page="nodes">节点管理</button>
+      <button class="nav-item" type="button" data-page="devices">设备管理</button>
+      <div class="nav-group">运维</div>
+      <button class="nav-item" type="button" data-page="alerts">告警中心</button>
+      <button class="nav-item" type="button" data-page="actions">管理动作</button>
+      <button class="nav-item" type="button" data-page="audit" id="navAudit">审计日志</button>
+      <button class="nav-item" type="button" disabled>系统设置 <span class="soon">M6</span></button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div>Console v0.3.0 · 阶段 M1</div>
+      <div class="muted" id="scrapeHint">抓取间隔 10s</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="page-title" id="pageTitle">总览</div>
+      <span class="env-tag">本地实例</span>
+      <div class="topbar-right">
+        <span class="clock" id="clock">--:--:--</span>
+        <button class="icon-button" id="themeToggle" type="button" title="切换浅色 / 深色主题" aria-label="切换主题">
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg>
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+        </button>
+        <div class="user-chip">
+          <span class="avatar" id="avatar">·</span>
+          <span id="userName">—</span>
+          <span class="role-tag" id="userRole">—</span>
+        </div>
+        <button class="ghost" id="logoutButton" type="button">退出</button>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- ---------- 总览 ---------- -->
+      <section class="page" id="page-overview">
+        <div class="banner" id="overviewBanner">
+          <div>
+            <strong>节点数字来自抓取；链路与平台来自客户端心跳（默认关闭）。</strong>
+            <p>在线设备与中继会话是 gauge（最近 60 秒内有读数才显示），带宽由计数器差分求得。心跳关闭时链路与平台为空，不补 0。</p>
+          </div>
+          <span class="tag" id="overviewStamp">尚未抓取</span>
+        </div>
+
+        <section class="grid kpi-row">
+          <div class="card kpi">
+            <div class="kpi-label">在线设备</div>
+            <div class="kpi-value" id="kpiDevices">—</div>
+            <div class="kpi-foot">信令连接数 · <code>devices_online</code></div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">中继会话</div>
+            <div class="kpi-value" id="kpiSessions">—</div>
+            <div class="kpi-foot">Relay 已配对 · <code>pairings_active</code></div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">中继出口带宽</div>
+            <div class="kpi-value" id="kpiBandwidth">—</div>
+            <div class="kpi-foot">近 2 分钟均值 · 双向合计</div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">今日告警</div>
+            <div class="kpi-value" id="kpiAlerts">—</div>
+            <div class="kpi-foot">M3 接入规则引擎后可见</div>
+          </div>
+        </section>
+
+        <section class="grid overview-cols">
+          <div class="card">
+            <div class="card-head">
+              <h2>中继流量</h2>
+              <div class="legend">
+                <span><i class="swatch accent"></i>控制端 → 被控端</span>
+                <span><i class="swatch accent2"></i>被控端 → 控制端</span>
+                <span class="muted" id="trafficWindow">近 30 分钟</span>
+              </div>
+            </div>
+            <canvas id="trafficChart" height="200"></canvas>
+            <p class="empty" id="trafficEmpty" hidden>还没有流量读数。节点注册后约 10 秒出现第一个点。</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>节点状态</h2><span class="muted" id="nodeCount">0 个节点</span></div>
+            <div id="overviewNodes" class="node-list"></div>
+          </div>
+        </section>
+
+        <div class="card overview-mix">
+          <div class="card-head">
+            <h2>链路与平台</h2>
+            <span class="muted">近 24 小时 · 只统计客户端上报过心跳的会话</span>
+          </div>
+          <section class="mix-cols">
+            <div class="mix-block">
+              <h3>链路</h3>
+              <div id="linkMix" class="mix-list"></div>
+            </div>
+            <div class="mix-block">
+              <h3>被控端平台</h3>
+              <div id="platformMix" class="mix-list"></div>
+            </div>
+          </section>
+          <p class="empty" id="mixEmpty" hidden>还没有心跳。客户端设置 <code>Telemetry:Enabled</code> 后会话质量才会出现在这里。</p>
+        </div>
+      </section>
+
+      <!-- ---------- 会话 ---------- -->
+      <section class="page" id="page-sessions" hidden>
+        <div class="banner">
+          <div>
+            <strong>只有服务器看见的会话会出现在这里。</strong>
+            <p>中继会话由 Relay 上报（含字节数）。P2P 直连的会话服务器在握手之后就看不到了——除非客户端开启了心跳，那时它会以 <code>client</code> 来源出现，并带上 RTT 与平台。空列表不等于没人连接。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>最近会话</h2><span class="muted" id="sessionsHint"></span></div>
+          <table class="data-table">
+            <thead>
+              <tr><th>开始</th><th>控制端 → 被控端</th><th>传输</th><th>时长</th><th>字节（入 / 出）</th><th>质量</th><th>来源</th><th>状态</th><th></th></tr>
+            </thead>
+            <tbody id="sessionTbody"></tbody>
+          </table>
+          <p class="empty" id="sessionsEmpty" hidden>还没有会话事件。事件通道需要节点配置 <code>OpsEvents:Endpoint</code> 与 <code>Key</code>。</p>
+        </div>
+
+        <div class="card" id="sessionDetailCard" hidden>
+          <div class="card-head">
+            <h2 id="sessionDetailTitle">会话详情</h2>
+            <div class="toolbar">
+              <button class="small danger" type="button" id="sessionDisconnect" hidden>请求断开</button>
+              <button class="small" type="button" id="sessionDetailClose">关闭</button>
+            </div>
+          </div>
+          <div id="sessionEvents" class="timeline"></div>
+        </div>
+      </section>
+
+      <!-- ---------- 告警 ---------- -->
+      <section class="page" id="page-alerts" hidden>
+        <div class="banner">
+          <div>
+            <strong>规则是结构化的：单指标阈值，或两个指标的比值。</strong>
+            <p>条件必须持续满足 <code>forSeconds</code> 才会开告警；同一个去重键同时只有一个未恢复的告警。没有新读数时规则不会触发——不知道不等于出事了。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>告警</h2><span class="muted" id="alertsHint"></span></div>
+          <table class="data-table">
+            <thead><tr><th>严重度</th><th>规则</th><th>当前值</th><th>开始时间</th><th>状态</th><th></th></tr></thead>
+            <tbody id="alertTbody"></tbody>
+          </table>
+          <p class="empty" id="alertsEmpty" hidden>还没有告警。规则命中后会出现在这里。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>规则</h2><span class="muted" id="rulesHint"></span></div>
+          <table class="data-table">
+            <thead><tr><th>名称</th><th>类型</th><th>条件</th><th>持续时间</th><th>严重度</th><th>启用</th><th></th></tr></thead>
+            <tbody id="ruleTbody"></tbody>
+          </table>
+
+          <form id="ruleForm" class="form-grid" hidden>
+            <label class="field"><span>名称</span><input id="ruleName" type="text" required maxlength="64"></label>
+            <label class="field"><span>类型</span>
+              <select id="ruleKind">
+                <option value="scrape">抓取失败</option>
+                <option value="single">单指标</option>
+                <option value="session.rtt">会话 RTT</option>
+                <option value="session.direct">直连率</option>
+              </select>
+            </label>
+            <label class="field"><span>指标 / 分子</span><input id="ruleMetric" type="text" placeholder="remotedesktop_devices_online"></label>
+            <label class="field"><span>比较</span>
+              <select id="ruleComparator"><option value="gt">大于</option><option value="lt">小于</option></select>
+            </label>
+            <label class="field"><span>阈值</span><input id="ruleThreshold" type="number" step="any" value="0"></label>
+            <label class="field"><span>持续（秒）</span><input id="ruleFor" type="number" min="0" value="60"></label>
+            <label class="field"><span>严重度</span>
+              <select id="ruleSeverity"><option>P1</option><option selected>P2</option><option>P3</option></select>
+            </label>
+            <div class="form-actions">
+              <button class="primary" type="submit" id="ruleSubmit">保存规则</button>
+              <span class="error inline" id="ruleError" hidden></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- ---------- 管理动作 ---------- -->
+      <section class="page" id="page-actions" hidden>
+        <div class="banner">
+          <div>
+            <strong>会改动数据面的动作都要两个人：一个发起，一个批准。</strong>
+            <p>发起人不等于批准人。只有管理员批准后，命令才会发给信令服务；发起与批准各留一条审计。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>待处理与最近动作</h2><span class="muted" id="actionsHint"></span></div>
+          <table class="data-table">
+            <thead><tr><th>类型</th><th>设备</th><th>发起人</th><th>状态</th><th>批准人</th><th></th></tr></thead>
+            <tbody id="actionTbody"></tbody>
+          </table>
+          <p class="empty" id="actionsEmpty" hidden>还没有管理动作。断开会话、封禁设备会出现在这里。</p>
+        </div>
+      </section>
+
+      <!-- ---------- 审计 ---------- -->
+      <section class="page" id="page-audit" hidden>
+        <div class="banner">
+          <div>
+            <strong>审计日志是哈希链：每条记录都覆盖前一条的哈希。</strong>
+            <p>改动任意一行，从那一行开始的所有哈希都对不上。校验会指出第一条不一致的记录。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>审计日志</h2>
+            <div class="toolbar">
+              <button class="small" type="button" id="verifyAudit">校验链</button>
+              <span class="muted" id="auditVerifyResult"></span>
+            </div>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>IP</th><th>结果</th></tr></thead>
+            <tbody id="auditTbody"></tbody>
+          </table>
+          <p class="empty" id="auditEmpty" hidden>还没有审计记录。</p>
+        </div>
+      </section>
+
+      <!-- ---------- 设备 ---------- -->
+      <section class="page" id="page-devices" hidden>
+        <div class="banner">
+          <div>
+            <strong>设备代码由信令服务持有，控制台只转述。</strong>
+            <p>列表经 <code>/internal/v1/devices</code> 分页读取，按设备代码排序。设备名、版本、无人值守模式服务器并不知道——那些属于客户端，等心跳接入。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>注册设备</h2>
+            <div class="toolbar">
+              <select id="deviceNode" class="compact" aria-label="选择信令节点"></select>
+              <input id="deviceSearch" class="compact" type="search" placeholder="按设备代码过滤">
+              <span class="muted" id="devicesHint"></span>
+            </div>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>设备代码</th><th>状态</th><th>首次注册</th><th>最后活跃</th><th></th></tr></thead>
+            <tbody id="deviceTbody"></tbody>
+          </table>
+          <p class="empty" id="devicesEmpty" hidden>没有可用的信令节点，或该节点还没有登记过设备。</p>
+          <div class="load-more"><button class="small" type="button" id="devicesMore" hidden>加载更多</button></div>
+        </div>
+      </section>
+
+      <!-- ---------- 节点管理 ---------- -->
+      <section class="page" id="page-nodes" hidden>
+        <div class="banner">
+          <div>
+            <strong>手动登记，不自动发现。</strong>
+            <p>节点是 console 主动抓取的 HTTP 目标：信令服务的 <code>/metrics</code>、中继的 <code>/metrics</code>。默认都只监听回环地址。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>已登记节点</h2><span class="muted" id="nodesHint"></span></div>
+          <table class="data-table">
+            <thead>
+              <tr><th>名称</th><th>角色</th><th>地址</th><th>状态</th><th>最近抓取</th><th></th></tr>
+            </thead>
+            <tbody id="nodeTbody"></tbody>
+          </table>
+          <p class="empty" id="nodesEmpty" hidden>还没有节点。在下面登记第一个。</p>
+        </div>
+
+        <div class="card" id="nodeFormCard" hidden>
+          <div class="card-head"><h2>登记节点</h2><span class="muted">管理员</span></div>
+          <form id="nodeForm" class="form-grid">
+            <label class="field"><span>名称</span><input id="nodeName" type="text" placeholder="rdvz-sh-01" required maxlength="64"></label>
+            <label class="field"><span>角色</span>
+              <select id="nodeRole">
+                <option value="rendezvous">Rendezvous（信令）</option>
+                <option value="relay">Relay（中继）</option>
+              </select>
+            </label>
+            <label class="field wide"><span>基础地址</span><input id="nodeUrl" type="url" placeholder="http://127.0.0.1:5080" required></label>
+            <label class="field"><span>区域（可选）</span><input id="nodeRegion" type="text" placeholder="sh"></label>
+            <div class="form-actions">
+              <button class="primary" type="submit" id="nodeSubmit">登记</button>
+              <span class="error inline" id="nodeError" hidden></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script src="/console.js"></script>
+</body>
+</html>

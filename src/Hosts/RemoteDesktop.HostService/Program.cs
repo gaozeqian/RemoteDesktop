@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.HostService;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Features.Desktop;
@@ -92,6 +93,9 @@ builder.Logging.ClearProviders().AddSerilog(
         .CreateLogger(),
     dispose: true);
 
+// Off unless the deployment turns it on; see TelemetryOptions for what leaves the machine when it is.
+var telemetry = builder.Configuration.GetSection(TelemetryOptions.SectionName).Get<TelemetryOptions>() ?? new TelemetryOptions();
+
 if (OperatingSystem.IsWindows())
 {
     var agent = builder.Configuration.GetSection("Agent").Get<AgentGatewayOptions>() ?? new AgentGatewayOptions();
@@ -102,7 +106,7 @@ if (OperatingSystem.IsWindows())
         .AddWindowsPlatform(dataDirectory, DataProtectionScope.LocalMachine)
         .AddWindowsAgentGateway(agent)
         .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication()
+        .AddRemoteDesktopApplication(telemetry)
         .AddAgentForwardedDesktop()
         .AddLocalHostControl(isService: true)
         .AddHostedService<HostControlServer>();
@@ -114,7 +118,7 @@ else if (OperatingSystem.IsLinux())
     builder.Services
         .AddLinuxPlatform(dataDirectory)
         .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication()
+        .AddRemoteDesktopApplication(telemetry)
         .AddRemoteDesktopMedia()
         .AddDesktopFeature()
         .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The console's policy layer: parsing, projections, rule evaluation, credential primitives. No ASP.NET, no database
+    driver, no knowledge of which host runs it — which is what makes it testable without starting a server. The
+    dependency rules in tests/RemoteDesktop.Architecture.UnitTests keep it that way.
+
+    Server.Shared is referenced for the event envelope only: the projection folds the same contract the servers send,
+    and a second copy of that shape would be a second thing to keep in step.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
+  </ItemGroup>
+</Project>

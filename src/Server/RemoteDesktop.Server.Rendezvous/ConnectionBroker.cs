@@ -18,6 +18,7 @@ public sealed partial class ConnectionBroker
     private readonly KeyedTokenBucket<uint> _connectBudget;
     private readonly RendezvousOptions _options;
     private readonly ServerMetrics _metrics;
+    private readonly NodeEventPublisher _events;
     private readonly TimeProvider _time;
     private readonly ILogger<ConnectionBroker> _logger;
     private readonly byte[]? _relayKey;
@@ -28,6 +29,7 @@ public sealed partial class ConnectionBroker
         KeyedTokenBucket<uint> connectBudget,
         IOptions<RendezvousOptions> options,
         ServerMetrics metrics,
+        NodeEventPublisher events,
         TimeProvider time,
         ILogger<ConnectionBroker> logger)
     {
@@ -37,6 +39,7 @@ public sealed partial class ConnectionBroker
         _connectBudget = connectBudget;
         _options = options.Value;
         _metrics = metrics;
+        _events = events;
         _time = time;
         _logger = logger;
         if (!string.IsNullOrEmpty(_options.RelayEndpoint))
@@ -81,8 +84,8 @@ public sealed partial class ConnectionBroker
             return;
         }
 
-        var relay = CreateRelayInfo();
-        var pending = new PendingRequest(controller, host.DeviceId, relay);
+        var relay = CreateRelayInfo(out var correlationId);
+        var pending = new PendingRequest(controller, host.DeviceId, relay, correlationId);
         if (!_pending.TryAdd(request.RequestId, pending))
         {
             // The same request id is already waiting: a refusal this request id gets instead of a second entry.
@@ -93,6 +96,10 @@ public sealed partial class ConnectionBroker
 
         _metrics.ConnectRequestAccepted();
         LogConnectRequested(_logger, request.RequestId, controller.DeviceId, host.DeviceId);
+        Publish(
+            OpsEventKinds.SessionRequested,
+            correlationId,
+            new { controllerDeviceId = controller.DeviceId, hostDeviceId = host.DeviceId, relaySessionId = relay is null ? null : correlationId.ToString("D") });
         _ = ExpireAsync(request.RequestId, pending);
 
         var incoming = new IncomingConnection
@@ -118,6 +125,7 @@ public sealed partial class ConnectionBroker
         var ready = new ConnectReady { RequestId = accept.RequestId, HostFingerprint = host.Fingerprint, Relay = pending.Relay };
         ready.HostCandidates.Add(accept.Candidates);
         await pending.Controller.TrySendAsync(new ServerMessage { ConnectReady = ready }, cancellationToken).ConfigureAwait(false);
+        Publish(OpsEventKinds.SessionAccepted, pending.CorrelationId, new { hostDeviceId = host.DeviceId });
     }
 
     public async Task HandleRejectAsync(DeviceSession host, ConnectReject reject, CancellationToken cancellationToken)
@@ -126,6 +134,7 @@ public sealed partial class ConnectionBroker
 
         if (TryComplete(host, reject.RequestId, out var pending))
         {
+            Publish(OpsEventKinds.SessionFailed, pending.CorrelationId, new { reason = "rejected" });
             await FailAsync(pending.Controller, reject.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -148,6 +157,7 @@ public sealed partial class ConnectionBroker
         await Task.Delay(_options.ConnectTimeout, _time).ConfigureAwait(false);
         if (_pending.TryRemove(new KeyValuePair<string, PendingRequest>(requestId, pending)))
         {
+            Publish(OpsEventKinds.SessionFailed, pending.CorrelationId, new { reason = "timeout" });
             await FailAsync(pending.Controller, requestId, FailureReason.Timeout, CancellationToken.None).ConfigureAwait(false);
         }
     }
@@ -171,16 +181,31 @@ public sealed partial class ConnectionBroker
         return count;
     }
 
-    private RelayInfo? CreateRelayInfo()
+    private RelayInfo? CreateRelayInfo(out Guid correlationId)
     {
+        // Minted even when there is no relay: the console correlates the request and its outcome by this id, and a
+        // client-supplied identifier would let one connection address another's timeline.
+        correlationId = Guid.NewGuid();
         if (_relayKey is null)
         {
             return null;
         }
 
-        var ticket = new RelayTicket(Guid.NewGuid(), _time.GetUtcNow() + _options.RelayTicketLifetime);
-        return new RelayInfo { Endpoint = _relayEndpoint, Ticket = ByteString.CopyFrom(ticket.Sign(_relayKey)) };
+        var ticket = new RelayTicket(correlationId, _time.GetUtcNow() + _options.RelayTicketLifetime);
+        _metrics.RelayTicketIssued();
+        return new RelayInfo
+        {
+            Endpoint = _relayEndpoint,
+            Ticket = ByteString.CopyFrom(ticket.Sign(_relayKey)),
+
+            // The same id, in the form both ends write: the client echoes it in telemetry so the console attaches
+            // quality to the relay's record of this session instead of creating a second one for it.
+            RelaySessionId = correlationId.ToString("D"),
+        };
     }
+
+    /// <summary>Queues one fact for the console. Building the envelope is skipped when no console is configured.</summary>
+    private void Publish(string kind, Guid correlationId, object payload) => _events.Publish(kind, correlationId, payload);
 
     private static Task FailAsync(DeviceSession controller, string requestId, FailureReason reason, CancellationToken cancellationToken) =>
         controller.TrySendAsync(
@@ -196,5 +221,5 @@ public sealed partial class ConnectionBroker
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connect request from device {DeviceId}: {Pending} requests are already waiting.")]
     private static partial void LogTooManyPendingRequests(ILogger logger, uint deviceId, int pending);
 
-    private sealed record PendingRequest(DeviceSession Controller, uint HostDeviceId, RelayInfo? Relay);
+    private sealed record PendingRequest(DeviceSession Controller, uint HostDeviceId, RelayInfo? Relay, Guid CorrelationId);
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Server.Rendezvous;
 
@@ -21,6 +22,9 @@ public sealed class ServerMetrics
     private long _connectRequestsThrottled;
     private long _connectRequestsRefused;
     private long _presenceQueriesThrottled;
+    private long _relayTicketsIssued;
+    private long _telemetryReported;
+    private long _telemetryRefused;
 
     /// <summary>One connection was refused before the WebSocket upgrade because a quota was already full.</summary>
     public void ConnectionRefused() => Interlocked.Increment(ref _connectionsRefused);
@@ -42,6 +46,15 @@ public sealed class ServerMetrics
 
     /// <summary>One presence query was dropped because the asking device had spent its budget.</summary>
     public void PresenceQueryThrottled() => Interlocked.Increment(ref _presenceQueriesThrottled);
+
+    /// <summary>One relay ticket was signed and handed to a controller. An accepted request mints one.</summary>
+    public void RelayTicketIssued() => Interlocked.Increment(ref _relayTicketsIssued);
+
+    /// <summary>One client heartbeat was validated and queued for the console.</summary>
+    public void TelemetryReported() => Interlocked.Increment(ref _telemetryReported);
+
+    /// <summary>One client heartbeat was dropped: malformed, out of range, or over the device's budget.</summary>
+    public void TelemetryRefused() => Interlocked.Increment(ref _telemetryRefused);
 
     /// <summary>
     /// Writes every metric as its <c>HELP</c> line, its <c>TYPE</c> line and its sample. The two gauges are handed in
@@ -69,6 +82,9 @@ public sealed class ServerMetrics
             ("remotedesktop_connect_requests_refused_total", "counter", "Connect requests refused after the budgets passed: no room in the pending table, or the request id was already waiting.", Interlocked.Read(ref _connectRequestsRefused)),
             ("remotedesktop_devices_online", "gauge", "Devices online right now.", devicesOnline),
             ("remotedesktop_presence_queries_throttled_total", "counter", "Presence queries dropped because the asking device had spent its budget.", Interlocked.Read(ref _presenceQueriesThrottled)),
+            (OpsMetricNames.RelayTicketsIssued, "counter", "Relay tickets signed and handed to a controller.", Interlocked.Read(ref _relayTicketsIssued)),
+            ("remotedesktop_telemetry_reports_total", "counter", "Client heartbeats validated and queued for the console.", Interlocked.Read(ref _telemetryReported)),
+            ("remotedesktop_telemetry_refused_total", "counter", "Client heartbeats dropped: malformed, out of range, or over the device's budget.", Interlocked.Read(ref _telemetryRefused)),
         ];
 
         var text = new StringBuilder(1024);

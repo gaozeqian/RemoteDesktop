@@ -26,7 +26,9 @@ public static class DeviceRegistryRegistration
         switch (database.Provider)
         {
             case DatabaseSettings.None:
-                services.AddSingleton<IDeviceRegistry, InMemoryDeviceRegistry>();
+                services.AddSingleton<InMemoryDeviceRegistry>();
+                services.AddSingleton<IDeviceRegistry>(sp => sp.GetRequiredService<InMemoryDeviceRegistry>());
+                services.AddSingleton<IDeviceCatalog>(sp => sp.GetRequiredService<InMemoryDeviceRegistry>());
                 return services;
 
             case DatabaseSettings.Postgres:
@@ -48,8 +50,10 @@ public static class DeviceRegistryRegistration
                     $"No device registry is implemented for provider '{database.Provider}'.");
         }
 
-        // The store is the registry; asking for the port twice must not build a second one with its own cache.
+        // The store is the registry; asking for the port twice must not build a second one with its own cache. The
+        // catalog is the same object for the same reason: a second instance would mean a second connection pool.
         services.AddSingleton(sp => (IDeviceRegistry)sp.GetRequiredService<IDeviceRegistryStore>());
+        services.AddSingleton(sp => (IDeviceCatalog)sp.GetRequiredService<IDeviceRegistryStore>());
         return services;
     }
 

@@ -22,6 +22,12 @@ public interface IPeerConnection : IAsyncDisposable
 
     ConnectionPath Path { get; }
 
+    /// <summary>
+    /// The relay session carrying this connection, when <see cref="Path"/> is <see cref="ConnectionPath.Relayed"/>.
+    /// <c>null</c> on a direct path, and also when the server did not say (an older server).
+    /// </summary>
+    string? RelaySessionId { get; }
+
     string LocalFingerprint { get; }
 
     string RemoteFingerprint { get; }

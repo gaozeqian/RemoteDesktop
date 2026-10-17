@@ -14,11 +14,14 @@ internal sealed class QuicPeerConnection(
     DeviceId remoteDevice,
     ConnectionPath path,
     string localFingerprint,
-    string remoteFingerprint) : IPeerConnection
+    string remoteFingerprint,
+    string? relaySessionId = null) : IPeerConnection
 {
     public DeviceId RemoteDevice { get; } = remoteDevice;
 
     public ConnectionPath Path { get; } = path;
+
+    public string? RelaySessionId { get; } = relaySessionId;
 
     public string LocalFingerprint { get; } = localFingerprint;
 

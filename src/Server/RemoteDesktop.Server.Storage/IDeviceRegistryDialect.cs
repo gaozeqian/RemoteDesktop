@@ -32,6 +32,18 @@ internal interface IDeviceRegistryDialect
     /// <summary>Refreshes <c>last_seen_at</c> for <c>@fingerprint</c>.</summary>
     string TouchLastSeenSql { get; }
 
+    /// <summary>Adds <c>revoked_at</c> to a table that predates it. Run after <see cref="CreateSchemaSql"/> on every start.</summary>
+    string AddRevokedAtSql { get; }
+
+    /// <summary>Sets or clears <c>revoked_at</c> for <c>@device_id</c>. <c>@revoked</c> is the timestamp or NULL.</summary>
+    string SetRevokedSql { get; }
+
+    /// <summary>Returns one row when the device exists: <c>1</c> when revoked, <c>0</c> when not.</summary>
+    string IsRevokedSql { get; }
+
+    /// <summary>Whether <paramref name="exception"/> is only "the column already exists", so the migration can be idempotent.</summary>
+    bool IsDuplicateColumn(Exception exception);
+
     /// <summary>
     /// Whether a write must be serialised in-process. True where the database has a single writer (SQLite); false
     /// where concurrent writers are its normal mode of operation and a lock would only add a queue.

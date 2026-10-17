@@ -23,6 +23,9 @@ internal sealed class DetachedPeerConnection : IPeerConnection
 
     public ConnectionPath Path => ConnectionPath.Direct;
 
+    /// <summary>This stand-in never reports telemetry, so it has no relay session to name.</summary>
+    public string? RelaySessionId => null;
+
     public string LocalFingerprint => string.Empty;
 
     public string RemoteFingerprint => string.Empty;

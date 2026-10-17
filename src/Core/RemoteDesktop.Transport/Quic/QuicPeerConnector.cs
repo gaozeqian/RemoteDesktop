@@ -74,7 +74,8 @@ public sealed partial class QuicPeerConnector(
             if (relayed is not null)
             {
                 LogConnected(logger, remote, ConnectionPath.Relayed, relayed.RemoteEndPoint);
-                return new QuicPeerConnection(relayed, remote, ConnectionPath.Relayed, identity.Fingerprint, ready.HostFingerprint);
+                return new QuicPeerConnection(
+                    relayed, remote, ConnectionPath.Relayed, identity.Fingerprint, ready.HostFingerprint, ready.Relay?.RelaySessionId);
             }
 
             // Everything that was tried, in the message. A connection that fails on somebody's machine is otherwise

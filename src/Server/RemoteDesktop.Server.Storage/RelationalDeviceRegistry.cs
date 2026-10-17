@@ -15,7 +15,7 @@ namespace RemoteDesktop.Server.Storage;
 /// id, the retry when two devices draw the same one, and the difference between "this call created the id" and "the
 /// device came back" — is here, so a new provider only has to say how its database spells four statements.
 /// </remarks>
-public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, IDisposable
+public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, IDeviceCatalog, IDisposable
 {
     private const int MaxAllocationAttempts = 10;
     private const uint LowestDeviceId = 100_000_000;
@@ -87,9 +87,26 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         try
         {
             await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
-            command.CommandText = _dialect.CreateSchemaSql;
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            await using (var create = connection.CreateCommand())
+            {
+                create.CommandText = _dialect.CreateSchemaSql;
+                await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            // The revoked_at column postdates the first release, so a live deployment has the table without it. The
+            // ALTER is dialect-specific in whether it is idempotent on its own; the guard is what makes both safe.
+            try
+            {
+                await using var migrate = connection.CreateCommand();
+                migrate.CommandText = _dialect.AddRevokedAtSql;
+                await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (_dialect.IsDuplicateColumn(ex))
+            {
+                // Already there from an earlier start.
+            }
+
             LogSchemaVerified(_logger);
         }
         catch (Exception ex)
@@ -107,8 +124,83 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<DeviceRegistration> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// A page of devices, by id. The timestamps are read as whatever the provider hands back and converted here,
+    /// because the two providers disagree about how a timestamp is represented and the console only wants a number.
+    /// </summary>
+    public async Task<IReadOnlyList<DeviceRecord>> ListAsync(
+        uint afterDeviceId,
+        int limit,
+        CancellationToken cancellationToken = default)
     {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT device_id, created_at, last_seen_at, revoked_at FROM device_registrations " +
+            "WHERE device_id > @after ORDER BY device_id LIMIT @limit;";
+        AddParameter(command, "@after", (long)afterDeviceId);
+        AddParameter(command, "@limit", Math.Clamp(limit, 1, 500));
+
+        var records = new List<DeviceRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            records.Add(new DeviceRecord(
+                (uint)reader.GetInt64(0),
+                ToUnixMilliseconds(reader.GetValue(1)),
+                ToUnixMilliseconds(reader.GetValue(2)),
+                !reader.IsDBNull(3)));
+        }
+
+        return records;
+    }
+
+    public async Task<bool> IsRevokedAsync(uint deviceId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = _dialect.IsRevokedSql;
+        AddParameter(command, "@device_id", (long)deviceId);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value switch
+        {
+            true => true,
+            false or null or DBNull => false,
+            long number => number != 0,
+            int number => number != 0,
+            _ => Convert.ToBoolean(value, CultureInfo.InvariantCulture),
+        };
+    }
+
+    public Task SetRevokedAsync(uint deviceId, bool revoked, CancellationToken cancellationToken = default) =>
+        WithWriteLockAsync(
+            async () =>
+            {
+                await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await using var command = connection.CreateCommand();
+                command.CommandText = _dialect.SetRevokedSql;
+                AddParameter(command, "@device_id", (long)deviceId);
+                AddParameter(command, "@revoked", revoked ? DateTimeOffset.UtcNow : DBNull.Value);
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            },
+            cancellationToken);
+
+    private static long ToUnixMilliseconds(object value) => value switch
+    {
+        DateTimeOffset offset => offset.ToUnixTimeMilliseconds(),
+        DateTime dateTime => new DateTimeOffset(
+            dateTime.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dateTime, DateTimeKind.Utc) : dateTime)
+            .ToUnixTimeMilliseconds(),
+        string text => DateTimeOffset.TryParse(
+            text,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var parsed) ? parsed.ToUnixTimeMilliseconds() : 0,
+        _ => 0,
+    };
+
+    public async Task<DeviceRegistration> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)    {
         ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
 
         if (_cache.TryGetValue(fingerprint, out var cached))
@@ -193,9 +285,9 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     /// Refreshes <c>last_seen_at</c> without making the caller wait, and without ever queueing.
     /// </summary>
     /// <remarks>
-    /// The timestamp is a nicety — nothing reads it today, and a failure is logged at debug — so it must not become a
-    /// backlog. On a store with a single writer, a burst of reconnects would otherwise leave one touch per reconnect
-    /// waiting behind the writer; here the touch is simply skipped when the writer is busy.
+    /// The timestamp feeds the console's device page, which is why it is refreshed at all — but it is still best effort:
+    /// it must not become a backlog. On a store with a single writer, a burst of reconnects would otherwise leave one
+    /// touch per reconnect waiting behind the writer; here the touch is simply skipped when the writer is busy.
     /// </remarks>
     private void Touch(string fingerprint)
     {
@@ -248,6 +340,26 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         try
         {
             return await write().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>Serialises a write that has nothing to report, without going through the generic overload.</summary>
+    private async Task WithWriteLockAsync(Func<Task> write, CancellationToken cancellationToken)
+    {
+        if (!_dialect.SerializeWrites)
+        {
+            await write().ConfigureAwait(false);
+            return;
+        }
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await write().ConfigureAwait(false);
         }
         finally
         {

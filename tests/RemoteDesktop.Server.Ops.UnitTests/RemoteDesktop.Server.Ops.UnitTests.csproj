@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops.Core\RemoteDesktop.Server.Ops.Core.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
+  </ItemGroup>
+</Project>

@@ -443,3 +443,10 @@ build/installer/macos/client/development-identity
 # WorkBuddy workspace memory (per-session notes, not project code).
 .workbuddy/
 .workbuddy-ai/
+
+# The ops console's default SQLite file. Its default path is relative to the working directory, so `dotnet run` from
+# the repository root — the command the docs give — would otherwise leave a database among the sources. WAL keeps two
+# sidecars beside it.
+ops.db
+ops.db-wal
+ops.db-shm

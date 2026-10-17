@@ -2,4 +2,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Signaling\RemoteDesktop.Signaling.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The event sink is a background service; the rest is what every server process already has. Nothing here reaches
+         the client. -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
 </Project>
