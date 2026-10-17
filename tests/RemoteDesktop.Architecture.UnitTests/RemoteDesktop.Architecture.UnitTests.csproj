@@ -23,6 +23,8 @@
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops\RemoteDesktop.Server.Ops.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="NetArchTest.Rules" />
   </ItemGroup>
 </Project>
