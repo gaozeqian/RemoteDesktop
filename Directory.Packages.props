@@ -42,7 +42,7 @@
          FfmpegLibraries checks for rather than discovering later. -->
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0" />
     <!-- File transfer integrity check -->
-    <PackageVersion Include="System.IO.Hashing" Version="10.0.12" />
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->
     <PackageVersion Include="NAudio.Wasapi" Version="3.1.0" />
     <PackageVersion Include="Concentus" Version="2.2.2" />
