@@ -128,6 +128,9 @@ Rendezvous ──▶ Storage ──▶ Npgsql
 * **配置是显式的**：`Rendezvous:Database:{Provider,ConnectionString,Path}`，`Provider` 取
   `none` / `postgres` / `sqlite`。旧的 `Rendezvous:PostgresConnectionString` 与
   `ConnectionStrings:Postgres` 仍然生效且含义不变——它们是已装机器的配置，读它们就是升级不换设备码。
+* **"没给"与"给空"是两件事。** `--configure-system` 的参数为 null 表示"这次不改这一项"，空串或 `auto`
+  才是明确表态。这条约定是整个配置步骤的地基：它同时也是给运维用的（改证书的那次不该顺手清掉数据库设置），
+  所以别把它改回"空值即清空"。
 * **不引入 EF Core**：一张表、没有跨表事务、也没有迁移需求（建表在启动时做，`IF NOT EXISTS`）。
   表数量上到五张、或需要跨表事务时，这笔账要重算。
 
@@ -135,6 +138,17 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 `CHECK (device_id BETWEEN …)`（SQLite 按值定类型，没有约束就会把文本存进数字列）。
 `/health` 探的是"表在不在"，不是"连接通不通"——SQLite 打开一个不存在的文件会**新建空库**，
 只问连接的话，一个刚丢光设备码的服务器会回答 Healthy。
+
+**SQLite 是单节点。** 共享 PostgreSQL 时可以起多个 Rendezvous 挂负载均衡；SQLite 每个实例一个文件，
+两个实例会给同一台设备发不同的码。这是存储形态决定的，不是配置能绕开的。
+
+**换一种数据库会重发设备码**，因为 `device_id` 在旧库里。手工搬数据的命令在
+[运维文档](../ops/README.md)的"数据库怎么选"一节。
+
+**已经验证到什么程度。** 契约测试同时跑内存与 SQLite（同一指纹并发、32 路并发、撞车重试、跨实例持久化、
+删文件后探活失败、`CHECK` 约束），`/health` 有 SQLite 起服务的用例，三个 RID 的自包含发布都带
+`e_sqlite3`。**没验证的**：三平台安装包的真机安装（CI 只构建、不安装），以及真 PostgreSQL 上的往返
+（CI 没有 PG，PG 的 DDL 与 upsert 只由文本断言钉住）。动这两处时，别把"测试通过"当成"装过一遍"。
 
 ## 2. 通信协议
 
