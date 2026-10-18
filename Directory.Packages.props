@@ -40,7 +40,7 @@
          an offset wrong there corrupts memory rather than failing. The Windows side made the same call with Vortice
          instead of hand-writing Direct3D. It also means the library's major version is a hard requirement, which
          FfmpegLibraries checks for rather than discovering later. -->
-    <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0" />
+    <PackageVersion Include="FFmpeg.AutoGen" Version="9.0.1.1" />
     <!-- File transfer integrity check -->
     <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->
