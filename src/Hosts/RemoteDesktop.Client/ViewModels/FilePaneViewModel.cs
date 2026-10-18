@@ -15,8 +15,6 @@ public sealed class FileItemViewModel(FileEntryInfo entry)
 
     public bool IsDirectory => Entry.IsDirectory;
 
-    public string Icon => Entry.IsDirectory ? "📁" : "📄";
-
     /// <summary>Hidden items are shown, but dimmed.</summary>
     public double RowOpacity => Entry.Attributes.HasFlag(FileEntryAttributes.Hidden) ? 0.5 : 1;
 

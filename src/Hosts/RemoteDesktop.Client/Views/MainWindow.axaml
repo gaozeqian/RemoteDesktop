@@ -3,7 +3,7 @@
         xmlns:vm="using:RemoteDesktop.Client.ViewModels"
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="Remote Desktop"
+        Title="远程桌面"
         Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="860" Height="560" MinWidth="860" MinHeight="560">
@@ -128,7 +128,7 @@
                     <!-- 设定固定高度，使之与右边包含三个元素的堆叠栏等高 -->
                     <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" MinHeight="32">
                       <SelectableTextBlock Text="{Binding LocalDeviceId}" Classes="display" VerticalAlignment="Center" />
-                      <Button x:Name="CopyDeviceCodeButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制设备代码"
+                      <Button x:Name="CopyDeviceCodeButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制设备代码" AutomationProperties.Name="复制设备代码"
                               VerticalAlignment="Center" />
                     </StackPanel>
                   </StackPanel>
@@ -138,7 +138,7 @@
                     <TextBlock Text="临时密码" Classes="label" />
                     <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" MinHeight="32">
                       <SelectableTextBlock Text="{Binding TemporaryPassword}" Classes="code" VerticalAlignment="Center" />
-                      <Button x:Name="CopyPasswordButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制临时密码"
+                      <Button x:Name="CopyPasswordButton" Content="复制" Classes="iconButton" ToolTip.Tip="复制临时密码" AutomationProperties.Name="复制临时密码"
                               VerticalAlignment="Center" />
                       <Button Content="刷新" Command="{Binding RefreshPasswordCommand}" VerticalAlignment="Center" />
                     </StackPanel>
@@ -155,9 +155,9 @@
 
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceMd}">
               <StackPanel Spacing="{DynamicResource RdSpaceSm}">
-                <TextBox Text="{Binding RemoteDeviceId}" PlaceholderText="请输入远程设备代码 (如 123 456 789)"
+                <TextBox Text="{Binding RemoteDeviceId}" AutomationProperties.Name="远程设备代码" PlaceholderText="请输入远程设备代码 (如 123 456 789)"
                          MinHeight="44" VerticalContentAlignment="Center" />
-                <TextBox Text="{Binding RemotePassword}" PasswordChar="●" PlaceholderText="连接密码"
+                <TextBox Text="{Binding RemotePassword}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="连接密码"
                          MinHeight="44" VerticalContentAlignment="Center" />
               </StackPanel>
               <Button Grid.Column="1" Content="连接" Classes="primaryLarge" Command="{Binding ConnectCommand}"
@@ -173,7 +173,7 @@
               </ListBox.ItemsPanel>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:ConnectionMode">
-                  <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                  <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" AutomationProperties.Name="{Binding Label}">
                     <Border Classes="radioRing" />
                     <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
                   </StackPanel>
@@ -271,7 +271,7 @@
                       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
                         <SelectableTextBlock Text="{Binding SelectedRecentDevice.FormattedId}" Classes="code"
                                              VerticalAlignment="Center" />
-                        <Button x:Name="CopySelectedDeviceCodeButton" Content="复制" Classes="iconButton"
+                        <Button x:Name="CopySelectedDeviceCodeButton" Content="复制" Classes="iconButton" AutomationProperties.Name="复制设备代码"
                                 ToolTip.Tip="复制设备代码" VerticalAlignment="Center" />
                       </StackPanel>
                     </StackPanel>
@@ -290,7 +290,7 @@
 
                 <StackPanel Spacing="{DynamicResource RdSpaceXs}" MaxWidth="360" HorizontalAlignment="Left">
                   <TextBlock Text="连接密码" Classes="label" />
-                  <TextBox Text="{Binding SelectedRecentDevice.Password}" PasswordChar="●" PlaceholderText="该设备的密码"
+                  <TextBox Text="{Binding SelectedRecentDevice.Password}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="该设备的密码"
                            MinHeight="40" VerticalContentAlignment="Center" />
                   <CheckBox IsChecked="{Binding SelectedRecentDevice.RememberPassword}" Content="记住该设备的密码" />
                 </StackPanel>
@@ -332,9 +332,12 @@
                     <TextBlock Classes="caption"
                                Text="{x:Static vm:MainWindowViewModel.FixedPasswordStorageNote}" />
                     <!-- Linux only: the portal restriction that keeps a fixed password from meaning unattended
-                         access there. Null on the other two platforms, which hides the whole line. -->
-                    <TextBlock Classes="caption" Text="{x:Static vm:MainWindowViewModel.FixedPasswordPlatformNote}"
-                               IsVisible="{x:Static vm:MainWindowViewModel.ShowFixedPasswordPlatformNote}" />
+                         access there. Null on the other two platforms, which hides the whole banner. It is a
+                         limitation on what the setting buys, not a footnote, so it gets the warning treatment. -->
+                    <Border Classes="banner warning" IsVisible="{x:Static vm:MainWindowViewModel.ShowFixedPasswordPlatformNote}">
+                      <TextBlock Classes="warning" FontSize="{DynamicResource RdFontCaption}"
+                                 Text="{x:Static vm:MainWindowViewModel.FixedPasswordPlatformNote}" />
+                    </Border>
 
                     <StackPanel Spacing="{DynamicResource RdSpaceSm}">
                       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}"
@@ -351,7 +354,7 @@
 
                       <Border Classes="inset" IsVisible="{Binding IsEditingFixedPassword}">
                         <StackPanel Spacing="{DynamicResource RdSpaceSm}">
-                          <TextBox Text="{Binding NewFixedPassword}" PasswordChar="●"
+                          <TextBox Text="{Binding NewFixedPassword}" AutomationProperties.Name="固定密码" PasswordChar="●"
                                    PlaceholderText="输入新固定密码（至少 8 位）" />
                           <TextBlock Text="{Binding FixedPasswordError}" Classes="danger"
                                      IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -411,7 +414,7 @@
                         </StackPanel>
 
                         <StackPanel Spacing="{DynamicResource RdSpaceSm}" IsVisible="{Binding IsEditingServerAddress}">
-                          <TextBox Text="{Binding NewServerAddress}" PlaceholderText="ws://服务器地址:5080/ws" MaxWidth="300" HorizontalAlignment="Left" />
+                          <TextBox Text="{Binding NewServerAddress}" AutomationProperties.Name="服务器地址" PlaceholderText="ws://服务器地址:5080/ws" MaxWidth="300" HorizontalAlignment="Left" />
                           <TextBlock Text="{Binding ServerAddressError}" Foreground="{DynamicResource RdErrorTextBrush}"
                                      IsVisible="{Binding ServerAddressError, Converter={x:Static ObjectConverters.IsNotNull}}" TextWrapping="Wrap" />
                           <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
@@ -438,7 +441,7 @@
                       <TextBlock Text="数据目录" Classes="label" VerticalAlignment="Center" />
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
                         <SelectableTextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                        <Button x:Name="CopyDataDirectoryButton" Content="复制" Classes="iconButton"
+                        <Button x:Name="CopyDataDirectoryButton" Content="复制" Classes="iconButton" AutomationProperties.Name="复制数据目录"
                                 ToolTip.Tip="复制数据目录" VerticalAlignment="Center" />
                       </StackPanel>
 
@@ -448,7 +451,7 @@
                       <TextBlock Grid.Row="2" Text="本机控制端代码" Classes="label" VerticalAlignment="Center" />
                       <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
                         <SelectableTextBlock Text="{Binding ClientDeviceId}" Classes="code" VerticalAlignment="Center" />
-                        <Button x:Name="CopyClientDeviceIdButton" Content="复制" Classes="iconButton"
+                        <Button x:Name="CopyClientDeviceIdButton" Content="复制" Classes="iconButton" AutomationProperties.Name="复制本机控制端代码"
                                 ToolTip.Tip="复制本机控制端代码" VerticalAlignment="Center" />
                       </StackPanel>
                     </Grid>

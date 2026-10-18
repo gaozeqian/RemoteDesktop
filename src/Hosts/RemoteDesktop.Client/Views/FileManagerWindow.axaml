@@ -34,7 +34,9 @@
     </Grid>
 
     <TextBlock Grid.Row="2" Text="传输列表" Classes="sectionHeader" />
-    <ListBox Grid.Row="3" ItemsSource="{Binding Transfers}" SelectionMode="Single">
+    <TextBlock Grid.Row="3" Text="暂无传输" Classes="caption" HorizontalAlignment="Center" VerticalAlignment="Center"
+               IsVisible="{Binding !HasTransfers}" />
+    <ListBox Grid.Row="3" ItemsSource="{Binding Transfers}" SelectionMode="Single" IsVisible="{Binding HasTransfers}">
       <ListBox.ItemTemplate>
         <DataTemplate x:DataType="vm:TransferItemViewModel">
           <Grid ColumnDefinitions="2*,3*,Auto" ColumnSpacing="{DynamicResource RdSpaceMd}">

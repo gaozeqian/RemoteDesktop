@@ -2,6 +2,40 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · 当前平台 UI 与图标修复
+
+针对 Ubuntu 26.04 / GNOME Wayland 的实机评审，按 P0→P3 处理。
+
+### Changed
+
+- **应用图标改为原创矢量**：不再从 Windows `mstsc.exe` 提取图标，`icon.svg` 现在是真正的矢量（此前是
+  base64 包装的 256px PNG）。16/24px 使用去掉支架、放大显示器与指针的简化版，512/1024px 由几何直接渲染；
+  新增 `icon-1024.png` 供 macOS `.icns` 使用。删除 `build/tools/New-AppIcons.ps1` 并更新 `build/README.md`。
+- **统一强调色**：用 `FluentTheme.Palettes` 的 `ColorPaletteResources.Accent` 把 Fluent 自绘控件
+  （CheckBox、TextBox 焦点框、ProgressBar、Tab 下划线）统一为应用蓝 `#3B82F6`，不再跟随桌面强调色
+  （Ubuntu 默认橙色）。之前无效的 `SystemAccentColor` ThemeDictionary 覆盖已移除。
+- **对比度**：浅色 caption 2.39:1 → 4.97:1，深色 caption 3.89:1 → 4.82:1；主按钮改为 `#2563EB`，
+  白字 5.17:1；浅色主题在线圆点改为 `#149A45`（3.35:1）。
+- **文件管理器图标**：文件夹/文件从 emoji（📁/📄）改为与导航一致的 PathIcon。
+- **窗口标题**：主窗口从 “Remote Desktop” 改为“远程桌面”，与其它窗口及 `.desktop` 的 `Name[zh_CN]` 一致。
+- **路径占位符**从“所有驱动器”改为“所有位置”，不再使用 Windows 术语。
+
+### Fixed
+
+- **Linux 无人值守限制不够醒目**：固定密码区块的 portal 限制从 12px tertiary caption 改为 warning banner。
+- **可访问性名称**：主页输入框、连接方式、文件行、路径/名称输入、复制按钮与终端关闭按钮补齐
+  `AutomationProperties.Name`；终端标签标题增加 ToolTip。
+- **文件传输空状态**：没有传输时显示“暂无传输”，不再是一块空白。
+- **Linux standalone 托管说明**：高级设置显示“被控端在本进程内运行（未安装后台服务）”，不再是空行。
+
+### Notes
+
+- **Wayland 后端已评估，本次不切换**：`Avalonia.Wayland` 12.1.4 能启动原生窗口，但该窗口没有出现在 AT-SPI
+  树中（会回退无障碍与自动化），且 Fluent 12.1.4 没有 HighContrast 变体。XWayland 在 1.333 分数缩放下的
+  模糊仍是已知限制，待 Wayland 后端与无障碍/高对比度一起移植。
+- 高对比度模式仍不跟随；`_NET_WM_ICON` 仍只有 128×128 一档（Avalonia X11 后端行为）；AppStream metainfo
+  仍未提供。
+
 ## [未发布] · Linux 端到端测试修复
 
 在 Ubuntu 26.04 / GNOME Wayland 上用真实服务端、客户端与 HostService 跑端到端场景时发现的三处问题。

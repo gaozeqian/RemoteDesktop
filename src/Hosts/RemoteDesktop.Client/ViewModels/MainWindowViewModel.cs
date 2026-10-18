@@ -1075,14 +1075,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
                   + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/ops/README.md）。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
-        // Windows with the service installed points at it; Windows without one, and the client alone, have nothing
-        // to say (that is the existing blank). macOS always runs the host in this process, so it says so instead —
-        // a blank row reads like a missing value rather than the single model macOS has.
+        // Windows with the service installed points at it. Without one — and on Linux or macOS — the controlled end
+        // runs inside this process, so the row says that instead of going blank: a blank row reads like a missing
+        // value. macOS adds the login-item hint it has and the other two platforms do not.
         HostDetail = status.IsService
             ? $"由后台服务托管{(status.AgentState is { } agent ? $" · 代理 {agent}" : string.Empty)}"
             : OperatingSystem.IsMacOS()
                 ? "被控端在本进程内运行；开机自启请在「高级设置 → 安全」开启登录项"
-                : null;
+                : "被控端在本进程内运行（未安装后台服务）";
         if (OperatingSystem.IsMacOS())
         {
             // Read every poll: the state is one property on a launchd-side object, and the user may have flipped it

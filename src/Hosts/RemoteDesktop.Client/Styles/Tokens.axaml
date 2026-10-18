@@ -51,17 +51,17 @@
       <SolidColorBrush x:Key="RdToolbarBrush" Color="#F7F8FA" />
       <SolidColorBrush x:Key="RdBorderBrush" Color="#E8EAF0" />
 
-      <!-- Text -->
+      <!-- Text. Secondary and tertiary both clear 4.5:1 on the lightest surface they sit on (#F4F5F7). -->
       <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#1A1D21" />
-      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#6B7280" />
-      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#9AA1AC" />
+      <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#4B5563" />
+      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#5F6B7A" />
 
-      <!-- Semantic -->
+      <!-- Semantic. The primary is dark enough for white text to clear 4.5:1 (5.17:1). -->
       <SolidColorBrush x:Key="RdAccentBrush" Color="#3B82F6" />
       <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#E8F1FE" />
-      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#4A90F5" />
+      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#2563EB" />
       <SolidColorBrush x:Key="RdTextOnPrimaryBrush" Color="#FFFFFF" />
-      <SolidColorBrush x:Key="RdSuccessBrush" Color="#22C55E" />
+      <SolidColorBrush x:Key="RdSuccessBrush" Color="#149A45" />
       <SolidColorBrush x:Key="RdDangerBrush" Color="#D93A2B" />
       <SolidColorBrush x:Key="RdDangerSurfaceBrush" Color="#FDECEA" />
       <SolidColorBrush x:Key="RdDangerTextBrush" Color="#A62A1C" />
@@ -90,12 +90,12 @@
       <!-- Text -->
       <SolidColorBrush x:Key="RdTextPrimaryBrush" Color="#EDEEF1" />
       <SolidColorBrush x:Key="RdTextSecondaryBrush" Color="#A2A8B3" />
-      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#737984" />
+      <SolidColorBrush x:Key="RdTextTertiaryBrush" Color="#8B929E" />
 
       <!-- Semantic -->
       <SolidColorBrush x:Key="RdAccentBrush" Color="#6BA6F8" />
       <SolidColorBrush x:Key="RdAccentSurfaceBrush" Color="#1E2A3D" />
-      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#4A90F5" />
+      <SolidColorBrush x:Key="RdPrimaryBrush" Color="#2563EB" />
       <SolidColorBrush x:Key="RdTextOnPrimaryBrush" Color="#FFFFFF" />
       <SolidColorBrush x:Key="RdSuccessBrush" Color="#34C759" />
       <SolidColorBrush x:Key="RdDangerBrush" Color="#FF6B5E" />

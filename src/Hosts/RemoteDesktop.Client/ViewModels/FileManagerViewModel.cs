@@ -117,6 +117,7 @@ public sealed partial class FileManagerViewModel : ObservableObject, IAsyncDispo
         Conflicts = [new("覆盖已有文件", ConflictPolicy.Overwrite), new("跳过已有文件", ConflictPolicy.Skip), new("保留两者（重命名）", ConflictPolicy.Rename)];
         SelectedConflict = Conflicts[0];
         _manager.JobAdded += (_, job) => Dispatcher.UIThread.Post(() => Transfers.Add(Watch(new TransferItemViewModel(job, _manager))));
+        Transfers.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasTransfers));
     }
 
     public FilePaneViewModel LocalPane { get; }
@@ -124,6 +125,9 @@ public sealed partial class FileManagerViewModel : ObservableObject, IAsyncDispo
     public FilePaneViewModel RemotePane { get; }
 
     public ObservableCollection<TransferItemViewModel> Transfers { get; } = [];
+
+    /// <summary>Whether the transfer list has anything in it, so the empty state and the list can take turns.</summary>
+    public bool HasTransfers => Transfers.Count > 0;
 
     public IReadOnlyList<ConflictChoice> Conflicts { get; }
 

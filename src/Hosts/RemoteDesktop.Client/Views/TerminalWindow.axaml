@@ -12,7 +12,7 @@
     <Border DockPanel.Dock="Top" Classes="toolbar">
       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
         <TextBlock Text="Shell" Classes="secondary" VerticalAlignment="Center" />
-        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" MinWidth="140"
+        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" AutomationProperties.Name="Shell" MinWidth="140"
                   VerticalAlignment="Center" />
         <Button Content="新建标签" Command="{Binding NewTabCommand}" VerticalAlignment="Center" />
         <Border Classes="toolbarSeparator" />
@@ -23,8 +23,8 @@
       <TabControl.ItemTemplate>
         <DataTemplate x:DataType="vm:TerminalTabViewModel">
           <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
-            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
-            <Button Content="✕" Command="{Binding CloseCommand}" Classes="iconButton" MinHeight="0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Title}" ToolTip.Tip="{Binding Title}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
+            <Button Content="✕" Command="{Binding CloseCommand}" AutomationProperties.Name="关闭标签" Classes="iconButton" MinHeight="0" VerticalAlignment="Center" />
           </StackPanel>
         </DataTemplate>
       </TabControl.ItemTemplate>

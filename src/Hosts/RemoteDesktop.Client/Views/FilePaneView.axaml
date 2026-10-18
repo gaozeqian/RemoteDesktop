@@ -22,12 +22,12 @@
       <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="{DynamicResource RdSpaceXs}">
         <Button Content="↑" Command="{Binding UpCommand}" IsEnabled="{Binding CanGoUp}" ToolTip.Tip="上一级" Classes="iconButton" />
         <Button Grid.Column="1" Content="⟳" Command="{Binding RefreshCommand}" ToolTip.Tip="刷新" Classes="iconButton" />
-        <TextBox Grid.Column="2" x:Name="PathBox" Text="{Binding PathInput}" PlaceholderText="路径（留空显示所有驱动器）" />
+        <TextBox Grid.Column="2" x:Name="PathBox" Text="{Binding PathInput}" AutomationProperties.Name="路径" PlaceholderText="路径（留空显示所有位置）" />
         <Button Grid.Column="3" Content="转到" Command="{Binding GoCommand}" />
       </Grid>
 
       <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceXs}">
-        <TextBox Text="{Binding NewName}" PlaceholderText="名称" MinWidth="140" />
+        <TextBox Text="{Binding NewName}" AutomationProperties.Name="名称" PlaceholderText="名称" MinWidth="140" />
         <Button Content="新建文件夹" Command="{Binding NewFolderCommand}" IsEnabled="{Binding HasFolder}" />
         <Button Content="重命名" Command="{Binding RenameCommand}" IsEnabled="{Binding HasExactlyOneSelected}" />
         <Button Content="删除" Command="{Binding AskDeleteCommand}" IsEnabled="{Binding HasSelection}" />
@@ -36,8 +36,13 @@
       <ListBox Grid.Row="3" x:Name="Files" ItemsSource="{Binding Items}" SelectionMode="Multiple">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:FileItemViewModel">
-            <Grid ColumnDefinitions="24,*,80,120" Opacity="{Binding RowOpacity}">
-              <TextBlock Text="{Binding Icon}" />
+            <Grid ColumnDefinitions="24,*,80,120" Opacity="{Binding RowOpacity}" AutomationProperties.Name="{Binding Name}">
+              <Panel VerticalAlignment="Center">
+                <PathIcon Data="{StaticResource RdIconFolder}" Width="16" Height="16"
+                          Foreground="{DynamicResource RdAccentBrush}" IsVisible="{Binding IsDirectory}" />
+                <PathIcon Data="{StaticResource RdIconFile}" Width="16" Height="16"
+                          Foreground="{DynamicResource RdTextTertiaryBrush}" IsVisible="{Binding !IsDirectory}" />
+              </Panel>
               <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
               <TextBlock Grid.Column="2" Text="{Binding SizeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Classes="caption" />
               <TextBlock Grid.Column="3" Text="{Binding ModifiedText}" Classes="caption" />

@@ -24,4 +24,9 @@
 
   <!-- A display on a stand, drawn as an outline (even-odd). This machine's mark in the sidebar. -->
   <StreamGeometry x:Key="RdIconMachine">M2.5 4.5h19v12.5h-19zM5 7h14v7.5H5zM9.5 19h5v2h-5zF0</StreamGeometry>
+
+  <!-- File-manager rows. Emoji would render differently on every platform (and not at all without a colour
+       emoji font); these take the row's colour like every other geometry in this file. -->
+  <StreamGeometry x:Key="RdIconFolder">M3 6h7l2 2h9v10.5H3z</StreamGeometry>
+  <StreamGeometry x:Key="RdIconFile">M6 2.5h8l5 5v14H6zM14 2.5v5h5zF0</StreamGeometry>
 </ResourceDictionary>

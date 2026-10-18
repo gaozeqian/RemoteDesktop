@@ -64,9 +64,8 @@ for pair in "${mapping[@]}"; do
     cp "$ASSETS_DIR/$src" "$iconset/$dst"
 done
 
-# The 512@2x slot wants 1024px and the artwork stops at 512, so this one is an upscale. It is the one soft entry in
-# the set; if a 1024 source is ever added to Assets, point this at it instead.
-sips -z 1024 1024 "$ASSETS_DIR/icon-512.png" --out "$iconset/icon_512x512@2x.png" >/dev/null
+# The 512@2x slot wants 1024px. The vector artwork is rendered at that size rather than upscaled from 512.
+cp "$ASSETS_DIR/icon-1024.png" "$iconset/icon_512x512@2x.png"
 
 mkdir -p "$(dirname "$OUTPUT")"
 iconutil -c icns "$iconset" -o "$OUTPUT"

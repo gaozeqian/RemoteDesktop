@@ -1,5 +1,6 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fluent="using:Avalonia.Themes.Fluent"
              x:Class="RemoteDesktop.Client.App"
              Name="Remote Desktop"
              RequestedThemeVariant="Default">
@@ -15,7 +16,18 @@
     </ResourceDictionary>
   </Application.Resources>
   <Application.Styles>
-    <FluentTheme />
+    <!--
+      The palette is how Fluent's own controls (check box, text-box focus, progress bar, tab underline) are
+      told which accent to use. Left to the platform they follow the desktop accent — orange on Ubuntu — while
+      this app's buttons, radio rings and navigation are the blue in Tokens.axaml. Setting `Accent` here makes
+      both halves one colour; its shade/tint steps are derived automatically.
+    -->
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <fluent:ColorPaletteResources x:Key="Light" Accent="#3B82F6" />
+        <fluent:ColorPaletteResources x:Key="Dark" Accent="#3B82F6" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
     <!-- After FluentTheme on purpose: styles declared later win against the theme for the same property. -->
     <StyleInclude Source="avares://RemoteDesktop.Client/Styles/Controls.axaml" />
   </Application.Styles>
