@@ -2,6 +2,41 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · macOS UI 与图标评审
+
+在 macOS 26 上逐屏核对界面与产品图标，详见
+[`docs/reviews/ui-and-icon-review-2026-10-18.md`](docs/reviews/ui-and-icon-review-2026-10-18.md)。
+
+### Changed
+
+- **macOS 客户端 bundle 改名为 `Remote Desktop.app`**：Dock 悬停提示读的是 `.app` 文件名，而不是
+  `CFBundleDisplayName`——即使 LaunchServices 已报告 “Remote Desktop”，旧的 `RemoteDesktop.app` 仍显示
+  `RemoteDesktop`。改名后与 host bundle（`Remote Desktop Host.app`）一致，Dock 提示、菜单栏与窗口标题
+  统一为 “Remote Desktop”。打包脚本、CI 校验路径与文档同步更新。**升级注意**：pkg 不会删除旧名字的
+  bundle，从旧版升级需先删掉 `/Applications/RemoteDesktop.app`；若开过登录项，需在新 bundle 里重新开启。
+- **主窗口标题从“远程桌面”改为 “Remote Desktop”**：与 Dock 提示、菜单栏与产品名一致（撤销上一轮为
+  Linux 中文一致性所做的改动）。
+
+### Fixed
+
+- **三个控制器时，第三个会话的“仅观看/断开”落在横幅视口外**：每项说明与按钮原先竖排，约 100pt 高，
+  150pt 的视口只露出两项半。改为说明与操作同一行；三个控制器的实机截图确认三项操作全部可见。
+- **`Remote Desktop Host.app` 在 Finder/安装包中显示通用应用图标**：host bundle 没有 `AppIcon.icns`，
+  也没有 `CFBundleIconFile`。`make-app.sh` 现在用客户端同一套图标资产生成并签入图标，product 只有一份图标源。
+- **远程桌面与摄像头的录制按钮比同一工具栏里的其他按钮高**：录制/停止文案的前缀是 emoji（`⏺`/`⏹`），
+  Apple Color Emoji 的行高把按钮撑高。改为文本呈现的 `●`/`■` 后，远程桌面工具栏六个按钮（静音、录制、
+  文件、终端、摄像头、断开）实测均为 64px（32pt），摄像头工具栏的“开始/停止/录制摄像头”也完全一致；
+  viewmodel 里的注释说明了不要换回 emoji 的原因。
+- **终端窗口的下拉框标签是英文 “Shell”**：改为“终端类型”，`AutomationProperties.Name` 同步更新。
+
+### Notes
+
+- **亮色外观已实机核验**：主页、设备列表、三项高级设置、远程桌面、文件传输、终端、摄像头与被控端警告
+  横幅逐屏截图；正文、次级文字、警告色与按钮均清晰。唯一观察：文件传输中的隐藏文件整行以 50% 透明度
+  呈现，亮色下大小/日期（本来就是 `caption`）对比度低于 4.5:1；属可访问性观察，未改设计。
+- macOS 图标主体占画布 89%，比 Apple 的 824/1024 栅格大约 10%；本轮只记录（R3），未改图形比例。
+- 版本号段数与固定密码“关闭”按钮等 P3 观察项见评审文档。
+
 ## [未发布] · macOS 端到端测试修复
 
 在 macOS 26.7 / Apple Silicon 上用真实签名的客户端 bundle、真实服务端与两个独立客户端实例跑端到端场景时发现的问题。

@@ -95,7 +95,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的一个
-> **已签名 `.app`**：client 包是自带托管能力的 `RemoteDesktop.app`，host 包是无窗口的
+> **已签名 `.app`**：client 包是自带托管能力的 `Remote Desktop.app`，host 包是无窗口的
 > `Remote Desktop Host.app`（开机自启用 `/Library/LaunchAgents` 的 LaunchAgent，而非系统服务）。
 > 三个平台的宿主形态对照表见 [使用说明](../usage/README.md)。
 

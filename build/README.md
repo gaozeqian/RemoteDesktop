@@ -33,7 +33,7 @@ build/
 |---|---|---|
 | Linux | `client`、`host`、`server` | 两个独立的程序与包：`RemoteDesktop.Client` 与 `RemoteDesktop.HostService` |
 | Windows | `client`、`host`、`server` | 客户端 MSI 也带着被控端服务与 Agent；`host` 那个只装这两样，没有客户端窗口 |
-| macOS | `client`、`host`、`server` | 两个独立的 app：`RemoteDesktop.app`（完整客户端）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控）；host 包另装登录项 |
+| macOS | `client`、`host`、`server` | 两个独立的 app：`Remote Desktop.app`（完整客户端）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控）；host 包另装登录项 |
 
 Windows 的 `host` 走的是 `client/Build-ClientInstaller.ps1 -HostOnly`：服务定义、崩溃重启、防火墙规则与机器清理
 步骤只有一份，两个包不会各改一半。两个包共用服务名，所以一台机器只能装一个（安装程序会拒绝第二个）。

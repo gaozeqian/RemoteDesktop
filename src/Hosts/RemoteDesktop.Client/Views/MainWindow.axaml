@@ -3,7 +3,7 @@
         xmlns:vm="using:RemoteDesktop.Client.ViewModels"
         x:Class="RemoteDesktop.Client.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="远程桌面"
+        Title="Remote Desktop"
         Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="860" Height="560" MinWidth="860" MinHeight="560">
@@ -82,16 +82,27 @@
               <ItemsControl ItemsSource="{Binding IncomingSessions}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:HostSessionItem">
-                    <StackPanel Spacing="{DynamicResource RdSpaceXs}" Margin="0,0,0,8">
-                      <TextBlock Text="{Binding Description}" Classes="warning" />
-                      <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}"
-                                 Foreground="{DynamicResource RdDangerTextBrush}" FontWeight="SemiBold" />
-                      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                    <!--
+                      Description and actions share one row. They used to be stacked, which made each session about
+                      100 px tall; with the 150 px viewport the third controller's 仅观看/断开 buttons sat below the
+                      fold, so the person at this machine could not cut that session without discovering that the
+                      alert itself scrolls. One row fits four sessions in the same height, and the camera warning
+                      only adds a line when it applies.
+                    -->
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceMd}"
+                          Margin="0,0,0,8">
+                      <StackPanel Spacing="{DynamicResource RdSpaceXs}" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Description}" Classes="warning" TextWrapping="Wrap" />
+                        <TextBlock Text="正在使用本机摄像头" IsVisible="{Binding CameraActive}"
+                                   Foreground="{DynamicResource RdDangerTextBrush}" FontWeight="SemiBold" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}"
+                                  VerticalAlignment="Center">
                         <Button Content="关闭摄像头" Command="{Binding StopCameraCommand}" IsVisible="{Binding CameraActive}" />
                         <Button Content="仅观看" Command="{Binding DowngradeCommand}" IsVisible="{Binding CanDowngrade}" />
                         <Button Content="断开" Command="{Binding DisconnectCommand}" />
                       </StackPanel>
-                    </StackPanel>
+                    </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>

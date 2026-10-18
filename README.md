@@ -18,7 +18,7 @@
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app（`RemoteDesktop.app` 或独立的 `Remote Desktop Host.app`） | 图形会话里的 `systemd --user` 服务 |
+| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app（`Remote Desktop.app` 或独立的 `Remote Desktop Host.app`） | 图形会话里的 `systemd --user` 服务 |
 | 登录前的远程访问 | 支持 | 不支持 | 不支持 |
 | 无人值守操作 | 支持 | 仅登录后 | **不支持**（portal 不允许控制会话持久化） |
 

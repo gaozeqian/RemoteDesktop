@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds RemoteDesktop.app — the client as a macOS application bundle.
+# Builds "Remote Desktop.app" — the client as a macOS application bundle.
 #
 # Why a bundle and not just the executable: macOS grants screen recording, accessibility, camera and keychain access to
 # a *bundle with a stable code-signing identity*, not to a path. Since macOS 26 a bare CLI executable does not even
@@ -40,7 +40,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIGURATION="Release"
 OUTPUT_DIR="$REPO_ROOT/artifacts/app/macos"
 SELF_CONTAINED=1
-APP_NAME="RemoteDesktop.app"
+# The file name, not CFBundleDisplayName, is what the Dock shows in its hover tooltip: while this bundle was named
+# RemoteDesktop.app the tooltip read "RemoteDesktop" even though LaunchServices reported "Remote Desktop". The host
+# bundle has always been "Remote Desktop Host.app"; the client matches it now.
+APP_NAME="Remote Desktop.app"
 BUNDLE_ID="com.remotedesktop.client"
 EXECUTABLE_NAME="RemoteDesktop.Client"
 PROJECT="$REPO_ROOT/src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj"

@@ -73,7 +73,7 @@ dyld 拒绝在更老的系统上加载它们。要降低下限只能改走"从�
 
 **进程模型：没有 Session 0，"服务 + Agent"模型不成立。** 以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 所以 Windows 那套拆分在 macOS 上无法成立。被控端 = 运行在用户图形会话里的一个**已签名 `.app`**：
-client 包是完整的 `RemoteDesktop.app`（自带托管能力），host 包是独立的 `Remote Desktop Host.app`
+client 包是完整的 `Remote Desktop.app`（自带托管能力），host 包是独立的 `Remote Desktop Host.app`
 （`LSUIElement`，无窗口、无控制端，就是 Linux 那个 `HostService` 二进制）。
 开机自启：client 用 `SMAppService`，host 包用 `/Library/LaunchAgents` 的 LaunchAgent。两者都只在用户图形登录后生效，这直接导致「登录界面 / 登录前访问」没有对应物。
 

@@ -151,7 +151,7 @@ jobs:
           echo "==> Signing identities available:"
           security find-identity -v -p codesigning "$KC"
 
-      # 三个 .pkg：客户端（RemoteDesktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
+      # 三个 .pkg：客户端（Remote Desktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
       # （信令、中继与监控台 + 三个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
       # TCC 授权也分开，不能互相复用。
       # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize

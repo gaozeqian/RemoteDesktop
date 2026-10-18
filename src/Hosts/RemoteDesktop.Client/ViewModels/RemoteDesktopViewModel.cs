@@ -153,8 +153,10 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [ObservableProperty]
     public partial string RecordingDurationText { get; set; } = "00:00";
 
+    // Text-presentation symbols (●/■), not emoji (⏺/⏹): the emoji font's line metrics make the record button taller
+    // than the other toolbar buttons. Keep both the idle and recording text on the same symbols.
     [ObservableProperty]
-    public partial string RecordButtonText { get; set; } = "⏺ 录制屏幕";
+    public partial string RecordButtonText { get; set; } = "● 录制屏幕";
 
     [ObservableProperty]
     public partial string? RecordingStatusMessage { get; set; }
@@ -295,7 +297,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             finally
             {
                 IsRecording = false;
-                RecordButtonText = "⏺ 录制屏幕";
+                RecordButtonText = "● 录制屏幕";
             }
 
             return;
@@ -341,7 +343,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _recordingFileName = fileName;
         IsRecording = true;
         RecordingDurationText = "00:00";
-        RecordButtonText = "⏹ 停止录制 (00:00)";
+        RecordButtonText = "■ 停止录制 (00:00)";
         RecordingStatusMessage = $"正在录制: {fileName}";
         _recordingTimer.Start();
     }
@@ -355,7 +357,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
         var dur = recorder.Duration;
         RecordingDurationText = dur.ToString(dur.TotalHours >= 1 ? @"hh\:mm\:ss" : @"mm\:ss", CultureInfo.InvariantCulture);
-        RecordButtonText = $"⏹ 停止录制 ({RecordingDurationText})";
+        RecordButtonText = $"■ 停止录制 ({RecordingDurationText})";
 
         if (RecordingMessages.Interrupted(recorder.Failure) is { } interrupted)
         {
@@ -392,7 +394,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         finally
         {
             IsRecording = false;
-            RecordButtonText = "⏺ 录制屏幕";
+            RecordButtonText = "● 录制屏幕";
         }
 
         RecordingStatusMessage = saved ? $"{interrupted} 已保存到 {recorder.OutputFilePath}" : interrupted;

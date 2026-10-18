@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Packages RemoteDesktop.app into a macOS .pkg installer.
+# Packages "Remote Desktop.app" into a macOS .pkg installer.
 #
 # Why a .pkg and not a .dmg: this application is meant to run as an unattended controlled-side host, which on macOS
 # means it has to live in /Applications (SMAppService.mainAppService is keyed to the installed bundle — see
@@ -39,8 +39,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONFIGURATION="Release"
 OUTPUT_DIR="$REPO_ROOT/artifacts/installer/macos"
-APP_DIR="$REPO_ROOT/artifacts/app/macos/RemoteDesktop.app"
-APP_NAME="RemoteDesktop.app"
+APP_DIR="$REPO_ROOT/artifacts/app/macos/Remote Desktop.app"
+APP_NAME="Remote Desktop.app"
 BUNDLE_ID="com.remotedesktop.client"
 INSTALL_LOCATION="/Applications"
 ARCH="arm64"

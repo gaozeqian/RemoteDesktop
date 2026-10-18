@@ -103,7 +103,7 @@ runs:
         }
 
         check artifacts/installer/macos/RemoteDesktop-Client-macOS-*.pkg \
-          RemoteDesktop.Client RemoteDesktop.app/Contents/Info.plist
+          RemoteDesktop.Client 'Remote Desktop.app/Contents/Info.plist'
 
         # The host package is a product archive with two components (the app and the login item). pkgutil
         # --payload-files shows only the first one, and it does not read an expanded component directory either, so

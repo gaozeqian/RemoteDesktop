@@ -11,8 +11,8 @@
   <DockPanel>
     <Border DockPanel.Dock="Top" Classes="toolbar">
       <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
-        <TextBlock Text="Shell" Classes="secondary" VerticalAlignment="Center" />
-        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" AutomationProperties.Name="Shell" MinWidth="140"
+        <TextBlock Text="终端类型" Classes="secondary" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Shells}" SelectedItem="{Binding SelectedShell}" AutomationProperties.Name="终端类型" MinWidth="140"
                   VerticalAlignment="Center" />
         <Button Content="新建标签" Command="{Binding NewTabCommand}" VerticalAlignment="Center" />
         <Border Classes="toolbarSeparator" />

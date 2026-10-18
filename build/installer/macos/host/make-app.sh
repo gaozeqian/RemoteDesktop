@@ -80,6 +80,16 @@ cp -R "$PUBLISH_DIR/." "$MACOS_DIR/"
 sed "s/__VERSION__/$VERSION/g" "$SCRIPT_DIR/Info.plist" > "$CONTENTS_DIR/Info.plist"
 chmod +x "$MACOS_DIR/RemoteDesktop.HostService"
 
+# The same product icon as the client, generated from the client's artwork rather than kept as a second copy. The
+# host runs as an agent (LSUIElement: no Dock icon, no menu bar), but Finder, /Applications and the installer still
+# show the bundle, and the generic application icon there is the wrong first impression for a deliverable. The icon
+# has to be in place before signing so it is sealed into the bundle.
+if "$REPO_ROOT/build/installer/macos/client/make-icns.sh" --output "$CONTENTS_DIR/Resources/AppIcon.icns" >/dev/null; then
+    echo "    icon: AppIcon.icns"
+else
+    echo "    WARNING: could not build AppIcon.icns — Finder will show the generic application icon." >&2
+fi
+
 # --- signing --------------------------------------------------------------------------------------------------
 
 if [[ -z "$IDENTITY" ]]; then

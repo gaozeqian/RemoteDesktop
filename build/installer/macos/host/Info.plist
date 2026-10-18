@@ -23,6 +23,11 @@
     <key>CFBundleIdentifier</key>
     <string>com.remotedesktop.host</string>
 
+    <!-- Finder/Applications icon. LSUIElement hides the Dock icon at runtime, not this one. Generated from the
+         client's Assets/icon-*.png by make-app.sh, so the two bundles cannot carry different artwork. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
 

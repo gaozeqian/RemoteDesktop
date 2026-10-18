@@ -86,8 +86,10 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
     [ObservableProperty]
     public partial string RecordingDurationText { get; set; } = "00:00";
 
+    // Text-presentation symbols (●/■), not emoji (⏺/⏹): the emoji font's line metrics make the record button taller
+    // than the other toolbar buttons. Keep both the idle and recording text on the same symbols.
     [ObservableProperty]
-    public partial string RecordButtonText { get; set; } = "⏺ 录制摄像头";
+    public partial string RecordButtonText { get; set; } = "● 录制摄像头";
 
     [ObservableProperty]
     public partial string? RecordingStatusMessage { get; set; }
@@ -249,7 +251,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         _recordingFileName = fileName;
         IsRecording = true;
         RecordingDurationText = "00:00";
-        RecordButtonText = "⏹ 停止录制 (00:00)";
+        RecordButtonText = "■ 停止录制 (00:00)";
         RecordingStatusMessage = $"正在录制: {fileName}";
         _recordingTimer.Start();
     }
@@ -263,7 +265,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
 
         var dur = recorder.Duration;
         RecordingDurationText = dur.ToString(dur.TotalHours >= 1 ? @"hh\:mm\:ss" : @"mm\:ss", CultureInfo.InvariantCulture);
-        RecordButtonText = $"⏹ 停止录制 ({RecordingDurationText})";
+        RecordButtonText = $"■ 停止录制 ({RecordingDurationText})";
 
         if (RecordingMessages.Interrupted(recorder.Failure) is { } interrupted)
         {
@@ -297,7 +299,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         finally
         {
             IsRecording = false;
-            RecordButtonText = "⏺ 录制摄像头";
+            RecordButtonText = "● 录制摄像头";
         }
 
         RecordingStatusMessage = saved ? $"{interrupted} 已保存到 {recorder.OutputFilePath}" : interrupted;
@@ -375,7 +377,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         finally
         {
             IsRecording = false;
-            RecordButtonText = "⏺ 录制摄像头";
+            RecordButtonText = "● 录制摄像头";
         }
     }
 

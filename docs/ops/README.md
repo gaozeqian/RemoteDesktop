@@ -838,7 +838,7 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 
 macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有一个 app。现在是两个不同 bundle 的应用：
 
-- **client**：`/Applications/RemoteDesktop.app`，Avalonia 客户端，完整功能；不自动启动；可在应用内手动开
+- **client**：`/Applications/Remote Desktop.app`，Avalonia 客户端，完整功能；不自动启动；可在应用内手动开
   “登录时自动启动”（SMAppService）。
 - **host**：`/Applications/Remote Desktop Host.app`，`LSUIElement` 的后台应用，**没有窗口**；里面是
   `RemoteDesktop.HostService`，只负责被控，不能控制别人；由 LaunchAgent 在每次图形登录时启动。
@@ -857,7 +857,7 @@ build/installer/macos/host/make-pkg.sh --configuration Release
 
 | 装的包 | 文件 | 登录行为 | 能做什么 |
 |---|---|---|---|
-| 只装 client | `RemoteDesktop.app` | 不自动启动；应用内可选开 SMAppService 登录项 | 打开后既能控制别人，也能被别人控制 |
+| 只装 client | `Remote Desktop.app` | 不自动启动；应用内可选开 SMAppService 登录项 | 打开后既能控制别人，也能被别人控制 |
 | 只装 host | `Remote Desktop Host.app` + LaunchAgent | 每次图形登录自动启动；退出后不强行拉起 | **无窗口、只能被控**，不能控制别人；没有登录前访问 |
 | 两个都装 | 两个 app 各一份 | host 的登录项照常启动 | 两个独立的被控端，两个设备码；不建议 |
 
@@ -887,6 +887,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 - **无人值守**：host 包用 LaunchAgent 自启，并提供固定密码命令（见上）；client 包可以在应用里手动开
   `SMAppService` 登录项。授权按**已签名并位于 `/Applications` 的应用**记账，别把 `.app` 拷到别处运行。
 - **卸载 host**（pkg 没有卸载器）：
+
   ```bash
   launchctl bootout gui/$(id -u)/com.remotedesktop.host 2>/dev/null || true
   sudo rm -f /Library/LaunchAgents/com.remotedesktop.host.plist
@@ -894,7 +895,8 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
   sudo pkgutil --forget com.remotedesktop.host.app
   sudo pkgutil --forget com.remotedesktop.host.agent
   ```
-  卸载 client 只需删 `/Applications/RemoteDesktop.app` 并
+
+  卸载 client 只需删 `/Applications/Remote Desktop.app` 并
   `sudo pkgutil --forget com.remotedesktop.client`；若在应用里开过登录项，先在应用里关掉。
 
 服务器地址：host 读 `~/Library/Application Support/RemoteDesktop/appsettings.json` 的
