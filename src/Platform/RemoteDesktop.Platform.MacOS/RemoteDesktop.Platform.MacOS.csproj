@@ -36,7 +36,7 @@
        process launch and no compilation. -->
   <Target Name="BuildMacNativeHelper"
           BeforeTargets="AssignTargetPaths"
-          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+          Condition="'$(RemoteDesktopCrossTargeting)' != 'true' and ('$(RuntimeIdentifier)' == 'osx-arm64' or ('$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('OSX'))))">
     <Exec Command="&quot;$(MSBuildThisFileDirectory)..\..\..\native\macos\build-native.sh&quot;"
           StandardOutputImportance="low" />
     <ItemGroup>

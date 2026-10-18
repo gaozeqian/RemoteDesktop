@@ -101,6 +101,16 @@ public sealed class InstallerPackageTests
         var registry = package.Rows("SELECT `Root`, `Name` FROM `Registry`", 2);
         Assert.Single(registry, row => row[0] == "1" && row[1] == "StartMenuShortcut");
 
+        // --- the client package is also the controlled end, so it refuses the host-only package ------------------
+        // One machine has one RemoteDesktopHost service and one device identity. Installing the host-only package
+        // alongside this one would be a second service for the same pipe and code, so each package blocks the other;
+        // the row is checked because an Upgrade element that never made it into the package blocks nothing.
+        var upgrades = package.Rows("SELECT `UpgradeCode` FROM `Upgrade`", 1);
+        Assert.Contains(upgrades, row =>
+            row[0].Equals("3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03", StringComparison.OrdinalIgnoreCase));
+        var launch = package.Rows("SELECT `Condition` FROM `LaunchCondition`", 1);
+        Assert.Contains(launch, row => row[0].Contains("HOSTPACKAGEINSTALLED", StringComparison.Ordinal));
+
         // --- the certificates that go into a machine's trusted roots ----------------------------------------------
         // Two can be in a package, and either, both or neither may be: the certificate the build signed with, when it
         // is self-signed (Build-ClientInstaller.ps1 passes -p:TrustedRootCertificate, which is the only thing that compiles

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The host-only bundle. A .app rather than a bare executable because macOS keys the screen-recording and
+  accessibility grants to a signed bundle in a user's graphical session; a daemon cannot capture, and a loose binary
+  has no stable identity to remember the grant by.
+
+  LSUIElement makes it an agent: it has no Dock icon and no window. It is still a GUI-session process, which is the
+  point — it is not a LaunchDaemon and cannot run before a user logs in.
+
+  The bundle identifier is deliberately different from the client's (com.remotedesktop.client): the two applications
+  have different code and different jobs, and TCC must be able to grant them separately. The executable is the
+  existing HostService; there is no second composition to drift from the Linux one.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+
+    <key>CFBundleExecutable</key>
+    <string>RemoteDesktop.HostService</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.remotedesktop.host</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>Remote Desktop Host</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Remote Desktop Host</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+
+    <!-- Agent, not a normal app: no Dock icon, no menu bar, no window. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>NSCameraUsageDescription</key>
+    <string>Remote Desktop 需要访问摄像头，才能把本机摄像头画面转发给远端会话。</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Remote Desktop 需要访问麦克风，才能把本机声音转发给远端会话。</string>
+
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Remote Desktop 需要访问桌面文件夹，才能在被控时传输其中的文件。</string>
+
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Remote Desktop 需要访问文稿文件夹，才能在被控时传输其中的文件。</string>
+
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Remote Desktop 需要访问下载文件夹，才能在被控时传输其中的文件。</string>
+</dict>
+</plist>

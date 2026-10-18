@@ -51,7 +51,7 @@ jobs:
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-windows
-      # The two MSIs are built here as well as at release time, and that is the whole point of the step. The scripts
+      # The three MSIs are built here as well as at release time, and that is the whole point of the step. The scripts
       # under build/installer/windows/* otherwise only ever run when a tag is pushed, so anything that breaks them —
       # a project reference that no longer resolves, a file the publish stops producing, a WiX component that silently
       # drops content — would first be discovered while publishing a release, which is the one build nobody gets to
@@ -63,10 +63,11 @@ jobs:
         shell: pwsh
         run: |
           .\build\installer\windows\client\Build-ClientInstaller.ps1 -Configuration Release -SkipSigning
+          .\build\installer\windows\host\Build-HostInstaller.ps1 -Configuration Release -SkipSigning
           .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
 
-      # Both packages are opened and their contents checked, by the same shared action the other two platforms call:
-      # one place answers "does this package hold what it is supposed to" for all three.
+      # All three packages are opened and their contents checked, by the same shared action the other two platforms
+      # call: one place answers "does this package hold what it is supposed to" for all three.
       - uses: ./.github/actions/verify-packages
 
   build-linux:
@@ -132,7 +133,7 @@ jobs:
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-macos
-      # The two .pkg files are built here as well as at release time, and that is the whole point of the step: the
+      # The three .pkg files are built here as well as at release time, and that is the whole point of the step: the
       # scripts under build/installer/macos/* otherwise only ever run when a tag is pushed, so a broken one — a project
       # reference that no longer resolves, a native library the publish stops carrying, a payload the launchd plists
       # no longer point at — would first be discovered while publishing a release, which is the one build nobody gets
@@ -143,6 +144,7 @@ jobs:
       - name: Build the macOS installers (.pkg)
         run: |
           ./build/installer/macos/client/make-pkg.sh --configuration Release
+          ./build/installer/macos/host/make-pkg.sh   --configuration Release
           ./build/installer/macos/server/make-pkg.sh --configuration Release
 
       # The payload is what has to be right: a package that installs nothing would still be a package, and the scripts

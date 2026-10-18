@@ -19,6 +19,22 @@ public static class OpsServer
 
         var options = builder.Configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
 
+        // A relative SQLite path is relative to the program's content root, which for a service is where the program
+        // lives — not the directory the service manager happened to start it in. (A Windows service starts in System32,
+        // so the old behaviour put the console's database there.) Expanding environment variables lets a packaged
+        // install say %ProgramData%, which is right even on a machine whose data directory is not on C:. Absolute
+        // paths — what the Linux and macOS packages configure — are left as they are.
+        if (!string.IsNullOrWhiteSpace(options.Database.Path))
+        {
+            var databasePath = Environment.ExpandEnvironmentVariables(options.Database.Path);
+            if (!Path.IsPathRooted(databasePath))
+            {
+                databasePath = Path.Combine(builder.Environment.ContentRootPath, databasePath);
+            }
+
+            options.Database.Path = databasePath;
+        }
+
         // Stopping at start-up beats serving a sign-in page that cannot work. The message names Ops:Database:*.
         options.Database.Validate();
         ValidateIngestKeys(options);

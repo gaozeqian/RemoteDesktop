@@ -5,7 +5,11 @@
          community fixes, so the installer is kept to standard features (no custom actions of our own beyond calling
          the service executable) to keep a later move to another tool cheap. -->
     <InstallerPlatform>x64</InstallerPlatform>
-    <OutputName>RemoteDesktop-$(ProductVersion)-x64</OutputName>
+    <!-- Passed by Build-ClientInstaller.ps1 -HostOnly. Global properties, so they are visible here before this file is
+         evaluated; the host package needs a name and an identity of its own, or it would try to upgrade the client. -->
+    <HostOnly Condition="'$(HostOnly)' == ''">0</HostOnly>
+    <OutputName Condition="'$(HostOnly)' == '1'">RemoteDesktop.Host-$(ProductVersion)-x64</OutputName>
+    <OutputName Condition="'$(HostOnly)' != '1'">RemoteDesktop-$(ProductVersion)-x64</OutputName>
     <OutputType>Package</OutputType>
     <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
@@ -13,9 +17,17 @@
   <PropertyGroup>
     <!-- Passed by Build-ClientInstaller.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <ProductName Condition="'$(HostOnly)' == '1'">Remote Desktop Host</ProductName>
+    <ProductName Condition="'$(HostOnly)' != '1'">Remote Desktop</ProductName>
+    <!-- A separate UpgradeCode for the host package: Windows Installer identifies a product by it, and upgrading one
+         role must never remove the other. The client's value is the one this file has always had. -->
+    <ProductUpgradeCode Condition="'$(HostOnly)' == '1'">3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03</ProductUpgradeCode>
+    <ProductUpgradeCode Condition="'$(HostOnly)' != '1'">6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30</ProductUpgradeCode>
     <!-- The address baked into the installed appsettings.json, and the default of the RENDEZVOUSURI property. -->
     <DefaultRendezvousUri Condition="'$(DefaultRendezvousUri)' == ''">ws://127.0.0.1:5080/ws</DefaultRendezvousUri>
-    <DefineConstants>ProductVersion=$(ProductVersion);SourceRoot=$(SourceRoot);DefaultRendezvousUri=$(DefaultRendezvousUri)</DefineConstants>
+    <DefineConstants>ProductVersion=$(ProductVersion);ProductName=$(ProductName);ProductUpgradeCode=$(ProductUpgradeCode);SourceRoot=$(SourceRoot);DefaultRendezvousUri=$(DefaultRendezvousUri)</DefineConstants>
+    <!-- Defined only for the host package, so that the HostOnly conditional in the .wxs files means what it says. -->
+    <DefineConstants Condition="'$(HostOnly)' == '1'">$(DefineConstants);HostOnly=1</DefineConstants>
     <!-- The public half of the signing certificate, and only when the build signed with a self-signed one: its presence
          is what compiles the component that installs it into the machine's trusted root store. Built by hand, without
          it, the package simply has no certificate in it (see Components.wxs). -->

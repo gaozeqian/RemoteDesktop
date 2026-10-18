@@ -1,25 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One installer per platform: this MSI installs the client, the background service and the session agent into one
-  folder. The service is what makes this computer reachable; the client is both the window of this computer and the
-  controller of others. Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
+  One installer per role. The default package installs the client, the background service and the session agent into
+  one folder: the service is what makes this computer reachable, and the client is both the window of this computer and
+  the controller of others. Built with -HostOnly it is the controlled end's package instead — the same service and
+  agent, without the client — with its own product name and UpgradeCode so the two upgrade independently.
+  Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <Package Name="Remote Desktop" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
-           UpgradeCode="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30"
-           Scope="perMachine" Compressed="yes" InstallerVersion="500">
+  <!-- Codepage 936 (GBK): the host package's unattended-settings page has Chinese labels, and MSI strings are stored
+       in the database codepage. The client package shares this file, so it gets the same codepage; its WixUI strings
+       are ASCII and unaffected. -->
+  <Package Name="$(var.ProductName)" Manufacturer="Remote Desktop" Version="$(var.ProductVersion)"
+           UpgradeCode="$(var.ProductUpgradeCode)"
+           Scope="perMachine" Compressed="yes" InstallerVersion="500"
+           Codepage="936">
 
     <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
          somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
+    <?ifdef var.HostOnly ?>
+    <SummaryInformation Description="Remote desktop, controlled end: the background service and the session agent. Chinese UI." />
+    <?else?>
     <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese UI." />
+    <?endif?>
 
     <!-- Same-version installs upgrade in place, which is what rebuilding the same version while testing needs. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   Schedule="afterInstallInitialize"
-                  DowngradeErrorMessage="A newer version of RemoteDesktop is already installed." />
+                  DowngradeErrorMessage="A newer version of this Remote Desktop package is already installed." />
+
+    <!--
+      The two roles share the service name RemoteDesktopHost, so they cannot be installed side by side: the second
+      installer would add a second service with the same name, and the machine would end up with one product's files
+      and the other's registration. Refusing is better than half-working, and the message says what to do.
+
+      Each package names the *other* one's UpgradeCode here, so this is also what makes "install one, then the other"
+      a clear error rather than a silent overwrite.
+    -->
+    <?ifdef var.HostOnly ?>
+    <Upgrade Id="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30">
+      <UpgradeVersion Minimum="0.0.0" Maximum="999.99.99" IncludeMinimum="yes" IncludeMaximum="no"
+                      Property="CLIENTPACKAGEINSTALLED" OnlyDetect="yes" />
+    </Upgrade>
+    <Launch Condition="NOT CLIENTPACKAGEINSTALLED"
+            Message="This machine already has the client package, which also installs the controlled end. Uninstall it first if you want the controlled-end-only package here." />
+    <?else?>
+    <Upgrade Id="3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03">
+      <UpgradeVersion Minimum="0.0.0" Maximum="999.99.99" IncludeMinimum="yes" IncludeMaximum="no"
+                      Property="HOSTPACKAGEINSTALLED" OnlyDetect="yes" />
+    </Upgrade>
+    <Launch Condition="NOT HOSTPACKAGEINSTALLED"
+            Message="This machine already has the controlled-end-only package. The client package also installs the controlled end; uninstall the host package first if you want the client here." />
+    <?endif?>
     <MediaTemplate EmbedCab="yes" />
 
     <!-- The server this installation talks to. The default is the address baked in when the installer was built
@@ -34,6 +68,22 @@
          asks for them to go: msiexec /x ... REMOVEDATA=1 -->
     <Property Id="REMOVEDATA" Value="0" Secure="yes" />
 
+    <?ifdef var.HostOnly ?>
+    <!--
+      The fixed password for unattended access. It has a single space rather than no value because a control is only
+      editable while its property is defined (the same reason the server's certificate box arrives holding a space);
+      the setup command trims it, so a space means "leave what is there alone". Secure so the deferred action receives
+      it, and in MsiHiddenProperties so it does not end up in the installer log.
+
+      The host package has no window, so this page is the only place a fresh host can be given a password without a
+      command line. The value is passed to the service executable as an argument; a double quote in it would break the
+      command line, and the page says so.
+    -->
+    <Property Id="FIXEDPASSWORD" Value=" " Secure="yes" />
+    <Property Id="CLEARFIXEDPASSWORD" Value="0" Secure="yes" />
+    <Property Id="MsiHiddenProperties" Value="FIXEDPASSWORD" />
+    <?endif?>
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RemoteDesktop" />
     </StandardDirectory>
@@ -41,15 +91,19 @@
       <Directory Id="AppShortcutFolder" Name="Remote Desktop" />
     </StandardDirectory>
 
-    <Feature Id="Main" Title="Remote Desktop" Level="1" AllowAbsent="no">
-      <!-- The window of this computer and the controller for others. -->
+    <Feature Id="Main" Title="$(var.ProductName)" Level="1" AllowAbsent="no">
+      <!-- The window of this computer and the controller for others. Not in the host-only package. -->
+      <?ifndef var.HostOnly ?>
       <ComponentRef Id="ClientExe" />
+      <?endif?>
       <!-- The service that accepts connections, plus the agent that does the work inside the session. -->
       <ComponentRef Id="HostServiceExe" />
       <ComponentRef Id="SessionAgentExe" />
       <ComponentRef Id="Settings" />
       <!-- Start menu shortcut (per-user, so it only goes for the user who uninstalls). -->
+      <?ifndef var.HostOnly ?>
       <ComponentRef Id="StartMenuShortcut" />
+      <?endif?>
       <!-- Only in a build that signed with a self-signed certificate (see Components.wxs). -->
       <?ifdef var.TrustedRootCertificate ?>
       <ComponentRef Id="TrustedRootCert" />
@@ -71,8 +125,10 @@
     -->
     <util:CloseApplication Id="CloseAgent" Target="RemoteDesktop.SessionAgent.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <?ifndef var.HostOnly ?>
     <util:CloseApplication Id="CloseClient" Target="RemoteDesktop.Client.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <?endif?>
 
     <!-- Welcome, license, folder, progress, finish. The license text is the repository's LICENSE, shared with the
          server package, and the RTF the dialog needs is generated from it by New-LicenseRtf.ps1 while building, so the

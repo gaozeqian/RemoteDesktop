@@ -11,6 +11,11 @@
   The MSI installs the client, the background service and the session agent, adds a start menu shortcut, an inbound UDP
   firewall rule for peer connections, and configures Ctrl+Alt+Del support and the server address.
 
+  -HostOnly builds the controlled end's own package instead: the same service and session agent, without the client
+  window and its shortcut. It exists because a machine that is only ever connected to should not have to install the
+  controller as well. Both packages share this script so the service, its recovery settings, the firewall rule and the
+  machine setup actions cannot drift apart.
+
 .EXAMPLE
   # Development build with the built-in default server address
   .\build\installer\windows\client\Build-ClientInstaller.ps1
@@ -45,6 +50,10 @@ param(
     [string]$RendezvousUri = '',
 
     [string]$Configuration = 'Release',
+
+    # Build the controlled end's package: the service and the session agent, no client window, no shortcut. The default
+    # output folder and the MSI name change with it (artifacts\app\windows\host, RemoteDesktop.Host-<version>-x64.msi).
+    [switch]$HostOnly,
 
     # Code-signing certificate to use (thumbprint, or the subject of one). Left empty, a suitable certificate is looked
     # for in this user's and the machine's store, and signing is skipped when there is none; -SkipSigning turns it off
@@ -109,8 +118,12 @@ $repoRoot = Resolve-Path (Join-Path $installerDirectory '..\..\..\..')
 # The publish output is an intermediate and the MSI is the deliverable, hence two kinds. The role is a directory only
 # where one OS has more than one of that kind — Windows publishes a client and a server, so their publish outputs need
 # separate trees; the MSIs do not, because the role is already in their file names.
-if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot 'artifacts\app\windows\client' }
+if (-not $PublishDirectory) { $PublishDirectory = Join-Path $repoRoot "artifacts\app\windows\$(if ($HostOnly) { 'host' } else { 'client' })" }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'artifacts\installer\windows' }
+
+# The two roles this script can build. The name is what the MSI is called and what the package tests are selected by,
+# so it is decided once here rather than spelled out at each of the four places that need it.
+$role = if ($HostOnly) { 'host' } else { 'client' }
 
 # Checked here, before anything is published: a certificate path that does not exist (a step that was supposed to write
 # it, a typo) is worth a plain sentence now, not a cryptographic error five minutes into the build.
@@ -507,8 +520,13 @@ Push-Location $repoRoot
 try {
     # Each executable is published self-contained into the same folder: the service starts the agent from its own
     # directory, so the agent has to be there with the same runtime (a plain build copies the agent, but a
-    # framework-dependent agent would look for the .NET runtime on the target machine).
-    foreach ($project in 'RemoteDesktop.HostService', 'RemoteDesktop.SessionAgent', 'RemoteDesktop.Client') {
+    # framework-dependent agent would look for the .NET runtime on the target machine). The client is left out of
+    # -HostOnly: a controlled machine has no window, and shipping the executable without a shortcut would only be a
+    # second way to start it.
+    $projects = @('RemoteDesktop.HostService', 'RemoteDesktop.SessionAgent')
+    if (-not $HostOnly) { $projects += 'RemoteDesktop.Client' }
+
+    foreach ($project in $projects) {
         Write-Host "  $project"
 
         # -p:UiAccessAgent=true goes to every publish, not only the agent's own: the agent project is also built as part
@@ -524,7 +542,10 @@ finally {
     Pop-Location
 }
 
-foreach ($expected in 'RemoteDesktop.Client.exe', 'RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json', 'msquic.dll') {
+$expectedFiles = @('RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json', 'msquic.dll')
+if (-not $HostOnly) { $expectedFiles = @('RemoteDesktop.Client.exe') + $expectedFiles }
+
+foreach ($expected in $expectedFiles) {
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
@@ -579,7 +600,8 @@ Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
 # Declared by hand in Components.wxs (they carry the service, the shortcuts or the settings).
-$handWritten = @('RemoteDesktop.Client.exe', 'RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json')
+$handWritten = @('RemoteDesktop.HostService.exe', 'RemoteDesktop.SessionAgent.exe', 'appsettings.json')
+if (-not $HostOnly) { $handWritten += 'RemoteDesktop.Client.exe' }
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
@@ -649,6 +671,9 @@ $wixArguments = @(
 )
 if ($trustedRootCertificate) { $wixArguments += "-p:TrustedRootCertificate=$trustedRootCertificate" }
 if ($trustedServerCertificate) { $wixArguments += "-p:TrustedServerCertificate=$trustedServerCertificate" }
+# What makes the same .wxs files produce the host's package: no client component, no shortcut, its own product name and
+# UpgradeCode (a host package and a client package are two products and have to upgrade separately).
+if ($HostOnly) { $wixArguments += '-p:HostOnly=1' }
 
 # The .msi is the deliverable; the .wixpdb that comes with it is not. WiX writes the pdb next to the package by
 # default, and "next to" is $(TargetDir) -- which OutputPath above has just pointed at artifacts/installer/windows,
@@ -658,8 +683,12 @@ if ($trustedServerCertificate) { $wixArguments += "-p:TrustedServerCertificate=$
 dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Installer.wixproj') -c $Configuration -nologo -v minimal @wixArguments -p:OutputPath=$OutputDirectory -p:PdbOutputDir=obj\$Configuration\
 if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 
-$package = Get-ChildItem $OutputDirectory -Filter *.msi | Select-Object -First 1
-if (-not $package) { throw "No MSI was produced in $OutputDirectory." }
+# The newest package of this role, not merely the first: an older one left in the output folder must not be the one
+# that gets signed and checked. The pattern is role-specific on purpose - "*.msi" would pick the server package built
+# before this one, and the tests would then pass while describing a package this run never produced.
+$packagePattern = if ($HostOnly) { 'RemoteDesktop.Host-*.msi' } else { 'RemoteDesktop-*.msi' }
+$package = Get-ChildItem $OutputDirectory -Filter $packagePattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $package) { throw "No $role MSI was produced in $OutputDirectory." }
 
 Write-Host "  $($package.FullName) ($([math]::Round($package.Length / 1MB, 1)) MB)"
 
@@ -757,9 +786,10 @@ $env:RD_EXPECTED_CERTIFICATES = "$expectedCertificates"
 #
 # --results-directory 不能省：不给它，dotnet test 会在当前目录建一个空的 TestResults/，于是仓库根上又长出第二个
 # 产物根（见 CONTRIBUTING.md 的"构建产物布局"）。指到 artifacts/ 下面，位置就只有一个答案。
-dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.UnitTests') --filter-class RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests --results-directory (Join-Path $repoRoot 'artifacts\test-results\windows') -v quiet
+$packageTestClass = if ($HostOnly) { 'HostInstallerPackageTests' } else { 'InstallerPackageTests' }
+dotnet test --project (Join-Path $repoRoot 'tests\RemoteDesktop.Platform.Windows.UnitTests') --filter-class "RemoteDesktop.Platform.Windows.UnitTests.$packageTestClass" --results-directory (Join-Path $repoRoot 'artifacts\test-results\windows') -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (see the test output above).' }
 Remove-Item Env:\RD_INSTALLER_MSI
 Remove-Item Env:\RD_EXPECTED_CERTIFICATES
 
-Write-Host 'Done. Install with: msiexec /i <msi> (or RENDEZVOUSURI=ws://... to set the server now).'
+Write-Host "Done ($role). Install with: msiexec /i <msi> (or RENDEZVOUSURI=ws://... to set the server now)."

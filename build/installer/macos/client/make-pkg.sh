@@ -207,7 +207,9 @@ XML
 
 # --- 5. The product package ------------------------------------------------------------------------------------
 
-PKG_NAME="RemoteDesktop-macOS-$ARCH-$VERSION.pkg"
+# The role is in the file name, like the Linux packages and the release assets: three .pkg files land in one directory
+# and "which one is the controller" should not depend on knowing that the one without a role word is it.
+PKG_NAME="RemoteDesktop-Client-macOS-$ARCH-$VERSION.pkg"
 FINAL_PKG="$OUTPUT_DIR/$PKG_NAME"
 
 BUILD_ARGS=(--distribution "$WORK_DIR/distribution.xml" --resources "$RES_DIR" --package-path "$WORK_DIR")

@@ -1,12 +1,13 @@
 Remote Desktop 服务器（macOS）—— 装好之后怎么改配置
 ==================================================
 
-这个目录里放着两个服务器程序（Rendezvous/ 信令、Relay/ 中继）、它们的配置
+这个目录里放着三个服务器程序（Rendezvous/ 信令、Relay/ 中继、Ops/ 运维监控台）、它们的配置
 （各自目录下的 appsettings.json），以及这个说明。
 
 它们由 launchd 以系统守护进程（LaunchDaemon）的方式运行，开机自启、崩溃自动重启：
     /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
     /Library/LaunchDaemons/com.remotedesktop.relay.plist
+    /Library/LaunchDaemons/com.remotedesktop.ops.plist
 
 
 一、改配置的推荐做法：用同目录下的脚本
@@ -69,8 +70,10 @@ appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留�
 四、日志与健康检查
 ------------------
 
-    logs/rendezvous.log、logs/relay.log      两个服务器的标准输出
+    logs/rendezvous.log、logs/relay.log      两个网络服务器的标准输出
+    logs/ops.log                             运维监控台的标准输出
     curl http://127.0.0.1:5080/health        信令是否活着（返回 Healthy）
+    curl http://127.0.0.1:5090/health        监控台是否活着
 
 
 五、卸载
@@ -79,7 +82,24 @@ appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留�
     cd /usr/local/remotedesktop-server
     sudo ./uninstall-server.sh
 
-它会停掉两个守护进程、删掉 plist 和这个目录。加 --keep-settings 只删程序、留下配置和日志。
+它会停掉三个守护进程、删掉 plist 和这个目录。加 --keep-settings 只删程序、留下配置和日志。
 
 注意：中继密钥在配置里。如果中继装在另一台机器上，那台机器用的是**这台机器**的密钥；
 在这里删掉它，就等于下次安装时那台机器要重新配置一遍。
+
+
+六、运维监控台（Ops）的第一个账号
+------------------------------------
+
+监控台没有默认口令，也没有网页初始化入口。第一个管理员要在终端里建：
+
+    sudo ./Ops/RemoteDesktop.Server.Ops --create-admin admin
+
+它会交互式地问口令，然后打印一个 TOTP 密钥和 otpauth:// 链接，用验证器扫码即可。**密钥只显示这一次**，
+丢了只能再建一个账号。之后每次登录都要口令 + TOTP。
+
+监控台默认只监听 127.0.0.1:5090，用浏览器在服务器本机上打开即可；要给它 TLS 或对外访问，
+在前面放反向代理，不要直接把 5090 暴露到公网——它自己的登录面没有为公网设计限额。
+
+它的数据库在 var/ops.db（与设备码的 var/rendezvous.db 同一个 0700 目录）。删掉它等于丢掉监控历史、
+告警和审计记录，但**不影响**远程桌面连接本身。

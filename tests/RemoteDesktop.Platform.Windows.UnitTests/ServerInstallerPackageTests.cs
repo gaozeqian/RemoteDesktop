@@ -6,9 +6,9 @@ using WixToolset.Dtf.WindowsInstaller;
 namespace RemoteDesktop.Platform.Windows.UnitTests;
 
 /// <summary>
-/// What has to be in the server installer for it to be worth anything: two services that start by themselves, the
-/// three ports the servers need opened, both settings files in place, and the one step that ties them together —
-/// the key that signs relay tickets, which both servers have to agree on.
+/// What has to be in the server installer for it to be worth anything: three services that start by themselves, the
+/// three ports the public servers need opened, their settings files in place, and the one step that ties them together
+/// — the key that signs relay tickets, which both network servers have to agree on.
 /// </summary>
 /// <remarks>
 /// Checked by opening the package rather than by installing it. WiX 5 drops things without a word (a fragment with
@@ -51,20 +51,20 @@ public sealed class ServerInstallerPackageTests
 
         using var package = new MsiPackage(Msi!);
 
-        // --- the two programs, each with the runtime that comes with it -------------------------------------------
+        // --- the three programs, each with the runtime that comes with it ----------------------------------------
         var files = package.Rows("SELECT `File`, `FileName` FROM `File`", 2);
         var names = files.Select(row => row[1].Split('|')[^1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "appsettings.json", "Set-ServerConfiguration.ps1", "how-to-configure.txt" })
+        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "RemoteDesktop.Server.Ops.exe", "appsettings.json", "Set-ServerConfiguration.ps1", "how-to-configure.txt" })
         {
             Assert.Contains(expected, names);
         }
 
-        Assert.True(files.Count >= 200, $"Only {files.Count} files in the payload.");
+        Assert.True(files.Count >= 300, $"Only {files.Count} files in the payload.");
 
-        // --- two services that start on their own, as the system -----------------------------------------------
+        // --- three services that start on their own, as the system ----------------------------------------------
         var services = package.Rows("SELECT `Name`, `StartType` FROM `ServiceInstall`", 2);
         var installed = services.Select(row => row[0]).ToList();
-        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay" })
+        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps" })
         {
             Assert.True(installed.Contains(service), $"The package does not install the {service} service.");
         }
@@ -73,7 +73,7 @@ public sealed class ServerInstallerPackageTests
 
         // Stopped on uninstall and on upgrades, or the executable is in use while it is being replaced.
         var controls = package.Rows("SELECT `Name` FROM `ServiceControl`", 1).Select(row => row[0]).ToList();
-        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay" })
+        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps" })
         {
             Assert.True(controls.Contains(service), $"The package never stops the {service} service.");
         }

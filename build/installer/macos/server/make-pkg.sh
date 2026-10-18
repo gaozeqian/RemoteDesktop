@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Packages the Remote Desktop servers (signaling + relay) into a macOS .pkg installer.
+# Packages the Remote Desktop servers (signaling, relay and the monitoring console) into a macOS .pkg installer.
 #
 # The counterpart of build/installer/windows/server/Build-ServerInstaller.ps1, and deliberately the same shape: the
-# two servers go into one install directory, each with its own appsettings.json, and a setup step writes those
-# settings at install time. That step is the server's own `--configure-system`, which is platform-neutral .NET, so
-# both platforms produce identical settings and generate the relay key the same way.
+# three programs go into one install directory, each with its own appsettings.json, and a setup step writes the
+# signaling/relay settings at install time. That step is the server's own `--configure-system`, which is
+# platform-neutral .NET, so both platforms produce identical settings and generate the relay key the same way. The
+# console needs no setup step of its own: its database path and loopback address come from its launchd job.
 #
 # What differs is only what has to: there is no MSI property mechanism here, so the answers are baked into the package
 # when it is built (as setup-options) and handed to the setup step by the postinstall; the two servers are launchd
@@ -95,7 +96,7 @@ done
 
 if [[ "$SKIP_PUBLISH" != "1" ]]; then
     echo "==> Publishing the servers ($CONFIGURATION, $RID)"
-    for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay; do
+    for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops; do
         dotnet publish "$REPO_ROOT/src/Server/$project/$project.csproj" \
             --configuration "$CONFIGURATION" \
             --runtime "$RID" \
@@ -105,7 +106,7 @@ if [[ "$SKIP_PUBLISH" != "1" ]]; then
     done
 fi
 
-for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay; do
+for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops; do
     [[ -f "$PUBLISH_DIR/$project/$project" ]] || {
         echo "No executable at $PUBLISH_DIR/$project/$project — publish first, or drop --skip-publish." >&2
         exit 1
@@ -131,12 +132,25 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # /Library/LaunchDaemons. The directory names inside the install location match what the launchd plists point at, so
 # the two cannot disagree.
 SERVER_DIR="$STAGE_DIR$INSTALL_LOCATION"
-mkdir -p "$SERVER_DIR/Rendezvous" "$SERVER_DIR/Relay" "$SERVER_DIR/logs" "$STAGE_DIR/Library/LaunchDaemons"
+mkdir -p "$SERVER_DIR/Rendezvous" "$SERVER_DIR/Relay" "$SERVER_DIR/Ops" "$SERVER_DIR/logs" "$STAGE_DIR/Library/LaunchDaemons"
 
 echo "==> Assembling the payload"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Rendezvous/." "$SERVER_DIR/Rendezvous/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Relay/." "$SERVER_DIR/Relay/"
-cp "$REPO_ROOT/build/service/macos/com.remotedesktop.rendezvous.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.relay.plist" "$STAGE_DIR/Library/LaunchDaemons/"
+cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Ops/." "$SERVER_DIR/Ops/"
+
+# The shipped settings are a template, not the live file. A .pkg has no conffile concept: a payload file with the same
+# path is overwritten on upgrade, which would put the build's defaults back over what the operator configured — and,
+# for the signaling server, throw away the relay key every client and relay has been given. The live appsettings.json
+# is created by the postinstall only if it is missing; this template is what it copies on a first install and what an
+# upgrade refreshes for the next fresh install.
+for server in Rendezvous Relay Ops; do
+    if [ -f "$SERVER_DIR/$server/appsettings.json" ]; then
+        mv "$SERVER_DIR/$server/appsettings.json" "$SERVER_DIR/$server/appsettings.default.json"
+    fi
+done
+
+cp "$REPO_ROOT/build/service/macos/com.remotedesktop.rendezvous.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.relay.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.ops.plist" "$STAGE_DIR/Library/LaunchDaemons/"
 cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/how-to-configure.txt" "$SERVER_DIR/"
 chmod +x "$SERVER_DIR/configure-server.sh" "$SERVER_DIR/uninstall-server.sh"
 
@@ -167,22 +181,28 @@ options_file="$SERVER_DIR/setup-options"
 cat > "$RES_DIR/welcome.html" <<'HTML'
 <html><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Remote Desktop Server</h2>
-<p>This installs the two servers this product needs into <b>/usr/local/remotedesktop-server</b> and registers them
-with <b>launchd</b> so they start at boot and restart if they crash:</p>
+<p>This installs the three server programs this product needs into <b>/usr/local/remotedesktop-server</b> and registers
+them with <b>launchd</b> so they start at boot and restart if they crash:</p>
 <ul>
   <li><b>Rendezvous</b> — signaling: device codes, presence, and introductions.</li>
   <li><b>Relay</b> — carries the traffic when two machines cannot reach each other directly.</li>
+  <li><b>Ops</b> — the monitoring console: nodes, sessions, alerts and audit, on <b>127.0.0.1:5090</b>.</li>
 </ul>
-<p>They listen on <b>TCP 5080</b> (signaling), <b>UDP 5081</b> (address reflection) and <b>UDP 5082</b> (relay).
-macOS does not let a package open ports, so open them yourself if other machines have to reach this one.</p>
+<p>The two network servers listen on <b>TCP 5080</b> (signaling), <b>UDP 5081</b> (address reflection) and
+<b>UDP 5082</b> (relay). macOS does not let a package open ports, so open them yourself if other machines have to reach
+this one. The console stays on loopback; exposing it is a reverse-proxy decision.</p>
 </body></html>
 HTML
 
 cat > "$RES_DIR/conclusion.html" <<'HTML'
 <html><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Installed</h2>
-<p>Both servers are running. Check them with:</p>
+<p>The signaling server and the relay are running. Check them with:</p>
 <p style="font-family: ui-monospace, Menlo, monospace;">curl http://127.0.0.1:5080/health</p>
+<p>The monitoring console is running on <b>http://127.0.0.1:5090</b>, but it has no account yet and no default
+password. Create the first administrator in a terminal (it asks for a password and prints a TOTP secret once):</p>
+<p style="font-family: ui-monospace, Menlo, monospace;">sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin<br>
+sudo launchctl kickstart -k system/com.remotedesktop.ops</p>
 <p>Two defaults are worth knowing, because their consequences are the worst ones:</p>
 <ul>
   <li>Device codes are kept in a <b>SQLite database</b> under <b>var/</b>, so they survive a restart and an unattended
@@ -310,7 +330,7 @@ fi
 # The payload is what actually has to be right here: two executables where the launchd plists say they are, and the
 # plists themselves. Printing both makes a wrong layout visible now rather than as a job that will not start.
 echo "    payload:"
-pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|how-to-configure' | sed 's/^/      /'
+pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|Ops/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|how-to-configure' | sed 's/^/      /'
 echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries in total)"
 
 echo

@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One installer for the two server programs: the rendezvous server (signaling) and the relay. They go side by side
-  into one folder, each in a subfolder of its own, because each is a self-contained application with its own runtime.
-  This is the server side of the product; the client installer (build/installer/windows/client) is a separate package with a
-  separate UpgradeCode, so a machine can be both a server and a client.
+  One installer for the three server programs: the rendezvous server (signaling), the relay and the monitoring
+  console. They go side by side into one folder, each in a subfolder of its own, because each is a self-contained
+  application with its own runtime. This is the server side of the product; the client and host installers under
+  build/installer/windows/ are separate packages with separate UpgradeCodes, so a machine can be a server, a client or
+  a controlled end without the other two.
   Everything else (files, dialogs) lives in Components.wxs and Files.generated.wxs.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -158,14 +159,17 @@
     </StandardDirectory>
 
     <Feature Id="Main" Title="Remote Desktop Server" Level="1" AllowAbsent="no">
-      <!-- The signaling server and the relay, one folder each. -->
+      <!-- The signaling server, the relay and the monitoring console, one folder each. -->
       <ComponentRef Id="RendezvousService" />
       <ComponentRef Id="RelayService" />
-      <!-- Inbound rules for the two of them, in a component of their own (see Components.wxs). -->
+      <ComponentRef Id="OpsService" />
+      <!-- Inbound rules for the two public servers, in a component of their own (see Components.wxs). The console
+           binds to loopback and has none. -->
       <ComponentRef Id="FirewallRules" />
-      <!-- The settings each server reads at start-up, which an upgrade must not put back to their built-in defaults. -->
+      <!-- The settings each program reads at start-up, which an upgrade must not put back to their built-in defaults. -->
       <ComponentRef Id="RendezvousSettings" />
       <ComponentRef Id="RelaySettings" />
+      <ComponentRef Id="OpsSettings" />
       <ComponentRef Id="ServerShortcut" />
       <!-- Everything else: the runtime, libraries and the settings templates' neighbours. -->
       <ComponentGroupRef Id="Payload" />
@@ -182,6 +186,8 @@
     <util:CloseApplication Id="CloseRendezvous" Target="RemoteDesktop.Server.Rendezvous.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
     <util:CloseApplication Id="CloseRelay" Target="RemoteDesktop.Server.Relay.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <util:CloseApplication Id="CloseOps" Target="RemoteDesktop.Server.Ops.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
 
     <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package: the

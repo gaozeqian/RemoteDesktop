@@ -10,9 +10,15 @@
   <!-- MsQuic is what System.Net.Quic talks to. Windows gets msquic.dll from the .NET runtime pack; macOS gets
        nothing, so the application carries its own. native/macos/fetch-libmsquic.sh stages a self-contained set into
        artifacts/lib/macos, and putting it here means every project that references this one — the hosts and the
-       transport tests — has it copied next to its executable, which is where the runtime looks for it. The condition
-       keeps a Windows build from globbing a directory that only exists on a developer's Mac. -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+       transport tests — has it copied next to its executable, which is where the runtime looks for it.
+
+       Two conditions, for two different mistakes:
+         * the platform is the *target*, not the host: cross-publishing linux-x64 from a Mac must not carry the dylibs;
+         * RemoteDesktopCrossTargeting is set by the Linux package scripts, because a project reference is built with
+           RuntimeIdentifier removed (MSBuild strips it for inner builds), so a Mac building the referenced projects
+           still looks like a Mac build. That was the state in which libmsquic.dylib, libssl.dylib and libcrypto.dylib
+           ended up in a .deb. -->
+  <ItemGroup Condition="'$(RemoteDesktopCrossTargeting)' != 'true' and ('$(RuntimeIdentifier)' == 'osx-arm64' or ('$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('OSX'))))">
     <None Include="$(MSBuildThisFileDirectory)..\..\..\artifacts\lib\macos\*.dylib"
           Link="%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"

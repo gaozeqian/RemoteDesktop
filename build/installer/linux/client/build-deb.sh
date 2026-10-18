@@ -47,6 +47,7 @@ mkdir -p "$work/DEBIAN" "$work/usr/bin" "$work/usr/share/applications" "$program
 echo "Publishing the client for $runtime (version $version)..."
 dotnet publish "$root/src/Hosts/RemoteDesktop.Client" \
     -c Release -r "$runtime" --self-contained true \
+    -p:RemoteDesktopCrossTargeting=true \
     -o "$program" \
     --nologo -v quiet
 

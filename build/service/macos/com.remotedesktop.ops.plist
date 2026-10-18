@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The monitoring console as a launchd job.
+
+  A LaunchDaemon like the two servers, because it has to be up whether or not anybody is logged in and it is scraped by
+  nothing but its own UI. The console binds to loopback by default: it has its own sign-in and no rate limits worth
+  trusting on a public socket, so exposing it is a reverse-proxy decision, not a package default.
+
+  The paths are fixed at build time for the same reason as the servers': launchd starts the executable named here, and
+  the package writes the payload to match.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.remotedesktop.ops</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/remotedesktop-server/Ops</string>
+
+    <!-- The console's database lives beside the signaling server's, in the 0700 var/ directory the postinstall makes.
+         Set here rather than in appsettings.json so that a console installed before this key existed still gets the
+         right location, and so that "where is the data" has one answer on this platform. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>Ops__Database__Path</key>
+        <string>/usr/local/remotedesktop-server/var/ops.db</string>
+        <key>Ops__Listen</key>
+        <string>http://127.0.0.1:5090</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/remotedesktop-server/logs/ops.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/remotedesktop-server/logs/ops.log</string>
+</dict>
+</plist>

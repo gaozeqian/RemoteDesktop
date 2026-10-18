@@ -76,7 +76,7 @@ jobs:
           if-no-files-found: error
 
   # macOS 安装包（.pkg）。先跑，因为下面的发布 job 需要它的产物才能发版——
-  # 只发出 Windows 的两个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
+  # 只发出 Windows 的三个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
   build-macos:
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
     # dyld 拒绝在更老的系统上加载（docs/ports/README.md"最低系统版本是 macOS 26"）。macos-26 就是 arm64 镜像。
@@ -151,8 +151,9 @@ jobs:
           echo "==> Signing identities available:"
           security find-identity -v -p codesigning "$KC"
 
-      # 两个 .pkg：客户端（装到 /Applications）与服务端（两个服务器 + launchd 守护进程）。
-      # 客户端脚本会顺带构建 .app 与原生辅助库。
+      # 三个 .pkg：客户端（RemoteDesktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
+      # （信令、中继与监控台 + 三个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
+      # TCC 授权也分开，不能互相复用。
       # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize
       # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
       - name: Build the macOS installers (.pkg)
@@ -174,26 +175,27 @@ jobs:
           fi
 
           ./build/installer/macos/client/make-pkg.sh "${args[@]}"
+          ./build/installer/macos/host/make-pkg.sh   "${args[@]}"
           ./build/installer/macos/server/make-pkg.sh "${args[@]}"
 
-      # 打开两个包的 payload 看里面有什么（客户端那个必须带着 Info.plist，服务端那两个必须带着各自的 launchd
-      # plist），与 ci.yml 及另外两个平台调用同一份共享动作。这两个包此前在发版路径上一次都没被检查过内容。
+      # 打开三个包的 payload 看里面有什么（客户端那个必须带着 Info.plist，被控端那个必须带着登录项 plist，
+      # 服务端那三个必须带着各自的 launchd plist），与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
 
-      # 两个包都落在 artifacts/installer/macos/，按文件名前缀区分（服务端那个带 -Server-）。用循环而不是
-      # `ls | head -1`：后者在两个包都在时会随便挑一个，而且是那种直到发布出去才发现的错。
+      # 三个包都落在 artifacts/installer/macos/，文件名里已经带角色词，这一步只是把版本换成 Tag。
       - name: Rename the installers for the release
         run: |
           set -euo pipefail
           cd artifacts/installer/macos
-          # 角色词一律写上：七个资产同一个形状 <产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>。Linux 一直写着，因为
-          # 那边有三个包、本来就是靠角色词区分的；Windows 与 macOS 只有两个包，此前客户端那份省了角色词，
-          # 现在跟着写全——下载列表里三行是同一族，比省一个词要紧。
+          # 三个角色都写全：九个资产同一个形状 <产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>。
           for file in *.pkg; do
             case "$file" in
-              RemoteDesktop-Server-*) mv "$file" "RemoteDesktop-Server-macOS-arm64-${GITHUB_REF_NAME}.pkg" ;;
-              *)                      mv "$file" "RemoteDesktop-Client-macOS-arm64-${GITHUB_REF_NAME}.pkg" ;;
+              RemoteDesktop-Server-*) role=Server ;;
+              RemoteDesktop-Host-*)   role=Host ;;
+              RemoteDesktop-Client-*) role=Client ;;
+              *) echo "Unexpected installer name: $file" >&2; exit 1 ;;
             esac
+            mv "$file" "RemoteDesktop-$role-macOS-arm64-${GITHUB_REF_NAME}.pkg"
           done
           ls -la
 
@@ -313,8 +315,24 @@ jobs:
 
           .\build\installer\windows\client\Build-ClientInstaller.ps1 @arguments
 
-      # 服务端（信令 + 中继）的安装包。和上面那个用同一套签名参数、同一个版本号，但是两个各自独立安装的包：
-      # 一台机器可以只做被控端、只做服务器，或者两个都做。
+      # 被控端自己的 MSI：同一个服务与会话 Agent，没有客户端窗口。参数与客户端那个逐字一致（服务器地址、签名），
+      # 因为它走的是同一个脚本的 -HostOnly 分支——两份服务定义迟早会分叉，这里不留第二份。
+      - name: Build Host MSI Installer
+        shell: pwsh
+        run: |
+          $arguments = @{ Configuration = 'Release' }
+          if ($env:DEFAULT_SERVER) { $arguments.RendezvousUri = $env:DEFAULT_SERVER }
+          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+              $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
+              $arguments.CertificatePassword = $env:PFX_PASSWORD
+          } else {
+              $arguments.SkipSigning = $true
+          }
+
+          .\build\installer\windows\host\Build-HostInstaller.ps1 @arguments
+
+      # 服务端（信令 + 中继 + 监控台）的安装包。和上面那些用同一套签名参数、同一个版本号，但是三个各自独立安装的包：
+      # 一台机器可以只做被控端、只做服务器，或者都做。
       - name: Build Server MSI Installer
         shell: pwsh
         run: |
@@ -324,38 +342,43 @@ jobs:
               .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
           }
 
-      # 打开两个 MSI 的数据库看里面有什么（payload、服务与崩溃重启、防火墙规则、快捷方式、向导页与许可文本），
+      # 打开三个 MSI 的数据库看里面有什么（payload、服务与崩溃重启、防火墙规则、快捷方式、向导页与许可文本），
       # 与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
 
-      # 将打好的两个 MSI 提取出来
+      # 将打好的三个 MSI 提取出来
       - name: Rename Artifacts for Release
         shell: pwsh
         run: |
-          # 两个包都在同一个 artifacts/installer/windows/ 下，角色写在文件名里。**构建产物**的名字来自两个
-          # wixproj 的 OutputName：RemoteDesktop-<版本>-x64.msi 与 RemoteDesktop.Server-<版本>-x64.msi。
-          # 而 "RemoteDesktop-*" 也会匹配到服务端那个，所以客户端那份要显式排除掉。
-          #
-          # 带 Windows 的是**发布产物**的名字（下面重命名之后），不是构建产物的名字——此前这里按发布产物的
-          # 名字去 glob 构建产物，两个都找不到，而这条路径在 v0.3.0 之后一次都没跑过，所以没人发现。
+          # 三个包都在同一个 artifacts/installer/windows/ 下，角色写在文件名里。**构建产物**的名字来自 wixproj 的
+          # OutputName：RemoteDesktop-<版本>-x64.msi（客户端）、RemoteDesktop.Host-<版本>-x64.msi、
+          # RemoteDesktop.Server-<版本>-x64.msi。带 Windows 的是**发布产物**的名字（下面重命名之后），不是构建产物
+          # 的名字——此前这里按发布产物的名字去 glob 构建产物，两个都找不到，而这条路径在 v0.3.0 之后一次都没跑过，
+          # 所以没人发现。
           $installerFolder = 'artifacts/installer/windows'
           $client = Get-ChildItem -Path "$installerFolder/RemoteDesktop-*-x64.msi" -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' } |
+              Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' -and $_.Name -notlike 'RemoteDesktop.Host-*' } |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $hostPackage = Get-ChildItem -Path "$installerFolder/RemoteDesktop.Host-*-x64.msi" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $server = Get-ChildItem -Path "$installerFolder/RemoteDesktop.Server-*-x64.msi" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-          # 少一个就什么都别发：只发出客户端、悄悄少了服务端，是发完才会被发现的那种错。
+          # 少一个就什么都别发：只发出客户端、悄悄少了被控端或服务端，是发完才会被发现的那种错。
           if (-not $client) { throw "No client installer in $installerFolder." }
+          if (-not $hostPackage) { throw "No host installer in $installerFolder." }
           if (-not $server) { throw "No server installer in $installerFolder." }
 
           # 按 GitHub Tag（例如 v1.0.0）重命名成发布资产：<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>，
           # 与 macOS、Linux 那两步同一个形状（见上面 macOS 那步的注释）。
           $clientName = "RemoteDesktop-Client-Windows-x64-$($env:GITHUB_REF_NAME).msi"
+          $hostName = "RemoteDesktop-Host-Windows-x64-$($env:GITHUB_REF_NAME).msi"
           $serverName = "RemoteDesktop-Server-Windows-x64-$($env:GITHUB_REF_NAME).msi"
           Rename-Item -Path $client.FullName -NewName $clientName
+          Rename-Item -Path $hostPackage.FullName -NewName $hostName
           Rename-Item -Path $server.FullName -NewName $serverName
           Write-Output "CLIENT_MSI=$installerFolder/$clientName" >> $env:GITHUB_ENV
+          Write-Output "HOST_MSI=$installerFolder/$hostName" >> $env:GITHUB_ENV
           Write-Output "SERVER_MSI=$installerFolder/$serverName" >> $env:GITHUB_ENV
 
       # 三个 Linux 包在上一个 job 里打好，这里取回来。少了就什么都不发——和下面 MSI 一样的理由：只发出其中
@@ -374,7 +397,7 @@ jobs:
           name: macos-installer
           path: macos-installer
 
-      # 上传至 GitHub Release：一个版本一个 Release，七个包都放在里面（装的机器不同，版本是同一个）。
+      # 上传至 GitHub Release：一个版本一个 Release，九个包都放在里面（装的机器不同，版本是同一个）。
       # body 会被放在自动生成的 release notes 前面，所以"这个包有没有内置地址"永远写在最上面。
       # 用官方 gh CLI 取代第三方 softprops/action-gh-release（上游已停维护）；gh 在托管 runner 上预装，
       # github.token 已有 contents:write 权限。
@@ -385,7 +408,7 @@ jobs:
         run: |
           # 这一处只清点，不校验内容：每个平台的包已经在它自己的 job 里被打开看过了（dpkg-deb / pkgutil / MSI
           # 数据库各自只存在于那一个平台上，共享动作因此按 runner.os 分三支）。这里要回答的是另一个问题——
-          # 七个包是不是都到了，少一个就什么都不发。
+          # 九个包是不是都到了，少一个就什么都不发。
           #
           # Linux 的包按平台惯例用 amd64，Windows 的用 x64——各随各的约定，不为了让列表整齐而互相将就。
           $linux = Get-ChildItem -Path linux-packages/*.deb -ErrorAction SilentlyContinue
@@ -393,12 +416,18 @@ jobs:
               throw "Expected three Linux packages, found $($linux.Count)."
           }
 
-          # macOS 客户端和服务端各一个。少一个就说明 build-macos 只出了一半，而那是发完才会被发现的那种错。
+          # macOS 三个角色各一个。少一个就说明 build-macos 只出了一部分，而那是发完才会被发现的那种错。
           $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-          if ($packages.Count -ne 2) { throw "Expected the macOS client and server installers from build-macos, got $($packages.Count)." }
+          if ($packages.Count -ne 3) { throw "Expected the macOS client, host and server installers from build-macos, got $($packages.Count)." }
+
+          # Windows 三个都在本 job 里，名字已经写在环境变量里；少一个就说明重命名那一步只做了一半。
+          foreach ($variable in 'CLIENT_MSI', 'HOST_MSI', 'SERVER_MSI') {
+              $path = [Environment]::GetEnvironmentVariable($variable)
+              if (-not $path -or -not (Test-Path $path)) { throw "$variable is not a file that exists: '$path'." }
+          }
 
           gh release create "$env:GITHUB_REF_NAME" `
-            "$env:CLIENT_MSI" "$env:SERVER_MSI" @($linux.FullName) $packages `
+            "$env:CLIENT_MSI" "$env:HOST_MSI" "$env:SERVER_MSI" @($linux.FullName) $packages `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes

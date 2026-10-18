@@ -83,22 +83,22 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 | 路径 | 是什么 |
 |---|---|
-| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 两个 `.msi`（`RemoteDesktop-<版本>-x64.msi` 为客户端、`RemoteDesktop.Server-<版本>-x64.msi` 为服务端），macOS 是 `.pkg`，Linux 是 `.deb`。角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
-| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 的下一层是**交付物**而不是角色：`client/` 是客户端 MSI 的本体——一个 MSI 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`server/` 下再按程序分成 `Rendezvous/` 与 `Relay/` |
+| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 三个 `.msi`（`RemoteDesktop-<版本>-x64.msi` 客户端、`RemoteDesktop.Host-<版本>-x64.msi` 被控端、`RemoteDesktop.Server-<版本>-x64.msi` 服务端），macOS 三个 `.pkg`，Linux 三个 `.deb`。角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `RemoteDesktop.app`；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/` 与 `Ops/` |
 | `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
 | `artifacts/test-results/<平台>/` | 测试报告（`dotnet test --report-trx` 产出的 `.trx`），按跑测试的机器分平台 |
 
 发布时 `release.yml` 会把上面这些包**改名**成用户看到的那份资产，形状是
-`<产品>-<角色?>-<平台>-<架构>-<tag>.<扩展名>`：
+`<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：
 
 | 平台 | 客户端 | 被控端 | 服务端 |
 |---|---|---|---|
-| Windows | `RemoteDesktop-Client-Windows-x64-<tag>.msi` | 并进客户端包 | `RemoteDesktop-Server-Windows-x64-<tag>.msi` |
-| macOS | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | 并进客户端包 | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` |
+| Windows | `RemoteDesktop-Client-Windows-x64-<tag>.msi` | `RemoteDesktop-Host-Windows-x64-<tag>.msi` | `RemoteDesktop-Server-Windows-x64-<tag>.msi` |
+| macOS | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` |
 | Linux | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | `RemoteDesktop-Server-Linux-amd64-<tag>.deb` |
 
-**七个资产一个形状**：`<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`。角色词一律写上，即使那个平台只有两个包——
-Linux 有三个包本来就是靠角色词区分的，另外两个平台跟着写，下载列表才是同一族。
+**九个资产一个形状**：`<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`。角色词一律写上——三个平台都出三个包，
+下载列表里每一行都要能直接看出它是哪一端。
 
 两处仍然不同，各有成因：
 

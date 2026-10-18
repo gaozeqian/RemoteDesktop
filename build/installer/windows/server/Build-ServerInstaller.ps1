@@ -3,16 +3,17 @@
   Builds the Windows installer (MSI) for the RemoteDesktop servers.
 
 .DESCRIPTION
-  1. Publishes the two server programs (the rendezvous server and the relay) self-contained for win-x64, each into a
-     folder of its own (Rendezvous, Relay) under one publish directory.
+  1. Publishes the three server programs (the rendezvous server, the relay and the monitoring console) self-contained
+     for win-x64, each into a folder of its own (Rendezvous, Relay, Ops) under one publish directory.
   2. Generates the WiX file list from that directory (WiX v5 has no heat, and the list changes with every build
      anyway).
   3. Builds the MSI with the WiX v5 SDK and, when a signing certificate is given, signs it.
 
-  The MSI installs both servers into Program Files\Remote Desktop Server, registers each as a Windows service
-  (RemoteDesktopRendezvous and RemoteDesktopRelay), adds the three inbound firewall rules they need, and configures
-  the two of them - the address signaling listens on, the relay endpoint clients are told, the key they share, and
-  optionally a certificate to serve TLS with.
+  The MSI installs all three into Program Files\Remote Desktop Server, registers each as a Windows service
+  (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps), adds the three inbound firewall rules the two
+  public servers need, and configures them - the address signaling listens on, the relay endpoint clients are told,
+  the key they share, and optionally a certificate to serve TLS with. The console binds to loopback and gets no rule:
+  exposing it is a reverse-proxy decision, not an installer default.
 
   This is a package of its own, next to the client installer in ..\client: a machine can run the servers, the client,
   or both, and upgrading one never touches the other.
@@ -492,9 +493,12 @@ New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 
 # The folder each server is published into is the folder the installer creates under Program Files, and the one the
 # configuration step looks in (ServerSetup.RendezvousFolder / RelayFolder), so the two have to be spelled the same.
+# Ops is the third program: the monitoring console, which reads the other two and is useless without them, so it is
+# installed by the same package and by no package of its own.
 $servers = @(
     @{ Project = 'RemoteDesktop.Server.Rendezvous'; Folder = 'Rendezvous' }
     @{ Project = 'RemoteDesktop.Server.Relay'; Folder = 'Relay' }
+    @{ Project = 'RemoteDesktop.Server.Ops'; Folder = 'Ops' }
 )
 
 Push-Location $repoRoot
@@ -519,7 +523,8 @@ finally {
 }
 
 foreach ($expected in @('Rendezvous\RemoteDesktop.Server.Rendezvous.exe', 'Rendezvous\appsettings.json',
-                        'Relay\RemoteDesktop.Server.Relay.exe', 'Relay\appsettings.json')) {
+                        'Relay\RemoteDesktop.Server.Relay.exe', 'Relay\appsettings.json',
+                        'Ops\RemoteDesktop.Server.Ops.exe', 'Ops\appsettings.json')) {
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
@@ -559,6 +564,14 @@ signaling will not start:
 
 $version = Get-ProductVersion
 
+# The console's own database. A Windows service starts in System32, so a relative path in its settings would be a file
+# in System32 — the one place a database must not live. %ProgramData% is expanded by the program at start-up (see
+# OpsServer.AddOps), which keeps the location right on a machine whose ProgramData is not on C:.
+$opsSettingsPath = Join-Path $PublishDirectory 'Ops\appsettings.json'
+$opsSettings = Get-Content $opsSettingsPath -Raw | ConvertFrom-Json
+$opsSettings.Ops.Database.Path = '%ProgramData%\Remote Desktop Server\ops.db'
+$opsSettings | ConvertTo-Json -Depth 10 | Set-Content $opsSettingsPath -Encoding utf8
+
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.
 # Same text as the client installer's, so the two packages agree; generated next to this script, which is where this
 # package's project looks for it.
@@ -577,8 +590,8 @@ foreach ($extra in 'Set-ServerConfiguration.ps1', 'how-to-configure.txt') {
 }
 
 # Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
-# which is what leaves out both copies of it: the publish output has one in each server folder.
-$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'appsettings.json')
+# which is what leaves out all three copies of it: the publish output has one in each program folder.
+$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'RemoteDesktop.Server.Ops.exe', 'appsettings.json')
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
@@ -606,7 +619,7 @@ if ($signer) {
 }
 
 New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten `
-    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder' }
+    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder' }
 
 # The hand-written components own those files; a second component for one of them would install it twice, and for the
 # settings files it would fight the NeverOverwrite an upgrade depends on. The exclusion is by file name, so it is
@@ -653,9 +666,11 @@ dotnet build (Join-Path $installerDirectory 'RemoteDesktop.Server.Installer.wixp
 if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 
 # The newest, not merely the first: an older package left in the output folder must not be the one that gets signed
-# and checked (a rebuild of the same version overwrites its name, a new version does not).
-$package = Get-ChildItem $OutputDirectory -Filter *.msi | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $package) { throw "No MSI was produced in $OutputDirectory." }
+# and checked (a rebuild of the same version overwrites its name, a new version does not). The pattern is role-specific
+# on purpose — "*.msi" would pick the client or host package built before this one, and the tests would then pass while
+# describing a package this run never produced.
+$package = Get-ChildItem $OutputDirectory -Filter 'RemoteDesktop.Server-*.msi' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $package) { throw "No server MSI was produced in $OutputDirectory." }
 
 Write-Host "  $($package.FullName) ($([math]::Round($package.Length / 1MB, 1)) MB)"
 

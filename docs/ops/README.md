@@ -58,18 +58,21 @@ build/installer/linux/server/build-deb.sh
 sudo dpkg -i artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<版本>.deb
 ```
 
-包把两个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay}`，两个 **system** 单元装到
+包把三个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops}`，三个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
 升级不会覆盖运维改过的东西。这是相对 Windows 的一处有意改进：MSI 只能把 `appsettings.json` 写在
 `Program Files` 里，然后想办法绕开同一件事。
 
 和 Windows 一样，设置由程序自己写（`--configure-system`），`postinst` 只负责说明位置——两个平台因此
-产出同样的文件，走同一段代码。改完配置：
+产出同样的文件，走同一段代码。控制台不需要这段设置：它的库路径与回环地址由单元里的环境变量给定。
+改完配置：
 
 ```sh
 sudo dpkg-reconfigure remotedesktop-server     # 或直接编辑 /etc/default/remotedesktop-server 后重跑 postinst
-systemctl status remotedesktop-rendezvous remotedesktop-relay
-curl http://127.0.0.1:5080/health
+systemctl status remotedesktop-rendezvous remotedesktop-relay remotedesktop-ops
+# 这个包的默认值是 RD_TLS=generate，即自签 HTTPS；-k 是因为证书不是公共 CA 签的
+curl -k https://127.0.0.1:5080/health
+curl http://127.0.0.1:5090/health
 ```
 
 `postinst` **只在 ufw 处于 active 时**才加防火墙规则，不动 nftables/iptables。
@@ -93,11 +96,19 @@ msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
   TLSCERTIFICATEPATH="C:\rd\signaling.pfx" TLSCERTIFICATEPASSWORD="..."
 ```
 
-它做的事：把两个服务器（信令 + 中继，各自自包含）装进 `%ProgramFiles%\Remote Desktop Server`，
-注册两个自动启动、崩溃后自动重启的服务（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`），
-加三条**只针对这两个程序**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好两份
+它做的事：把三个服务器（信令、中继与监控台，各自自包含）装进 `%ProgramFiles%\Remote Desktop Server`，
+注册三个自动启动、崩溃后自动重启的服务（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`），
+加三条**只针对两个网络服务器**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好信令与中继的两份
 `appsettings.json`。设置是由信令服务器自己写进去的（`--configure-system`），它把做过什么记在安装目录的
 `server-setup.log` 里——安装程序不会给任何人看这一步的输出。
+
+监控台（Ops）没有安装属性：它默认只监听 `127.0.0.1:5090`，数据库在
+`%ProgramData%\Remote Desktop Server\ops.db`。**它没有默认账号**，装完要自己建第一个管理员（见 §二 10）：
+
+```powershell
+& "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
+Restart-Service RemoteDesktopOps
+```
 
 | 属性 | 默认 | 说明 |
 |---|---|---|
@@ -132,12 +143,16 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 # 产物：artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-<版本>.pkg
 ```
 
-装到 `/usr/local/remotedesktop-server`，并把两个服务器注册成 **launchd 守护进程**
-（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay`，开机自启、崩溃重启）—— 这就是 Windows 那两个服务的对应物。
+装到 `/usr/local/remotedesktop-server`，并把三个服务器注册成 **launchd 守护进程**
+（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay` / `com.remotedesktop.ops`，开机自启、崩溃重启）
+—— 这就是 Windows 那三个服务的对应物。
 
 ```bash
 sudo installer -pkg <文件>.pkg -target /
-curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个服务器都活着
+curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个网络服务器都活着
+curl http://127.0.0.1:5090/health      # 监控台
+sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
 
 要在**构建时**就定下配置（等于 Windows 安装时传属性），给打包脚本传对应的选项：
@@ -219,7 +234,7 @@ macOS `/usr/local/remotedesktop-server/var/rendezvous.db`、Linux `/var/lib/remo
 # 2. 导出、导入。created_at / last_seen_at 是 TEXT，原样搬即可。
 psql "$PG" -c "\copy device_registrations TO 'devices.csv' CSV HEADER"
 sqlite3 rendezvous.db ".mode csv" ".import --skip 1 devices.csv device_registrations"
-# 3. 重启信令服务，curl http://127.0.0.1:5080/health 应为 Healthy。
+# 3. 重启信令服务，curl 它的 /health（HTTP 或自签 HTTPS 加 -k）应为 Healthy。
 ```
 
 ### 2. 手工构建
@@ -227,12 +242,13 @@ sqlite3 rendezvous.db ".mode csv" ".import --skip 1 devices.csv device_registrat
 ```bash
 dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Rendezvous
 dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Relay
+dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Ops
 ```
 
-两个服务端各自一个子目录，因为它们是两个程序，装在同一台机器上时目录不能混。
+三个服务端各自一个子目录，因为它们是三个程序，装在同一台机器上时目录不能混。
 `build/installer/windows/server/Build-ServerInstaller.ps1` 用的就是这个布局（见它的 `$PublishDirectory` 与
 `-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.ps1`、`how-to-configure.txt`
-与两个 `appsettings.json` 也在这一层。
+与信令/中继的两份 `appsettings.json` 也在这一层；控制台自己那份在 `Ops\appsettings.json`。
 
 （Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等，并把 `artifacts/app/windows/` 里的 `windows`
 换成对应平台 —— 服务端是跨平台的。产物目录的约定见 [CONTRIBUTING.md](../../CONTRIBUTING.md) 的"构建产物布局"。）
@@ -428,7 +444,10 @@ netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in actio
 ### 9. 健康检查
 
 ```bash
+# Windows / macOS 包默认走 HTTP：
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
+# Linux 包默认自签 HTTPS（RD_TLS=generate），对自签证书要加 -k：
+curl -k https://127.0.0.1:5080/health
 ```
 
 **监控指标（可选，默认关闭）**：把 `Rendezvous:MetricsEnabled` 设为 `true` 后，服务器会额外挂载 `/metrics`，
@@ -462,19 +481,25 @@ dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin
 dotnet run --project src/Server/RemoteDesktop.Server.Ops                          # http://127.0.0.1:5090
 ```
 
-随 `.deb` 一起装（单元 `remotedesktop-ops.service` 已随包带上并启用）。数据库落在
-`/var/lib/remotedesktop-server/ops.db`，与信令服务的库同一个账号、同一个目录：
+随**服务端安装包**一起装，三个平台都是：Linux 的 `.deb` 带 `remotedesktop-ops.service`（库在
+`/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带 `com.remotedesktop.ops` LaunchDaemon（库在
+`/usr/local/remotedesktop-server/var/ops.db`），Windows 的 MSI 带 `RemoteDesktopOps` 服务（库在
+`%ProgramData%\Remote Desktop Server\ops.db`）。它不需要单独安装，也没有安装属性。
 
 ```bash
+# Linux
 sudo -u remotedesktop /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
-systemctl restart remotedesktop-ops
+sudo systemctl restart remotedesktop-ops
+
+# macOS
+sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
 
-Windows 上同一个可执行文件也能作为服务跑（服务名 `RemoteDesktopOps`）：
-
 ```powershell
-sc.exe create RemoteDesktopOps binPath= "\"C:\rd\ops\RemoteDesktop.Server.Ops.exe\"" start= auto
-sc.exe start RemoteDesktopOps
+# Windows（管理员 PowerShell）
+& "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
+Restart-Service RemoteDesktopOps
 ```
 
 #### 首个管理员
@@ -521,22 +546,25 @@ sc.exe start RemoteDesktopOps
 
 ## 三、自动化发布到 GitHub Releases
 
-项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**七个**安装包放进同一个 Release——三个平台各出自己的，装的机器不同，版本是同一个：
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**九个**安装包放进同一个 Release——三个平台各出三个角色，装的机器不同，版本是同一个：
 
 | 产物 | 平台 | 装的是什么 |
 |---|---|---|
-| `RemoteDesktop-Client-Windows-x64-<tag>.msi` | Windows | 客户端 / 被控端（一个包同时装客户端、被控端服务与会话 Agent） |
-| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（信令 + 中继） |
-| `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | macOS | 客户端（在 macOS 上它自己就是被控端） |
-| `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端 |
-| `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | Linux | 客户端 |
+| `RemoteDesktop-Client-Windows-x64-<tag>.msi` | Windows | 控制端；同一个包也装被控端服务与会话 Agent（一台机器两种角色都要时用它） |
+| `RemoteDesktop-Host-Windows-x64-<tag>.msi` | Windows | 被控端：只有服务与会话 Agent，没有客户端窗口 |
+| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（Rendezvous + Relay + Ops） |
+| `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | macOS | 控制端（同一个 `.app` 也能被控，但不会自动启动） |
+| `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | macOS | 被控端：独立的 `Remote Desktop Host.app`（无窗口）+ 登录项 |
+| `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端（Rendezvous + Relay + Ops） |
+| `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | Linux | 控制端 |
 | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | Linux | 被控端 |
-| `RemoteDesktop-Server-Linux-amd64-<tag>.deb` | Linux | 服务端 |
+| `RemoteDesktop-Server-Linux-amd64-<tag>.deb` | Linux | 服务端（Rendezvous + Relay + Ops） |
 
 命名约定（角色词一律写全；架构词各平台用自己的说法，Linux 那个与包内 `Architecture` 字段同源）见
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的"构建产物布局"。
 
-同一个平台上的包版本号相同，但各自独立安装、互不影响：一台机器可以只做被控端、只做服务器，或者两个都做。
+同一个平台上的包版本号相同。三个角色各自装在不同的机器上是常态；Windows 的客户端包与被控端包共用
+`RemoteDesktopHost` 服务名，**一台机器只能装其中一个**（装第二个会被安装程序拒绝），而服务端包和它们互不影响。
 
 发布前要准备好下面这些。**没有哪一件是必填的**，但流水线会根据你配了什么调整产物，并把结果写在 Release 说明
 最前面：
@@ -625,6 +653,16 @@ msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:50
 msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
+只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop.Host-<版本>-x64.msi`：同样的服务与会话 Agent、同样的
+`RENDEZVOUSURI` 属性，只是没有客户端与开始菜单项。它和客户端包装在同一个目录、用同一个 `RemoteDesktopHost`
+服务与 `%ProgramData%\RemoteDesktop` 设备身份，所以**一台机器只装其中一个**：想同时具备"控制别人"与"被别人
+控制"两种角色，只装**客户端**包就够了（它本来就带被控端）；Host 包是给"只能被控、不允许控制别人"的机器用的。
+装第二个时安装程序会明确拒绝，先卸掉已有的那个再装。
+
+```powershell
+msiexec /i RemoteDesktop.Host-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+```
+
 安装完成后：
 
 - 服务 `RemoteDesktopHost` 自动启动（LocalSystem），客户端在开始菜单里。
@@ -703,7 +741,7 @@ msiexec /i RemoteDesktop-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 
 ### 1. 构建
 
-两个包各装各的：一台机器按需要选一个，或者两个都装。
+控制端与被控端两个包各装各的：一台机器按需要选一个，或者两个都装。
 
 ```sh
 build/installer/linux/client/build-deb.sh   # 用来控制别人
@@ -747,6 +785,19 @@ sudo dpkg -i RemoteDesktop-Host-Linux-amd64-<版本>.deb
 - 被控端是一条 `systemd --user` 服务，安装时对**所有用户**启用，用户下次登录时随图形会话启动。
   **它不在安装时启动**——装包时可能根本没有图形会话，没有人能点 portal 的对话框。
 
+> **Linux 的“无人值守”只能到“可观看”为止。**
+> Wayland portal 不允许持久化远程桌面会话（请求会被拒绝：`Remote desktop sessions cannot persist`）：
+> 共享屏幕可以记住，**控制权限每次连接都要有人当场同意**。所以本机无人时，别人可以看到屏幕，
+> 但**不能操作键鼠**。固定密码也不能改变这一点——它不是本软件的取舍，是 portal 的规定。
+> 要在无人值守的机器上被操作，只能用 Windows 的被控端。
+
+host 包没有界面，固定密码用命令行设置（以运行 host 的那个登录用户执行；密钥写进 `~/.local/share/RemoteDesktop/secrets`）：
+
+```sh
+/usr/lib/remotedesktop-host/RemoteDesktop.HostService --set-fixed-password '至少8位'
+systemctl --user restart remotedesktop-host
+```
+
 ```sh
 systemctl --user status remotedesktop-host
 journalctl --user -u remotedesktop-host -f
@@ -785,14 +836,41 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 
 ### 1. 构建与安装
 
-macOS 侧是**单进程**的：同一个 `.app` 既能当控制端、也能当被控端（没有 Windows 那种服务 + Agent 的拆分，
-因为 macOS 的守护进程拿不到屏幕录制权限）。安装包由 `build/installer/macos/client/make-pkg.sh` 产出，
-装到 `/Applications`。
+macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有一个 app。现在是两个不同 bundle 的应用：
+
+- **client**：`/Applications/RemoteDesktop.app`，Avalonia 客户端，完整功能；不自动启动；可在应用内手动开
+  “登录时自动启动”（SMAppService）。
+- **host**：`/Applications/Remote Desktop Host.app`，`LSUIElement` 的后台应用，**没有窗口**；里面是
+  `RemoteDesktop.HostService`，只负责被控，不能控制别人；由 LaunchAgent 在每次图形登录时启动。
+- 两者 bundle id 不同（`com.remotedesktop.client` / `com.remotedesktop.host`），TCC 授权也分开。可以并装，
+  但会变成两个被控端（两个设备码、两个监听），**不建议**。
 
 ```bash
+# 控制端
 build/installer/macos/client/make-pkg.sh --configuration Release
-# 产物：artifacts/installer/macos/RemoteDesktop-macOS-arm64-<版本>.pkg
+# 产物：artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-<版本>.pkg
+
+# 被控端：独立的 Remote Desktop Host.app + /Library/LaunchAgents/com.remotedesktop.host.plist
+build/installer/macos/host/make-pkg.sh --configuration Release
+# 产物：artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-<版本>.pkg
 ```
+
+| 装的包 | 文件 | 登录行为 | 能做什么 |
+|---|---|---|---|
+| 只装 client | `RemoteDesktop.app` | 不自动启动；应用内可选开 SMAppService 登录项 | 打开后既能控制别人，也能被别人控制 |
+| 只装 host | `Remote Desktop Host.app` + LaunchAgent | 每次图形登录自动启动；退出后不强行拉起 | **无窗口、只能被控**，不能控制别人；没有登录前访问 |
+| 两个都装 | 两个 app 各一份 | host 的登录项照常启动 | 两个独立的被控端，两个设备码；不建议 |
+
+host 没有界面，临时密码只在进程内存里，所以**无人值守必须设固定密码**（至少 8 位；用登录用户在终端执行）：
+
+```bash
+"/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'
+launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
+```
+
+设备码在 `~/Library/Application Support/RemoteDesktop/logs/` 的日志里，搜索
+`Registered with the rendezvous server as`。服务器地址在
+`~/Library/Application Support/RemoteDesktop/appsettings.json` 的 `Transport:RendezvousUri`。
 
 **安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。
 
@@ -802,13 +880,25 @@ build/installer/macos/client/make-pkg.sh --configuration Release
   "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
   有证书时加 `--distribution` 与 `--notarize` 做签名 + 公证，下载即开；证书与凭据的配置见
   [build/signing/README.md](../../build/signing/README.md) 的 macOS 一节。
-- **被控端需要手动授权两项权限**：装完后打开应用，在「系统设置 → 隐私与安全性」里给它开
-  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。macOS 会在首次使用时弹窗；授权后可能要重启应用。
-- **无人值守**：在应用里开启登录项（`SMAppService`）。它按**已签名并位于 `/Applications` 的应用**记账，
-  所以别把 `.app` 拷到别处运行。
+- **被控端需要手动授权两项权限**：在「系统设置 → 隐私与安全性」里把 **Remote Desktop Host** 勾进
+  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。host 没有窗口；首次登录时系统会弹提示，
+  也可以在系统设置里手动添加 `/Applications/Remote Desktop Host.app`。授权后执行
+  `launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host` 重启（屏幕录制只在新进程启动时读取）。
+- **无人值守**：host 包用 LaunchAgent 自启，并提供固定密码命令（见上）；client 包可以在应用里手动开
+  `SMAppService` 登录项。授权按**已签名并位于 `/Applications` 的应用**记账，别把 `.app` 拷到别处运行。
+- **卸载 host**（pkg 没有卸载器）：
+  ```bash
+  launchctl bootout gui/$(id -u)/com.remotedesktop.host 2>/dev/null || true
+  sudo rm -f /Library/LaunchAgents/com.remotedesktop.host.plist
+  sudo rm -rf "/Applications/Remote Desktop Host.app"
+  sudo pkgutil --forget com.remotedesktop.host.app
+  sudo pkgutil --forget com.remotedesktop.host.agent
+  ```
+  卸载 client 只需删 `/Applications/RemoteDesktop.app` 并
+  `sudo pkgutil --forget com.remotedesktop.client`；若在应用里开过登录项，先在应用里关掉。
 
-服务器地址同样可以内置：`make-pkg.sh` 会复用 `make-app.sh` 产出的 `.app`，而后者读的是构建时的配置；
-也可装完后在客户端界面用「修改服务器地址」填 `wss://<主机>:5080/ws`。
+服务器地址：host 读 `~/Library/Application Support/RemoteDesktop/appsettings.json` 的
+`Transport:RendezvousUri`（默认 `ws://127.0.0.1:5080/ws`），改完 kickstart；client 也可以在界面里改。
 
 > **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
 > （见 [平台移植总览](../ports/README.md) 的"最低系统版本"）。`.pkg` 只面向 Apple Silicon（arm64）。
@@ -816,7 +906,7 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 ## 七、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
-- **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。
+- **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。**Linux 例外**：固定密码能让连接通过认证，但 Wayland portal 仍要求每次控制有人当场授权，所以无人值守只能观看，不能操作。
 - **中继带宽**：直连打洞成功时不走中继。`RelayEndpoint` 配错会让所有连接都失败。
 - **多台服务器**：目前 Rendezvous 不共享状态，设备要连到同一台服务器才能互相发现。
 - **日志**：服务器是标准输出（服务方式运行时进 Windows 事件日志或用 `--console` 重定向）；被控端在
@@ -843,7 +933,36 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 ```
 
 **客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物约 49 MB。
-服务端有**自己的**安装包，装的是另一套东西，和这个包互不影响：
+只做被控端的机器用**另一个**包：它只装服务与 Agent，没有客户端窗口，也没有开始菜单项。
+
+```powershell
+.\build\installer\windows\host\Build-HostInstaller.ps1 `
+    -RendezvousUri ws://<服务器>:5080/ws
+# 产出 artifacts/installer/windows/RemoteDesktop.Host-<版本>-x64.msi
+```
+
+两个包走同一个脚本（`Build-ClientInstaller.ps1 -HostOnly`）：服务定义、崩溃重启、UDP 防火墙规则和
+`--configure-system` 只有一份，所以不会出现"客户端那个修好了、被控端那个还是旧行为"。产品名与 UpgradeCode
+各自独立，但因为共用服务名，一台机器只能装其中一个——第二个会拒绝安装并说明先卸哪个。
+
+**Host 包的安装向导多一页“无人值守设置”**：host 装完没有窗口，临时密码只存在进程内存里，所以这一页是全新
+机器唯一能直接输入固定密码的地方。留空表示不修改已有密码；勾选“清除已设置”则清掉。静默安装等价于：
+
+```powershell
+msiexec /i RemoteDesktop.Host-<版本>-x64.msi /qn `
+  RENDEZVOUSURI="ws://rd.example.com:5080/ws" `
+  FIXEDPASSWORD="至少8位"
+# 清除已有固定密码：CLEARFIXEDPASSWORD=1
+```
+
+密码通过 deferred 自定义动作写进服务的 DPAPI **LocalMachine** 密钥库；`FIXEDPASSWORD` 在
+`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码不能包含双引号（Windows Installer
+的命令行限制）；少于 8 位时安装会失败并在日志里说明，而不是装出一个连不上的 host。
+
+设备码在服务的日志里：`%ProgramData%\RemoteDesktop\logs\service-<日期>.log`，搜索
+`Registered with the rendezvous server as`。host 没有 UI 可以显示它。
+
+服务端有**自己的**安装包，装的是另一套东西（Rendezvous + Relay + Ops），和这两个包互不影响：
 
 ```powershell
 .\build\installer\windows\server\Build-ServerInstaller.ps1
@@ -851,8 +970,9 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 ```
 
 打包脚本做四件事：发布可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名，
-最后**不安装就直接检查包内容**：`InstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、
-自定义操作和属性，缺什么就报错。
+最后**不安装就直接检查包内容**：`InstallerPackageTests` / `HostInstallerPackageTests` /
+`ServerInstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、自定义操作和属性，
+缺什么就报错。
 
 几个容易踩的地方：
 
@@ -886,7 +1006,10 @@ build/installer/macos/client/make-app.sh --configuration Release
 # .pkg（可分发安装包，装到 /Applications；默认未签名）
 build/installer/macos/client/make-pkg.sh --configuration Release
 
-# 服务端 .pkg（两个服务器 + launchd 守护进程，装到 /usr/local/remotedesktop-server）
+# 被控端 .pkg：独立的 Remote Desktop Host.app（LSUIElement，无窗口）+ 登录时自动启动的 LaunchAgent
+build/installer/macos/host/make-pkg.sh --configuration Release
+
+# 服务端 .pkg（信令、中继与监控台 + 三个 launchd 守护进程，装到 /usr/local/remotedesktop-server）
 build/installer/macos/server/make-pkg.sh --configuration Release
 ```
 
@@ -910,7 +1033,7 @@ build/installer/linux/server/build-deb.sh   # 信令与中继服务器
 ### 产物在哪
 
 一律在 `artifacts/installer/<平台>/`，角色写在**文件名**里，不另开子目录。发布时 `release.yml` 会把它们改名成
-用户看到的那份资产，形状是 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：七个资产一个形状。
+用户看到的那份资产，形状是 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：九个资产一个形状。
 
 注意一个坑：`artifacts/installer/windows/` 里**没有**带 `Windows` 的文件——Windows 的资产名是发布时才长成终态的。
 照着发布资产名去那个目录里找会一无所获（这个仓库已经踩过一次）。
@@ -1180,4 +1303,5 @@ remotedesktop --self-check
 - 节点鉴权只有部署级 `Ops:NodeToken`；每节点令牌未做。
 - 明确**单实例**：抓取/告警求值/保留清理都靠 `ops_lease` 抢独占；多副本需要再把带租约的 worker 拆出去，未做
   SignalR backplane。
-- Windows 侧控制台用"可执行文件直接当服务"（`sc.exe`），未加 MSI 组件。
+- Windows 侧控制台现在是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
+  手工 `sc.exe create` 仍然可行，但不是安装包的做法。

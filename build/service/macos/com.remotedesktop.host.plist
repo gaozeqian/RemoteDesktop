@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The host-only app (Remote Desktop Host.app) as a per-user launch agent.
+
+  Why a LaunchAgent and not a LaunchDaemon: macOS grants screen recording and accessibility only to a signed app
+  running inside a user's GUI session. A root daemon cannot capture the screen at all (see docs/ports/README.md,
+  "TCC 授权按签名身份记账"). The bundle is LSUIElement, so it has no window; this job is what starts it at login.
+
+  Install path: /Library/LaunchAgents, so the job exists for every account on the machine and runs when that account
+  logs into the graphical session. RunAtLoad starts it once per login; KeepAlive is false on purpose, so quitting the
+  app means "not now" rather than a process launchd fights to restart.
+
+  This is the only auto-start mechanism on macOS. There is no in-app "start at login" toggle in the host bundle: the
+  host has no UI at all. Do not install the client package as well and expect one to be the controller — they are two
+  separate hosts with separate device identities.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.remotedesktop.host</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Only in a graphical login. Without this launchd would also try to start it from an ssh session, where there
+         is no screen to share. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

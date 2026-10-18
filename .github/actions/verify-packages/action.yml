@@ -55,7 +55,17 @@ runs:
 
         check artifacts/installer/linux/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
         check artifacts/installer/linux/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
-        check artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb Rendezvous
+        check artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb RemoteDesktop.Server.Rendezvous
+        # The console is the third program in the server package. Checked separately so a server package that lost it
+        # fails here rather than at the first operator who opens 5090.
+        server=$(ls -1 artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb)
+        case "$(dpkg-deb --contents "$server")" in
+          *RemoteDesktop.Server.Ops*) ;;
+          *)
+            echo "$server does not contain the Ops console." >&2
+            exit 1
+            ;;
+        esac
 
     - name: Verify the .pkg installers
       if: runner.os == 'macOS'
@@ -64,8 +74,8 @@ runs:
         set -eu
 
         count=$(ls -1 artifacts/installer/macos/*.pkg 2>/dev/null | wc -l)
-        if [ "$count" -ne 2 ]; then
-          echo "Expected two packages, found $count:" >&2
+        if [ "$count" -ne 3 ]; then
+          echo "Expected three packages, found $count:" >&2
           ls -la artifacts/installer/macos/ >&2 || true
           exit 1
         fi
@@ -92,11 +102,36 @@ runs:
           echo "--- $(basename "$package") $($(command -v stat) -f%z "$package") bytes, $(printf '%s\n' "$payload" | wc -l | tr -d ' ') payload entries"
         }
 
-        check artifacts/installer/macos/RemoteDesktop-macOS-*.pkg \
+        check artifacts/installer/macos/RemoteDesktop-Client-macOS-*.pkg \
           RemoteDesktop.Client RemoteDesktop.app/Contents/Info.plist
+
+        # The host package is a product archive with two components (the app and the login item). pkgutil
+        # --payload-files shows only the first one, and it does not read an expanded component directory either, so
+        # the archive is expanded and each component's BOM is read. Checking the product's payload list is what made
+        # a correct two-package product look like it had lost the login item.
+        host=$(ls -1 artifacts/installer/macos/RemoteDesktop-Host-macOS-*.pkg)
+        host_expanded=$(mktemp -d)
+        pkgutil --expand "$host" "$host_expanded"
+        for component in app agent; do
+          if [ ! -d "$host_expanded/$component.pkg" ]; then
+            echo "$host has no $component component." >&2
+            exit 1
+          fi
+        done
+        if ! lsbom "$host_expanded/app.pkg/Bom" | grep -q 'Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService'; then
+          echo "$host does not contain the host application." >&2
+          exit 1
+        fi
+        if ! lsbom "$host_expanded/agent.pkg/Bom" | grep -q 'LaunchAgents/com.remotedesktop.host.plist'; then
+          echo "$host does not contain the login item." >&2
+          exit 1
+        fi
+        rm -rf "$host_expanded"
+        echo "--- $(basename "$host") $($(command -v stat) -f%z "$host") bytes, app + login item"
+
         check artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg \
-          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay \
-          com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist
+          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops \
+          com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist com.remotedesktop.ops.plist
 
     - name: Verify the MSI installers
       if: runner.os == 'Windows'
@@ -104,18 +139,21 @@ runs:
       run: |
         $installerFolder = 'artifacts/installer/windows'
 
-        # The build produces RemoteDesktop-<version>-x64.msi and RemoteDesktop.Server-<version>-x64.msi, both into the
-        # one folder because the role is already in the file name. "RemoteDesktop-*" matches the server's as well, so
-        # the client is what is left after excluding it. (The names carrying "Windows" are the *release assets*, made
-        # by the rename step: globbing for those against a fresh build finds nothing, which is a mistake this
-        # repository has already made once.)
+        # The build produces RemoteDesktop-<version>-x64.msi (client), RemoteDesktop.Host-<version>-x64.msi and
+        # RemoteDesktop.Server-<version>-x64.msi, all into the one folder because the role is already in the file
+        # name. "RemoteDesktop-*" matches neither of the other two (their role words are separated by a dot), but the
+        # filter below says so explicitly rather than relying on that. (The names carrying "Windows" are the *release
+        # assets*, made by the rename step: globbing for those against a fresh build finds nothing, which is a mistake
+        # this repository has already made once.)
         $client = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-*-x64.msi" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' })
+            Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' -and $_.Name -notlike 'RemoteDesktop.Host-*' })
+        $hostPackage = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop.Host-*-x64.msi" -ErrorAction SilentlyContinue)
         $server = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop.Server-*-x64.msi" -ErrorAction SilentlyContinue)
 
         # One glob must find exactly one package each. Two would mean a stale one from an earlier build is sitting
         # next to the fresh one, which is how a release ends up shipping the wrong bytes.
         if ($client.Count -ne 1) { throw "Expected one client installer in $installerFolder, found $($client.Count)." }
+        if ($hostPackage.Count -ne 1) { throw "Expected one host installer in $installerFolder, found $($hostPackage.Count)." }
         if ($server.Count -ne 1) { throw "Expected one server installer in $installerFolder, found $($server.Count)." }
 
         # The same question as the other two branches — is the program in there, and what makes it run — answered by
@@ -129,8 +167,9 @@ runs:
         # and it is the pass that verifies the package the release job has on disk rather than the one the build
         # script had in hand.
         $checks = @(
-          @{ Msi = $client[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests' }
-          @{ Msi = $server[0].FullName; Variable = 'RD_SERVER_INSTALLER_MSI'; Class = 'RemoteDesktop.Platform.Windows.UnitTests.ServerInstallerPackageTests' }
+          @{ Msi = $client[0].FullName;      Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests' }
+          @{ Msi = $hostPackage[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.HostInstallerPackageTests' }
+          @{ Msi = $server[0].FullName;      Variable = 'RD_SERVER_INSTALLER_MSI'; Class = 'RemoteDesktop.Platform.Windows.UnitTests.ServerInstallerPackageTests' }
         )
 
         foreach ($check in $checks) {

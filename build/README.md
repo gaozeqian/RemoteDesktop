@@ -26,15 +26,20 @@ build/
 `installer/linux/` 而不是 `installer/debian/`，和 `artifacts/installer/<平台>/` 的取法一致（见 `CONTRIBUTING.md`
 §构建产物布局）。
 
-三平台的**角色集合不一样**，这不是漏了目录，而是产品形状本来不同：
+三平台的**角色集合现在是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops）。
+角色目录仍然只为该平台真实存在的东西而建，只是三个平台现在都有这三样：
 
-| 平台 | `installer/` 下的角色 | 为什么少了一个 |
+| 平台 | `installer/` 下的角色 | 被控端包与控制端包的关系 |
 |---|---|---|
-| Linux | `client`、`host`、`server` | — |
-| Windows | `client`、`server` | 被控端服务与会话 Agent 并进客户端那一个 MSI，`app/windows/client/` 里因此有三个 `.exe` |
-| macOS | `client`、`server` | 客户端自己就是被控端，没有服务/Agent 的拆分 |
+| Linux | `client`、`host`、`server` | 两个独立的程序与包：`RemoteDesktop.Client` 与 `RemoteDesktop.HostService` |
+| Windows | `client`、`host`、`server` | 客户端 MSI 也带着被控端服务与 Agent；`host` 那个只装这两样，没有客户端窗口 |
+| macOS | `client`、`host`、`server` | 两个独立的 app：`RemoteDesktop.app`（完整客户端）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控）；host 包另装登录项 |
 
-规则是**只建该平台真实存在的角色目录**，不为对称补齐。三种产品形状见根目录 `README.md` 开头。
+Windows 的 `host` 走的是 `client/Build-ClientInstaller.ps1 -HostOnly`：服务定义、崩溃重启、防火墙规则与机器清理
+步骤只有一份，两个包不会各改一半。两个包共用服务名，所以一台机器只能装一个（安装程序会拒绝第二个）。
+macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote Desktop Host.app`：里面是同一个
+`RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。不能复用客户端
+bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被单独授予屏幕录制/辅助功能，且不能带着控制端 UI。
 
 `docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。上面那张树里
 其余四项都服从 `<平台>/<角色>`，只有它不分层。

@@ -38,8 +38,8 @@
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 客户端进程自己 | 图形会话里的 `systemd --user` 服务 |
-| 为什么是这个形状 | Session 0 采不到屏，必须拆出一个在交互会话里干活的 Agent | 没有 Session 0，root 的 LaunchDaemon 拿不到屏幕录制权限，所以不需要拆 | portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
+| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app（client，或独立的 host-only app） | 图形会话里的 `systemd --user` 服务 |
+| 为什么是这个形状 | Session 0 采不到屏，必须拆出一个在交互会话里干活的 Agent | 没有 Session 0，root 的 LaunchDaemon 拿不到屏幕录制权限，所以只能是一个用户会话里的 app；host 包把这个 app 做成无窗口、只被控的形态 | portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
 
 Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC 三个桌面：
 
@@ -72,14 +72,14 @@ dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/
 
 | | Windows | macOS |
 |---|---|---|
-| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 客户端进程自己（没有服务，也就没有登录前访问） |
+| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app；host 包是独立的无窗口 app（没有服务，也就没有登录前访问） |
 | 屏幕 | DXGI Desktop Duplication | ScreenCaptureKit |
 | 输入 | `SendInput` / `SendSAS` | CGEvent（Ctrl+Alt+Del 不可用） |
 | 编解码 | Media Foundation | VideoToolbox |
 | 终端 | ConPTY + PowerShell / cmd | PTY（`posix_spawn`）+ 登录 shell |
 | 密钥 | DPAPI | Keychain |
 | 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 |
-| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService` 登录项 + 固定密码（仅登录后） |
+| 无人值守 | 服务 + 固定密码，登录前也在线 | LaunchAgent（host 包）或 `SMAppService`（client）+ 固定密码（仅登录后） |
 
 ### Linux
 

@@ -2,6 +2,56 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · 九个安装包：三平台 × 控制端 / 被控端 / 服务端
+
+三个平台现在各出三个角色，共九个安装包。服务端那一个包统一是 **Rendezvous + Relay + Ops**：
+控制台没有前两者就没有数字可看，分成两个包只会多出"装了一半"的状态。
+
+### Added
+
+- [Windows] **被控端 MSI**（`RemoteDesktop.Host-<版本>-x64.msi`）：只装 `RemoteDesktop.HostService` 与
+  `RemoteDesktop.SessionAgent`，没有客户端窗口与开始菜单项。走 `Build-ClientInstaller.ps1 -HostOnly`，
+  服务定义、崩溃重启、UDP 防火墙规则与机器清理步骤只有一份；产品名与 UpgradeCode 独立。两者共用
+  `RemoteDesktopHost` 服务与机器的设备身份，所以一台机器只能装一个——安装条件会拒绝第二个。
+- [Windows] **安装向导可设固定密码**：host 没有窗口，临时密码只在服务内存里，所以新增“无人值守设置”页，
+  把 `FIXEDPASSWORD` 通过 deferred 自定义动作写进服务的 DPAPI LocalMachine 密钥库；静默安装可用同名属性，
+  `CLEARFIXEDPASSWORD=1` 清除。属性在 `MsiHiddenProperties` 里、动作 `HideTarget="yes"`；密码少于 8 位时
+  安装失败，不会装出一个连不上的 host。
+- [macOS] **独立的 host-only app**：`Remote Desktop Host.app`（`LSUIElement`、无窗口、bundle id
+  `com.remotedesktop.host`），里面是 `RemoteDesktop.HostService`，不含 Avalonia / 控制端 UI；配套
+  `/Library/LaunchAgents/com.remotedesktop.host.plist` 每次图形登录自启。它不再复用客户端的 `.app`——TCC 授权
+  按 bundle 的签名身份记账，host 必须能被单独授予屏幕录制/辅助功能。
+- [macOS] **host 无界面下的固定密码/设备码入口**：`HostService --set-fixed-password` 写入登录 Keychain；
+  设备码从 `~/Library/Application Support/RemoteDesktop/logs/` 里查 `Registered with the rendezvous server as`。
+- [Linux] **文档明确无人值守只能“观看”**：Wayland portal 不允许持久化远程桌面会话，控制每次要现场授权；
+  固定密码能让连接通过认证，但不能让无人值守变成可操作。
+- [Windows/macOS] **服务端包收编 Ops**：Windows 多一个 `RemoteDesktopOps` 服务、`Ops/` 目录与 `OpsFolder` 组件；
+  macOS 多一个 `com.remotedesktop.ops` LaunchDaemon，库在 `var/ops.db`。两个平台都在安装说明里写了首个管理员怎么建。
+- [CI] **`release.yml` 出九个资产**：Windows 三个 MSI、macOS 三个 `.pkg`、Linux 三个 `.deb`，少一个就不发版；
+  `verify-packages` 按平台逐个打开包，检查 Ops、被控端登录项与客户端载荷都在。
+
+### Fixed
+
+- **跨平台发布会把 macOS 的 dylib 塞进 Linux 包**：`RemoteDesktop.Transport` 与 `Platform.MacOS` 的条件看的是
+  **构建机**是不是 macOS，而不是**目标**是不是；而项目引用在内部构建时又被去掉了 `RuntimeIdentifier`，所以
+  在 Mac 上交叉发布 `linux-x64` 时，`libmsquic.dylib`、`libssl.dylib`、`libcrypto.dylib` 与
+  `libRemoteDesktopMacNative.dylib` 都进了 `.deb`。现在条件同时看目标 RID 与 Linux 三个打包脚本显式传入的
+  `-p:RemoteDesktopCrossTargeting=true`（这个属性会流到项目引用，RID 不会）。
+- **Windows 服务端 `Components.wxs` 的 XML 错误**：`RelaySettings` 前多了一个 `>`，WiX 编译会直接失败。
+- **macOS 服务端升级会覆盖 `appsettings.json`**：`.pkg` 没有 conffile 概念，payload 里的同名文件在升级时会被
+  写回构建默认值，连 relay key 一起丢掉。现在 payload 里放的是 `appsettings.default.json`，postinstall 只在
+  `appsettings.json` 不存在时复制；升级保留运维改过的配置。三平台在这一点上这才一致。
+- **Ops 作为 Windows 服务时数据库落在 `System32`**：服务的工作目录是 `System32`，`Ops:Database:Path` 的相对路径
+  就跟着它走。现在相对路径按程序目录解析，`%ProgramData%` 也会展开；Windows 包据此把库放在
+  `%ProgramData%\Remote Desktop Server\ops.db`。
+
+### Notes
+
+- macOS 的 client（`RemoteDesktop.app`）与 host（`Remote Desktop Host.app`）是**两个不同 bundle**，TCC 授权也分开；
+  一台机器通常只装一个。两个都装会得到两个被控端（两个设备码、两个监听），不建议。
+- Windows 客户端 MSI 仍然同时装客户端、服务与被控端 Agent——**一台机器想同时具备控制与被控两种角色，装客户端包就够了**；
+  新的 Host 包是给"只能被控、不允许控制别人"的机器用的，两者不能并行安装。
+
 ## [未发布] · 运维监控台：交付面
 
 M6：把控制台从"能跑"变成"干净机器按文档从零装到能登录"。核心是文档与打包，不是新功能。

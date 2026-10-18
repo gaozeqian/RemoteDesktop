@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The components that need more than "a file": the two services, the inbound firewall rules that let clients reach
-  them, and the two settings files. Everything else is generated from the publish output into Files.generated.wxs.
+  The components that need more than "a file": the three services, the inbound firewall rules that let clients reach
+  the two network servers, and their settings files. Everything else is generated from the publish output into
+  Files.generated.wxs.
 
-  The two server folders (Rendezvous, Relay) are declared by that generated file, which mirrors the publish output;
-  Build-ServerInstaller.ps1 tells the generator to name those two directories RendezvousFolder and RelayFolder, so
-  the components here can be placed in them regardless of the order the publish output happens to be read in.
+  The three program folders (Rendezvous, Relay, Ops) are declared by that generated file, which mirrors the publish
+  output; Build-ServerInstaller.ps1 tells the generator to name those three directories RendezvousFolder,
+  RelayFolder and OpsFolder, so the components here can be placed in them regardless of the order the publish output
+  happens to be read in.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
@@ -71,7 +73,39 @@
 
       <!-- The other half of the shared key; see the comment on the signaling server's settings above. -->
       <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102" NeverOverwrite="yes">
->        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
+        <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
+      </Component>
+
+    </DirectoryRef>
+
+    <DirectoryRef Id="OpsFolder">
+
+      <!-- The monitoring console. It is a server of its own — not a page inside the signaling server — because it
+           aggregates across nodes, has its own sign-in, and must not be able to take signaling down with it. It binds
+           to loopback by default, so it gets no firewall rule: exposing it is a reverse-proxy decision. -->
+      <Component Id="OpsService" Guid="5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b">
+        <File Id="OpsExeFile" Source="$(var.SourceRoot)\Ops\RemoteDesktop.Server.Ops.exe" KeyPath="yes" />
+        <ServiceInstall Id="OpsServiceInstall"
+                        Name="RemoteDesktopOps"
+                        DisplayName="Remote Desktop Ops Console"
+                        Description="Monitoring and management console for the Remote Desktop servers."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
+        <ServiceControl Id="OpsServiceControl" Name="RemoteDesktopOps" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- The console is optional, but once installed it should stay up: its own history (metrics, alerts, audit)
+             is the only record of what happened, and a service that died on a machine nobody watches would leave a
+             gap nobody notices until it matters. -->
+        <util:ServiceConfig ServiceName="RemoteDesktopOps"
+                            FirstFailureActionType="restart"
+                            SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="5"
+                            ResetPeriodInDays="1" />
+      </Component>
+
+      <!-- The console's own settings: where its database lives, what it listens on. Never overwritten, for the same
+           reason as the other two — an operator's changes and the console's history belong to the deployment. -->
+      <Component Id="OpsSettings" Guid="6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c" NeverOverwrite="yes">
+        <File Id="OpsAppSettingsFile" Source="$(var.SourceRoot)\Ops\appsettings.json" KeyPath="yes" />
       </Component>
 
     </DirectoryRef>

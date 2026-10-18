@@ -3,6 +3,8 @@
 # Runs at the end of the server package's installation, as root.
 #
 # Two jobs: write the servers' settings, and hand the launchd jobs to the system so they start now and at every boot.
+# There are three jobs — signaling, relay and the monitoring console. Only the first two have settings written here;
+# the console's database path and loopback address come from its own plist.
 #
 # The settings are written by the server's own `--configure-system` step — the same code the Windows package runs
 # through its installer — so both platforms produce identical appsettings.json files and generate the relay key the
@@ -21,6 +23,16 @@ mkdir -p "$INSTALL_DIR/logs"
 # Where the SQLite database goes. 0700 and root-owned: the file inside holds the device ids, and a directory nobody
 # else can enter is what protects it, because SQLite creates the file with the process umask rather than 0600.
 install -d -m 700 "$INSTALL_DIR/var"
+
+# The live settings file, from the template the package ships. Only when it is not there: an upgrade must not put the
+# build's defaults back over what the operator configured, and for the signaling server that file holds the relay key
+# every client and relay has been given. The template itself is refreshed by the package on every upgrade.
+for server in Rendezvous Relay Ops; do
+    if [ ! -f "$INSTALL_DIR/$server/appsettings.json" ] && [ -f "$INSTALL_DIR/$server/appsettings.default.json" ]; then
+        cp "$INSTALL_DIR/$server/appsettings.default.json" "$INSTALL_DIR/$server/appsettings.json"
+        chmod 0644 "$INSTALL_DIR/$server/appsettings.json"
+    fi
+done
 
 # --- settings ----------------------------------------------------------------------------------
 
@@ -51,7 +63,7 @@ rm -f "$OPTIONS"
 # bootstrap wants the file owned by root and not writable by anyone else; the package installs it that way already,
 # and this makes that true even if something loosened it.
 echo "  starting the servers"
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay; do
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops; do
     plist="/Library/LaunchDaemons/$label.plist"
     chown root:wheel "$plist"
     chmod 644 "$plist"
@@ -71,7 +83,8 @@ done
 
 echo "Remote Desktop Server: installed in $INSTALL_DIR"
 echo "  health:  curl http://127.0.0.1:5080/health"
-echo "  logs:    $INSTALL_DIR/logs/rendezvous.log and relay.log"
+echo "  console: http://127.0.0.1:5090 (no account yet: see how-to-configure.txt, section 6)"
+echo "  logs:    $INSTALL_DIR/logs/rendezvous.log, relay.log and ops.log"
 echo "  settings: $INSTALL_DIR/how-to-configure.txt"
 
 exit 0

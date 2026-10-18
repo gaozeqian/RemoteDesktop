@@ -18,7 +18,7 @@
 set -e
 
 INSTALL_DIR="/usr/local/remotedesktop-server"
-LABELS="com.remotedesktop.rendezvous com.remotedesktop.relay"
+LABELS="com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops"
 
 keep_settings=0
 assume_yes=0
