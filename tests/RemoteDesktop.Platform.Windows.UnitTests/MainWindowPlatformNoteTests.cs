@@ -3,49 +3,78 @@ using RemoteDesktop.Client.ViewModels;
 namespace RemoteDesktop.Platform.Windows.UnitTests;
 
 /// <summary>
-/// The platform sentences in 高级设置 must describe the platform they are read on. Each is a static property
-/// chosen by <c>OperatingSystem.Is*()</c>, so a build shows exactly one branch and no single-platform run can see
-/// the others — which is how Linux came to read the macOS wording in all three
-/// (docs/reviews/ui-consistency-review-2026-10-17.md, U1–U3): the branch was "Windows or not". Every CI job runs
-/// this suite on its own platform, so the assertions below cover each branch where it actually runs.
+/// The platform and hosting sentences in 高级设置 must describe the machine they are read on. The hosting mode is
+/// part of that: a Windows standalone client has no background service, so it must not say that its two codes differ
+/// or promise a UAC prompt and a service restart. These assertions run on every CI platform, so each branch is
+/// checked where it actually runs.
 /// </summary>
 public class MainWindowPlatformNoteTests
 {
     [Fact]
-    public void Platform_notes_carry_no_other_platforms_wording()
+    public void Client_code_wording_follows_the_hosting_mode()
+    {
+        var inProcess = MainWindowViewModel.DescribeClientCode(controlledEndInThisProcess: true);
+        var service = MainWindowViewModel.DescribeClientCode(controlledEndInThisProcess: false);
+
+        Assert.Contains("同一个代码", inProcess);
+        Assert.DoesNotContain("后台服务", inProcess);
+        Assert.Contains("后台服务", service);
+        Assert.DoesNotContain("同一个代码", service);
+    }
+
+    [Fact]
+    public void Server_address_wording_matches_what_the_platform_can_actually_do()
+    {
+        var inProcess = MainWindowViewModel.DescribeServerAddress(controlledEndInThisProcess: true);
+        var service = MainWindowViewModel.DescribeServerAddress(controlledEndInThisProcess: false);
+
+        if (OperatingSystem.IsWindows())
+        {
+            // A standalone Windows client cannot write the service's appsettings; the sentence says how to edit it
+            // instead of promising a UAC prompt that would only end in "找不到后台服务程序".
+            Assert.Contains("启动参数", inProcess);
+            Assert.DoesNotContain("UAC", inProcess);
+            Assert.Contains("UAC", service);
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            Assert.Contains("客户端会重启", inProcess);
+            Assert.Contains("已安装的被控端服务", service);
+            Assert.DoesNotContain("macOS", inProcess);
+            Assert.DoesNotContain("macOS", service);
+        }
+        else
+        {
+            // macOS has no service at all; the controlled end is always this process.
+            Assert.Contains("macOS", inProcess);
+            Assert.Contains("同一个进程", inProcess);
+        }
+    }
+
+    [Fact]
+    public void Fixed_password_storage_names_the_store_of_this_platform()
     {
         if (OperatingSystem.IsLinux())
         {
-            // An owner-only file rather than the macOS keychain, a service to restart rather than one process,
-            // two device codes rather than one. All three sentences used to say macOS here.
             Assert.DoesNotContain("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
             Assert.DoesNotContain("macOS", MainWindowViewModel.FixedPasswordStorageNote);
-            Assert.DoesNotContain("macOS", MainWindowViewModel.ServerAddressNote);
-            Assert.DoesNotContain("macOS", MainWindowViewModel.ClientCodeNote);
         }
         else if (OperatingSystem.IsWindows())
         {
             Assert.DoesNotContain("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
-            Assert.DoesNotContain("同一个进程", MainWindowViewModel.ClientCodeNote);
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            // macOS is the single-process platform, and its sentences say so.
-            Assert.Contains("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
-            Assert.Contains("同一个进程", MainWindowViewModel.ClientCodeNote);
-            Assert.Contains("macOS", MainWindowViewModel.ServerAddressNote);
+            Assert.Contains("DPAPI", MainWindowViewModel.FixedPasswordStorageNote);
         }
         else
         {
-            Assert.Fail("This suite covers Windows, macOS and Linux; on any other system these assertions check nothing.");
+            Assert.Contains("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
         }
     }
 
     [Fact]
     public void The_portal_caveat_exists_only_where_it_applies()
     {
-        // U4 of the same review: the portal refuses to persist the control grant, so a fixed password cannot make
-        // a Linux machine unattended. The sentence belongs to Linux alone.
+        // U4 of docs/reviews/ui-consistency-review-2026-10-17.md: the portal refuses to persist the control grant,
+        // so a fixed password cannot make a Linux machine unattended. The sentence belongs to Linux alone.
         var onLinux = OperatingSystem.IsLinux();
 
         Assert.Equal(onLinux, MainWindowViewModel.ShowFixedPasswordPlatformNote);

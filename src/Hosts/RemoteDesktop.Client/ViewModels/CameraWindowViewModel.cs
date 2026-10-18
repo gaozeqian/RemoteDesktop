@@ -16,11 +16,17 @@ namespace RemoteDesktop.Client.ViewModels;
 public sealed record CameraChoice(CameraInfo Camera)
 {
     public string Name => Camera.Name;
+
+    // The ComboBox automation peer uses ToString for the collapsed value; without this it read the whole
+    // CameraInfo record instead of the camera's name.
+    public override string ToString() => Name;
 }
 
 public sealed record CameraModeChoice(CameraMode Mode)
 {
     public string Label => string.Create(CultureInfo.InvariantCulture, $"{Mode.Width}×{Mode.Height} · {Mode.FrameRate} fps");
+
+    public override string ToString() => Label;
 }
 
 /// <summary>The camera window: pick one of the host's cameras and a mode, watch the picture, see how the stream is doing.</summary>

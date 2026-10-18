@@ -19,7 +19,11 @@ public sealed record FileEntryInfo(string Name, bool IsDirectory, long Size, Dat
 public sealed record DirectoryContents(string Path, string Parent, IReadOnlyList<FileEntryInfo> Entries, bool Truncated);
 
 /// <summary>A starting point for browsing: a drive or a well-known folder.</summary>
-public sealed record PlaceInfo(string Name, string Path, bool IsDrive);
+public sealed record PlaceInfo(string Name, string Path, bool IsDrive)
+{
+    // The quick-access ComboBox's collapsed value: its automation peer asks ToString for it.
+    public override string ToString() => Name;
+}
 
 /// <summary>A file operation failed in a way the other side can be told about.</summary>
 public sealed class FileOperationException : Exception

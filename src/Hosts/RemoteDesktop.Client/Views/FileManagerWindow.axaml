@@ -21,7 +21,8 @@
 
     <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="{DynamicResource RdSpaceSm}">
       <TextBlock Text="文件已存在时：" VerticalAlignment="Center" />
-      <ComboBox Grid.Column="1" ItemsSource="{Binding Conflicts}" SelectedItem="{Binding SelectedConflict}" MinWidth="180">
+      <ComboBox Grid.Column="1" ItemsSource="{Binding Conflicts}" SelectedItem="{Binding SelectedConflict}" MinWidth="180"
+                AutomationProperties.Name="文件已存在时">
         <ComboBox.ItemTemplate>
           <DataTemplate x:DataType="vm:ConflictChoice">
             <TextBlock Text="{Binding Label}" />

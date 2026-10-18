@@ -24,7 +24,8 @@
       <Component Id="StartMenuShortcut" Guid="b4c5d6e7-f8a9-4b0c-9d1e-2f3a4b5c6d7e" Directory="AppShortcutFolder">
         <Shortcut Id="StartMenuShortcutLink" Name="Remote Desktop"
                   Description="Remote desktop: control, file transfer, terminal and camera"
-                  Target="[INSTALLFOLDER]RemoteDesktop.Client.exe" WorkingDirectory="INSTALLFOLDER" />
+                  Target="[INSTALLFOLDER]RemoteDesktop.Client.exe" WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon" />
         <RegistryValue Root="HKCU" Key="Software\RemoteDesktop" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
         <!-- Windows Installer only removes folders it is told about. -->
         <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />

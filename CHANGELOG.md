@@ -2,6 +2,43 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Windows UI 与产品图标评审
+
+在 Windows 11 Enterprise 26200 上对客户端界面与产品图标做逐屏评审（深浅色各一轮、真实服务端与客户端），
+并用 UI Automation、图标逐尺寸渲染与实际构建的最小 MSI 核对。完整记录见
+[`docs/reviews/ui-and-icon-review-2026-10-18.md`](docs/reviews/ui-and-icon-review-2026-10-18.md) 的第二轮。
+
+### Fixed
+
+- **独立被控端模式的说明与事实相反**：被控端在本进程内运行时，界面仍说“本机控制端代码”与主页不同、
+  主页显示的是后台服务代码；首帧也用默认文案，等轮询回来才纠正。托管模式现在由 `ClientEnvironment`
+  传入，说明在窗口构造时即正确，并随主机状态刷新。
+- **独立模式下“被控端信令服务器”是走不通的编辑入口**：界面提供修改/保存并承诺 UAC 与服务重启，
+  实际报“找不到后台服务程序”。非服务托管时编辑入口不再显示，说明改为关闭客户端后改启动参数
+  （`--Transport:RendezvousUri`）或 `appsettings.json`。
+- **最近连接多于约 5 条时底部说明被压到状态栏下**：设备列表卡片改为 `Auto,*,Auto` 的 Grid，
+  列表自己滚动，在线状态说明固定在底部。
+- **数据目录路径过长时被裁切、复制按钮被挤出**：路径改为可换行，复制按钮固定在右列。
+- **下拉框无障碍值与名称**：`CameraChoice`、`CameraModeChoice`、`ConflictChoice`、`PlaceInfo`
+  的 `ToString()` 返回界面文字，不再让读屏念整条记录；快速访问、摄像头、分辨率、文件已存在时、
+  连接方式与主导航补 `AutomationProperties.Name`。
+- **MSI 没有产品图标**：client 与 server 包加入 `Icon`/`ARPPRODUCTICON`，client 开始菜单快捷方式
+  显式引用 `AppIcon`；“设置 > 应用”不再回落到通用图标。新增
+  `InstallerPackageTests.The_package_carries_the_product_icon`，用 Windows Installer API 查询
+  `Icon` 表、`ARPPRODUCTICON` 与快捷方式图标，无安装包时跳过。
+- **`.ico` 缺少 20/40px 槽位**：`icon.ico` 从 7 档补到 9 档（16/20/24/32/40/48/64/128/256，均为 32bpp
+  PNG 压缩），20px 沿用 16/24 的简化图形、40px 沿用完整图形；Windows 在 125%/150% 缩放下直接取这两档，
+  不再由 shell 缩放。`build/README.md` 说明这两档只存在于 `.ico`，不单独导出 PNG（Linux hicolor 按
+  `icon-*.png` 遍历）。
+- **浅色下隐藏文件元数据对比度不足**：不再对整行应用 50% 透明度，只淡化图标与文件名，大小和日期保持
+  不透明；浅色下这两列恢复到 tertiary 文字的 4.82:1，隐藏状态仍能从图标与文件名看出。
+
+### Notes
+
+- 图标主体占比 89% 在 Windows 上不构成问题，第一轮 R3 的 macOS 栅格决定仍待定。
+- 四段版本号 `0.3.0.0`、浅色主题下终端保持深色：均为既有观察，本轮未改。评审为深色 12 张、浅色 11 张
+  截图与 UIA 读取，未实际安装 MSI，也未覆盖混合 DPI。
+
 ## [未发布] · Windows 多显示器端到端测试
 
 在 Dell Latitude 5420 / Intel Iris Xe（驱动 32.0.101.7092）上接两块显示器：DISPLAY2 2560×1440 主屏 +

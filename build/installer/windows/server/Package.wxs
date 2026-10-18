@@ -25,6 +25,10 @@
          somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
     <SummaryInformation Description="Remote desktop servers: signaling (rendezvous) and relay. Chinese UI." />
 
+    <!-- The product icon in Settings > Apps. Same source icon as the client and host packages. -->
+    <Icon Id="AppIcon" SourceFile="..\..\..\..\src\Hosts\RemoteDesktop.Client\Assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
     <!-- Same-version installs upgrade in place, which is what rebuilding the same version while testing needs. The UpgradeCode is
          the server package's own, so it never touches a client installation on the same machine. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"

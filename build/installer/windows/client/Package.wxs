@@ -26,6 +26,11 @@
     <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese UI." />
     <?endif?>
 
+    <!-- The product icon in Settings > Apps and on the Start menu shortcut. The same source icon as the exe and the
+         window; without ARPPRODUCTICON Windows Installer shows its generic package icon there. -->
+    <Icon Id="AppIcon" SourceFile="..\..\..\..\src\Hosts\RemoteDesktop.Client\Assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
     <!-- Same-version installs upgrade in place, which is what rebuilding the same version while testing needs. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   Schedule="afterInstallInitialize"

@@ -15,8 +15,11 @@ public sealed class FileItemViewModel(FileEntryInfo entry)
 
     public bool IsDirectory => Entry.IsDirectory;
 
-    /// <summary>Hidden items are shown, but dimmed.</summary>
-    public double RowOpacity => Entry.Attributes.HasFlag(FileEntryAttributes.Hidden) ? 0.5 : 1;
+    /// <summary>
+    /// Hidden items are shown, but their icon and name are dimmed. The size and date keep full opacity: dimming
+    /// the whole row pushed the metadata below 4.5:1 in the light theme.
+    /// </summary>
+    public double ContentOpacity => Entry.Attributes.HasFlag(FileEntryAttributes.Hidden) ? 0.5 : 1;
 
     public string SizeText => Entry.IsDirectory ? string.Empty : SizeFormat.Bytes(Entry.Size);
 

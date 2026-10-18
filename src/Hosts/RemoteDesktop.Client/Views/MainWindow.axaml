@@ -41,7 +41,8 @@
              stale the first time somebody forgets it, and support asks people what version they are running. -->
         <TextBlock DockPanel.Dock="Bottom" Text="{Binding ClientVersionLabel}" Classes="caption" Margin="18,0,18,14" />
 
-        <ListBox x:Name="NavList" Classes="navList" SelectedIndex="{Binding SelectedPageIndex}">
+        <ListBox x:Name="NavList" Classes="navList" SelectedIndex="{Binding SelectedPageIndex}"
+                 AutomationProperties.Name="主导航">
           <ListBoxItem AutomationProperties.Name="主页">
             <StackPanel Orientation="Horizontal" Spacing="11">
               <PathIcon Data="{StaticResource RdIconHome}" Classes="navIcon" />
@@ -176,7 +177,8 @@
             </Grid>
 
             <!-- One selectable row, drawn as the radio group it is: picking a mode does not dial anything. -->
-            <ListBox Classes="modeChooser" ItemsSource="{Binding ConnectionModes}" SelectedItem="{Binding SelectedConnectionMode}">
+            <ListBox Classes="modeChooser" ItemsSource="{Binding ConnectionModes}" SelectedItem="{Binding SelectedConnectionMode}"
+                     AutomationProperties.Name="连接方式">
               <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
                   <StackPanel Orientation="Horizontal" />
@@ -200,20 +202,23 @@
         <!-- ============================ 设备列表 ============================ -->
         <Grid IsVisible="{Binding IsDeviceListPage}" ColumnDefinitions="300,*" ColumnSpacing="18" Margin="24,20,24,24">
 
-          <Border Grid.Column="0" Classes="card" VerticalAlignment="Top">
-            <StackPanel Spacing="{DynamicResource RdSpaceMd}">
-              <Grid ColumnDefinitions="*,Auto">
+          <!-- The card fills the page so the list gets a bounded height. With enough recent devices the two footer
+               captions used to be pushed under the status bar: the page has no ScrollViewer, and the card used to
+               size itself to its content. The list now scrolls inside the middle row and the captions stay visible. -->
+          <Border Grid.Column="0" Classes="card">
+            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="{DynamicResource RdSpaceMd}">
+              <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
                 <TextBlock Text="最近连接" Classes="sectionHeader" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="刷新" Command="{Binding RefreshRecentDevicesCommand}"
                         Classes="feature" VerticalAlignment="Center" />
               </Grid>
 
-              <StackPanel Spacing="{DynamicResource RdSpaceSm}" Margin="0,24" IsVisible="{Binding !HasRecentDevices}">
+              <StackPanel Grid.Row="1" Spacing="{DynamicResource RdSpaceSm}" Margin="0,24" IsVisible="{Binding !HasRecentDevices}">
                 <TextBlock Text="暂无最近连接过的设备" Classes="secondary" HorizontalAlignment="Center" />
                 <TextBlock Text="在“主页”中发起连接后将自动记录到设备列表" Classes="caption" HorizontalAlignment="Center" />
               </StackPanel>
 
-              <ListBox x:Name="DeviceList" Classes="deviceList" ItemsSource="{Binding RecentDevices}"
+              <ListBox Grid.Row="1" x:Name="DeviceList" Classes="deviceList" ItemsSource="{Binding RecentDevices}"
                        SelectedItem="{Binding SelectedRecentDevice}" IsVisible="{Binding HasRecentDevices}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:RecentDeviceItemViewModel">
@@ -240,10 +245,12 @@
                 </ListBox.ItemTemplate>
               </ListBox>
 
-              <TextBlock Classes="caption" Text="在线状态由服务器提供，仅供参考；连接仍以实际结果为准。" />
-              <TextBlock Classes="caption" Text="服务器未回应在线状态查询，状态显示为未知。"
-                         IsVisible="{Binding IsPresenceUnavailable}" />
-            </StackPanel>
+              <StackPanel Grid.Row="2" Spacing="{DynamicResource RdSpaceMd}">
+                <TextBlock Classes="caption" Text="在线状态由服务器提供，仅供参考；连接仍以实际结果为准。" />
+                <TextBlock Classes="caption" Text="服务器未回应在线状态查询，状态显示为未知。"
+                           IsVisible="{Binding IsPresenceUnavailable}" />
+              </StackPanel>
+            </Grid>
           </Border>
 
           <!--
@@ -420,9 +427,9 @@
                       <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ClientRendezvousUri}" TextWrapping="Wrap" VerticalAlignment="Center" />
 
                       <TextBlock Grid.Row="3" Text="被控端信令服务器" Classes="label" VerticalAlignment="Top" Margin="0,8,0,0"
-                                 IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                 IsVisible="{Binding CanEditHostServerAddress}" />
                       <StackPanel Grid.Row="3" Grid.Column="1" Spacing="{DynamicResource RdSpaceSm}"
-                                  IsVisible="{Binding HostRendezvousUri, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                  IsVisible="{Binding CanEditHostServerAddress}">
                         
                         <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" IsVisible="{Binding !IsEditingServerAddress}">
                           <TextBlock Text="{Binding HostRendezvousUri}" TextWrapping="Wrap" VerticalAlignment="Center" />
@@ -441,8 +448,7 @@
                       </StackPanel>
                     </Grid>
 
-                    <TextBlock Classes="caption"
-                               Text="{x:Static vm:MainWindowViewModel.ServerAddressNote}" />
+                    <TextBlock Classes="caption" Text="{Binding ServerAddressNote}" />
                   </StackPanel>
                 </Border>
               </TabItem>
@@ -455,11 +461,13 @@
                     <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto"
                           ColumnSpacing="{DynamicResource RdSpaceLg}" RowSpacing="{DynamicResource RdSpaceSm}">
                       <TextBlock Text="数据目录" Classes="label" VerticalAlignment="Center" />
-                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                      <!-- A Grid, not a horizontal StackPanel: the panel measured the text with infinite width, so a
+                           long path neither wrapped nor left room for the button — both ran past the card edge. -->
+                      <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceSm}">
                         <SelectableTextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                        <Button x:Name="CopyDataDirectoryButton" Content="复制" Classes="iconButton" AutomationProperties.Name="复制数据目录"
+                        <Button Grid.Column="1" x:Name="CopyDataDirectoryButton" Content="复制" Classes="iconButton" AutomationProperties.Name="复制数据目录"
                                 ToolTip.Tip="复制数据目录" VerticalAlignment="Center" />
-                      </StackPanel>
+                      </Grid>
 
                       <TextBlock Grid.Row="1" Text="客户端版本" Classes="label" VerticalAlignment="Center" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClientVersion}" VerticalAlignment="Center" />
@@ -475,8 +483,7 @@
                     <TextBlock Classes="caption"
                                Text="设备身份、记住的密码和最近连接列表都在这个目录里。客户端没有文件日志，只在崩溃时写 crash.log——平时的问题看界面提示。" />
 
-                    <TextBlock Classes="caption" TextWrapping="Wrap"
-                               Text="{x:Static vm:MainWindowViewModel.ClientCodeNote}" />
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding ClientCodeNote}" />
                   </StackPanel>
                 </Border>
               </TabItem>

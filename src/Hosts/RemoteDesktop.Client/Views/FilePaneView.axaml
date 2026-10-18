@@ -9,7 +9,8 @@
     <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" RowSpacing="{DynamicResource RdSpaceSm}">
       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceSm}">
         <TextBlock Text="{Binding Title}" Classes="sectionHeader" VerticalAlignment="Center" />
-        <ComboBox Grid.Column="1" ItemsSource="{Binding Places}" SelectedItem="{Binding SelectedPlace}" PlaceholderText="快速访问" MinWidth="150">
+        <ComboBox Grid.Column="1" ItemsSource="{Binding Places}" SelectedItem="{Binding SelectedPlace}" PlaceholderText="快速访问"
+                  AutomationProperties.Name="快速访问" MinWidth="150">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="ft:PlaceInfo">
               <TextBlock Text="{Binding Name}" />
@@ -36,14 +37,14 @@
       <ListBox Grid.Row="3" x:Name="Files" ItemsSource="{Binding Items}" SelectionMode="Multiple">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:FileItemViewModel">
-            <Grid ColumnDefinitions="24,*,80,120" Opacity="{Binding RowOpacity}" AutomationProperties.Name="{Binding Name}">
-              <Panel VerticalAlignment="Center">
+            <Grid ColumnDefinitions="24,*,80,120" AutomationProperties.Name="{Binding Name}">
+              <Panel VerticalAlignment="Center" Opacity="{Binding ContentOpacity}">
                 <PathIcon Data="{StaticResource RdIconFolder}" Width="16" Height="16"
                           Foreground="{DynamicResource RdAccentBrush}" IsVisible="{Binding IsDirectory}" />
                 <PathIcon Data="{StaticResource RdIconFile}" Width="16" Height="16"
                           Foreground="{DynamicResource RdTextTertiaryBrush}" IsVisible="{Binding !IsDirectory}" />
               </Panel>
-              <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding Name}" Opacity="{Binding ContentOpacity}" TextTrimming="CharacterEllipsis" />
               <TextBlock Grid.Column="2" Text="{Binding SizeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Classes="caption" />
               <TextBlock Grid.Column="3" Text="{Binding ModifiedText}" Classes="caption" />
             </Grid>

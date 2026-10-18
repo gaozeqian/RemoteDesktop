@@ -9,7 +9,12 @@ using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client.ViewModels;
 
-public sealed record ConflictChoice(string Label, ConflictPolicy Policy);
+public sealed record ConflictChoice(string Label, ConflictPolicy Policy)
+{
+    // The ComboBox automation peer uses ToString for the collapsed value; without this it read
+    // "ConflictChoice { Label = …, Policy = … }" instead of the choice.
+    public override string ToString() => Label;
+}
 
 /// <summary>One row of the transfer list.</summary>
 public sealed partial class TransferItemViewModel : ObservableObject

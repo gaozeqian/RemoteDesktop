@@ -50,6 +50,23 @@ public sealed class InstallerPackageTests
             : Directory.GetFiles(artifacts, "RemoteDesktop-Client-Windows-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
     }
 
+    /// <summary>
+    /// Settings > Apps reads ARPPRODUCTICON, and the shortcut names the same icon rather than relying on the target
+    /// file's embedded one. Neither is visible in a source review of the assets; only the built package says whether
+    /// the icon table actually made it in.
+    /// </summary>
+    [Fact]
+    public void The_package_carries_the_product_icon()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        using var package = new MsiPackage(Msi!);
+
+        Assert.Contains(package.Rows("SELECT `Name` FROM `Icon`", 1), row => row[0] == "AppIcon");
+        Assert.Equal("AppIcon", Assert.Single(package.Rows("SELECT `Value` FROM `Property` WHERE `Property` = 'ARPPRODUCTICON'", 1))[0]);
+        Assert.Contains(package.Rows("SELECT `Icon_` FROM `Shortcut`", 1), row => row[0] == "AppIcon");
+    }
+
     [Fact]
     public void The_package_contains_the_payload_the_service_and_the_machine_setup_actions()
     {

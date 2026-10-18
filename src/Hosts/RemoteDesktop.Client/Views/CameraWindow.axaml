@@ -12,7 +12,7 @@
       <StackPanel Spacing="{DynamicResource RdSpaceSm}">
         <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
           <ComboBox ItemsSource="{Binding Cameras}" SelectedItem="{Binding SelectedCamera}" MinWidth="220"
-                    IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
+                    AutomationProperties.Name="摄像头" IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:CameraChoice">
                 <TextBlock Text="{Binding Name}" />
@@ -20,7 +20,7 @@
             </ComboBox.ItemTemplate>
           </ComboBox>
           <ComboBox ItemsSource="{Binding Modes}" SelectedItem="{Binding SelectedMode}" MinWidth="170"
-                    IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
+                    AutomationProperties.Name="分辨率" IsEnabled="{Binding !IsStreaming}" VerticalAlignment="Center">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:CameraModeChoice">
                 <TextBlock Text="{Binding Label}" />

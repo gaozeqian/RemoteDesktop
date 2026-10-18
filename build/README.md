@@ -129,4 +129,7 @@ pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/wind
 
 客户端图标不在这张表里：`src/Hosts/RemoteDesktop.Client/Assets/icon.svg` 是**原创矢量源**，
 `icon-*.png` 与 `icon.ico` 是提交进仓库的渲染产物。换图标时从 SVG 重新导出各尺寸；16/24 px 使用去掉支架、
-放大显示器与指针的简化版，避免细节缩成一团。不要从某个系统程序的资源段提取图标。
+放大显示器与指针的简化版，避免细节缩成一团。`icon.ico` 另外含 20/40 px 两档（Windows 在 125%/150% 缩放
+下取这两个尺寸；20 px 沿用简化版，由 24 px 高质缩放，40 px 由 48 px 高质缩放）；它们只存在于 `.ico` 中，
+不单独导出 PNG——Linux 的 hicolor 安装遍历 `icon-*.png`，而 20/40 不是标准 hicolor 尺寸。
+不要从某个系统程序的资源段提取图标。

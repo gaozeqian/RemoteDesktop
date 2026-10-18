@@ -106,6 +106,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;
+        IsHostService = !environment.ControlledEndInThisProcess;
+        ClientCodeNote = DescribeClientCode(environment.ControlledEndInThisProcess);
+        ServerAddressNote = DescribeServerAddress(environment.ControlledEndInThisProcess);
         ClientRendezvousUri = transport.RendezvousUri?.ToString() is { Length: > 0 } uri ? uri : "未配置";
 
         // The host side may live in another process (the background service), so its state is polled rather than observed.
@@ -187,6 +190,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
 
+    /// <summary>Whether the controlled end runs in the installed background service (as opposed to this process).</summary>
+    [ObservableProperty]
+    public partial bool IsHostService { get; set; }
+
+    /// <summary>Whether the 被控端信令服务器 block can be edited: an installed service that reported its address.</summary>
+    [ObservableProperty]
+    public partial bool CanEditHostServerAddress { get; set; }
+
+    /// <summary>The caption under 本机控制端代码, refreshed when the hosting mode becomes known.</summary>
+    [ObservableProperty]
+    public partial string ClientCodeNote { get; set; } = string.Empty;
+
+    /// <summary>The caption under 服务器地址, refreshed when the hosting mode becomes known.</summary>
+    [ObservableProperty]
+    public partial string ServerAddressNote { get; set; } = string.Empty;
+
     /// <summary>Shown when this computer cannot reach the signaling server: without it there is no device code at all.</summary>
     [ObservableProperty]
     public partial string? ServerHint { get; set; }
@@ -256,22 +275,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。",
         "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以仅本用户可读写的文件（0600）保存在本机。");
 
-    /// <summary>The caption under 服务器地址.</summary>
-    public static string ServerAddressNote => ByPlatform(
-        "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。",
-        "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。",
-        "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端与已安装的被控端服务会各自重启，两边一起换到新地址。");
+    /// <summary>The caption under 服务器地址. It depends on the platform and on who hosts the controlled end.</summary>
+    internal static string DescribeServerAddress(bool controlledEndInThisProcess) =>
+        OperatingSystem.IsMacOS()
+            ? "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。"
+            : controlledEndInThisProcess
+                ? OperatingSystem.IsWindows()
+                    ? "两台机器必须连同一台服务器。被控端在本进程内运行；修改地址请关闭客户端，改启动参数（--Transport:RendezvousUri）或 appsettings.json 后再启动。"
+                    : "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端会重启并生效。"
+                : OperatingSystem.IsWindows()
+                    ? "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。"
+                    : "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端与已安装的被控端服务会各自重启，两边一起换到新地址。";
 
     /// <summary>
-    /// The caption explaining 本机控制端代码. Branches by where the controlled end runs, not by operating system:
-    /// on Windows and Linux it is a background service with an identity of its own (the installed service / a
-    /// systemd --user unit), so this window's code and the home page's are two different codes — the same
-    /// situation, and therefore the Windows wording. macOS runs the controlled end inside this same process, so
-    /// there the two codes are one.
+    /// The caption explaining 本机控制端代码. It branches by where the controlled end runs, not by operating system:
+    /// a background service has an identity of its own, so the window's code and the home page's are two different
+    /// codes; a controlled end inside this process shows the same code on both.
     /// </summary>
-    public static string ClientCodeNote => OperatingSystem.IsMacOS()
-        ? "「本机控制端代码」是这台机器连出去时用的身份。macOS 上客户端与被控端是同一个进程，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。"
-        : "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。";
+    internal static string DescribeClientCode(bool controlledEndInThisProcess) =>
+        controlledEndInThisProcess
+            ? "「本机控制端代码」是这台机器连出去时用的身份。被控端在本进程内运行，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。"
+            : "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。";
 
     /// <summary>
     /// Linux only: a fixed password cannot make this machine unattended there — the desktop portal refuses to
@@ -1106,6 +1130,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             HostDetail = null;
             ServerHint = null;
             HostRendezvousUri = null;
+            CanEditHostServerAddress = false;
             return;
         }
 
@@ -1142,6 +1167,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             : OperatingSystem.IsMacOS()
                 ? "被控端在本进程内运行；开机自启请在「高级设置 → 安全」开启登录项"
                 : "被控端在本进程内运行（未安装后台服务）";
+
+        // The settings page has two sentences whose facts depend on where the controlled end runs, not on the OS: a
+        // standalone Windows client has no service, so it must not claim that this window's code differs from the
+        // home page's, nor promise a UAC prompt and a service restart. The same applies to a Linux standalone client.
+        IsHostService = status.IsService;
+        ClientCodeNote = DescribeClientCode(!status.IsService);
+        ServerAddressNote = DescribeServerAddress(!status.IsService);
+        CanEditHostServerAddress = status.IsService && !string.IsNullOrEmpty(status.RendezvousUri);
         if (OperatingSystem.IsMacOS())
         {
             // Read every poll: the state is one property on a launchd-side object, and the user may have flipped it
