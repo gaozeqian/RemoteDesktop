@@ -2,6 +2,42 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · macOS 端到端测试修复
+
+在 macOS 26.7 / Apple Silicon 上用真实签名的客户端 bundle、真实服务端与两个独立客户端实例跑端到端场景时发现的问题。
+
+### Fixed
+
+- **设置 6–7 位固定密码会让客户端直接崩溃**：窗口自己留了一份长度下限（6），而
+  `FixedPasswordPolicy.MinimumLength` 早已提高到 8。密码通过窗口校验后在 `LocalHostControl` 抛出
+  `ArgumentException`，异常从 `AsyncRelayCommand` 逃到 UI 线程，进程退出。窗口现在直接问策略
+  （`ValidateFixedPassword`），保存失败也只显示在编辑框里，不再结束进程。
+- **被控端拒绝固定密码时界面仍以为保存成功**：`PipeHostControl` 读到了服务端 `error` 应答却把它丢掉。
+  现在会把它转成异常，由界面显示；新增回归测试（旧的实现失败）。
+- **macOS 摄像头未授权时提示是英文、且不会主动询问**：控制器窗口只显示原生辅助库的
+  “Camera access has not been granted to this application.”。现在打开摄像头时若尚未授权，会先通过
+  `AVCaptureDevice requestAccessForMediaType:` 弹出系统授权框（由本机用户决定）；被拒绝后才显示
+  `TccGrants.Describe` 的中文提示。摄像头权限不需要重启应用即可生效。
+- **macOS 摄像头授权后第一次打开会把被控端进程带崩**：30 fps 的帧间隔被换算成 33333/1000000 秒
+  （30.000299 fps），略高于设备支持范围的上限 30.00，AVFoundation 抛出
+  `NSInvalidArgumentException`；原生辅助库没有兜住，进程被直接终止。帧间隔现在向上取整，保证有效
+  帧率不超过请求值；`RDCameraApplyFormat` 与 `rd_camera_start` 的 `NSException` 也都在 C 边界转成
+  普通错误返回，不再越过边界。
+- **macOS 摄像头有画面尺寸、却一帧都不出**：AVFoundation 交付 BGRA，而 `CameraModule` 只接受 NV12，
+  于是每一帧都在“格式不是 NV12”处被静默丢弃（Windows/Linux 的摄像头源本来就直接给 NV12）。
+  模块现在把 BGRA 转成 NV12 后再编码，与桌面采集走同一条转换；新增合成 BGRA 摄像头的回归测试。
+- **摄像头实际分辨率与用户选择不一致**：`startRunning` 会根据会话 preset 最后一次改写
+  `activeFormat`，选 1280×720 实际流出 1920×1080。原生层在启动后再应用一次选定的格式。
+- **摄像头授权弹窗无人应答时，控制端会在 30 秒后崩溃**：`CameraViewer` 的打开超时抛
+  `OperationCanceledException`，`CameraWindowViewModel` 没有捕获，异常从 UI 线程逃出并终止进程。
+  现在显示“被控端没有在 30 秒内响应”的提示，窗口保持可用。
+- **录制保存后的状态文本会压住工具栏按钮**：远程桌面窗口的状态区是横向 `StackPanel`，子元素按无限宽度
+  测量，`TextTrimming` 不生效，完整保存路径直接盖在“静音/录制屏幕/文件…”上。改为 `DockPanel`：
+  录制状态右对齐、限宽 520px、超出显示省略号，并带完整路径的 ToolTip。
+- **设备别名较长时，列表里的设备代码会丢掉第一位**：`TextBlock.caption` 默认换行，设备列表行右侧的
+  Auto 列被标题挤窄后，“902 226 105”显示成“002 226 105”。代码改为 `NoWrap`，需要让位时由标题省略号
+  截断。
+
 ## [未发布] · 当前平台 UI 与图标修复
 
 针对 Ubuntu 26.04 / GNOME Wayland 的实机评审，按 P0→P3 处理。

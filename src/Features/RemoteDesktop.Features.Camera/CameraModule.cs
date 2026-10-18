@@ -123,54 +123,80 @@ public sealed partial class CameraModule(
             {
                 using (frame)
                 {
-                    if (frame.Format != PixelFormat.Nv12)
+                    // Platforms do not agree on one camera format: Windows and Linux deliver NV12, AVFoundation
+                    // delivers BGRA. The encoder only takes NV12, so a BGRA frame is converted here rather than
+                    // dropped — the skip that used to stand here accepted the promise "cameras are NV12" and
+                    // silently produced no picture at all on macOS. Same conversion, and the same even-dimension
+                    // rounding, as the desktop capture path.
+                    MemoryVideoFrame? converted = null;
+                    VideoFrame picture;
+                    if (frame.Format == PixelFormat.Nv12)
                     {
-                        continue; // the ports promise NV12 for cameras; anything else cannot be encoded here
+                        picture = frame;
                     }
-
-                    var capturedAt = time.GetUtcNow();
-                    if (encoder is null || encoder.Options.Width != frame.Width || encoder.Options.Height != frame.Height)
+                    else if (frame.Format == PixelFormat.Bgra32)
                     {
-                        encoder?.Dispose();
-                        (encoder, bitrate) = CreateEncoder(frame.Width, frame.Height, mode.FrameRate, allowHardware);
-                        await SendAsync(stream, new CameraEvent
-                        {
-                            StreamInfo = new CameraStreamInfo
-                            {
-                                Width = (uint)frame.Width,
-                                Height = (uint)frame.Height,
-                                FrameRate = (uint)mode.FrameRate,
-                                CameraName = camera.Name,
-                                EncoderName = encoder.Name,
-                                HardwareEncoder = encoder.IsHardware,
-                            },
-                        }, stop.Token).ConfigureAwait(false);
-                        state.KeyFrameRequested = true;
+                        var width = frame.Width & ~1;
+                        var height = frame.Height & ~1;
+                        converted = new MemoryVideoFrame(width, height, PixelFormat.Nv12, frame.Timestamp);
+                        ColorConversion.BgraToNv12(frame.GetPixels(out var stride), stride, width, height, converted.Buffer, converted.Stride);
+                        picture = converted;
                     }
-
-                    IReadOnlyList<EncodedVideoFrame> encoded;
-                    try
+                    else
                     {
-                        encoded = encoder.Encode(frame, state.TakeKeyFrameRequest());
-                    }
-                    catch (Exception ex) when (encoder.IsHardware && ex is not OperationCanceledException)
-                    {
-                        // Drivers can fail mid-stream; continue in software from the next picture.
-                        LogEncoderFailed(logger, encoder.Name, ex);
-                        allowHardware = false;
-                        encoder.Dispose();
-                        encoder = null;
                         continue;
                     }
 
-                    foreach (var unit in encoded)
+                    try
                     {
-                        var sendStarted = clock.Elapsed;
-                        await VideoDataFrame.WriteAsync(stream, unit, capturedAt, stop.Token).ConfigureAwait(false);
-                        if (bitrate!.OnFrameSent(clock.Elapsed - sendStarted, clock.Elapsed) is { } kbps)
+                        var capturedAt = time.GetUtcNow();
+                        if (encoder is null || encoder.Options.Width != picture.Width || encoder.Options.Height != picture.Height)
                         {
-                            encoder.SetBitrate(kbps);
+                            encoder?.Dispose();
+                            (encoder, bitrate) = CreateEncoder(picture.Width, picture.Height, mode.FrameRate, allowHardware);
+                            await SendAsync(stream, new CameraEvent
+                            {
+                                StreamInfo = new CameraStreamInfo
+                                {
+                                    Width = (uint)picture.Width,
+                                    Height = (uint)picture.Height,
+                                    FrameRate = (uint)mode.FrameRate,
+                                    CameraName = camera.Name,
+                                    EncoderName = encoder.Name,
+                                    HardwareEncoder = encoder.IsHardware,
+                                },
+                            }, stop.Token).ConfigureAwait(false);
+                            state.KeyFrameRequested = true;
                         }
+
+                        IReadOnlyList<EncodedVideoFrame> encoded;
+                        try
+                        {
+                            encoded = encoder.Encode(picture, state.TakeKeyFrameRequest());
+                        }
+                        catch (Exception ex) when (encoder.IsHardware && ex is not OperationCanceledException)
+                        {
+                            // Drivers can fail mid-stream; continue in software from the next picture.
+                            LogEncoderFailed(logger, encoder.Name, ex);
+                            allowHardware = false;
+                            encoder.Dispose();
+                            encoder = null;
+                            continue;
+                        }
+
+                        foreach (var unit in encoded)
+                        {
+                            var sendStarted = clock.Elapsed;
+                            await VideoDataFrame.WriteAsync(stream, unit, capturedAt, stop.Token).ConfigureAwait(false);
+                            if (bitrate!.OnFrameSent(clock.Elapsed - sendStarted, clock.Elapsed) is { } kbps)
+                            {
+                                encoder.SetBitrate(kbps);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        converted?.Dispose();
                     }
                 }
             }

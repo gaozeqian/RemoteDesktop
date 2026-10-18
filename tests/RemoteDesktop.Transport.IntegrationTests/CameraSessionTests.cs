@@ -10,6 +10,7 @@ using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.MacOS.Video;
 using RemoteDesktop.Platform.Windows.Camera;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Protocol;
@@ -104,6 +105,36 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         Assert.True(viewer.CopyLatestFrame(bgra, 640 * 4, 640, 480) > 0);
 
         // The synthetic picture is red on the left, blue on the right (BGRA order).
+        var left = ((240 * 640) + 160) * 4;
+        var right = ((240 * 640) + 480) * 4;
+        Assert.InRange(bgra[left + 2], 170, 255);
+        Assert.InRange(bgra[right + 0], 170, 255);
+        Assert.InRange(bgra[right + 2], 0, 90);
+    }
+
+    [Fact]
+    public async Task A_BGRA_camera_is_converted_instead_of_being_dropped()
+    {
+        // AVFoundation delivers BGRA; the Windows and Linux sources deliver NV12. The module used to skip anything
+        // that was not NV12, so on macOS the camera opened, reported a picture size, and then never produced a
+        // frame — the host log said "camera opened" and nothing else. This test would have timed out there.
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS(),
+            "This test needs the H.264 codecs of one of these platforms.");
+        var codecs = CreateCodecs();
+        await using var pair = await Pair.StartAsync(server, allowCamera: true);
+        pair.Source.Format = PixelFormat.Bgra32;
+
+        var frames = 0;
+        await using var viewer = await CameraViewer.StartAsync(pair.Session.Context.Connection, codecs, "front", Vga, TimeProvider.System, NullLogger.Instance, Ct);
+        viewer.FrameReady += (_, _) => Interlocked.Increment(ref frames);
+        await WaitUntilAsync(() => Volatile.Read(ref frames) >= 10);
+
+        Assert.Equal((640, 480), (viewer.Details!.Width, viewer.Details.Height));
+        var bgra = new byte[640 * 480 * 4];
+        Assert.True(viewer.CopyLatestFrame(bgra, 640 * 4, 640, 480) > 0);
+
+        // The synthetic picture is red on the left and blue on the right, in BGRA byte order.
         var left = ((240 * 640) + 160) * 4;
         var right = ((240 * 640) + 480) * 4;
         Assert.InRange(bgra[left + 2], 170, 255);
@@ -240,8 +271,15 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         TestContext.Current.SendDiagnosticMessage($"decoded picture: {bgra.Where((_, i) => i % 4001 == 0).Distinct().Count()} distinct sampled values");
     }
 
+    /// <summary>
+    /// The H.264 codecs of the platform this runs on. Most camera tests are Windows-only for other reasons (Media
+    /// Foundation sources, installer details); the synthetic-camera path is not, and macOS is the platform whose
+    /// camera source delivers BGRA, so it has to be able to run there.
+    /// </summary>
     private static VideoCodecSelector CreateCodecs() =>
-        new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+        OperatingSystem.IsMacOS()
+            ? new([new VideoToolboxH264EncoderFactory(hardware: false)], [new VideoToolboxH264DecoderFactory()])
+            : new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
@@ -303,6 +341,9 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
 
         public int FailAfterFrames { get; set; } = int.MaxValue;
 
+        /// <summary>What this camera delivers. AVFoundation delivers BGRA; the Windows and Linux sources NV12.</summary>
+        public PixelFormat Format { get; set; } = PixelFormat.Nv12;
+
         public async IAsyncEnumerable<VideoFrame> CaptureAsync(CameraMode mode, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             Volatile.Write(ref _capturing, 1);
@@ -327,11 +368,31 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        private static MemoryVideoFrame Picture(int width, int height, int index)
+        private MemoryVideoFrame Picture(int width, int height, int index)
         {
-            var frame = new MemoryVideoFrame(width, height, PixelFormat.Nv12, TimeSpan.FromMilliseconds(index * 33));
+            var frame = new MemoryVideoFrame(width, height, Format, TimeSpan.FromMilliseconds(index * 33));
             var buffer = frame.Buffer;
             var bar = (index * 8) % width;
+
+            if (Format == PixelFormat.Bgra32)
+            {
+                for (var y = 0; y < height; y++)
+                {
+                    for (var x = 0; x < width; x++)
+                    {
+                        var left = x < width / 2;
+                        var highlight = y < 20 && Math.Abs(x - bar) < 10;
+                        var p = (y * frame.Stride) + (x * 4);
+                        buffer[p] = (byte)(highlight ? 235 : left ? 0 : 255); // B
+                        buffer[p + 1] = (byte)(highlight ? 235 : 0); // G
+                        buffer[p + 2] = (byte)(highlight ? 235 : left ? 255 : 0); // R
+                        buffer[p + 3] = 255; // A
+                    }
+                }
+
+                return frame;
+            }
+
             for (var y = 0; y < height; y++)
             {
                 for (var x = 0; x < width; x++)

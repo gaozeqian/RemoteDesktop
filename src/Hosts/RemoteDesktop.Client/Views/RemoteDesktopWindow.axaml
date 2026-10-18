@@ -9,13 +9,20 @@
   <DockPanel>
     <Border DockPanel.Dock="Top" Classes="toolbar">
       <Grid ColumnDefinitions="*,Auto">
-        <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceMd}" VerticalAlignment="Center">
+        <!--
+          A DockPanel rather than a horizontal StackPanel: a horizontal StackPanel measures its children with
+          infinite width, so neither TextBlock ever trims. The recording message (a full path plus frame count)
+          then ran underneath the buttons, which is exactly what happened the first time a recording was saved.
+          Docking it right with a ceiling leaves the stream status the rest of the row; both trim.
+        -->
+        <DockPanel LastChildFill="True" VerticalAlignment="Center">
+          <TextBlock DockPanel.Dock="Right" Text="{Binding RecordingStatusMessage}" Foreground="{DynamicResource RdWarningBrush}"
+                     FontSize="{DynamicResource RdFontCaption}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                     MaxWidth="520" Margin="12,0,0,0" ToolTip.Tip="{Binding RecordingStatusMessage}"
+                     IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           <TextBlock Text="{Binding StatusText}" Classes="secondary" FontSize="{DynamicResource RdFontCaption}"
                      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-          <TextBlock Text="{Binding RecordingStatusMessage}" Foreground="{DynamicResource RdWarningBrush}"
-                     FontSize="{DynamicResource RdFontCaption}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                     IsVisible="{Binding RecordingStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </DockPanel>
 
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" Margin="12,0,0,0">
           <!-- Display and sound -->

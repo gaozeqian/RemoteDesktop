@@ -55,7 +55,7 @@ public static partial class HostControlHandler
                     {
                         // The rule is the service's, not the window's; the answer carries the reason back.
                         LogRefusedFixedPassword(logger, ex.Message);
-                        await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("error", ex.Message), timeout.Token).ConfigureAwait(false);
+                        await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(HostControlProtocol.ErrorCommand, ex.Message), timeout.Token).ConfigureAwait(false);
                     }
 
                     break;

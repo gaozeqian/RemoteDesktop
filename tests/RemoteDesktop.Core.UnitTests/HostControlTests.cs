@@ -82,6 +82,25 @@ public class HostControlTests
     }
 
     [Fact]
+    public async Task A_refused_fixed_password_reaches_the_caller_instead_of_looking_saved()
+    {
+        // The service answers "error" when its policy refuses the password. The client used to read the answer and
+        // discard it, so the window closed as if the password had been stored while the host still had the old one.
+        var control = new FakeHostControl { RefuseFixedPassword = true };
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName);
+
+        var refusal = await Assert.ThrowsAsync<ArgumentException>(() => client.SetFixedPasswordAsync("short", Ct));
+        Assert.Contains("at least", refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(control.FixedPassword);
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
     public async Task The_ui_can_stop_the_camera_of_one_session()
     {
         var control = new FakeHostControl();
@@ -205,8 +224,16 @@ public class HostControlTests
 
         public string? FixedPassword { get; private set; }
 
+        /// <summary>Stands in for a service whose policy is newer than the window's: the refusal is the service's.</summary>
+        public bool RefuseFixedPassword { get; init; }
+
         public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
         {
+            if (RefuseFixedPassword)
+            {
+                throw new ArgumentException("A fixed password must be at least 8 characters.", nameof(password));
+            }
+
             FixedPassword = password;
             return Task.CompletedTask;
         }

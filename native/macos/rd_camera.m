@@ -25,6 +25,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <float.h>
+#import <math.h>
 #import <os/lock.h>
 
 /// Fills the caller's message buffer, tolerating a null or zero-length buffer.
@@ -231,10 +232,31 @@ static BOOL RDCameraApplyFormat(AVCaptureDevice *device,
 
         const double clamped = RDCameraClampFrameRate(format, frameRate);
         if (clamped > 0) {
-            const CMTime duration = CMTimeMakeWithSeconds(1.0 / clamped, 1000000);
+            // Round the duration UP, never to nearest. AVFoundation checks the duration against the format's
+            // supported range, and 1/30 s rounded to this timescale is 33333/1000000 = 0.033333 s — a frame rate
+            // of 30.0003, a hair above the range's 30.00 maximum. It refuses that with an NSException, which is
+            // not an NSError and therefore terminates the process rather than failing the call (observed with
+            // the built-in MacBook Pro camera). Ceiling keeps the effective rate at or below what was asked for.
+            const int64_t timescale = 1000000;
+            const int64_t value = (int64_t)ceil((1.0 / clamped) * (double)timescale);
+            const CMTime duration = CMTimeMake(value, timescale);
             device.activeVideoMinFrameDuration = duration;
             device.activeVideoMaxFrameDuration = duration;
         }
+    } @catch (NSException *exception) {
+        // The header promises no exceptions cross this boundary. AVFoundation still raises one for a value it
+        // does not like, and an uncaught Objective-C exception takes the whole process down, so it is converted
+        // into the same NSError-shaped failure as every other refusal here.
+        if (outError != NULL) {
+            *outError = [NSError errorWithDomain:@"com.remotedesktop.camera"
+                                            code:AVErrorUnknown
+                                        userInfo:@{
+                                            NSLocalizedDescriptionKey:
+                                                exception.reason ?: @"The camera rejected the requested format."
+                                        }];
+        }
+
+        return NO;
     } @finally {
         [device unlockForConfiguration];
     }
@@ -304,6 +326,9 @@ static BOOL RDCameraApplyFormat(AVCaptureDevice *device,
 @property (nonatomic, strong) AVCaptureVideoDataOutput *output;
 @property (nonatomic, strong) RDCameraOutput *delegate;
 @property (nonatomic, strong) dispatch_queue_t queue;
+@property (nonatomic, strong) AVCaptureDevice *device;
+@property (nonatomic, strong) AVCaptureDeviceFormat *format;
+@property (nonatomic, assign) double frameRate;
 @property (nonatomic, assign) BOOL started;
 @end
 
@@ -570,6 +595,9 @@ int rd_camera_create(const char *id,
         camera.output = output;
         camera.delegate = delegate;
         camera.queue = queue;
+        camera.device = device;
+        camera.format = format;
+        camera.frameRate = frame_rate;
 
         *out = (__bridge_retained void *)camera;
         return RD_OK;
@@ -589,8 +617,28 @@ int rd_camera_start(rd_camera_ref handle, char *error, size_t error_size)
     }
 
     // startRunning is synchronous and can take a noticeable moment while the device spins up, which is why the
-    // header says not to call this from the main thread.
-    [camera.session startRunning];
+    // header says not to call this from the main thread. It can also raise rather than return an error when the
+    // session is in a state it refuses; the C boundary must report that, not let it kill the process.
+    @try {
+        [camera.session startRunning];
+    } @catch (NSException *exception) {
+        RDCameraSetError(error, error_size, exception.reason ?: @"The camera session could not be started.");
+        return RD_ERROR_UNAVAILABLE;
+    }
+
+    // Apply the chosen format once more, now that the session is running. The first application happens after
+    // commitConfiguration (see rd_camera_create), which is enough to make it stick for a session that is not yet
+    // running — but startRunning re-derives the device format from the session preset one last time. Without this
+    // second application a request for 1280x720 came back as 1920x1080, and the controller's mode picker was
+    // describing something the stream was not. Changing the format on a running session is allowed; the output
+    // delivers the next pictures in the new size, which the module already handles as a stream change.
+    NSError *formatError = nil;
+    if (!RDCameraApplyFormat(camera.device, camera.format, camera.frameRate, &formatError)) {
+        [camera.session stopRunning];
+        RDCameraSetError(error, error_size, formatError.localizedDescription ?: @"The camera rejected the requested format.");
+        return RD_ERROR_UNAVAILABLE;
+    }
+
     camera.started = YES;
     return RD_OK;
 }

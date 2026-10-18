@@ -35,8 +35,24 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) =>
         _ = await RequestAsync<HostControlRequest>(HostControlProtocol.CameraStopCommand, sessionId, cancellationToken).ConfigureAwait(false);
 
-    public async Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.FixedPasswordCommand, password, cancellationToken).ConfigureAwait(false);
+    public async Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
+    {
+        var answer = await RequestAsync<HostControlRequest>(HostControlProtocol.FixedPasswordCommand, password, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The service validates the password against the policy it was built with, and answers "error" with the
+        // reason. Discarding that answer made a refused password look saved; the window's own validation is a
+        // courtesy, not the authority.
+        if (answer is null)
+        {
+            throw new InvalidDataException("The host service sent no answer to the fixed-password command.");
+        }
+
+        if (string.Equals(answer.Command, HostControlProtocol.ErrorCommand, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(answer.Argument ?? "The host refused the fixed password.");
+        }
+    }
 
     private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {

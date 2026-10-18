@@ -655,18 +655,49 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsEditingFixedPassword = false;
     }
 
+    /// <summary>
+    /// The rule for a new fixed password, asked of the policy the host enforces rather than restated here.
+    /// </summary>
+    /// <remarks>
+    /// The window used to hold its own copy of the number — 6 — while <see cref="FixedPasswordPolicy.MinimumLength"/>
+    /// had been raised to 8. A 6- or 7-character password therefore passed this check, reached the host, and the
+    /// refusal escaped the command onto the UI thread and killed the process. One source of truth; and a refusal
+    /// that still arrives is shown, never thrown.
+    /// </remarks>
+    /// <returns>The error to show, or <see langword="null"/> when the password may be saved.</returns>
+    public static string? ValidateFixedPassword(string? password) =>
+        FixedPasswordPolicy.IsAcceptable(password)
+            ? null
+            : $"固定密码长度至少需要 {FixedPasswordPolicy.MinimumLength} 个字符。";
+
     [RelayCommand]
     private async Task SaveFixedPasswordAsync()
     {
         var password = NewFixedPassword?.Trim();
-        if (string.IsNullOrEmpty(password) || password.Length < 6)
+        if (ValidateFixedPassword(password) is { } validationError)
         {
-            FixedPasswordError = "固定密码长度至少需要 6 个字符。";
+            FixedPasswordError = validationError;
             return;
         }
 
         FixedPasswordError = null;
-        await _hostControl.SetFixedPasswordAsync(password, CancellationToken.None);
+        try
+        {
+            // The host applies the same policy, but it is the authority. A build whose policy is newer than this
+            // window's refuses here, and the refusal has to stay in the editor rather than end the process.
+            await _hostControl.SetFixedPasswordAsync(password, CancellationToken.None);
+        }
+        catch (ArgumentException)
+        {
+            FixedPasswordError = "被控端拒绝了该固定密码。";
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException)
+        {
+            FixedPasswordError = $"{HostUnreachable}，固定密码未保存。";
+            return;
+        }
+
         IsEditingFixedPassword = false;
         NewFixedPassword = string.Empty;
         await RefreshHostStatusAsync();
@@ -675,7 +706,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task ClearFixedPasswordAsync()
     {
-        await _hostControl.SetFixedPasswordAsync(null, CancellationToken.None);
+        try
+        {
+            await _hostControl.SetFixedPasswordAsync(null, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException)
+        {
+            FixedPasswordError = $"{HostUnreachable}，固定密码未更改。";
+            return;
+        }
+
         IsEditingFixedPassword = false;
         NewFixedPassword = string.Empty;
         FixedPasswordError = null;

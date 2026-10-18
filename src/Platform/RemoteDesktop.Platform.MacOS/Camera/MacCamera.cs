@@ -178,6 +178,17 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
 
         try
         {
+            // Ask before opening. On a machine where the question was never answered, macOS shows its own prompt
+            // naming this app, and the person at the keyboard decides — only they can, since the camera is theirs.
+            // Request blocks on this thread (deliberately not the UI thread) until they answer, and returns at once
+            // when the answer is already known (denied or restricted). No restart is needed afterwards: unlike
+            // Screen Recording, this grant is read on every open. If the answer is still no, the sentence below
+            // names the pane where it can be changed; the native helper's own text is English and says less.
+            if (!TccGrants.IsGranted(TccGrant.Camera) && !TccGrants.Request(TccGrant.Camera))
+            {
+                throw new CameraUnavailableException(TccGrants.Describe(TccGrant.Camera));
+            }
+
             handle = Create(mode, sinkHandle);
             Start(handle);
             started.TrySetResult();

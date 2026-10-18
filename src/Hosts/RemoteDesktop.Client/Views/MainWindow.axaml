@@ -213,8 +213,13 @@
                       <StackPanel Grid.Column="1" Spacing="3">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                           <TextBlock Text="{Binding ListTitle}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                          <!-- Only worth showing when the title is an alias; otherwise the title already is the code. -->
-                          <TextBlock Grid.Column="1" Text="{Binding FormattedId}" Classes="caption"
+                          <!--
+                            Only worth showing when the title is an alias; otherwise the title already is the code.
+                            NoWrap on purpose: caption wraps by default, and with a long alias the Auto column squeezed
+                            the code until its first digit was clipped ("902 226 105" read "002 226 105"). The code is
+                            the part that must stay whole; the title next to it already trims with an ellipsis.
+                          -->
+                          <TextBlock Grid.Column="1" Text="{Binding FormattedId}" Classes="caption" TextWrapping="NoWrap"
                                      IsVisible="{Binding Alias, Converter={x:Static ObjectConverters.IsNotNull}}" />
                         </Grid>
                         <TextBlock Text="{Binding LastConnectedText}" Classes="caption" />

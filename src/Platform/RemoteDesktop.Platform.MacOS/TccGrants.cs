@@ -103,9 +103,11 @@ public static class TccGrants
         TccGrant.Accessibility =>
             "远程桌面需要「辅助功能」权限才能把鼠标键盘事件发送给其他应用。"
             + "请在「系统设置 → 隐私与安全性 → 辅助功能」中勾选本应用。",
+        // No restart here, unlike Screen Recording: AVCaptureDevice reports a changed camera decision to the
+        // running process, so the next open uses it. Asking for a restart would be a step that changes nothing.
         TccGrant.Camera =>
             "远程桌面需要「摄像头」权限才能把本机摄像头画面转发给远端会话。"
-            + "请在「系统设置 → 隐私与安全性 → 摄像头」中勾选本应用，然后重新启动应用。",
+            + "请在「系统设置 → 隐私与安全性 → 摄像头」中允许本应用。",
         _ => throw new ArgumentOutOfRangeException(nameof(grant)),
     };
 }

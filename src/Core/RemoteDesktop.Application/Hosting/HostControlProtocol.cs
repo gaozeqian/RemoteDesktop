@@ -21,6 +21,9 @@ public static class HostControlProtocol
     public const string CameraStopCommand = "camera-stop";
     public const string FixedPasswordCommand = "fixed-password";
 
+    /// <summary>The service refused a command; the argument carries the reason.</summary>
+    public const string ErrorCommand = "error";
+
     /// <summary>Requests and responses are a few hundred bytes; anything bigger is not from us.</summary>
     public const int MaxLineBytes = 16 * 1024;
 
