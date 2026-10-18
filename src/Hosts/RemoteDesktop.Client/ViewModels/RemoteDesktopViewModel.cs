@@ -16,7 +16,12 @@ using RemoteDesktop.Transport;
 namespace RemoteDesktop.Client.ViewModels;
 
 /// <summary>A display of the host that can be streamed.</summary>
-public sealed record DisplayChoice(string Id, string Label);
+public sealed record DisplayChoice(string Id, string Label)
+{
+    // The ComboBox automation peer uses ToString for the collapsed value; without this it read
+    // "DisplayChoice { Id = …, Label = … }" instead of the display the user had selected.
+    public override string ToString() => Label;
+}
 
 /// <summary>One remote desktop window: the video stream, the input path, audio, clipboard and the session they belong to.</summary>
 public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDisposable

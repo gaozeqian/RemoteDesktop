@@ -27,7 +27,8 @@
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}" Margin="12,0,0,0">
           <!-- Display and sound -->
           <ComboBox ItemsSource="{Binding Displays}" SelectedItem="{Binding SelectedDisplay}" IsVisible="{Binding ShowDisplayPicker}"
-                    MinWidth="200" FontSize="{DynamicResource RdFontCaption}" VerticalAlignment="Center">
+                    MinWidth="200" FontSize="{DynamicResource RdFontCaption}" VerticalAlignment="Center"
+                    AutomationProperties.Name="显示器">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="vm:DisplayChoice">
                 <TextBlock Text="{Binding Label}" />

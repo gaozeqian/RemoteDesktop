@@ -58,4 +58,42 @@ public class DxgiCaptureTests
                 $"Captured {frame.Width}x{frame.Height} in {captureMs:0.0} ms, BGRA→NV12 {stopwatch.Elapsed.TotalMilliseconds:0.0} ms");
         }
     }
+
+    /// <summary>
+    /// Every attached output is capturable at its own size, including one that starts at a negative desktop X (a
+    /// monitor placed left of the primary). Windows allows one duplication per output per process; one after another
+    /// here is what proves the second output is not simply the first one's size.
+    /// </summary>
+    [Fact]
+    public async Task Captures_every_attached_display_at_its_own_size()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "DXGI is Windows only.");
+        var displays = new DxgiDisplayEnumerator().GetDisplays();
+        Assert.SkipWhen(displays.Count == 0, "No display attached.");
+
+        foreach (var display in displays)
+        {
+            DxgiScreenCapturer capturer;
+            try
+            {
+                capturer = new DxgiScreenCapturer(display);
+            }
+            catch (SharpGenException ex)
+            {
+                Assert.Skip($"Desktop duplication unavailable for {display.Id}: {ex.Message}");
+                return;
+            }
+
+            await using (capturer)
+            {
+                using var frame = await capturer.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+                Assert.NotNull(frame);
+                Assert.Equal(PixelFormat.Bgra32, frame.Format);
+                Assert.Equal(display.Bounds.Width, frame.Width);
+                Assert.Equal(display.Bounds.Height, frame.Height);
+                TestContext.Current.SendDiagnosticMessage(
+                    $"{display.Id} ({display.Bounds.X},{display.Bounds.Y}) captured {frame.Width}x{frame.Height}");
+            }
+        }
+    }
 }
