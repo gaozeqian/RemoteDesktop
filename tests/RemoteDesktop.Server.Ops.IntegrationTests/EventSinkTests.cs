@@ -61,6 +61,38 @@ public class EventSinkTests
     }
 
     [Fact]
+    public async Task The_sink_accepts_the_console_base_address_from_the_deployment_document()
+    {
+        var key = RandomNumberGenerator.GetBytes(32);
+        await using var consumer = await Consumer.StartAsync();
+
+        // What docs/ops/README.md tells an operator to configure: the console's address, no /ingest/events.
+        using var sink = new HttpOpsEventSink(
+            consumer.Url,
+            Convert.ToBase64String(key),
+            "k1",
+            "rendezvous-test",
+            NullLogger<HttpOpsEventSink>.Instance);
+
+        await sink.StartAsync(Ct);
+        sink.Publish(new OpsEventEnvelope
+        {
+            EventId = Guid.CreateVersion7().ToString("D"),
+            Node = "rendezvous-test",
+            Kind = OpsEventKinds.SessionRequested,
+            OccurredAt = DateTimeOffset.UtcNow,
+            CorrelationId = Guid.NewGuid().ToString("D"),
+            Payload = """{"controllerDeviceId":1,"hostDeviceId":2}""",
+        });
+
+        var delivery = await consumer.Received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        var events = JsonSerializer.Deserialize<List<OpsEventEnvelope>>(delivery.Body, OpsEventJson.Options);
+        Assert.Equal(OpsEventKinds.SessionRequested, Assert.Single(events!).Kind);
+
+        await sink.StopAsync(Ct);
+    }
+
+    [Fact]
     public async Task A_sink_without_an_endpoint_is_the_no_op_one()
     {
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();

@@ -42,6 +42,24 @@ public class RelayBindTests
     }
 
     [Fact]
+    public async Task A_pairing_that_goes_idle_is_reaped_without_another_packet()
+    {
+        await using var relay = await TestRelay.StartAsync(cleanupInterval: TimeSpan.FromMilliseconds(100));
+
+        Assert.True(await relay.BindAsync(RelayRole.Controller));
+        Assert.True(await relay.BindAsync(RelayRole.Host));
+        Assert.Equal(1, relay.Relay.ActivePairings);
+
+        // Both peers now go silent. The sweep used to run only after an incoming packet, so nothing would ever
+        // remove this pairing; the relay's own timer has to do it.
+        relay.Advance(TimeSpan.FromMinutes(3));
+
+        Assert.True(
+            await WaitUntilAsync(() => relay.Relay.ActivePairings == 0, TimeSpan.FromSeconds(5)),
+            "an idle pairing must be swept on the relay's timer, not on the next packet");
+    }
+
+    [Fact]
     public async Task A_token_issued_for_another_address_is_not_accepted()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -71,16 +89,22 @@ public class RelayBindTests
         private readonly Task _loop;
         private readonly UdpClient _client;
 
+        private readonly FakeTimeProvider _time;
+
         private TestRelay(UdpRelay relay, UdpClient client, byte[] ticket, FakeTimeProvider time)
         {
             Relay = relay;
             _client = client;
             Ticket = ticket;
+            _time = time;
             Now = time.GetUtcNow();
             _loop = relay.RunAsync(_stop.Token);
         }
 
         public UdpRelay Relay { get; }
+
+        /// <summary>Moves the clock the relay reads for activity timestamps.</summary>
+        public void Advance(TimeSpan by) => _time.Advance(by);
 
         public byte[] Ticket { get; }
 
@@ -88,10 +112,18 @@ public class RelayBindTests
 
         public IPEndPoint ClientEndPoint => (IPEndPoint)_client.Client.LocalEndPoint!;
 
-        public static Task<TestRelay> StartAsync()
+        public static Task<TestRelay> StartAsync(TimeSpan? cleanupInterval = null)
         {
             var time = new FakeTimeProvider();
-            var relay = new UdpRelay(new IPEndPoint(IPAddress.Loopback, 0), Key, TimeSpan.FromMinutes(2), time, new NoopOpsEventSink(), "relay-test", NullLogger<UdpRelay>.Instance);
+            var relay = new UdpRelay(
+                new IPEndPoint(IPAddress.Loopback, 0),
+                Key,
+                TimeSpan.FromMinutes(2),
+                time,
+                new NoopOpsEventSink(),
+                "relay-test",
+                NullLogger<UdpRelay>.Instance,
+                cleanupInterval);
             var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
             var ticket = new RelayTicket(Guid.NewGuid(), time.GetUtcNow() + TimeSpan.FromMinutes(2)).Sign(Key);
             return Task.FromResult(new TestRelay(relay, client, ticket, time));
@@ -143,6 +175,22 @@ public class RelayBindTests
             Relay.Dispose();
             _stop.Dispose();
         }
+    }
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(25), Ct);
+        }
+
+        return condition();
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

@@ -64,7 +64,18 @@ public class SessionTelemetryTests
         Assert.Contains("version", error, StringComparison.Ordinal);
 
         Assert.False(SessionTelemetry.TryCreate(
-            SessionId, null, "host", "control", "direct", 0, "windows", new string('9', 40), out _, out _));
+            SessionId, null, "host", "control", "direct", 0, "windows", new string('9', 80), out _, out _));
+    }
+
+    [Fact]
+    public void The_version_the_product_actually_reports_is_accepted()
+    {
+        // AssemblyInformationalVersion is "0.3.0+<40-char commit hash>"; that is 46 characters, not a payload.
+        Assert.True(SessionTelemetry.TryCreate(
+            SessionId, null, "host", "control", "direct", 0, "windows",
+            "0.3.0+db9820fe0cb5d3dc26e1f292ae8d49c6e886469b", out var telemetry, out var error));
+        Assert.Empty(error);
+        Assert.StartsWith("0.3.0+", telemetry.Version, StringComparison.Ordinal);
     }
 
     [Fact]

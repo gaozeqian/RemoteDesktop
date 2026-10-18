@@ -130,6 +130,27 @@ public sealed partial class OpsStore
         return rows;
     }
 
+    /// <summary>
+    /// Every alert still open, across all rules. The evaluator reads this to find alerts whose signal has disappeared —
+    /// a deleted node, a disabled rule, or a rule that was removed — because those can never be resolved by comparing
+    /// a current reading with a threshold.
+    /// </summary>
+    public async Task<IReadOnlyList<OpsAlertRow>> ListOpenAlertsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {AlertColumns} FROM ops_alert WHERE state = 'open' ORDER BY opened_at;";
+
+        var rows = new List<OpsAlertRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(ReadAlert(reader));
+        }
+
+        return rows;
+    }
+
     /// <summary>The open alert for <paramref name="dedupeKey"/>, if one exists.</summary>
     public async Task<OpsAlertRow?> FindOpenAlertAsync(string dedupeKey, CancellationToken cancellationToken = default)
     {

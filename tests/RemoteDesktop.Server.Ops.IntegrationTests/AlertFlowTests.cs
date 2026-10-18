@@ -76,6 +76,43 @@ public class AlertFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtu
     }
 
     [Fact]
+    public async Task Deleting_the_failing_node_resolves_the_alert_it_opened()
+    {
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var ruleId = await CreateRuleAsync(client, cookies);
+            var nodeId = await CreateFailingNodeAsync(client, cookies);
+
+            var scraper = fixture.Services.GetRequiredService<MetricScraper>();
+            await scraper.RunOnceAsync(Ct);
+
+            var evaluation = fixture.Services.GetRequiredService<AlertEvaluationService>();
+            await evaluation.RunOnceAsync(Ct);
+
+            var alerts = await client.GetFromJsonAsync<List<AlertDto>>("/api/alerts?limit=50", Ct);
+            var alert = Assert.Single(alerts!, item => item.RuleId == ruleId && item.Active);
+
+            // Deletion removes the signal entirely; the state machine can no longer see this node, and before the
+            // stale-alert pass the row stayed open for the life of the database.
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            using (var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/nodes/{nodeId}"))
+            {
+                delete.Headers.Add("X-Ops-CSRF", csrf);
+                Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(delete, Ct)).StatusCode);
+            }
+
+            await evaluation.RunOnceAsync(Ct);
+
+            var resolved = Assert.Single(
+                (await client.GetFromJsonAsync<List<AlertDto>>("/api/alerts?limit=50", Ct))!,
+                item => item.Id == alert.Id);
+            Assert.False(resolved.Active);
+            Assert.NotNull(resolved.ResolvedAt);
+        }
+    }
+
+    [Fact]
     public async Task The_audit_log_records_the_acknowledgement_and_its_chain_verifies()
     {
         var (client, cookies) = await SignInAsync();

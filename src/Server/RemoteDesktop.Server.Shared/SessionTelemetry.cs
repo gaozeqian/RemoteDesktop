@@ -21,8 +21,11 @@ namespace RemoteDesktop.Server.Shared;
 /// </remarks>
 public sealed partial record SessionTelemetry
 {
-    /// <summary>Longest version string accepted; the product version is well under this.</summary>
-    public const int MaxVersionLength = 32;
+    /// <summary>
+    /// Longest version string accepted. The product's informational version carries the commit hash appended after
+    /// <c>+</c>, which makes the ordinary build about 46 characters — a limit of 32 refused every real heartbeat.
+    /// </summary>
+    public const int MaxVersionLength = 64;
 
     /// <summary>Largest RTT accepted. Beyond this the session is not alive; the number is a client's invention.</summary>
     public const int MaxRttMilliseconds = 60_000;

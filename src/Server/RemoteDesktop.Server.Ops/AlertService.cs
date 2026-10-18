@@ -31,20 +31,21 @@ public sealed partial class AlertService(
     public async Task<(int Opened, int Resolved)> EvaluateOnceAsync(CancellationToken cancellationToken)
     {
         var rules = await store.ListAlertRulesAsync(cancellationToken).ConfigureAwait(false);
-        if (rules.Count == 0)
-        {
-            return (0, 0);
-        }
-
         var nodes = await store.ListNodesAsync(cancellationToken).ConfigureAwait(false);
         var now = time.GetUtcNow();
         var opened = 0;
         var resolved = 0;
 
+        // Every dedupe key this pass actually looked at. An open alert outside this set has no signal behind it at
+        // all: its node was deleted, its rule was disabled, or the rule itself is gone. Comparing a current reading
+        // with a threshold cannot reach those, so they would otherwise stay open forever.
+        var observed = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var rule in rules.Where(rule => rule.Enabled))
         {
             foreach (var (dedupeKey, firing, value) in await SignalsAsync(rule, nodes, now, cancellationToken).ConfigureAwait(false))
             {
+                observed.Add(dedupeKey);
                 var open = await store.FindOpenAlertAsync(dedupeKey, cancellationToken).ConfigureAwait(false);
                 var decision = machine.Observe(dedupeKey, firing, rule.ForSeconds, open is not null);
 
@@ -65,7 +66,7 @@ public sealed partial class AlertService(
 
                     await store.OpenAlertAsync(alert, cancellationToken).ConfigureAwait(false);
                     await AuditAsync("alert.open", rule.Name, rule.Severity, now, cancellationToken).ConfigureAwait(false);
-                    await NotifyAsync(alert, rule, "opened", cancellationToken).ConfigureAwait(false);
+                    await NotifyAsync(alert, rule.Name, rule.Severity, "opened", cancellationToken).ConfigureAwait(false);
                     opened++;
                 }
                 else if (decision == AlertDecision.Resolve && open is not null)
@@ -73,11 +74,32 @@ public sealed partial class AlertService(
                     if (await store.ResolveAlertAsync(open.Id, now.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false))
                     {
                         await AuditAsync("alert.resolve", rule.Name, open.Id, now, cancellationToken).ConfigureAwait(false);
-                        await NotifyAsync(open, rule, "resolved", cancellationToken).ConfigureAwait(false);
+                        await NotifyAsync(open, rule.Name, rule.Severity, "resolved", cancellationToken).ConfigureAwait(false);
                         resolved++;
                     }
                 }
             }
+        }
+
+        var rulesById = rules.ToDictionary(rule => rule.Id, StringComparer.Ordinal);
+        foreach (var orphan in await store.ListOpenAlertsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (observed.Contains(orphan.DedupeKey))
+            {
+                continue;
+            }
+
+            if (!await store.ResolveAlertAsync(orphan.Id, now.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // The rule may have been deleted along with the node that opened the alert; the dedupe key is the only
+            // name left, and a resolved notification with an id in it is better than a permanent open one.
+            var name = rulesById.TryGetValue(orphan.RuleId, out var rule) ? rule.Name : orphan.DedupeKey;
+            await AuditAsync("alert.resolve", name, orphan.Id, now, cancellationToken).ConfigureAwait(false);
+            await NotifyAsync(orphan, name, orphan.Severity, "resolved", cancellationToken).ConfigureAwait(false);
+            resolved++;
         }
 
         return (opened, resolved);
@@ -200,7 +222,12 @@ public sealed partial class AlertService(
         return perNode.Length == 0 ? null : perNode.Sum();
     }
 
-    private async Task NotifyAsync(OpsAlertRow alert, AlertRule rule, string transition, CancellationToken cancellationToken)
+    private async Task NotifyAsync(
+        OpsAlertRow alert,
+        string ruleName,
+        string severity,
+        string transition,
+        CancellationToken cancellationToken)
     {
         var url = options.Notifications.WebhookUrl;
         if (string.IsNullOrWhiteSpace(url))
@@ -215,8 +242,8 @@ public sealed partial class AlertService(
 
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
         var title = transition == "opened"
-            ? $"[{rule.Severity}] {rule.Name}"
-            : $"[已恢复] {rule.Name}";
+            ? $"[{severity}] {ruleName}"
+            : $"[已恢复] {ruleName}";
 
         try
         {
@@ -229,8 +256,8 @@ public sealed partial class AlertService(
                     alert = new
                     {
                         id = alert.Id,
-                        rule = rule.Name,
-                        severity = rule.Severity,
+                        rule = ruleName,
+                        severity,
                         value = alert.Value,
                         openedAt = alert.OpenedAt,
                         resolvedAt = transition == "resolved" ? now : (long?)null,
@@ -253,7 +280,7 @@ public sealed partial class AlertService(
 
             if (!sent)
             {
-                NotifyRejected(logger, rule.Name, (int)response.StatusCode);
+                NotifyRejected(logger, ruleName, (int)response.StatusCode);
             }
         }
         catch (HttpRequestException ex)
@@ -266,7 +293,7 @@ public sealed partial class AlertService(
                 ex.Message,
                 now,
                 cancellationToken).ConfigureAwait(false);
-            NotifyFailed(logger, rule.Name, ex.Message);
+            NotifyFailed(logger, ruleName, ex.Message);
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -278,7 +305,7 @@ public sealed partial class AlertService(
                 "timed out",
                 now,
                 cancellationToken).ConfigureAwait(false);
-            NotifyFailed(logger, rule.Name, "timed out");
+            NotifyFailed(logger, ruleName, "timed out");
         }
     }
 

@@ -41,7 +41,15 @@ public sealed partial class HttpOpsEventSink : BackgroundService, IOpsEventSink
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _endpoint = new Uri(endpoint, UriKind.Absolute);
+        var endpointUri = new Uri(endpoint, UriKind.Absolute);
+
+        // The deployment document configures the console's base address ("http://127.0.0.1:5090"); the ingest path
+        // is fixed on the console. Accept both spellings — a base address that is posted to verbatim answers 405 and
+        // every event is dropped, which is exactly the failure this normalisation removes.
+        _endpoint = string.IsNullOrEmpty(endpointUri.AbsolutePath.Trim('/'))
+            ? new Uri(endpointUri, "ingest/events")
+            : endpointUri;
+
         _key = Convert.FromBase64String(key);
         if (_key.Length < 32)
         {

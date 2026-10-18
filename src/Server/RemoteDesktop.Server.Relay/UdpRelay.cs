@@ -23,6 +23,7 @@ public sealed partial class UdpRelay : IDisposable
     private readonly Socket _socket;
     private readonly byte[] _key;
     private readonly TimeSpan _idleTimeout;
+    private readonly TimeSpan _cleanupInterval;
     private readonly TimeProvider _time;
     private readonly IOpsEventSink _events;
     private readonly string _nodeName;
@@ -39,12 +40,21 @@ public sealed partial class UdpRelay : IDisposable
     private long _pairingsTotal;
     private int _activePairings;
 
-    public UdpRelay(IPEndPoint bindEndPoint, byte[] sharedKey, TimeSpan idleTimeout, TimeProvider time, IOpsEventSink events, string nodeName, ILogger<UdpRelay> logger)
+    public UdpRelay(
+        IPEndPoint bindEndPoint,
+        byte[] sharedKey,
+        TimeSpan idleTimeout,
+        TimeProvider time,
+        IOpsEventSink events,
+        string nodeName,
+        ILogger<UdpRelay> logger,
+        TimeSpan? cleanupInterval = null)
     {
         ArgumentNullException.ThrowIfNull(bindEndPoint);
 
         _key = sharedKey;
         _idleTimeout = idleTimeout;
+        _cleanupInterval = cleanupInterval ?? TimeSpan.FromSeconds(10);
         _time = time;
         _events = events;
         _nodeName = nodeName;
@@ -70,26 +80,50 @@ public sealed partial class UdpRelay : IDisposable
     {
         var buffer = new byte[65_535];
         EndPoint any = new IPEndPoint(_socket.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            SocketReceiveFromResult received;
-            try
-            {
-                received = await _socket.ReceiveFromAsync(buffer, SocketFlags.None, any, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
-            {
-                // ICMP port unreachable from a peer that went away; keep serving the others.
-                continue;
-            }
 
-            var from = (IPEndPoint)received.RemoteEndPoint;
-            await HandleAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false);
-            CleanupIfDue();
+        // One source for the whole loop, rescheduled after every packet and replaced only after it fires. Allocating
+        // one per packet would put a cancellation registration on the forwarding path.
+        CancellationTokenSource? receiveWindow = null;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                receiveWindow ??= CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                receiveWindow.CancelAfter(_cleanupInterval);
+
+                SocketReceiveFromResult received;
+                try
+                {
+                    received = await _socket.ReceiveFromAsync(buffer, SocketFlags.None, any, receiveWindow.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // No packet arrived for a whole cleanup interval. Without this wake-up the table was only swept
+                    // after the next packet, so a pairing whose peers both went quiet stayed "active" forever and the
+                    // console never received its relay_closed event.
+                    receiveWindow.Dispose();
+                    receiveWindow = null;
+                    CleanupIfDue();
+                    continue;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    // ICMP port unreachable from a peer that went away; keep serving the others.
+                    continue;
+                }
+
+                var from = (IPEndPoint)received.RemoteEndPoint;
+                await HandleAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false);
+                CleanupIfDue();
+            }
+        }
+        finally
+        {
+            receiveWindow?.Dispose();
         }
     }
 
@@ -289,7 +323,7 @@ public sealed partial class UdpRelay : IDisposable
             return;
         }
 
-        _nextCleanup = now + TimeSpan.FromSeconds(10);
+        _nextCleanup = now + _cleanupInterval;
         foreach (var pairing in _pairings.Values.Where(p => now - p.LastActivity > _idleTimeout).ToList())
         {
             Unroute(pairing);

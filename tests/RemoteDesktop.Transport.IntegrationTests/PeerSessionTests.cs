@@ -33,6 +33,11 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
         var hostSide = await started.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(controller.Id, hostSide.Connection.RemoteDevice);
         Assert.Equal(ConnectionPath.Direct, hostSide.Connection.Path);
+
+        // The server mints one session id per request and both ends report heartbeats under it. A direct connection
+        // that dropped it made the console show the signaling row and a second, quality-only row for one session.
+        Assert.False(string.IsNullOrEmpty(session.Context.Connection.RelaySessionId));
+        Assert.Equal(session.Context.Connection.RelaySessionId, hostSide.Connection.RelaySessionId);
     }
 
     [Fact]

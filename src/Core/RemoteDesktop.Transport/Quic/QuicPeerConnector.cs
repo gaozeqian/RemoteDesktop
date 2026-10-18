@@ -59,7 +59,12 @@ public sealed partial class QuicPeerConnector(
                     if (direct is not null)
                     {
                         LogConnected(logger, remote, ConnectionPath.Direct, candidate);
-                        return new QuicPeerConnection(direct, remote, ConnectionPath.Direct, identity.Fingerprint, ready.HostFingerprint);
+
+                        // The server mints a session id for every request, relay or not, and the host reports it in
+                        // its heartbeat. Dropping it on the direct path split one session into two console rows: the
+                        // signaling row and a second one created by the controller's own id.
+                        return new QuicPeerConnection(
+                            direct, remote, ConnectionPath.Direct, identity.Fingerprint, ready.HostFingerprint, ready.Relay?.RelaySessionId);
                     }
                 }
             }
