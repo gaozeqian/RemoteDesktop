@@ -83,13 +83,13 @@ curl http://127.0.0.1:5090/health
 
 ```powershell
 pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
-# 产物：artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
+# 产物：artifacts/installer/windows/RemoteDesktop-Server-Windows-<版本>-x64.msi
 ```
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
 
 ```powershell
-msiexec /i RemoteDesktop.Server-0.3.0.0-x64.msi /qn `
+msiexec /i RemoteDesktop-Server-Windows-0.3.0.0-x64.msi /qn `
   RENDEZVOUSURL="https://0.0.0.0:5080" `
   RELAYPUBLICENDPOINT="203.0.113.10:5082" `
   POSTGRESCONNECTIONSTRING="Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." `
@@ -644,23 +644,23 @@ GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Release
 
 ```powershell
 # 图形界面（推荐给一般用户）
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
 
 # 静默安装，指定服务器地址
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 
 # 静默安装到别的目录
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
-只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop.Host-<版本>-x64.msi`：同样的服务与会话 Agent、同样的
+只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop-Host-Windows-<版本>-x64.msi`：同样的服务与会话 Agent、同样的
 `RENDEZVOUSURI` 属性，只是没有客户端与开始菜单项。它和客户端包装在同一个目录、用同一个 `RemoteDesktopHost`
 服务与 `%ProgramData%\RemoteDesktop` 设备身份，所以**一台机器只装其中一个**：想同时具备"控制别人"与"被别人
 控制"两种角色，只装**客户端**包就够了（它本来就带被控端）；Host 包是给"只能被控、不允许控制别人"的机器用的。
 装第二个时安装程序会明确拒绝，先卸掉已有的那个再装。
 
 ```powershell
-msiexec /i RemoteDesktop.Host-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Host-Windows-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
 安装完成后：
@@ -691,13 +691,13 @@ msiexec /i RemoteDesktop.Host-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.
 
 ```powershell
 # 升级（保留设备身份、日志和服务器地址；服务器地址以安装包里的为准）
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi /qn
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn
 
 # 卸载（保留设备身份和日志，重装后设备代码不变）
-msiexec /x RemoteDesktop-0.3.0.0-x64.msi /qn
+msiexec /x RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn
 
 # 卸载并删除设备身份与日志（这台机器下次安装会得到新的设备代码）
-msiexec /x RemoteDesktop-0.3.0.0-x64.msi /qn REMOVEDATA=1
+msiexec /x RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn REMOVEDATA=1
 ```
 
 **升级前最好先退出客户端**。安装包会把残留的 `RemoteDesktop.Client.exe` 和 `RemoteDesktop.SessionAgent.exe` 关掉，
@@ -706,14 +706,14 @@ msiexec /x RemoteDesktop-0.3.0.0-x64.msi /qn REMOVEDATA=1
 
 ```powershell
 Get-Process RemoteDesktop.Client -ErrorAction SilentlyContinue | Stop-Process
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
 ```
 
 服务不用担心：安装包会先停服务，服务停止时会结束它启动的 Agent（实测 2 秒内退出）。
 出问题时用日志装：
 
 ```powershell
-msiexec /i RemoteDesktop-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
+msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
 ```
 
 安装失败时 Windows 也会在"应用程序"事件日志里记下来（来源 `MsiInstaller`，含具体错误码和失败的那一步）。
@@ -938,7 +938,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 ```powershell
 .\build\installer\windows\host\Build-HostInstaller.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws
-# 产出 artifacts/installer/windows/RemoteDesktop.Host-<版本>-x64.msi
+# 产出 artifacts/installer/windows/RemoteDesktop-Host-Windows-<版本>-x64.msi
 ```
 
 两个包走同一个脚本（`Build-ClientInstaller.ps1 -HostOnly`）：服务定义、崩溃重启、UDP 防火墙规则和
@@ -949,7 +949,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 机器唯一能直接输入固定密码的地方。留空表示不修改已有密码；勾选“清除已设置”则清掉。静默安装等价于：
 
 ```powershell
-msiexec /i RemoteDesktop.Host-<版本>-x64.msi /qn `
+msiexec /i RemoteDesktop-Host-Windows-<版本>-x64.msi /qn `
   RENDEZVOUSURI="ws://rd.example.com:5080/ws" `
   FIXEDPASSWORD="至少8位"
 # 清除已有固定密码：CLEARFIXEDPASSWORD=1
@@ -966,7 +966,7 @@ msiexec /i RemoteDesktop.Host-<版本>-x64.msi /qn `
 
 ```powershell
 .\build\installer\windows\server\Build-ServerInstaller.ps1
-# 产出 artifacts/installer/windows/RemoteDesktop.Server-<版本>-x64.msi
+# 产出 artifacts/installer/windows/RemoteDesktop-Server-Windows-<版本>-x64.msi
 ```
 
 打包脚本做四件事：发布可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名，

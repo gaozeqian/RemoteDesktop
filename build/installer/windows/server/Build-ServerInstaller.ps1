@@ -669,7 +669,7 @@ if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 # and checked (a rebuild of the same version overwrites its name, a new version does not). The pattern is role-specific
 # on purpose — "*.msi" would pick the client or host package built before this one, and the tests would then pass while
 # describing a package this run never produced.
-$package = Get-ChildItem $OutputDirectory -Filter 'RemoteDesktop.Server-*.msi' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$package = Get-ChildItem $OutputDirectory -Filter 'RemoteDesktop-Server-Windows-*.msi' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $package) { throw "No server MSI was produced in $OutputDirectory." }
 
 Write-Host "  $($package.FullName) ($([math]::Round($package.Length / 1MB, 1)) MB)"

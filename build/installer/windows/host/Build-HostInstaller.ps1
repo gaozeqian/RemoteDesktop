@@ -13,7 +13,7 @@
   (its own name and UpgradeCode, so one role's upgrade never removes the other) and the product's shortcut (there is
   none).
 
-  Output: artifacts\installer\windows\RemoteDesktop.Host-<version>-x64.msi
+  Output: artifacts\installer\windows\RemoteDesktop-Host-Windows-<version>-x64.msi
 
 .EXAMPLE
   # Development build with the published default server address
@@ -29,7 +29,7 @@
   installation, and the temporary password lives only in the service process, so without a fixed password a fresh
   machine has no password anybody can be told. Silent installs use the same value as a property:
 
-      msiexec /i RemoteDesktop.Host-<version>-x64.msi /qn FIXEDPASSWORD="..."
+      msiexec /i RemoteDesktop-Host-Windows-<version>-x64.msi /qn FIXEDPASSWORD="..."
 
   A machine installs either this package or the client package, not both: they share the RemoteDesktopHost service and
   the machine's single device identity, so a second one would be a second service competing for the same pipe and device

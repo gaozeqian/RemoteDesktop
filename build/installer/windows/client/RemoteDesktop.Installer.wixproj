@@ -8,8 +8,8 @@
     <!-- Passed by Build-ClientInstaller.ps1 -HostOnly. Global properties, so they are visible here before this file is
          evaluated; the host package needs a name and an identity of its own, or it would try to upgrade the client. -->
     <HostOnly Condition="'$(HostOnly)' == ''">0</HostOnly>
-    <OutputName Condition="'$(HostOnly)' == '1'">RemoteDesktop.Host-$(ProductVersion)-x64</OutputName>
-    <OutputName Condition="'$(HostOnly)' != '1'">RemoteDesktop-$(ProductVersion)-x64</OutputName>
+    <OutputName Condition="'$(HostOnly)' == '1'">RemoteDesktop-Host-Windows-$(ProductVersion)-x64</OutputName>
+    <OutputName Condition="'$(HostOnly)' != '1'">RemoteDesktop-Client-Windows-$(ProductVersion)-x64</OutputName>
     <OutputType>Package</OutputType>
     <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>

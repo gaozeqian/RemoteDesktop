@@ -9,7 +9,7 @@
 
 ### Added
 
-- [Windows] **被控端 MSI**（`RemoteDesktop.Host-<版本>-x64.msi`）：只装 `RemoteDesktop.HostService` 与
+- [Windows] **被控端 MSI**（`RemoteDesktop-Host-Windows-<版本>-x64.msi`）：只装 `RemoteDesktop.HostService` 与
   `RemoteDesktop.SessionAgent`，没有客户端窗口与开始菜单项。走 `Build-ClientInstaller.ps1 -HostOnly`，
   服务定义、崩溃重启、UDP 防火墙规则与机器清理步骤只有一份；产品名与 UpgradeCode 独立。两者共用
   `RemoteDesktopHost` 服务与机器的设备身份，所以一台机器只能装一个——安装条件会拒绝第二个。

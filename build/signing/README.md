@@ -95,7 +95,7 @@ pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
 
 ```bash
 osslsigncode sign -h sha256 -n RemoteDesktop -ts http://timestamp.digicert.com \
-  -pkcs12 codesign.pfx -pass "$PASS" -in RemoteDesktop-0.3.0.0-x64.msi -out signed.msi
+  -pkcs12 codesign.pfx -pass "$PASS" -in RemoteDesktop-Client-Windows-0.3.0.0-x64.msi -out signed.msi
 osslsigncode verify -in signed.msi
 ```
 
@@ -215,13 +215,13 @@ pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -TimestampSe
 
 ```powershell
 # 安装包
-Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-Client-Windows-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
 
 # 装好的程序
 Get-AuthenticodeSignature 'C:\Program Files\RemoteDesktop\RemoteDesktop.Client.exe' | Format-List Status, SignerCertificate
 
 # 用 signtool（装了 SDK 时）
-signtool verify /pa /v .\artifacts\RemoteDesktop-0.3.0.0-x64.msi
+signtool verify /pa /v .\artifacts\RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
 ```
 
 ## macOS（Developer ID + 公证）

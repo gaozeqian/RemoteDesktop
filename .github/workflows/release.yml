@@ -351,17 +351,16 @@ jobs:
         shell: pwsh
         run: |
           # 三个包都在同一个 artifacts/installer/windows/ 下，角色写在文件名里。**构建产物**的名字来自 wixproj 的
-          # OutputName：RemoteDesktop-<版本>-x64.msi（客户端）、RemoteDesktop.Host-<版本>-x64.msi、
-          # RemoteDesktop.Server-<版本>-x64.msi。带 Windows 的是**发布产物**的名字（下面重命名之后），不是构建产物
-          # 的名字——此前这里按发布产物的名字去 glob 构建产物，两个都找不到，而这条路径在 v0.3.0 之后一次都没跑过，
-          # 所以没人发现。
+          # OutputName，与 macOS、Linux 同一个形状 <产品>-<角色>-<平台>-<架构>-<版本>：
+          # RemoteDesktop-Client-Windows-<版本>-x64.msi、RemoteDesktop-Host-Windows-<版本>-x64.msi、
+          # RemoteDesktop-Server-Windows-<版本>-x64.msi。带 Tag 的是**发布产物**的名字（下面重命名之后）。
+          # 三个 glob 各匹配各的角色，前缀互不重叠，不再需要 notlike 排除。
           $installerFolder = 'artifacts/installer/windows'
-          $client = Get-ChildItem -Path "$installerFolder/RemoteDesktop-*-x64.msi" -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' -and $_.Name -notlike 'RemoteDesktop.Host-*' } |
+          $client = Get-ChildItem -Path "$installerFolder/RemoteDesktop-Client-Windows-x64-*.msi" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          $hostPackage = Get-ChildItem -Path "$installerFolder/RemoteDesktop.Host-*-x64.msi" -ErrorAction SilentlyContinue |
+          $hostPackage = Get-ChildItem -Path "$installerFolder/RemoteDesktop-Host-Windows-x64-*.msi" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          $server = Get-ChildItem -Path "$installerFolder/RemoteDesktop.Server-*-x64.msi" -ErrorAction SilentlyContinue |
+          $server = Get-ChildItem -Path "$installerFolder/RemoteDesktop-Server-Windows-x64-*.msi" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           # 少一个就什么都别发：只发出客户端、悄悄少了被控端或服务端，是发完才会被发现的那种错。

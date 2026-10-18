@@ -139,16 +139,13 @@ runs:
       run: |
         $installerFolder = 'artifacts/installer/windows'
 
-        # The build produces RemoteDesktop-<version>-x64.msi (client), RemoteDesktop.Host-<version>-x64.msi and
-        # RemoteDesktop.Server-<version>-x64.msi, all into the one folder because the role is already in the file
-        # name. "RemoteDesktop-*" matches neither of the other two (their role words are separated by a dot), but the
-        # filter below says so explicitly rather than relying on that. (The names carrying "Windows" are the *release
-        # assets*, made by the rename step: globbing for those against a fresh build finds nothing, which is a mistake
-        # this repository has already made once.)
-        $client = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-*-x64.msi" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike 'RemoteDesktop.Server-*' -and $_.Name -notlike 'RemoteDesktop.Host-*' })
-        $hostPackage = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop.Host-*-x64.msi" -ErrorAction SilentlyContinue)
-        $server = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop.Server-*-x64.msi" -ErrorAction SilentlyContinue)
+        # The build produces RemoteDesktop-Client-Windows-<version>-x64.msi, RemoteDesktop-Host-Windows-<version>-x64.msi
+        # and RemoteDesktop-Server-Windows-<version>-x64.msi, all into the one folder because the role is already in the
+        # file name — the same <产品>-<角色>-<平台>-<架构>-<版本> shape as the macOS and Linux packages. Three globs, one per
+        # role, each matching its own prefix, so a stale package from another role is never picked up.
+        $client = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-Client-Windows-x64-*.msi" -ErrorAction SilentlyContinue)
+        $hostPackage = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-Host-Windows-x64-*.msi" -ErrorAction SilentlyContinue)
+        $server = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-Server-Windows-x64-*.msi" -ErrorAction SilentlyContinue)
 
         # One glob must find exactly one package each. Two would mean a stale one from an earlier build is sitting
         # next to the fresh one, which is how a release ends up shipping the wrong bytes.

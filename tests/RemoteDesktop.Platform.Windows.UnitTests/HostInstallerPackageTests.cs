@@ -35,7 +35,7 @@ public sealed class HostInstallerPackageTests
         var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
         return artifacts is null || !Directory.Exists(artifacts)
             ? null
-            : Directory.GetFiles(artifacts, "RemoteDesktop.Host-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            : Directory.GetFiles(artifacts, "RemoteDesktop-Host-Windows-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
     }
 
     [Fact]

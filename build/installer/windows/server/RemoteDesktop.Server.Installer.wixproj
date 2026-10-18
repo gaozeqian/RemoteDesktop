@@ -5,7 +5,7 @@
          community fixes, so the installer is kept to standard features (no custom actions of our own beyond calling
          the server executable) to keep a later move to another tool cheap. Same choice as the client installer. -->
     <InstallerPlatform>x64</InstallerPlatform>
-    <OutputName>RemoteDesktop.Server-$(ProductVersion)-x64</OutputName>
+    <OutputName>RemoteDesktop-Server-Windows-$(ProductVersion)-x64</OutputName>
     <OutputType>Package</OutputType>
     <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>

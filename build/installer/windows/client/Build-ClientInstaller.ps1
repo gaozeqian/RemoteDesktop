@@ -52,7 +52,7 @@ param(
     [string]$Configuration = 'Release',
 
     # Build the controlled end's package: the service and the session agent, no client window, no shortcut. The default
-    # output folder and the MSI name change with it (artifacts\app\windows\host, RemoteDesktop.Host-<version>-x64.msi).
+    # output folder and the MSI name change with it (artifacts\app\windows\host, RemoteDesktop-Host-Windows-<version>-x64.msi).
     [switch]$HostOnly,
 
     # Code-signing certificate to use (thumbprint, or the subject of one). Left empty, a suitable certificate is looked
@@ -686,7 +686,7 @@ if ($LASTEXITCODE -ne 0) { throw 'The installer build failed.' }
 # The newest package of this role, not merely the first: an older one left in the output folder must not be the one
 # that gets signed and checked. The pattern is role-specific on purpose - "*.msi" would pick the server package built
 # before this one, and the tests would then pass while describing a package this run never produced.
-$packagePattern = if ($HostOnly) { 'RemoteDesktop.Host-*.msi' } else { 'RemoteDesktop-*.msi' }
+$packagePattern = if ($HostOnly) { 'RemoteDesktop-Host-Windows-*.msi' } else { 'RemoteDesktop-Client-Windows-*.msi' }
 $package = Get-ChildItem $OutputDirectory -Filter $packagePattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $package) { throw "No $role MSI was produced in $OutputDirectory." }
 
