@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -106,6 +107,11 @@ public sealed class OpsHostFixture : IAsyncLifetime
         {
             await _app.DisposeAsync();
         }
+
+        // Windows refuses to delete a file that an open handle still points at, and Microsoft.Data.Sqlite pools its
+        // connections by default. Disposing the host returns them to the pool rather than closing them, so the
+        // pooled handles have to go before the database can be removed. Unix unlinks them either way.
+        SqliteConnection.ClearAllPools();
 
         foreach (var path in new[] { _databasePath, _databasePath + "-wal", _databasePath + "-shm" })
         {

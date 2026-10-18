@@ -6,6 +6,7 @@ internal static class MfGuids
     public static readonly Guid MediaTypeVideo = new("73646976-0000-0010-8000-00AA00389B71");
     public static readonly Guid VideoFormatH264 = new("34363248-0000-0010-8000-00AA00389B71");
     public static readonly Guid VideoFormatNv12 = new("3231564E-0000-0010-8000-00AA00389B71");
+    public static readonly Guid VideoFormatYuy2 = new("32595559-0000-0010-8000-00AA00389B71");
 
     public static readonly Guid CategoryVideoEncoder = new("f79eac7d-e545-4387-bdee-d647d7bde42a");
     public static readonly Guid CategoryVideoDecoder = new("d6c02d4b-6833-45b4-971a-05a4b04bab91");

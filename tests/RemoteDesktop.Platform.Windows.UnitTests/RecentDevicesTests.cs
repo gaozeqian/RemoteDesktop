@@ -254,6 +254,25 @@ public class RecentDevicesTests
         Assert.False(vm.IsEditingAlias);
     }
 
+    /// <summary>
+    /// A successful connection updates the stored password. The row's box must follow it unless the user typed
+    /// something themselves; keeping the old box sent a fixed password that had been cleared or a rotated temporary
+    /// one, and the row failed with "密码错误" until the client was restarted.
+    /// </summary>
+    [Theory]
+    [InlineData("old", "old", "new", "new")]      // untouched auto-fill: follow the store
+    [InlineData("typed", "old", "new", "typed")]  // an edit the user made is theirs
+    [InlineData("", null, "new", "new")]          // first password remembered for this device
+    [InlineData("", null, null, "")]              // nothing remembered, nothing to fill
+    public void A_reloaded_row_refreshes_the_password_only_when_the_user_has_not_edited_it(
+        string current,
+        string? previouslySaved,
+        string? saved,
+        string expected)
+    {
+        Assert.Equal(expected, MainWindowViewModel.PasswordAfterReload(current, previouslySaved, saved));
+    }
+
     private static void DeleteDirectory(string path)
     {
         if (Directory.Exists(path))

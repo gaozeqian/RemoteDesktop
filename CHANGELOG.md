@@ -2,6 +2,62 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Windows 端到端测试修复
+
+在 Windows 11 Enterprise（26200）/ .NET 10.0.13 上用 Release 构建、真实服务端与多个独立客户端实例跑用户场景：
+先在本机以未安装后台服务的 standalone 被控端连接，再启动三个控制器同时观看，另跑文件传输、终端、摄像头、
+录制、固定密码、设备列表与服务器中断恢复。
+
+### Fixed
+
+- **第二个及之后的并发会话一建立就断开**：Windows 一个进程对同一个输出只允许一个
+  `IDXGIOutput1::DuplicateOutput`，第二个返回 `E_INVALIDARG`，于是被控端日志是
+  “Video channel failed”，控制端只看到会话结束。采集现在按显示共享：DXGI 复制接口每个显示只开一份，
+  各会话订阅同一份最新画面（引用计数、空闲两秒后暂停采集但不释放复制接口）。新增
+  `SharedScreenCaptureTests`（两个订阅者共享一个 capturer、光标事件分发、空闲后新订阅者仍能拿到最后一帧）；
+  实机三个控制器同时出画面，日志中不再有 `DuplicateOutput` 失败。
+- **成功连接后设备列表里的密码不会更新**：行里的密码框在上次连接后保存了旧密码，之后用新密码（例如清空固定
+  密码后改用临时密码）连上，列表刷新时仍把旧密码带回来；从该行点“终端/文件/摄像头”会以旧密码连接，
+  被控端记 “Wrong password”，界面只停在设备列表，直到重启客户端。未被用户改过的密码框现在跟随
+  `ISecretStore` 里刚保存的密码，用户亲手改过的仍保留；新增 `PasswordAfterReload` 的回归用例。
+- **摄像头 424×240 及以下的小尺寸模式打不开**：这台机器的内置摄像头在这些尺寸只提供 YUY2，源读取器拒绝
+  把它转成 NV12（`MF_E_INVALIDMEDIATYPE`），用户选中后只会看到“摄像头无法打开”。NV12 被拒绝时现在改设
+  YUY2 输出，再由平台层把 4:2:2 降采样成 4:2:0；对外的帧仍是 NV12。新增合成 YUY2→NV12 单测与“最小模式
+  仍出 NV12”的实机用例；此前 `CameraTests.Stopping_the_capture_releases_the_camera_so_it_can_be_opened_again`
+  在这台机器上失败，现在通过。
+
+### Notes
+
+- **硬件编码器在这台机器上每次都回退到软件编码**：Intel Iris Xe（Windows 11 26200）的 QSV H.264 MFT 是
+  异步、D3D11-aware 的硬件 MFT；它接受解锁、输入/输出类型和每一帧输入，但第一次 `ProcessOutput` 返回
+  `E_UNEXPECTED`，此后桌面与摄像头都走 `H264 Encoder MFT` 软件编码。为排除我们自己的设置问题，用
+  `D3D11CreateDevice`（`VideoSupport` + 多线程保护）+ `MFCreateDXGIDeviceManager` + `ResetDevice` 正确
+  建立设备管理器后重试：`MFT_MESSAGE_SET_D3D_MANAGER` 被接受，事件状态均为 0（NeedInput/HaveOutput 正常），
+  `ProcessOutput` 仍以 `E_UNEXPECTED` 失败；软件 MFT 的同一往返测试通过。把 Intel 驱动从 32.0.101.7088
+  更新到 32.0.101.7092（2026-09-03）并重启后重测，失败点与 HRESULT 完全相同；实机连接仍正常回退到软件
+  编码（2560×1440、29 fps、约 42 ms 延迟）。结论是故障在 Intel 的 MFT/驱动内部，不在封装层。
+  另外，硬件+异步枚举里还有一个 **Microsoft AVC DX12 Encoder**（产品原先的硬件枚举少了
+  `MFT_ENUM_FLAG_ASYNCMFT`，所以完全看不到它）；它接受设备管理器，但拒绝我们手工构造的 H.264 输出类型。
+  要让它工作，需要按 MFT 的可用类型协商并改用 D3D11/DX12 纹理输入，这是一条独立的、较大的硬件路径，
+  本轮未实现，实验性改动已全部撤回。`MediaFoundationCodecTests.Hardware_encoder_round_trips` 因此在这台
+  机器上是红的（软件编码往返通过）；换一台 QSV 正常的机器或更新/回退 Intel 驱动后才能判定。解码侧也只
+  枚举同步 MFT，所以即使编码修好，也不是全硬件管线。
+- **Windows 上的两处测试环境假设**：Ops 集成测试清理时 `File.Delete` 撞上仍被 SQLite 连接池占用的数据库
+  文件（Unix 允许删除已打开的文件，所以此前没暴露），`OpsHostFixture` 与 `SchemaMigrationTests` 现在先调用
+  `SqliteConnection.ClearAllPools()`；`RealProgramTerminalTests` 等的是旧版 nano 的 “Write to File”，
+  而 Git for Windows 的 nano 8.2 提示 “File Name to Write:”，两种写法都接受。两类用例在本机已通过。
+- **三路 2560×1440 软件编码同时观看时，延迟会累积到数十秒**：这是本机把被控端与三个控制端放在同一颗 CPU 上
+  的饱和场景，去掉多余会话后会逐步回落；单会话实测 26–40 fps、35–50 ms 画面延迟。当前管线不会为了追平而
+  丢弃旧帧，慢客户端只能等队列排空——在真实双机、硬件编解码的场景下未复现。
+- **Windows 服务 + 会话 Agent 的托管形态未实测**：测试账户没有提升权限，无法安装 LocalSystem 服务，
+  因此本轮走的是客户端进程内 standalone 被控端。登录界面 / UAC 接管与 `SendSAS` 仍需在管理员环境补测。
+- **摄像头首次打开出现过一次全黑画面**（1280×720、10 fps、0.4 Mbps），停止再开始后同一进程内连续三次均为
+  正常画面（29–30 fps、3–5 Mbps）；硬件编码器仍每次回退。未再复现，记录待查。
+- **开发用内存注册表重启即换设备码**：停掉 Rendezvous 再启动后两台客户端都拿到新代码（文档已说明
+  `DATABASEPROVIDER=none` 的行为）；用新代码 + 固定密码/临时密码重连均正常，旧代码在设备列表中显示离线。
+- 剪贴板文本双向稳定；图片剪贴板在连接期间可保持，但两端在同一台机器上共享同一个系统剪贴板，
+  跨机传输未被这轮验证覆盖。
+
 ## [未发布] · macOS UI 与图标评审
 
 在 macOS 26 上逐屏核对界面与产品图标，详见

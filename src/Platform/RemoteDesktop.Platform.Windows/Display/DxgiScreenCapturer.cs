@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
 using SharpGen.Runtime;
@@ -10,9 +11,47 @@ using Vortice.DXGI;
 namespace RemoteDesktop.Platform.Windows.Display;
 
 [SupportedOSPlatform("windows")]
-public sealed class DxgiScreenCapturerFactory : IScreenCapturerFactory
+public sealed class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenCapturerFactory, IAsyncDisposable
 {
-    public IScreenCapturer Create(DisplayInfo display) => new DxgiScreenCapturer(display);
+    private readonly Lock _gate = new();
+    private readonly Dictionary<string, SharedDisplayCapture> _captures = new(StringComparer.Ordinal);
+
+    /// <summary>Releases the duplication every display share holds. The container calls this when the host stops.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        SharedDisplayCapture[] captures;
+        lock (_gate)
+        {
+            captures = [.. _captures.Values];
+            _captures.Clear();
+        }
+
+        foreach (var capture in captures)
+        {
+            await capture.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Returns a subscription, not a private duplication. Windows permits one duplication interface per output per
+    /// process, so a second session must share the first one's; see <see cref="SharedDisplayCapture"/>.
+    /// </summary>
+    public IScreenCapturer Create(DisplayInfo display)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+
+        SharedDisplayCapture capture;
+        lock (_gate)
+        {
+            if (!_captures.TryGetValue(display.Id, out capture!))
+            {
+                capture = new SharedDisplayCapture(display, static d => new DxgiScreenCapturer(d), loggers.CreateLogger<SharedDisplayCapture>());
+                _captures[display.Id] = capture;
+            }
+        }
+
+        return capture.Subscribe();
+    }
 }
 
 /// <summary>

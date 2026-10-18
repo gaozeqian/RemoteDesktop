@@ -340,6 +340,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public event EventHandler<(RemoteSession Session, CameraWindowViewModel Camera)>? StandaloneCameraOpened;
 
     /// <summary>
+    /// The password box a device row keeps after the list is reloaded following a successful connection.
+    /// </summary>
+    /// <param name="current">What the row held before the reload; equal to <paramref name="previouslySaved"/> when the user never edited it.</param>
+    /// <param name="previouslySaved">The secret the store had before this connection.</param>
+    /// <param name="saved">The secret the store has now, i.e. the password the connection just succeeded with.</param>
+    internal static string PasswordAfterReload(string? current, string? previouslySaved, string? saved) =>
+        // null and "" are the same box: no password. Comparing them as distinct would make an empty box look like
+        // an edit and leave it empty after the device's first password was remembered.
+        string.Equals(current ?? string.Empty, previouslySaved ?? string.Empty, StringComparison.Ordinal)
+            ? saved ?? string.Empty
+            : current ?? string.Empty;
+
+    /// <summary>
     /// Rebuilds the list from disk. Anything the user typed into a row in this session is carried over: the rows are
     /// recreated on every connect, and without this the detail panel would appear to forget a password that was just
     /// entered, and the selection would point at an object no longer in the list.
@@ -367,6 +380,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 item.Password = previous.Password;
                 item.RememberPassword = previous.RememberPassword;
                 item.Presence = previous.Presence;
+
+                // A successful connection saves the password it used, but the row still holds the box the user left
+                // it with. Carrying that box over verbatim would keep sending the old password — a fixed password
+                // that has since been cleared, or a temporary one that rotated — so a row the user has not edited is
+                // refreshed from the store. An edited box is theirs and is kept.
+                item.Password = PasswordAfterReload(previous.Password, previous.SavedPassword, item.SavedPassword);
             }
             else
             {

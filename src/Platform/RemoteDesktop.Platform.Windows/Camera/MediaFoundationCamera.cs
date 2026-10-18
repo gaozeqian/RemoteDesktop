@@ -180,7 +180,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
                 reader = MediaFactory.MFCreateSourceReaderFromMediaSource(source, attributes);
             }
 
-            var (width, height) = Configure(reader, mode);
+            var (width, height, yuy2) = Configure(reader, mode);
             started.TrySetResult();
 
             var clock = Stopwatch.StartNew();
@@ -194,7 +194,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
 
                 if (flags.HasFlag(SourceReaderFlag.CurrentMediaTypeChanged))
                 {
-                    (width, height) = CurrentSize(reader);
+                    (width, height, yuy2) = CurrentFormat(reader);
                 }
 
                 if (sample is null)
@@ -202,7 +202,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
                     continue; // a gap in the stream; the next read waits for the next picture
                 }
 
-                writer.TryWrite(ToFrame(sample, width, height, clock.Elapsed));
+                writer.TryWrite(ToFrame(sample, width, height, yuy2, clock.Elapsed));
             }
         }
         catch (CameraUnavailableException ex)
@@ -245,8 +245,10 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         }
     }
 
-    // Picks the camera's own format closest to the request, then asks the reader to deliver NV12 of that size.
-    private static (int Width, int Height) Configure(IMFSourceReader reader, CameraMode mode)
+    // Picks the camera's own format closest to the request, then asks the reader to deliver NV12 of that size. Some
+    // cameras only offer YUY2 at their smaller sizes and the reader refuses to convert those to NV12; for them the
+    // native 4:2:2 layout comes back and the chroma is reduced by hand, so the contract is still NV12.
+    private static (int Width, int Height, bool Yuy2) Configure(IMFSourceReader reader, CameraMode mode)
     {
         IMFMediaType? best = null;
         var bestScore = double.MaxValue;
@@ -292,20 +294,33 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
 
             using var output = MfRuntime.CreateVideoType(MfGuids.VideoFormatNv12, (int)width, (int)height, 0);
             MediaFactory.MFSetAttributeRatio(output, MfGuids.FrameRate, numerator, Math.Max(1, denominator)).CheckError();
-            reader.SetCurrentMediaType(FirstVideoStream, output);
-            return (CurrentSize(reader).Width, CurrentSize(reader).Height);
+            try
+            {
+                reader.SetCurrentMediaType(FirstVideoStream, output);
+                return CurrentFormat(reader);
+            }
+            catch (SharpGenException)
+            {
+                // The driver (the built-in webcam in the E2E machine is one) offers YUY2 for its small modes and
+                // answers MF_E_INVALIDMEDIATYPE for an NV12 output. Ask for YUY2 instead; ToFrame reduces it.
+                using var yuy2 = MfRuntime.CreateVideoType(MfGuids.VideoFormatYuy2, (int)width, (int)height, 0);
+                MediaFactory.MFSetAttributeRatio(yuy2, MfGuids.FrameRate, numerator, Math.Max(1, denominator)).CheckError();
+                reader.SetCurrentMediaType(FirstVideoStream, yuy2);
+                return CurrentFormat(reader);
+            }
         }
     }
 
-    private static (int Width, int Height) CurrentSize(IMFSourceReader reader)
+    private static (int Width, int Height, bool Yuy2) CurrentFormat(IMFSourceReader reader)
     {
         using var type = reader.GetCurrentMediaType(FirstVideoStream);
         MediaFactory.MFGetAttributeSize(type, MfGuids.FrameSize, out var width, out var height);
-        return ((int)width, (int)height);
+        return ((int)width, (int)height, type.GetGUID(MfGuids.Subtype) == MfGuids.VideoFormatYuy2);
     }
 
-    // The buffer holds the Y plane and the interleaved UV plane. Its rows may be padded; the padding is left behind.
-    private static unsafe MemoryVideoFrame ToFrame(IMFSample sample, int width, int height, TimeSpan timestamp)
+    // The frame contract is NV12. The reader hands out NV12 when the camera/driver can convert, and YUY2 for the
+    // modes where it cannot (see Configure); both end up in the same plane layout here.
+    private static unsafe MemoryVideoFrame ToFrame(IMFSample sample, int width, int height, bool yuy2, TimeSpan timestamp)
     {
         var evenWidth = width & ~1;
         var evenHeight = height & ~1;
@@ -317,25 +332,13 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
             try
             {
                 var source = new ReadOnlySpan<byte>((void*)pointer, length);
-                var stride = width;
-                var paddedHeight = height;
-                if (length != width * height * 3 / 2 && length % 3 == 0 && length * 2 / 3 % height == 0)
+                if (yuy2)
                 {
-                    // Rows padded to an alignment: Y is stride x paddedHeight rows, then UV.
-                    stride = length * 2 / 3 / height;
+                    CopyYuy2ToNv12(source, evenWidth, evenHeight, frame);
                 }
-
-                var destination = frame.Buffer;
-                for (var y = 0; y < evenHeight; y++)
+                else
                 {
-                    source.Slice(y * stride, evenWidth).CopyTo(destination.Slice(y * frame.Stride, evenWidth));
-                }
-
-                var sourceUv = paddedHeight * stride;
-                var destinationUv = evenHeight * frame.Stride;
-                for (var y = 0; y < evenHeight / 2; y++)
-                {
-                    source.Slice(sourceUv + (y * stride), evenWidth).CopyTo(destination.Slice(destinationUv + (y * frame.Stride), evenWidth));
+                    CopyNv12(source, width, height, evenWidth, evenHeight, frame);
                 }
             }
             finally
@@ -349,6 +352,79 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         {
             frame.Dispose();
             throw;
+        }
+    }
+
+    // The buffer holds the Y plane and the interleaved UV plane. Its rows may be padded; the padding is left behind.
+    private static void CopyNv12(ReadOnlySpan<byte> source, int width, int height, int evenWidth, int evenHeight, MemoryVideoFrame frame)
+    {
+        var stride = width;
+        var paddedHeight = height;
+        if (source.Length != width * height * 3 / 2 && source.Length % 3 == 0 && source.Length * 2 / 3 % height == 0)
+        {
+            // Rows padded to an alignment: Y is stride x paddedHeight rows, then UV.
+            stride = source.Length * 2 / 3 / height;
+        }
+
+        var destination = frame.Buffer;
+        for (var y = 0; y < evenHeight; y++)
+        {
+            source.Slice(y * stride, evenWidth).CopyTo(destination.Slice(y * frame.Stride, evenWidth));
+        }
+
+        var sourceUv = paddedHeight * stride;
+        var destinationUv = evenHeight * frame.Stride;
+        for (var y = 0; y < evenHeight / 2; y++)
+        {
+            source.Slice(sourceUv + (y * stride), evenWidth).CopyTo(destination.Slice(destinationUv + (y * frame.Stride), evenWidth));
+        }
+    }
+
+    /// <summary>
+    /// Reduces the camera's YUY2 (4:2:2) buffer to NV12 (4:2:0): luma passes through, and each chroma sample is
+    /// averaged over the two rows it now covers. Only the bit layout changes, so no colour matrix is involved.
+    /// </summary>
+    internal static void CopyYuy2ToNv12(ReadOnlySpan<byte> source, int width, int height, MemoryVideoFrame frame)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 2);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 2);
+
+        var rowBytes = width * 2;
+        if (source.Length < rowBytes * height)
+        {
+            throw new InvalidDataException("The camera's YUY2 buffer is smaller than its picture.");
+        }
+
+        // Rows may be padded to an alignment; the buffer's own length says by how much.
+        var stride = source.Length % height == 0 ? source.Length / height : rowBytes;
+        if (stride < rowBytes)
+        {
+            stride = rowBytes;
+        }
+
+        var destination = frame.Buffer;
+        for (var y = 0; y < height; y++)
+        {
+            var row = source.Slice(y * stride, rowBytes);
+            var luma = destination.Slice(y * frame.Stride, width);
+            for (var x = 0; x < width; x++)
+            {
+                luma[x] = row[x * 2];
+            }
+        }
+
+        var uvOffset = height * frame.Stride;
+        for (var y = 0; y < height; y += 2)
+        {
+            var first = source.Slice(y * stride, rowBytes);
+            var second = source.Slice((y + 1) * stride, rowBytes);
+            var uv = destination.Slice(uvOffset + (y / 2) * frame.Stride, width);
+            for (var x = 0; x < width; x += 2)
+            {
+                var pair = x * 2;
+                uv[x] = (byte)((first[pair + 1] + second[pair + 1] + 1) / 2);
+                uv[x + 1] = (byte)((first[pair + 3] + second[pair + 3] + 1) / 2);
+            }
         }
     }
 

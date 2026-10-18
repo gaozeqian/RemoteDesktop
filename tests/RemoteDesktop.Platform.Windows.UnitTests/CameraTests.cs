@@ -90,6 +90,51 @@ public class CameraTests
         Assert.InRange(rate, mode.FrameRate * 0.4, mode.FrameRate * 1.3);
     }
 
+    /// <summary>
+    /// Cameras that offer only YUY2 at their smaller sizes cannot be converted by the source reader and used to
+    /// fail with MF_E_INVALIDMEDIATYPE. The source now asks for YUY2 and reduces it here; the frame is NV12 either way.
+    /// </summary>
+    [Fact]
+    public void A_yuy2_buffer_is_reduced_to_nv12()
+    {
+        // 4x2: each row is two Y0 U Y1 V pairs.
+        var yuy2 = new byte[]
+        {
+            10, 100, 20, 200, 30, 110, 40, 210,
+            50, 120, 60, 220, 70, 130, 80, 230,
+        };
+
+        using var frame = new MemoryVideoFrame(4, 2, PixelFormat.Nv12, TimeSpan.Zero);
+        MediaFoundationCameraSource.CopyYuy2ToNv12(yuy2, 4, 2, frame);
+
+        Assert.Equal(
+            new byte[] { 10, 20, 30, 40, 50, 60, 70, 80, 110, 210, 120, 220 },
+            frame.Buffer.ToArray());
+    }
+
+    [Fact]
+    public async Task The_smallest_mode_is_still_delivered_as_nv12()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+        var camera = Enumerator.GetCameras().FirstOrDefault(c => c.Modes.Count > 0);
+        Assert.SkipWhen(camera is null, "No camera is connected.");
+        var mode = camera.Modes[^1];
+
+        await using var source = new MediaFoundationCameraSourceFactory(Enumerator).Open(camera.Id);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        cancel.CancelAfter(TimeSpan.FromSeconds(20));
+        await foreach (var frame in source.CaptureAsync(mode, cancel.Token))
+        {
+            using (frame)
+            {
+                Assert.Equal(PixelFormat.Nv12, frame.Format);
+                Assert.Equal((mode.Width, mode.Height), (frame.Width, frame.Height));
+            }
+
+            break;
+        }
+    }
+
     [Fact]
     public async Task Stopping_the_capture_releases_the_camera_so_it_can_be_opened_again()
     {

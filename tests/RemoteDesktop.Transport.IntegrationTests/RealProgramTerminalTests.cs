@@ -164,7 +164,13 @@ public sealed class RealProgramTerminalTests : IDisposable
         shell.Type("typed in nano");
         await shell.WaitForAsync("typed in nano");
         shell.Control('o'); // write out
-        await shell.WaitForAsync("Write to File");
+
+        // Nano 8.2 (the one bundled with Git for Windows) prompts "File Name to Write:"; older builds used
+        // "Write to File". The prompt being on screen is what proves ^O arrived, so accept either wording.
+        await shell.WaitUntilAsync(
+            s => s.Screen().Contains("File Name to Write", StringComparison.Ordinal)
+                 || s.Screen().Contains("Write to File", StringComparison.Ordinal),
+            "the write prompt");
         shell.Key(TerminalKey.Enter);
         await shell.WaitUntilAsync(_ =>
         {

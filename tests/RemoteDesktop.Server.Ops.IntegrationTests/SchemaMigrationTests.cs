@@ -57,6 +57,8 @@ public class SchemaMigrationTests
         }
         finally
         {
+            // See OpsHostFixture.DisposeAsync: pooled SQLite handles keep the file locked on Windows.
+            SqliteConnection.ClearAllPools();
             foreach (var suffix in new[] { string.Empty, "-wal", "-shm" })
             {
                 File.Delete(path + suffix);
@@ -85,6 +87,8 @@ public class SchemaMigrationTests
         }
         finally
         {
+            // See OpsHostFixture.DisposeAsync: pooled SQLite handles keep the file locked on Windows.
+            SqliteConnection.ClearAllPools();
             foreach (var suffix in new[] { string.Empty, "-wal", "-shm" })
             {
                 File.Delete(path + suffix);
