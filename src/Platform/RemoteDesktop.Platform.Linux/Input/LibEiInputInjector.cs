@@ -165,6 +165,15 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     /// </remarks>
     private bool EnsureConnected()
     {
+        // The descriptor can be connected once per portal session. The device it announces arrives asynchronously,
+        // so more input can arrive before Ready; asking for another descriptor then is refused by the portal
+        // ("Session is already connected") and used to end the whole input channel. Waiting is what the caller
+        // already does with events that arrive before the device does.
+        if (_ei != 0)
+        {
+            return Ready;
+        }
+
         if (!_control.EnsureReady())
         {
             return false;
@@ -556,9 +565,7 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
         return capabilities.Count == 0 ? "none" : string.Join(", ", capabilities);
     }
 
-    [LoggerMessage(
-        Level = LogLevel.Information,
-        Message = "Controlling this screen needs the desktop's permission, so a dialog is about to ask. It is asked every time, because control cannot be granted in advance.")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "Input is connected; waiting for the desktop to offer a device.")]
     private static partial void LogWaitingForDevice(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "A seat was offered; asked for pointer, buttons, keyboard and scroll.")]

@@ -659,12 +659,22 @@ public sealed partial class PortalConnection : IDisposable
         // message is disposed as soon as this delegate has run — so duplicating afterwards is a race that usually
         // works and occasionally duplicates a number that has already been closed, which reads as EBADF on a
         // connection that is perfectly healthy.
-        var copy = await _connection
-            .CallMethodAsync(
-                message,
-                static (Message m, object? _) => LibC.DuplicateFileDescriptor((int)m.GetBodyReader().ReadHandleRaw()),
-                null)
-            .ConfigureAwait(false);
+        int copy;
+        try
+        {
+            copy = await _connection
+                .CallMethodAsync(
+                    message,
+                    static (Message m, object? _) => LibC.DuplicateFileDescriptor((int)m.GetBodyReader().ReadHandleRaw()),
+                    null)
+                .ConfigureAwait(false);
+        }
+        catch (DBusExceptionBase error)
+        {
+            // The rest of this class reports the portal's refusals as PortalException, and callers catch exactly
+            // that. Letting the D-Bus error type through turned an ordinary refusal into a failure nobody expected.
+            throw new PortalException($"The portal refused {member}: {error.Message}", error);
+        }
 
         if (copy < 0)
         {

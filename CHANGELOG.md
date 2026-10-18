@@ -2,6 +2,23 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Linux 端到端测试修复
+
+在 Ubuntu 26.04 / GNOME Wayland 上用真实服务端、客户端与 HostService 跑端到端场景时发现的三处问题。
+
+### Fixed
+
+- **关闭终端会在 `crash.log` 里留下一条“崩溃”**：结束终端时先关闭 PTY，仍在读取输出的那一端会以
+  `EBADF` 失败；收尾里的 `ContinueWith` 没有观察该异常，终结器把它当作未观察异常交给 `CrashLog`。
+  现在收尾会显式观察这类预期失败，正常关闭不再留下 `crash.log`。
+- **SIGTERM / SIGINT 不能结束客户端**：信号被 host 的 `ConsoleLifetime` 消费后后台服务停了，但 Avalonia
+  的事件循环还在，进程不退出，注销或 `systemctl --user stop` 只能等超时。客户端现在订阅
+  `IHostApplicationLifetime.ApplicationStopping` 并关闭桌面生命周期，两种信号都能在 1 秒内退出。
+- **libei 设备就绪前的输入会打断整个输入通道**：设备尚未就绪时每个输入事件都会再调用一次
+  `ConnectToEIS`，portal 以 “Session is already connected” 拒绝，异常穿过输入通道后该会话的键鼠永久失效。
+  现在 EIS 描述符只连接一次，设备到达前的输入与以前一样被丢弃；portal 的 D-Bus 拒绝也统一转成
+  `PortalException`，不再以未预期异常的形式结束通道。
+
 ## [未发布] · 九个安装包：三平台 × 控制端 / 被控端 / 服务端
 
 三个平台现在各出三个角色，共九个安装包。服务端那一个包统一是 **Rendezvous + Relay + Ops**：

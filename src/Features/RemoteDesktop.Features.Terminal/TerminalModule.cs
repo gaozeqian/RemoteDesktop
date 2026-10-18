@@ -157,9 +157,18 @@ public sealed partial class TerminalModule(
         {
             await run.CancelAsync().ConfigureAwait(false);
 
-            // Ending the terminal ends the shell and its output, which lets the pumps finish.
+            // Ending the terminal ends the shell and its output, which lets the pumps finish. Disposing it is what
+            // unblocks a read that is already in flight, so a pump can end with the descriptor gone; that is the
+            // expected way this ends. The failure still has to be observed: an exception nobody looks at is
+            // rethrown on the finalizer thread and recorded as a crash even though the session simply ended.
             await terminal.DisposeAsync().ConfigureAwait(false);
-            await Task.WhenAll(output, input).ContinueWith(static _ => { }, TaskScheduler.Default).ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(output, input).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+            {
+            }
         }
     }
 
