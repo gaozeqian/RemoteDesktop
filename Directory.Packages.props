@@ -55,7 +55,7 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.13" />
     <!-- The storage layer reads its own settings section and registers itself; it is a plain class library, so both
          abstractions are referenced rather than coming in with a framework reference. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.13" />
     <!-- Installer: WiX v5 on purpose (v6+ requires OSMF for commercial use) -->
     <PackageVersion Include="WixToolset.Sdk" Version="5.0.2" />
     <!-- Reads streams out of a built .msi. The tests use it for the custom action DLL inside the package: the
