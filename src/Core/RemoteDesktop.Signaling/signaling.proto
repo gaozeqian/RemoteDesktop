@@ -14,6 +14,7 @@ message ClientMessage {
     ConnectReject connect_reject = 4;
     PresenceQuery presence_query = 5;
     TelemetryReport telemetry = 6;
+    SessionEndedReport session_ended = 7;
   }
 }
 
@@ -77,6 +78,9 @@ message IncomingConnection {
   string controller_fingerprint = 3;
   repeated PeerEndpoint controller_candidates = 4;
   RelayInfo relay = 5;
+  // Server-minted id for this session, as a UUID in "D" form. Same value as relay.relay_session_id when a relay is
+  // configured, and present even when it is not: both ends report telemetry and the session end under it.
+  string session_id = 6;
 }
 
 // Host -> server, once it is ready to accept the QUIC connection.
@@ -96,6 +100,9 @@ message ConnectReady {
   string host_fingerprint = 2;
   repeated PeerEndpoint host_candidates = 3;
   RelayInfo relay = 4;
+  // Server-minted id for this session, as a UUID in "D" form. Same value as relay.relay_session_id when a relay is
+  // configured, and present even when it is not: both ends report telemetry and the session end under it.
+  string session_id = 5;
 }
 
 enum FailureReason {
@@ -170,4 +177,17 @@ message TelemetryReport {
   string platform = 7;
   // Product version of the reporting process, e.g. "0.3.0".
   string version = 8;
+}
+
+// Client -> server, once when an established session ends. Unlike a heartbeat this is not optional: a direct (P2P)
+// session is invisible to the relay, so without this report the console has no end fact for it and shows the session
+// as active forever. Sent by both ends; the console treats a repeat as another observation of the same end.
+message SessionEndedReport {
+  // The session both ends agree on (32 hex chars), announced by the controller in Hello.session_id.
+  string session_id = 1;
+  // UUID in "D" form when the server issued one; empty when it did not (an older server, or no relay configured).
+  string relay_session_id = 2;
+  TelemetryRole role = 3;
+  // Short machine-readable reason, e.g. "closed". The console falls back to "ended" for anything it cannot read.
+  string reason = 4;
 }

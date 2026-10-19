@@ -8,7 +8,11 @@ using RemoteDesktop.Transport;
 namespace RemoteDesktop.Application.Sessions;
 
 /// <summary>Use case "connect to a remote device": transport connection, version negotiation, password proof.</summary>
-public sealed class ControllerSessionService(IPeerConnector connector, SessionTelemetry telemetry, TimeProvider time)
+public sealed class ControllerSessionService(
+    IPeerConnector connector,
+    SessionTelemetry telemetry,
+    SessionLifecycle lifecycle,
+    TimeProvider time)
 {
     /// <exception cref="PeerConnectException">No connection could be established.</exception>
     /// <exception cref="SessionException">The host refused the session.</exception>
@@ -66,6 +70,7 @@ public sealed class ControllerSessionService(IPeerConnector connector, SessionTe
             var context = new SessionContext(sessionId, SessionRole.Controller, connection, AccessGrant.Create(grantedMode, granted, granted));
             var session = RemoteSession.Start(context, control, time);
             telemetry.Track(session);
+            lifecycle.Track(session);
             return session;
         }
         catch

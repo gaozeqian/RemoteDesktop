@@ -49,6 +49,36 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
     }
 
     [Fact]
+    public async Task An_end_report_closes_a_direct_session()
+    {
+        var correlation = Guid.NewGuid();
+        var start = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var batch = new List<OpsEventEnvelope>
+        {
+            Event(OpsEventKinds.SessionRequested, start, new { controllerDeviceId = 111u, hostDeviceId = 222u }, correlation),
+            Event(OpsEventKinds.SessionAccepted, start.AddSeconds(1), new { hostDeviceId = 222u }, correlation),
+            Event(
+                OpsEventKinds.SessionEnded,
+                start.AddSeconds(20),
+                new { sessionId = Guid.NewGuid().ToString("N"), role = "controller", reason = "closed" },
+                correlation),
+        };
+
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(batch)).StatusCode);
+
+        var (client, _) = await SignInAsync();
+        using (client)
+        {
+            var sessions = await client.GetFromJsonAsync<SessionList>("/api/sessions?limit=50", Ct);
+            var session = Assert.Single(sessions!.Items, item => item.CorrelationId == correlation.ToString("D"));
+
+            Assert.False(session.Active);
+            Assert.Equal("closed", session.EndReason);
+            Assert.Null(session.Transport);   // direct: no relay ever reported it
+        }
+    }
+
+    [Fact]
     public async Task Replaying_the_same_batch_inserts_nothing_and_keeps_the_bytes()
     {
         var correlation = Guid.NewGuid();

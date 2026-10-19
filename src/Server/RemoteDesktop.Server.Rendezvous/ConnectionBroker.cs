@@ -108,6 +108,9 @@ public sealed partial class ConnectionBroker
             ControllerDeviceId = controller.DeviceId,
             ControllerFingerprint = controller.Fingerprint,
             Relay = relay,
+
+            // Independent of the relay: even a deployment that configures none needs the id both ends report under.
+            SessionId = correlationId.ToString("D"),
         };
         incoming.ControllerCandidates.Add(request.Candidates);
         await host.TrySendAsync(new ServerMessage { IncomingConnection = incoming }, cancellationToken).ConfigureAwait(false);
@@ -122,7 +125,13 @@ public sealed partial class ConnectionBroker
             return;
         }
 
-        var ready = new ConnectReady { RequestId = accept.RequestId, HostFingerprint = host.Fingerprint, Relay = pending.Relay };
+        var ready = new ConnectReady
+        {
+            RequestId = accept.RequestId,
+            HostFingerprint = host.Fingerprint,
+            Relay = pending.Relay,
+            SessionId = pending.CorrelationId.ToString("D"),
+        };
         ready.HostCandidates.Add(accept.Candidates);
         await pending.Controller.TrySendAsync(new ServerMessage { ConnectReady = ready }, cancellationToken).ConfigureAwait(false);
         Publish(OpsEventKinds.SessionAccepted, pending.CorrelationId, new { hostDeviceId = host.DeviceId });

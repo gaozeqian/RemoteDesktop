@@ -47,6 +47,13 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     private readonly Channel<TelemetryReport> _telemetry = Channel.CreateBounded<TelemetryReport>(
         new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.DropOldest });
 
+    /// <summary>
+    /// Session-end reports waiting to go out. A separate queue from heartbeats so a burst of samples cannot push out
+    /// the one fact that closes a row. A device hosts at most 16 sessions, so the bound is generous.
+    /// </summary>
+    private readonly Channel<SessionEndedReport> _sessionEnds = Channel.CreateBounded<SessionEndedReport>(
+        new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.DropOldest });
+
     private ClientWebSocket? _socket;
 
     public RendezvousState State { get; private set; }
@@ -80,6 +87,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var receive = ReceiveLoopAsync(socket, connection.Token);
                 var heartbeat = TelemetryLoopAsync(socket, connection.Token);
+                var sessionEnds = SessionEndLoopAsync(socket, connection.Token);
                 try
                 {
                     await receive.ConfigureAwait(false);
@@ -87,7 +95,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                 finally
                 {
                     await connection.CancelAsync().ConfigureAwait(false);
-                    await heartbeat.ConfigureAwait(false);
+                    await Task.WhenAll(heartbeat, sessionEnds).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -173,6 +181,15 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         _telemetry.Writer.TryWrite(report);
     }
 
+    public void ReportSessionEnded(SessionEndedReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        // Same trade as a heartbeat: a report that cannot be queued is dropped rather than blocking the session's
+        // shutdown. The other end of the session reports the same fact independently.
+        _sessionEnds.Writer.TryWrite(report);
+    }
+
     /// <summary>Drains the queue onto the socket while this connection is up.</summary>
     private async Task TelemetryLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
@@ -191,6 +208,29 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         {
             // Whatever was queued describes a connection that no longer exists.
             while (_telemetry.Reader.TryRead(out _))
+            {
+            }
+        }
+    }
+
+    /// <summary>Drains end reports onto the socket while this connection is up.</summary>
+    private async Task SessionEndLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var report in _sessionEnds.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await WebSocketMessaging.SendAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            // The receive loop reports the disconnect; a report that cannot be sent is not a second error.
+        }
+        finally
+        {
+            // Whatever was queued describes a session on a connection that no longer exists.
+            while (_sessionEnds.Reader.TryRead(out _))
             {
             }
         }

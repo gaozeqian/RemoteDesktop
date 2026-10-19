@@ -28,6 +28,7 @@ public sealed partial class HostSessionService(
     AuthAttemptLimiter limiter,
     ConnectionAdmission admission,
     SessionTelemetry telemetry,
+    SessionLifecycle lifecycle,
     ILogger<HostSessionService> logger,
     ISystemKeepAwake? keepAwake = null) : BackgroundService
 {
@@ -117,6 +118,7 @@ public sealed partial class HostSessionService(
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
                 keepAwake?.Acquire();
                 telemetry.Track(session, end.Token);
+                lifecycle.Track(session, end.Token);
                 SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {

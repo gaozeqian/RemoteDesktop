@@ -89,7 +89,7 @@ public sealed partial class QuicPeerListener(
                 LogAccepted(logger, device, path, connection.RemoteEndPoint);
                 await _accepted.Writer.WriteAsync(
                     new QuicPeerConnection(
-                        connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint, incoming.Relay?.RelaySessionId),
+                        connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint, SessionIdOf(incoming)),
                     cancellationToken).ConfigureAwait(false);
             }
         }
@@ -150,6 +150,13 @@ public sealed partial class QuicPeerListener(
             }
         }
     }
+
+    /// <summary>
+    /// The server-minted id both ends report under. The top-level field is always set by a current server; the relay's
+    /// copy is the fallback for one that predates it.
+    /// </summary>
+    private static string? SessionIdOf(IncomingConnection incoming) =>
+        string.IsNullOrEmpty(incoming.SessionId) ? incoming.Relay?.RelaySessionId : incoming.SessionId;
 
     [LoggerMessage(Level = LogLevel.Error, Message = "QUIC is not supported on this system; incoming connections are disabled.")]
     private static partial void LogQuicUnsupported(ILogger logger);

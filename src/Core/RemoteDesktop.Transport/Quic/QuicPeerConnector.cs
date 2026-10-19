@@ -64,7 +64,7 @@ public sealed partial class QuicPeerConnector(
                         // its heartbeat. Dropping it on the direct path split one session into two console rows: the
                         // signaling row and a second one created by the controller's own id.
                         return new QuicPeerConnection(
-                            direct, remote, ConnectionPath.Direct, identity.Fingerprint, ready.HostFingerprint, ready.Relay?.RelaySessionId);
+                            direct, remote, ConnectionPath.Direct, identity.Fingerprint, ready.HostFingerprint, SessionIdOf(ready));
                     }
                 }
             }
@@ -80,7 +80,7 @@ public sealed partial class QuicPeerConnector(
             {
                 LogConnected(logger, remote, ConnectionPath.Relayed, relayed.RemoteEndPoint);
                 return new QuicPeerConnection(
-                    relayed, remote, ConnectionPath.Relayed, identity.Fingerprint, ready.HostFingerprint, ready.Relay?.RelaySessionId);
+                    relayed, remote, ConnectionPath.Relayed, identity.Fingerprint, ready.HostFingerprint, SessionIdOf(ready));
             }
 
             // Everything that was tried, in the message. A connection that fails on somebody's machine is otherwise
@@ -147,6 +147,13 @@ public sealed partial class QuicPeerConnector(
 
         return null;
     }
+
+    /// <summary>
+    /// The server-minted id both ends report under. The top-level field is always set by a current server; the relay's
+    /// copy is the fallback for one that predates it.
+    /// </summary>
+    private static string? SessionIdOf(ConnectReady ready) =>
+        string.IsNullOrEmpty(ready.SessionId) ? ready.Relay?.RelaySessionId : ready.SessionId;
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connected to {Device} ({Path}) via {EndPoint}.")]
     private static partial void LogConnected(ILogger logger, DeviceId device, ConnectionPath path, IPEndPoint endPoint);

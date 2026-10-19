@@ -1241,7 +1241,7 @@ remotedesktop --self-check
 |---|---|---|
 | 在线设备 | `remotedesktop_devices_online` gauge | 有 |
 | 中继带宽 / 流量图 | Relay 字节计数器求速率 | 有 |
-| 活跃会话 | Relay 配对事件 + 客户端心跳，`source` 分开计数 | 有 |
+| 活跃会话 | Relay 配对/关闭事件 + 客户端会话结束/心跳，`source` 分开计数 | 有 |
 | 链路类型 / 平台分布 | 客户端心跳（被控端报平台） | 有（心跳默认关） |
 | 会话 RTT | 客户端心跳（控制端测） | 有 |
 | 丢包 / 码率 | **无来源** | 不做，显示"—" |
@@ -1270,6 +1270,9 @@ remotedesktop --self-check
   由服务端生成——**绝不用客户端的 `RequestId`**（可被构造，能撞别人的时间线）。
 - 事件是事实（`ops_event`），会话是投影（`ops_session`），同事务写；投影可由事件重放重建。
 - `source ∈ {relay, signaling, client}` 是诚实性字段：不把三者加成一个"活跃会话总数"。
+- **会话结束由客户端上报**：信令新增 `ClientMessage.session_ended`（字段 7），两端各报一次，控制台按同一个
+  `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
+  中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
 
 ### 数据模型
 

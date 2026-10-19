@@ -61,6 +61,31 @@ public class SessionProjectionTests
     }
 
     [Fact]
+    public void A_client_end_report_closes_the_session_with_its_reason()
+    {
+        var requested = SessionProjection.Apply(
+            null,
+            Event(OpsEventKinds.SessionRequested, new { controllerDeviceId = 1u, hostDeviceId = 2u }));
+        var ended = SessionProjection.Apply(
+            requested,
+            Event(OpsEventKinds.SessionEnded, new { sessionId = "0123456789abcdef0123456789abcdef", role = "controller", reason = "closed" }, seconds: 30));
+
+        Assert.Equal(30_000, ended!.EndedAt);
+        Assert.Equal("closed", ended.EndReason);
+        Assert.Equal(1u, ended.ControllerDeviceId);
+    }
+
+    [Fact]
+    public void Two_end_reports_keep_the_earliest_time_and_the_first_reason()
+    {
+        var first = SessionProjection.Apply(null, Event(OpsEventKinds.SessionEnded, new { reason = "closed" }, seconds: 30));
+        var second = SessionProjection.Apply(first, Event(OpsEventKinds.SessionEnded, new { reason = "idle" }, seconds: 20));
+
+        Assert.Equal(20_000, second!.EndedAt);
+        Assert.Equal("closed", second.EndReason);
+    }
+
+    [Fact]
     public void A_failure_ends_the_session_with_its_reason()
     {
         var state = SessionProjection.Apply(null, Event(OpsEventKinds.SessionFailed, new { reason = "timeout" }));

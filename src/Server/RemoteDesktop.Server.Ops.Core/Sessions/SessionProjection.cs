@@ -85,6 +85,14 @@ public static class SessionProjection
                     EndReason = String(root, "reason") ?? "failed",
                 }),
 
+                // A client's report that the session closed. Both ends send one, and for a direct session this is the
+                // only end fact there is — without it the row would stay active for the life of the database.
+                OpsEventKinds.SessionEnded => Merge(current, envelope, at, state => state with
+                {
+                    EndedAt = Earliest(state.EndedAt, at),
+                    EndReason = state.EndReason ?? String(root, "reason") ?? "ended",
+                }),
+
                 OpsEventKinds.RelayPaired => Merge(current, envelope, at, state => state with
                 {
                     Transport = "relay",

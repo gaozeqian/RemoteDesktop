@@ -23,8 +23,9 @@ public interface IPeerConnection : IAsyncDisposable
     ConnectionPath Path { get; }
 
     /// <summary>
-    /// The relay session carrying this connection, when <see cref="Path"/> is <see cref="ConnectionPath.Relayed"/>.
-    /// <c>null</c> on a direct path, and also when the server did not say (an older server).
+    /// The server-minted session id both ends report under. Present on a direct path too, not only on
+    /// <see cref="ConnectionPath.Relayed"/>: it is what ties a heartbeat or an end report to the signaling events for
+    /// the same session. <c>null</c> when the server did not issue one (an older server, or no relay configured).
     /// </summary>
     string? RelaySessionId { get; }
 

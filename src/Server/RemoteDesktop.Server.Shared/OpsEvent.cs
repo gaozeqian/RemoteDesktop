@@ -49,6 +49,10 @@ public static class OpsEventKinds
     public const string SessionRequested = "session.requested";
     public const string SessionAccepted = "session.accepted";
     public const string SessionFailed = "session.failed";
+
+    /// <summary>A client reported that an established session ended. The only end fact a direct session has.</summary>
+    public const string SessionEnded = "session.ended";
+
     public const string RelayPaired = "session.relay_paired";
     public const string RelayClosed = "session.relay_closed";
 

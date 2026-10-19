@@ -60,4 +60,14 @@ public interface IRendezvousClient
     /// place in the client's policy layer rather than in every call site.
     /// </remarks>
     void ReportTelemetry(TelemetryReport report);
+
+    /// <summary>
+    /// Queues the fact that an established session has ended. Not tied to the telemetry switch: a direct session has
+    /// no relay to report its close, so this is the only end fact the console can get for it.
+    /// </summary>
+    /// <remarks>
+    /// Never blocks and never retries, like a heartbeat. Two ends may both report the same session; the console folds
+    /// the second report into the same row.
+    /// </remarks>
+    void ReportSessionEnded(SessionEndedReport report);
 }

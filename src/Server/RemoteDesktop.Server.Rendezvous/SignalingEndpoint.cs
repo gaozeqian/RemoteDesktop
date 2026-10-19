@@ -192,6 +192,10 @@ public sealed partial class SignalingEndpoint(
                     // drops rather than waits, so a flood of heartbeats cannot hold this loop.
                     telemetry.Handle(session, message.Telemetry);
                     break;
+                case ClientMessage.BodyOneofCase.SessionEnded:
+                    // The only end fact a direct session has; same fire-and-forget contract as a heartbeat.
+                    telemetry.HandleSessionEnded(session, message.SessionEnded);
+                    break;
                 default:
                     // Unknown or out-of-order message: ignore so newer clients keep working.
                     break;

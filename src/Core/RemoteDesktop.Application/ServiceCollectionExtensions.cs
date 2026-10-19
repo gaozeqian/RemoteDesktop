@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ConnectionAdmission>();
         services.AddSingleton(telemetry ?? new TelemetryOptions());
         services.AddSingleton<SessionTelemetry>();
+        services.AddSingleton<SessionLifecycle>();
         services.AddSingleton<ChannelDispatcher>();
         services.AddSingleton(sp =>
         {
