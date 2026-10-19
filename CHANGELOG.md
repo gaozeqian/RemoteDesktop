@@ -26,11 +26,26 @@ CHANGELOG 三者是否一致，只靠人记得。
 - **macOS 客户端 `Info.plist` 的版本是字面量**：改为 `__VERSION__`，与 host 用同一套替换，仓库里的文件不再
   假装自己是一个已发布的版本。
 - **文档与测试里的版本示例会过期**：`docs/ops/README.md`、`build/signing/README.md` 改成 `<版本>` 占位符；
-  遥测“产品真实版本可通过”的用例改为读取 `AssemblyInformationalVersion`，不再拿写死的 `0.3.0+…` 当样本。
+  遥测“产品真实版本可通过”的用例改为读取 `ProductVersion.Full`，不再拿写死的 `0.3.0+…` 当样本。
 - **同一产品三种版本拼写**：新增 `RemoteDesktop.Application.ProductVersion` 与
   `RemoteDesktop.Server.Shared.ProductVersion`（客户端与服务端各一份，因为两侧不共享工具程序集；
   `ProductVersionTests` 断言两份一致）。界面侧栏、服务端节点信息用 `Display`（三段），遥测用 `Full`（带提交
   哈希）；`InstallerPackageTests` 新增断言，MSI 的 `ProductVersion` 必须等于 `<Version>` 加 `.0`。
+- **macOS 会在读不到版本时静默产出 `0.0.0`**：五个 macOS 脚本都有 `VERSION:-0.0.0` 回退，而 Windows 会抛错、
+  Linux 会退出；一个 props 路径变化就可能发出一个“合法”的 0.0.0 包。新增 `build/installer/version.sh`，八个
+  macOS/Linux 打包脚本统一 source 它，空值、三段数字与 MSI 数值上限都在这里失败；Windows 的两个
+  `Get-ProductVersion` 也补上了数值上限检查，`check-version` 复用同一份规则。
+- **macOS/Linux 的安装包版本没有在 CI 里核对**：`verify-packages` 的 Linux 分支现在比对 `dpkg-deb` 的 `Version`
+  与文件名，macOS 分支展开 `.pkg` 后比对每个 component 的 `PackageInfo`，并检查 app bundle 的
+  `CFBundleShortVersionString` / `CFBundleVersion`；Windows 的 MSI 版本由既有测试覆盖。一个上次构建留下的包
+  不再能混进来。
+- **Windows 文件属性的“产品版本”带着提交哈希**：Explorer 读的是 `AssemblyInformationalVersion`，于是
+  `0.3.0+<sha>` 出现在一个给人看的字段里。提交哈希改为写进 `AssemblyMetadata("Commit", …)`，
+  `AssemblyInformationalVersion` 保持三段；`ProductVersion.Full` 在运行时把两者拼回 `0.3.0+<sha>`，遥测不变，
+  文件属性、UI 与包内版本都是三段。macOS 的 `CFBundleVersion` 与营销版本同值这一决定也写进了两个 `Info.plist`
+  的注释（Developer ID 分发不受 App Store 的构建号规则约束）。
+- **`<版本>` 在三平台文档里会串**：`docs/ops/README.md` 增加版本形态表，明确 Windows 四段、macOS/Linux 三段、
+  发布资产用 Tag；`build/README.md` 说明 `version.sh` 的位置与职责。
 
 ## [未发布] · 运维监控台：端到端测试
 

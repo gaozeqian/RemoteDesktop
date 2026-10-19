@@ -3,9 +3,11 @@ description: >-
   Opens every installer this platform just built and checks what is inside it, instead of counting files: the Linux
   branch lists the .deb contents with dpkg-deb and reads the dependency lines its control file has to carry, the macOS
   branch lists the .pkg payload with pkgutil, and the Windows branch reads the MSI database through the repository's
-  own installer package tests. Shared by ci.yml and release.yml and by all three platforms, so that the same claim is
-  made about every package in the same way. Every one of these build scripts can exit zero without having produced
-  something usable, and a package that installs nothing is still a package.
+  own installer package tests. Every branch also compares the version the package declares with
+  Directory.Build.props, so a stale package or a 0.0.0 fallback fails here. Shared by ci.yml and release.yml and by
+  all three platforms, so that the same claim is made about every package in the same way. Every one of these build
+  scripts can exit zero without having produced something usable, and a package that installs nothing is still a
+  package.
 
 runs:
   using: composite
@@ -15,6 +17,12 @@ runs:
       shell: bash
       run: |
         set -eu
+
+        # One version source. Reading it here, through the same helper the packagers use, is what turns "the package
+        # was built" into "the package was built from this checkout" — a stale .deb or a 0.0.0 fallback otherwise
+        # passes every check below, because both are perfectly valid package contents.
+        . build/installer/version.sh
+        expected=$(read_product_version "$PWD")
 
         count=$(ls -1 artifacts/installer/linux/*.deb 2>/dev/null | wc -l)
         if [ "$count" -ne 3 ]; then
@@ -30,6 +38,23 @@ runs:
         check() {
           package=$1
           binary=$2
+
+          # The declared version and the name have to agree with the checkout, not merely be well-formed. The
+          # glob above deliberately accepts any version so that a package from an earlier build is visible here
+          # rather than silently skipped; this is what rejects it.
+          package_version=$(dpkg-deb --field "$package" Version)
+          if [ "$package_version" != "$expected" ]; then
+            echo "$package declares version $package_version, expected $expected." >&2
+            exit 1
+          fi
+
+          case "$package" in
+            *"-$expected.deb") ;;
+            *)
+              echo "$package is not named for version $expected." >&2
+              exit 1
+              ;;
+          esac
 
           # The listing is read into a variable rather than piped into grep: grep stops at the first match and
           # closes the pipe, which leaves dpkg's tar writing into nothing and printing a broken-pipe error that
@@ -73,12 +98,66 @@ runs:
       run: |
         set -eu
 
+        # Same version source as the Linux branch and as the packagers themselves.
+        . build/installer/version.sh
+        expected=$(read_product_version "$PWD")
+
         count=$(ls -1 artifacts/installer/macos/*.pkg 2>/dev/null | wc -l)
         if [ "$count" -ne 3 ]; then
           echo "Expected three packages, found $count:" >&2
           ls -la artifacts/installer/macos/ >&2 || true
           exit 1
         fi
+
+        # Every component package carries a version, and the product archive's pkg-ref is built from the same value.
+        # A package left over from an earlier build, or one built before <Version> was readable, fails here.
+        check_component_versions() {
+          package=$1
+          expanded=$(mktemp -d)
+          pkgutil --expand "$package" "$expanded"
+          components=0
+          for component in "$expanded"/*.pkg; do
+            [ -d "$component" ] || continue
+            components=$((components + 1))
+            actual=$(/usr/bin/plutil -extract version raw "$component/PackageInfo" 2>/dev/null || true)
+            if [ "$actual" != "$expected" ]; then
+              echo "$package component $(basename "$component") declares version '$actual', expected $expected." >&2
+              exit 1
+            fi
+          done
+          if [ "$components" -eq 0 ]; then
+            echo "$package has no component package whose version could be read." >&2
+            exit 1
+          fi
+          rm -rf "$expanded"
+        }
+
+        # The bundle has its own version and the package receipt does not prove they agree. --expand-full exposes the
+        # payload; if a package genuinely has no app, the caller does not use this.
+        check_bundle_version() {
+          package=$1
+          expanded=$(mktemp -d)
+          if ! pkgutil --expand-full "$package" "$expanded" >/dev/null 2>&1; then
+            echo "$package could not be expanded to read the app bundle version." >&2
+            exit 1
+          fi
+          info=$(find "$expanded" -path '*.app/Contents/Info.plist' -print | head -1)
+          if [ -z "$info" ]; then
+            echo "$package has no .app/Contents/Info.plist." >&2
+            exit 1
+          fi
+          actual=$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$info" 2>/dev/null || true)
+          if [ "$actual" != "$expected" ]; then
+            echo "$package bundle declares CFBundleShortVersionString '$actual', expected $expected." >&2
+            exit 1
+          fi
+          actual=$(/usr/bin/plutil -extract CFBundleVersion raw "$info" 2>/dev/null || true)
+          if [ "$actual" != "$expected" ]; then
+            echo "$package bundle declares CFBundleVersion '$actual', expected $expected." >&2
+            exit 1
+          fi
+          rm -rf "$expanded"
+        }
 
         # Same two questions as the .deb branch: is the program the package exists to install in there, and is the
         # thing that makes it run in there with it. On macOS that second part is the launchd job for each server and
@@ -88,12 +167,14 @@ runs:
           package=$1
           shift
 
+          check_component_versions "$package"
+
           payload=$(pkgutil --payload-files "$package")
-          for expected in "$@"; do
+          for wanted in "$@"; do
             case "$payload" in
-              *"$expected"*) ;;
+              *"$wanted"*) ;;
               *)
-                echo "$package does not contain $expected." >&2
+                echo "$package does not contain $wanted." >&2
                 exit 1
                 ;;
             esac
@@ -102,14 +183,17 @@ runs:
           echo "--- $(basename "$package") $($(command -v stat) -f%z "$package") bytes, $(printf '%s\n' "$payload" | wc -l | tr -d ' ') payload entries"
         }
 
-        check artifacts/installer/macos/RemoteDesktop-Client-macOS-*.pkg \
+        client=$(ls -1 artifacts/installer/macos/RemoteDesktop-Client-macOS-*.pkg)
+        check "$client" \
           RemoteDesktop.Client 'Remote Desktop.app/Contents/Info.plist'
+        check_bundle_version "$client"
 
         # The host package is a product archive with two components (the app and the login item). pkgutil
         # --payload-files shows only the first one, and it does not read an expanded component directory either, so
         # the archive is expanded and each component's BOM is read. Checking the product's payload list is what made
         # a correct two-package product look like it had lost the login item.
         host=$(ls -1 artifacts/installer/macos/RemoteDesktop-Host-macOS-*.pkg)
+        check_component_versions "$host"
         host_expanded=$(mktemp -d)
         pkgutil --expand "$host" "$host_expanded"
         for component in app agent; do
@@ -127,6 +211,7 @@ runs:
           exit 1
         fi
         rm -rf "$host_expanded"
+        check_bundle_version "$host"
         echo "--- $(basename "$host") $($(command -v stat) -f%z "$host") bytes, app + login item"
 
         check artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg \
@@ -162,7 +247,8 @@ runs:
         # The build scripts run these tests once themselves as part of building, so on Windows this is a second pass
         # over the same packages. That is deliberate: it is what makes this the same claim on all three platforms,
         # and it is the pass that verifies the package the release job has on disk rather than the one the build
-        # script had in hand.
+        # script had in hand. InstallerPackageTests includes the assertion that the MSI's ProductVersion is the
+        # product version plus the fourth .0.
         $checks = @(
           @{ Msi = $client[0].FullName;      Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.InstallerPackageTests' }
           @{ Msi = $hostPackage[0].FullName; Variable = 'RD_INSTALLER_MSI';        Class = 'RemoteDesktop.Platform.Windows.UnitTests.HostInstallerPackageTests' }

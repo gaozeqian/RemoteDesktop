@@ -87,7 +87,8 @@ pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 ```
 
 下面的命令里 `<版本>` 是**四段**版本（`Directory.Build.props` 的三段加 `.0`，例如 `0.4.0.0`）：Windows Installer
-只认四段数字。以 `artifacts/installer/windows/` 里的实际文件名为准，本文不再写死某一版。
+只认四段数字。Linux/macOS 的同名占位符仍是三段，见 §三 的版本形态表。以 `artifacts/installer/windows/` 里的
+实际文件名为准，本文不再写死某一版。
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
 
@@ -549,7 +550,17 @@ Restart-Service RemoteDesktopOps
 
 ## 三、自动化发布到 GitHub Releases
 
-项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**九个**安装包放进同一个 Release——三个平台各出三个角色，装的机器不同，版本是同一个：
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您打上 `v` 开头的 Tag 时，云端会自动跑测试、打包，并把**九个**安装包放进同一个 Release——三个平台各出三个角色，装的机器不同，版本是同一个。
+
+同一个 `<Version>` 在三个平台上的最终形态不同，这是安装包格式决定的，不是漂移：
+
+| 平台 | 包内版本 | 构建产物名 | 发布资产名 |
+|---|---|---|---|
+| Windows | `0.4.0.0`（三段 + `.0`，MSI 只认四段数字） | `RemoteDesktop-Client-Windows-x64-0.4.0.0.msi` | `RemoteDesktop-Client-Windows-x64-v0.4.0.msi` |
+| macOS | `0.4.0`（`CFBundleShortVersionString`、`CFBundleVersion`、`pkgbuild --version` 同值） | `RemoteDesktop-Client-macOS-arm64-0.4.0.pkg` | `RemoteDesktop-Client-macOS-arm64-v0.4.0.pkg` |
+| Linux | `0.4.0`（`control` 的 `Version`） | `RemoteDesktop-Client-Linux-amd64-0.4.0.deb` | `RemoteDesktop-Client-Linux-amd64-v0.4.0.deb` |
+
+三段的源只有 `Directory.Build.props`；Windows 的第四段由打包脚本追加，macOS/Linux 不改写。发布资产名用 Tag，所以包内版本与资产名不会逐字相同。`0.4.0-rc.1` 这类后缀不受支持：MSI 装不下，macOS 的 bundle version 也不接受。Linux 的 `Version` 不带 Debian revision（是 `0.3.0`，不是 `0.3.0-1`）：这是自发布包；若将来由发行版重打包，revision 由打包者追加。Windows 文件属性里的“产品版本”也是三段；提交哈希只出现在遥测的 `Full` 里（`AssemblyMetadata("Commit")`），不在文件元数据里。
 
 | 产物 | 平台 | 装的是什么 |
 |---|---|---|

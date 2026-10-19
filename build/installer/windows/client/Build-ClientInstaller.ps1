@@ -168,6 +168,13 @@ function Get-ProductVersion {
         throw "Version '$version' is not a valid MSI version (major.minor.build)."
     }
 
+    # The numeric ranges MSI allows. Matching the shape is not enough: WiX refuses 0.300.0 or 0.3.70000 later, with a
+    # message about the package rather than about the version that caused it.
+    $parts = $version.Split('.') | ForEach-Object { [double]$_ }
+    if ($parts[0] -gt 255 -or $parts[1] -gt 255 -or $parts[2] -gt 65535) {
+        throw "Version '$version' is outside the MSI limits (major/minor 0-255, build 0-65535)."
+    }
+
     return "$version.0"
 }
 

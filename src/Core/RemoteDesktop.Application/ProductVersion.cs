@@ -37,10 +37,26 @@ public static class ProductVersion
     {
         var assembly = typeof(ProductVersion).Assembly;
 
-        // The informational version is present on every SDK-built assembly. The fallback is for the theoretical case
-        // of one stripped after the fact; a three-part answer is still better than "unknown".
-        return assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? assembly.GetName().Version?.ToString(3)
             ?? "0.0.0";
+
+        // The build puts the commit in an AssemblyMetadata attribute rather than in AssemblyInformationalVersion:
+        // Windows shows the informational version as the file's "Product version", and a commit hash there is noise
+        // in a field people read. Rejoining the two here keeps telemetry's "0.3.0+<sha>" while the metadata stays
+        // three-part.
+        string? commit = null;
+        foreach (var attribute in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+        {
+            if (attribute.Key == "Commit")
+            {
+                commit = attribute.Value;
+                break;
+            }
+        }
+
+        return string.IsNullOrEmpty(commit) || informational.Contains('+')
+            ? informational
+            : $"{informational}+{commit}";
     }
 }

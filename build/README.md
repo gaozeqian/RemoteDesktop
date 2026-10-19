@@ -50,7 +50,7 @@ bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被
 
 | 位置 | 本层 | 子目录 |
 |---|---|---|
-| `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
+| `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF；`version.sh`：macOS/Linux 打包脚本共用的版本读取与校验 | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
 | `service/` | — | `<平台>/`：只有那个平台上的服务管理器读得懂的定义 |
 | `signing/` | 跨平台的证书脚本（纯 .NET API，`pwsh` 三平台可跑） | `windows/`：只在 Windows 上成立的两件事 |
 | `tools/` | 三个仓库维护脚本，与平台无关，见下 | — |
@@ -58,7 +58,14 @@ bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被
 `installer/` 与 `signing/` 看起来是"脚本和子目录混在一层"，其实不是混放：**本层 = 共用，子目录 = 专属**。
 判断标准只有一句——这个文件是被两个以上的角色/平台用到，还是只被一个用到。
 
-`installer/` 本层那个脚本是这条判据里唯一的窄例，值得说清楚：它**只被 Windows 用**（RTF 是 WiX 许可页的格式），
+`installer/version.sh` 就是这条规则的一个例子：它只有一份，被 macOS 的五个脚本与 Linux 的三个脚本 source。
+版本本身仍来自根 `Directory.Build.props` 的 `<Version>`；这个脚本负责空值、三段数字与 MSI 数值上限的检查，
+让 macOS/Linux 在本地打包时也得到与 Windows 相同的失败，而不是各自回退到 `0.0.0` 或用另一种解释接受它。
+Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的最终形态见
+[`docs/ops/README.md`](../docs/ops/README.md) 的"版本形态"表。
+
+`installer/New-LicenseRtf.ps1` 是这条判据里的一个窄例（`version.sh` 是标准情形：两个平台、三个角色都用到），
+值得说清楚：它**只被 Windows 用**（RTF 是 WiX 许可页的格式），
 之所以还放在共用层，是因为它服务的是 client 与 server **两个角色**。许可文本本身不在这一层——它是仓库根的
 `LICENSE`，macOS 的 `.pkg` 直接拷那一份（`make-pkg.sh` 里的 `<license file="License.txt"/>`），根本不经过这个脚本。
 换句话说："两平台共用的东西"放本层，"两角色共用的东西"也放，这一层收的是后者。

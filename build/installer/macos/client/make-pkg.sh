@@ -125,9 +125,10 @@ fi
 
 # --- 2. Version ------------------------------------------------------------------------------------------------
 
-# The version in the package should be the version that was built, not a copy that drifts.
-VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$REPO_ROOT/Directory.Build.props" | head -1)"
-VERSION="${VERSION:-0.0.0}"
+# The version in the package should be the version that was built, not a copy that drifts. version.sh owns both the
+# read and its rules: a missing or malformed <Version> fails here rather than producing a 0.0.0 package.
+. "$SCRIPT_DIR/../../version.sh"
+VERSION="$(read_product_version "$REPO_ROOT")"
 
 mkdir -p "$OUTPUT_DIR"
 WORK_DIR="$(mktemp -d)"

@@ -110,9 +110,10 @@ chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
 
 # The version in the bundle should be the version that was built, not a copy that drifts. Substituted the same way
 # the host's Info.plist is: one mechanism for both bundles, and the file in the repository states that it is a
-# placeholder rather than an old release.
-VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$REPO_ROOT/Directory.Build.props" | head -1)"
-VERSION="${VERSION:-0.0.0}"
+# placeholder rather than an old release. version.sh owns the read and its rules, so a missing or malformed
+# <Version> fails here instead of producing a 0.0.0 bundle.
+. "$SCRIPT_DIR/../../version.sh"
+VERSION="$(read_product_version "$REPO_ROOT")"
 
 sed "s/__VERSION__/$VERSION/g" "$SCRIPT_DIR/Info.plist" > "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$CONTENTS_DIR/Info.plist"

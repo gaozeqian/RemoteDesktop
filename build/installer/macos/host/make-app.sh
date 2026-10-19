@@ -52,8 +52,10 @@ APP_DIR="$OUTPUT_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 
-VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$REPO_ROOT/Directory.Build.props" | head -1)"
-VERSION="${VERSION:-0.0.0}"
+# version.sh owns the read and its rules, so a missing or malformed <Version> fails here instead of producing a
+# 0.0.0 bundle.
+. "$SCRIPT_DIR/../../version.sh"
+VERSION="$(read_product_version "$REPO_ROOT")"
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
     echo "==> Publishing RemoteDesktop.HostService ($CONFIGURATION, osx-arm64)"

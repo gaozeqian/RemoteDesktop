@@ -10,14 +10,10 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/../../../.." && pwd)
-version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$root/Directory.Build.props" | head -1)
+. "$root/build/installer/version.sh"
+version=$(read_product_version "$root")
 architecture=${DEB_ARCHITECTURE:-amd64}
 runtime=${DEB_RUNTIME:-linux-x64}
-
-if [ -z "$version" ]; then
-    echo "Could not read the version out of Directory.Build.props." >&2
-    exit 1
-fi
 
 # Same single artifacts/ root and <kind>/<os>/ shape as the Windows and macOS installers: a .deb is a delivered
 # installer, so it belongs under installer/, next to the .msi and the .pkg.

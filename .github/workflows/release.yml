@@ -23,15 +23,12 @@ jobs:
       - name: Check the tag, the product version and the changelog agree
         run: |
           set -euo pipefail
-          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
-          if [[ -z "$version" ]]; then
-            echo "::error file=Directory.Build.props::No <Version> element."
-            exit 1
-          fi
 
-          # 只接受 v<三段数字>：Windows Installer 只认这种版本，带 -rc.1 的 Tag 打不出包，早失败好过在 WiX 里失败。
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error file=Directory.Build.props::<Version> must be three numeric parts (major.minor.build); an MSI cannot carry a pre-release suffix."
+          # The same read and the same rules the packagers use: three numeric parts and within MSI's limits. Keeping
+          # the rules in one place is why this job does not repeat the sed expression.
+          . build/installer/version.sh
+          if ! version=$(read_product_version "$PWD"); then
+            echo "::error file=Directory.Build.props::The product version is missing, not three numeric parts, or outside the MSI limits (see above)."
             exit 1
           fi
 

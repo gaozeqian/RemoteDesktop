@@ -19,6 +19,13 @@
       pre-release suffix cannot be expressed in an MSI.
     -->
     <Version>0.3.0</Version>
+    <!--
+      The commit goes into a separate assembly attribute, not into AssemblyInformationalVersion. The file's
+      "Product version" on Windows is the informational version, so leaving the hash there put it in a field meant
+      for people (Explorer, the file properties dialog). Telemetry still gets "0.3.0+<sha>" - ProductVersion.Full
+      joins the two - while the UI, the packages and the file metadata stay three-part.
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!--
@@ -40,4 +47,17 @@
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
   </PropertyGroup>
+
+  <!--
+    The commit has to be added after source control information is initialized, which is why this is a target rather
+    than an item in a static ItemGroup: $(SourceRevisionId) is empty at evaluation time. GenerateAssemblyInfo turns
+    each AssemblyMetadata item into an AssemblyMetadataAttribute, which ProductVersion.Full reads back.
+  -->
+  <Target Name="RemoteDesktopAddCommitMetadata"
+          BeforeTargets="GetAssemblyAttributes"
+          DependsOnTargets="InitializeSourceControlInformation">
+    <ItemGroup Condition="'$(SourceRevisionId)' != ''">
+      <AssemblyMetadata Include="Commit" Value="$(SourceRevisionId)" />
+    </ItemGroup>
+  </Target>
 </Project>
