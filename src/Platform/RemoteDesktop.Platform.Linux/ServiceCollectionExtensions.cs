@@ -58,7 +58,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PortalGrant>();
         services.AddSingleton<PortalControlSession>();
         services.AddSingleton<IScreenCapturerFactory, PipeWireScreenCapturerFactory>();
-        services.AddSingleton<IInputInjector, LibEiInputInjector>();
+
+        // The injector is also where the control grant's state lives: the portal tells it whether the desktop will
+        // accept input, and libei can fail after the portal has already said yes. Registered once and resolved
+        // through both interfaces so there is one status and one event.
+        services.AddSingleton<LibEiInputInjector>();
+        services.AddSingleton<IInputInjector>(provider => provider.GetRequiredService<LibEiInputInjector>());
+        services.AddSingleton<IInputAccess>(provider => provider.GetRequiredService<LibEiInputInjector>());
 
         // The clipboard rides on the same remote-desktop session as the input, because the portal attaches it there
         // and allows it to be requested only once and only before that session starts.
@@ -68,6 +74,7 @@ public static class ServiceCollectionExtensions
         // interface to the same instance keeps one grant and one list rather than two of each.
         services.AddSingleton<WaylandCameraEnumerator>();
         services.AddSingleton<ICameraEnumerator>(provider => provider.GetRequiredService<WaylandCameraEnumerator>());
+        services.AddSingleton<ICameraAccess, CameraAccess>();
         services.AddSingleton<ICameraSourceFactory, WaylandCameraSourceFactory>();
         services.AddSingleton<IVideoDecoderFactory, FfmpegVideoDecoderFactory>();
         services.AddSingleton<IPtyHost, PosixPtyHost>();

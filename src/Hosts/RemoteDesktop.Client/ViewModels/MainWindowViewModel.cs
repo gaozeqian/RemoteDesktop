@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Audio;
+using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
@@ -170,6 +171,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string? FixedPasswordError { get; set; }
+
+    /// <summary>
+    /// The camera grant, on a platform that needs an explicit one. Null when the host is older than this window or
+    /// when the operating system asks when the camera is opened.
+    /// </summary>
+    [ObservableProperty]
+    public partial CameraAccessState? CameraAccess { get; set; }
+
+    [ObservableProperty]
+    public partial string CameraAccessStatus { get; set; } = "状态未知";
+
+    [ObservableProperty]
+    public partial string? CameraAccessError { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsCameraAccessBusy { get; set; }
+
+    /// <summary>
+    /// Whether the camera-permission section applies. It is a Linux answer to a Linux portal limitation; the other
+    /// platforms ask through their own camera APIs and have no separate grant to show.
+    /// </summary>
+    public static bool HasCameraAccess => OperatingSystem.IsLinux();
 
     /// <summary>
     /// Whether this machine has a login-item concept: macOS, where the client is its own host. On Windows the same
@@ -768,6 +791,51 @@ public sealed partial class MainWindowViewModel : ObservableObject
         await RefreshHostStatusAsync();
     }
 
+    /// <summary>
+    /// Allows the controlled end to use its cameras.
+    /// </summary>
+    /// <remarks>
+    /// The grant is written in the host process, not here: the portal keys it by the app id of the process that asks,
+    /// and that is the host service (or this process, when it is its own host), not the window.
+    /// </remarks>
+    [RelayCommand]
+    private Task AllowCameraAccessAsync() => SetCameraAccessAsync(allowed: true);
+
+    [RelayCommand]
+    private Task RevokeCameraAccessAsync() => SetCameraAccessAsync(allowed: false);
+
+    private async Task SetCameraAccessAsync(bool allowed)
+    {
+        if (IsCameraAccessBusy)
+        {
+            return;
+        }
+
+        IsCameraAccessBusy = true;
+        CameraAccessError = null;
+        try
+        {
+            await _hostControl.SetCameraAccessAsync(allowed, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+        {
+            // The host's own sentence names the reason (no app id, no permission store); keep it.
+            CameraAccessError = ex.Message;
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException)
+        {
+            CameraAccessError = $"{HostUnreachable}，摄像头权限未更改。";
+            return;
+        }
+        finally
+        {
+            IsCameraAccessBusy = false;
+        }
+
+        await RefreshHostStatusAsync();
+    }
+
     /// <summary>Reads the login-item state macOS reports. Called at start-up and from the status poll, because the user can also change it in System Settings → 登录项.</summary>
     [SupportedOSPlatform("macos")]
     private void RefreshLoginItemState()
@@ -1134,6 +1202,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ServerHint = null;
             HostRendezvousUri = null;
             CanEditHostServerAddress = false;
+            CameraAccess = null;
+            CameraAccessStatus = "状态未知";
             return;
         }
 
@@ -1141,6 +1211,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         TemporaryPassword = status.TemporaryPassword;
         HasFixedPassword = status.HasFixedPassword;
         FixedPasswordStatus = status.HasFixedPassword ? "已开启（长效密码）" : "未设置";
+        CameraAccess = status.CameraAccess;
+        CameraAccessStatus = status.CameraAccess switch
+        {
+            CameraAccessState.Allowed => "已允许（控制端可以使用本机摄像头）",
+            CameraAccessState.Denied => "已拒绝（控制端无法使用本机摄像头）",
+            CameraAccessState.Unset => "未授权 — 控制端打不开摄像头",
+            CameraAccessState.Unsupported => "当前启动方式无法授权：请使用已安装的宿主服务，或从应用菜单启动客户端",
+            CameraAccessState.Unknown => "状态未知（桌面权限服务没有回应）",
+            _ => "状态未知",
+        };
         var online = status.ServerState == nameof(Transport.Rendezvous.RendezvousState.Online);
         var where = string.IsNullOrEmpty(status.RendezvousUri) ? string.Empty : $"（{status.RendezvousUri}）";
         ServerStatus = status.ServerState switch

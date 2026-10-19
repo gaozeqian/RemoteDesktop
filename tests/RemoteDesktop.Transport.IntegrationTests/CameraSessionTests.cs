@@ -76,6 +76,22 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     }
 
     [Fact]
+    public async Task A_host_that_was_not_granted_the_camera_says_so_instead_of_listing_nothing()
+    {
+        // "No cameras" and "the desktop has not allowed the camera" are different facts, and only the second one can
+        // be fixed by the person at the host with one click. The host answers the list request with a refusal and a
+        // sentence, which the controller shows instead of its own generic empty-list message.
+        foreach (var state in new[] { CameraAccessState.Unset, CameraAccessState.Denied })
+        {
+            await using var pair = await Pair.StartAsync(server, allowCamera: true, cameraAccess: new FakeCameraAccess(state));
+
+            var refused = await Assert.ThrowsAsync<CameraException>(() => CameraViewer.ListCamerasAsync(pair.Session.Context.Connection, Ct));
+            Assert.Equal(CameraError.NotAllowed, refused.Error);
+            Assert.Contains("摄像头权限", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task The_host_lists_its_cameras_with_their_modes()
     {
         await using var pair = await Pair.StartAsync(server, allowCamera: true);
@@ -291,6 +307,14 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         }
     }
 
+    private sealed class FakeCameraAccess(CameraAccessState state) : ICameraAccess
+    {
+        public Task<CameraAccessState> GetStateAsync(CancellationToken cancellationToken) => Task.FromResult(state);
+
+        public Task SetAllowedAsync(bool allowed, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("The test only reads the state.");
+    }
+
     private sealed class SwitchableGuard : IUserContextGuard
     {
         public volatile string? Reason;
@@ -428,11 +452,16 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
 
         public FakeSource Source { get; } = new();
 
-        public static async Task<Pair> StartAsync(ServerFixture server, bool allowCamera, SessionMode mode = SessionMode.Control, IUserContextGuard? guard = null)
+        public static async Task<Pair> StartAsync(
+            ServerFixture server,
+            bool allowCamera,
+            SessionMode mode = SessionMode.Control,
+            IUserContextGuard? guard = null,
+            ICameraAccess? cameraAccess = null)
         {
             var pair = new Pair();
             var cameras = new FakeCameras(pair.Source);
-            var module = new CameraModule(cameras, cameras, guard ?? new SwitchableGuard(), CreateCodecs(), TimeProvider.System, NullLogger<CameraModule>.Instance);
+            var module = new CameraModule(cameras, cameras, guard ?? new SwitchableGuard(), CreateCodecs(), TimeProvider.System, NullLogger<CameraModule>.Instance, cameraAccess);
             pair.Host = await TestDevice.StartAsync(server, forceRelay: false, module);
             if (!allowCamera)
             {

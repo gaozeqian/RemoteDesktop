@@ -50,6 +50,44 @@ if (HostCredentialCommands.TryRun(args, credentialDataDirectory, Console.Out, ou
     return credentialExitCode;
 }
 
+// The camera grant has to be made by the running service: the portal identifies the application by the systemd user
+// unit it runs under, and a one-shot process started from a shell has a different cgroup and therefore no app id the
+// portal knows. This command asks the service to make the grant, which is also how a host with no graphical client
+// installed gets its camera allowed.
+var cameraAccessArgument = Array.IndexOf(args, "--camera-access");
+if (OperatingSystem.IsLinux() && cameraAccessArgument >= 0)
+{
+    var value = cameraAccessArgument + 1 < args.Length ? args[cameraAccessArgument + 1] : null;
+    var allowed = string.Equals(value, "allow", StringComparison.OrdinalIgnoreCase);
+    var refused = string.Equals(value, "deny", StringComparison.OrdinalIgnoreCase);
+    if (!allowed && !refused)
+    {
+        Console.Error.WriteLine("Usage: RemoteDesktop.HostService --camera-access allow|deny [--HostControlPipe <name>]");
+        return 2;
+    }
+
+    var pipeName = HostControlProtocol.PipeName;
+    var pipeArgument = Array.IndexOf(args, "--HostControlPipe");
+    if (pipeArgument >= 0 && pipeArgument + 1 < args.Length && !string.IsNullOrWhiteSpace(args[pipeArgument + 1]))
+    {
+        pipeName = args[pipeArgument + 1];
+    }
+
+    try
+    {
+        await new PipeHostControl(pipeName).SetCameraAccessAsync(allowed, CancellationToken.None);
+        Console.WriteLine(allowed
+            ? "Camera access granted. The camera portal will answer this host without asking again."
+            : "Camera access revoked. The next controller will be told the host does not allow its camera.");
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException)
+    {
+        Console.Error.WriteLine($"Could not change camera access: {ex.Message}");
+        return 1;
+    }
+}
+
 // Before anything is built, so that it still answers on a machine where the service cannot start — which is the
 // machine somebody runs it on. This end is where the portal, PipeWire and libei are actually reached for, so it is
 // the end that has the most to say and the one most likely to be installed on its own.

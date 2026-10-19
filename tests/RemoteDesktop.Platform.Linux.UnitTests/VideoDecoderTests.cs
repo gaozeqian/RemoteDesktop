@@ -62,6 +62,53 @@ public sealed class VideoDecoderTests
     }
 
     [Fact]
+    public void A_picture_keeps_its_colour_on_the_side_it_was_on()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        using var encoder = new FfmpegH264Encoder("libx264", Options);
+        using var decoder = new FfmpegVideoDecoder("h264", Width, Height);
+
+        // Flat luminance and a hard chroma split down the middle. The picture's colour must come out on the side it
+        // went in on; the decoder's planar-to-interleaved chroma copy once read the source at the output's byte
+        // offset, which skipped half of the chroma samples and pulled the rest from two rows away — visible as
+        // colour ghosts displaced sideways, while luminance stayed perfect. A flat neutral chroma, as the other
+        // tests use, cannot see that.
+        using var source = new MemoryVideoFrame(Width, Height, PixelFormat.Nv12, TimeSpan.Zero);
+        source.Buffer[..(Width * Height)].Fill(0x80);
+        var uv = source.Buffer[(Width * Height)..];
+        for (var row = 0; row < Height / 2; row++)
+        {
+            var line = uv.Slice(row * Width, Width);
+            for (var column = 0; column < Width; column += 2)
+            {
+                var left = column < Width / 2;
+                line[column] = left ? (byte)64 : (byte)192;
+                line[column + 1] = left ? (byte)192 : (byte)64;
+            }
+        }
+
+        var accessUnit = encoder.Encode(source, forceKeyFrame: true).Single();
+        using var decoded = decoder.Decode(accessUnit);
+        Assert.NotNull(decoded);
+
+        var pixels = decoded.GetPixels(out _).ToArray();
+        var uvOffset = Width * Height;
+        byte U(int pair, int row) => pixels[uvOffset + (row * Width) + (pair * 2)];
+        byte V(int pair, int row) => pixels[uvOffset + (row * Width) + (pair * 2) + 1];
+
+        const int LeftPair = Width / 8;
+        const int RightPair = Width / 8 * 3;
+        const int SampleRow = Height / 8;
+
+        // Direction, with a margin for H.264's losses; the two halves start 128 apart.
+        Assert.True(U(RightPair, SampleRow) - U(LeftPair, SampleRow) > 40,
+            $"The right half should be more blue than the left: U was {U(LeftPair, SampleRow)} then {U(RightPair, SampleRow)}.");
+        Assert.True(V(LeftPair, SampleRow) - V(RightPair, SampleRow) > 40,
+            $"The left half should be more red than the right: V was {V(LeftPair, SampleRow)} then {V(RightPair, SampleRow)}.");
+    }
+
+    [Fact]
     public void Frames_kept_by_the_caller_do_not_change_under_them()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);

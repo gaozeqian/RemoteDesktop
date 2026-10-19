@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Features;
@@ -31,7 +32,17 @@ public sealed class TestDevice : IAsyncDisposable
     public static Task<TestDevice> StartAsync(ServerFixture server, bool forceRelay = false, params IFeatureModule[] modules) =>
         StartAsync(server.RendezvousUri, forceRelay, modules);
 
-    public static async Task<TestDevice> StartAsync(Uri rendezvousUri, bool forceRelay = false, params IFeatureModule[] modules)
+    public static Task<TestDevice> StartAsync(ServerFixture server, bool forceRelay, IInputAccess inputAccess, params IFeatureModule[] modules) =>
+        StartAsync(server.RendezvousUri, forceRelay, inputAccess, modules);
+
+    public static Task<TestDevice> StartAsync(Uri rendezvousUri, bool forceRelay = false, params IFeatureModule[] modules) =>
+        StartAsync(rendezvousUri, forceRelay, inputAccess: null, modules);
+
+    public static async Task<TestDevice> StartAsync(
+        Uri rendezvousUri,
+        bool forceRelay,
+        IInputAccess? inputAccess,
+        params IFeatureModule[] modules)
     {
         // Deliberately not the full set of defaults. Host.CreateApplicationBuilder() adds appsettings.json as a
         // *reloading* file provider, and a reloading provider holds an inotify instance for as long as the host lives.
@@ -54,6 +65,11 @@ public sealed class TestDevice : IAsyncDisposable
         foreach (var module in modules)
         {
             builder.Services.AddSingleton(module);
+        }
+
+        if (inputAccess is not null)
+        {
+            builder.Services.AddSingleton(inputAccess);
         }
 
         var device = new TestDevice(builder.Build());

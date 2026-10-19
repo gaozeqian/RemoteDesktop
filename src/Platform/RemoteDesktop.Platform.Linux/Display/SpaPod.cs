@@ -150,15 +150,25 @@ public readonly struct SpaPod
             return this;
         }
 
-        // A choice body is {type, flags, child_size, child_type} followed by its alternatives.
+        // A choice body is {type, flags, child} and then the alternatives. The child is a pod header describing one
+        // alternative — its size and type — and the alternatives themselves are written as bare values after it, not
+        // as nested pods. Treating them as pods reads the first value's first word as a length: a camera's framerate
+        // choice starts with 30/1, so that word is 30 and the parser reported "a pod claims 30 bytes" on every start.
         const int ChoiceHeaderSize = 16;
         if (_body.Length < ChoiceHeaderSize)
         {
             throw new InvalidDataException("A choice pod is shorter than its header.");
         }
 
-        var first = Children(_body[ChoiceHeaderSize..]).GetEnumerator();
-        return first.MoveNext() ? first.Current : throw new InvalidDataException("A choice pod offers no alternatives.");
+        var valueSize = BinaryPrimitives.ReadUInt32LittleEndian(_body.Span[8..]);
+        var valueType = BinaryPrimitives.ReadUInt32LittleEndian(_body.Span[12..]);
+        if (valueSize == 0 || valueSize > _body.Length - ChoiceHeaderSize)
+        {
+            throw new InvalidDataException(
+                $"A choice pod's first value is {valueSize} bytes, but only {_body.Length - ChoiceHeaderSize} are present.");
+        }
+
+        return new SpaPod((SpaPodType)valueType, _body.Slice(ChoiceHeaderSize, (int)valueSize));
     }
 
     /// <summary>The elements of an array or the members of a struct.</summary>

@@ -87,7 +87,7 @@ public sealed class SpaPodBuilderTests
 
         var pod = SpaPod.Parse(SpaPodBuilder.CursorMeta(1024 * 1024));
 
-        Assert.Equal(SpaPodBuilder.TypeObjectFormat, pod.AsObjectType());
+        Assert.Equal(SpaPodBuilder.TypeObjectParamMeta, pod.AsObjectType());
         Assert.Equal(SpaPodBuilder.PipeWireParamMeta, pod.AsObjectId());
 
         var properties = pod.AsProperties();
@@ -196,6 +196,50 @@ public sealed class SpaPodBuilderTests
         // Nothing claims to be a pixel format, because nothing in this request is one.
         Assert.DoesNotContain(properties, property => property.Key == SpaPodBuilder.FormatVideoFormat);
         Assert.Equal(new SpaRectangle(640, 480), properties[2].Value.AsRectangle());
+    }
+
+    [Fact]
+    public void A_motion_jpeg_request_uses_the_subtype_a_v4l2_camera_advertises()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // 131074 is Spa:Enum:MediaSubtype:mjpg as the v4l2 source on this machine prints it. The value matters:
+        // jpeg (196609) is a different subtype, and a request naming only that one is refused.
+        Assert.Equal(131074u, SpaPodBuilder.MediaSubtypeMjpg);
+
+        var properties = SpaPod.Parse(SpaPodBuilder.EnumFormatMjpg(1280, 720, 30)).AsProperties();
+        Assert.Equal(4, properties.Count);
+        Assert.Equal(SpaPodBuilder.FormatMediaSubtype, properties[1].Key);
+        Assert.Equal(SpaPodBuilder.MediaSubtypeMjpg, properties[1].Value.AsId());
+        Assert.DoesNotContain(properties, property => property.Key == SpaPodBuilder.FormatVideoFormat);
+        Assert.Equal(new SpaRectangle(1280, 720), properties[2].Value.AsRectangle());
+    }
+
+    [Fact]
+    public void A_camera_buffer_request_states_only_what_the_source_cannot_supply_itself()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // Block size and stride are the source's to state: PipeWire intersects our Buffers pod with the source's,
+        // and two plain-int sizes have to be equal. Leaving them out makes them inherit the source's values.
+        // The data type has to come from this side, or the allocated buffers carry SPA_ID_INVALID and the link
+        // mixer rejects them.
+        var pod = SpaPod.Parse(SpaPodBuilder.BufferParams(4));
+
+        Assert.Equal(SpaPodBuilder.TypeObjectParamBuffers, pod.AsObjectType());
+        Assert.Equal(SpaPodBuilder.ParamBuffers, pod.AsObjectId());
+
+        var properties = pod.AsProperties();
+        Assert.Equal(3, properties.Count);
+        Assert.Equal(SpaPodBuilder.BuffersCount, properties[0].Key);
+        Assert.Equal(4, properties[0].Value.AsInt());
+        Assert.Equal(SpaPodBuilder.BuffersBlocks, properties[1].Key);
+        Assert.Equal(1, properties[1].Value.AsInt());
+        Assert.Equal(SpaPodBuilder.BuffersDataType, properties[2].Key);
+        Assert.Equal(
+            SpaPodBuilder.DataTypeMemPtr | SpaPodBuilder.DataTypeMemFd,
+            properties[2].Value.AsInt());
+        Assert.DoesNotContain(properties, property => property.Key == 3);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol.Control;
@@ -20,6 +21,8 @@ public sealed class RemoteSession : IAsyncDisposable
     private Task _loops = Task.CompletedTask;
     private int _closed;
     private int _disposed;
+    private volatile InputAccessStatus? _inputAccess;
+    private ulong _inputAccessSequence;
 
     private RemoteSession(SessionContext context, IChannel control, TimeProvider time)
     {
@@ -42,6 +45,39 @@ public sealed class RemoteSession : IAsyncDisposable
 
     /// <summary>Raised when the host changed what this session may do (e.g. switched it to watch-only); see <see cref="SessionContext.Grant"/>.</summary>
     public event EventHandler? GrantChanged;
+
+    /// <summary>
+    /// The host operating system's permission for injecting input, or <c>null</c> until the host says anything.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="SessionContext.Grant"/>: the grant is the host's policy, this is whether the desktop
+    /// will actually accept the input. A host platform with no separate permission sends nothing, and the controller
+    /// must not treat silence as a refusal.
+    /// </remarks>
+    public InputAccessStatus? InputAccess => _inputAccess;
+
+    /// <summary>Raised when <see cref="InputAccess"/> changes, on the control channel's read loop.</summary>
+    public event EventHandler? InputAccessChanged;
+
+    /// <summary>
+    /// Asks the host to request the desktop's permission again (the controller's "retry" action).
+    /// </summary>
+    /// <remarks>Fire-and-forget at this level: the answer arrives as an <see cref="InputAccessChanged"/>.</remarks>
+    public async Task RequestInputAccessAsync(CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ControlMessages.WriteAsync(
+                _control,
+                new ControlMessage { RequestInputAccess = new RequestInputAccess() },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
 
     internal static RemoteSession Start(SessionContext context, IChannel control, TimeProvider time)
     {
@@ -91,6 +127,23 @@ public sealed class RemoteSession : IAsyncDisposable
                     var granted = ControlMessages.FromWire(message.GrantChanged.GrantedPermissions);
                     Context.Grant = AccessGrant.Create(ControlMessages.FromMessage(message.GrantChanged.Mode), granted, granted);
                     GrantChanged?.Invoke(this, EventArgs.Empty);
+                }
+                else if (message.BodyCase == ControlMessage.BodyOneofCase.InputAccessChanged)
+                {
+                    var change = message.InputAccessChanged;
+
+                    // The initial status and a live change can be in flight together when a session starts. Applying
+                    // only increasing sequence numbers keeps an older one from overwriting the newer state.
+                    if (change.Sequence <= _inputAccessSequence)
+                    {
+                        continue;
+                    }
+
+                    _inputAccessSequence = change.Sequence;
+                    _inputAccess = new InputAccessStatus(
+                        ControlMessages.FromMessage(change.State),
+                        string.IsNullOrEmpty(change.Reason) ? null : change.Reason);
+                    InputAccessChanged?.Invoke(this, EventArgs.Empty);
                 }
             }
         }

@@ -245,7 +245,7 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | P5 剪贴板 | ✅ portal 路径可用，两个方向都端到端验证过 |
 | P6 终端（PTY 落在共享 `Platform.Posix`） | ✅ |
 | P7 文件传输 | ✅ XDG 目录 + 挂载点过滤 |
-| P8 摄像头（PipeWire 节点，不是 V4L2） | ⚠️ **代码完整，验证为空**，见 §5 |
+| P8 摄像头（PipeWire 节点，不是 V4L2） | ✅ 真机验证（Ubuntu 26.04 + 4K USB 摄像头，MJPEG/YUY2 → NV12 → NVENC） |
 | P9 音频 | ✅ PulseAudio（轮询而非回调） |
 | P10 录制 / 被控端宿主 / 打包 | ✅ |
 | P11 服务端原生部署 | ✅ Linux 侧 |
@@ -257,8 +257,8 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 
 | 缺口 | 状态 |
 |---|---|
-| **Linux 摄像头** | 代码完整，但**一行都没跑过**。本机 `IsCameraPresent` 是 `false`、没有 `/dev/video*`，所以枚举、协商、取帧这条路一次都没执行。按代码它应当能用（portal 授权 + PipeWire 节点，与采集屏幕同一套机制），**请当成未验证** |
-| Linux 硬件编码 | 本机 GPU（AMD Oland / GCN1）**没有 VCE**，所以 VA-API / NVENC 路径从未在真硬件上跑过；软件 x264 路径已验证 |
+| **Linux 摄像头的授权** | 采集链路已在 Ubuntu 26.04 + 4K USB 摄像头上验证；但后台宿主无法弹出 portal 的摄像头授权框（GNOME 只允许焦点应用弹），需要显式允许一次：客户端「高级设置 → 安全 → 摄像头权限」或 `RemoteDesktop.HostService --camera-access allow` |
+| Linux 硬件编码 | NVENC 已在 NVIDIA RTX A4000（驱动 595）上端到端验证（摄像头与桌面流）；软件 x264 已验证；VA-API 仍未在真硬件上跑过 |
 | Linux X11 会话 | 只在 Wayland 上验证过，portal 路径在 X11 下大概率能用，但不作承诺 |
 | Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见 §4 |
 | macOS 公证（notarization） | 只做到开发签名，发布链未做 |

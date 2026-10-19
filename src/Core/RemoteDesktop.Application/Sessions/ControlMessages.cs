@@ -1,3 +1,4 @@
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol.Control;
 using RemoteDesktop.Protocol.Framing;
@@ -18,6 +19,28 @@ internal static class ControlMessages
         mode == SessionModeMessage.SessionModeView ? SessionMode.View : SessionMode.Control;
 
     public static Permissions FromWire(uint permissions) => (Permissions)permissions & Permissions.All;
+
+    public static InputAccessStateMessage ToMessage(InputAccessState state) => state switch
+    {
+        InputAccessState.NotApplicable => InputAccessStateMessage.InputAccessNotApplicable,
+        InputAccessState.NotRequested => InputAccessStateMessage.InputAccessNotRequested,
+        InputAccessState.Requesting => InputAccessStateMessage.InputAccessRequesting,
+        InputAccessState.Granted => InputAccessStateMessage.InputAccessGranted,
+        InputAccessState.Denied => InputAccessStateMessage.InputAccessDenied,
+        InputAccessState.Unavailable => InputAccessStateMessage.InputAccessUnavailable,
+        _ => InputAccessStateMessage.InputAccessUnknown,
+    };
+
+    public static InputAccessState FromMessage(InputAccessStateMessage state) => state switch
+    {
+        InputAccessStateMessage.InputAccessNotApplicable => InputAccessState.NotApplicable,
+        InputAccessStateMessage.InputAccessNotRequested => InputAccessState.NotRequested,
+        InputAccessStateMessage.InputAccessRequesting => InputAccessState.Requesting,
+        InputAccessStateMessage.InputAccessGranted => InputAccessState.Granted,
+        InputAccessStateMessage.InputAccessDenied => InputAccessState.Denied,
+        InputAccessStateMessage.InputAccessUnavailable => InputAccessState.Unavailable,
+        _ => InputAccessState.Unknown,
+    };
 
     public static ValueTask WriteAsync(IChannel channel, ControlMessage message, CancellationToken cancellationToken) =>
         ProtobufFrames.WriteAsync(channel.Stream, message, cancellationToken);

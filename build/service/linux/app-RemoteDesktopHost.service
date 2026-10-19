@@ -1,4 +1,7 @@
 [Unit]
+# The name is not cosmetic. xdg-desktop-portal derives the camera permission's app id from the systemd user unit
+# (app-<ApplicationID>...), and RemoteDesktopHost.desktop must exist under /usr/share/applications for the portal to
+# accept that id. Renaming this file without renaming the desktop entry breaks the camera grant in the settings page.
 Description=Remote Desktop (lets this machine be controlled)
 Documentation=https://github.com/gaozeqian/RemoteDesktop
 # A user service, because that is where the desktop is. The portals answer only inside the session that owns the

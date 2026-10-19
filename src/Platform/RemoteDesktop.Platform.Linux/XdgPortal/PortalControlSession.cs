@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
+using RemoteDesktop.Abstractions.Input;
 
 namespace RemoteDesktop.Platform.Linux.XdgPortal;
 
@@ -33,28 +34,79 @@ public sealed partial class PortalControlSession(ILoggerFactory loggerFactory, I
     /// <summary>How long to leave a failed attempt alone before asking again.</summary>
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>Two explicit retries this close together would put two system dialogs on the host's screen for what is
+    /// one person's click, and a controller could otherwise ask in a loop.</summary>
+    private static readonly TimeSpan RetryCooldown = TimeSpan.FromSeconds(2);
+
     private readonly Lock _gate = new();
+    private readonly SemaphoreSlim _explicitRequest = new(1, 1);
 
     private PortalConnection? _connection;
     private string? _session;
     private DateTime _nextAttempt;
+    private DateTime _lastExplicitRequest;
+    private InputAccessStatus _status = new(InputAccessState.NotRequested);
+
+    /// <summary>Where the desktop's permission for control stands. Safe to read from any thread.</summary>
+    public InputAccessStatus AccessStatus => Volatile.Read(ref _status);
+
+    /// <summary>Raised when <see cref="AccessStatus"/> changes. May be raised with <see cref="_gate"/> held, so a
+    /// handler must not block or call back into this class.</summary>
+    public event EventHandler<InputAccessStatus>? AccessStatusChanged;
 
     /// <summary>Whether control is available, opening the session if it is not open and has not just failed.</summary>
-    public bool EnsureReady()
+    public bool EnsureReady() => EnsureReady(force: false);
+
+    /// <summary>
+    /// Asks the desktop again, ignoring the backoff a refusal left behind. Runs off the caller's thread: the portal
+    /// call does not return until the person at this machine answers, and the caller is often a session channel that
+    /// has to keep flowing.
+    /// </summary>
+    public Task<InputAccessStatus> RequestAccessAsync(CancellationToken cancellationToken) =>
+        Task.Run(
+            () =>
+            {
+                // One explicit request at a time. A second controller asking while the dialog is up is answered
+                // with the current state instead of queueing another question behind it.
+                if (!_explicitRequest.Wait(0))
+                {
+                    return AccessStatus;
+                }
+
+                try
+                {
+                    if (DateTime.UtcNow - _lastExplicitRequest < RetryCooldown)
+                    {
+                        return AccessStatus;
+                    }
+
+                    _lastExplicitRequest = DateTime.UtcNow;
+                    _ = EnsureReady(force: true);
+                    return AccessStatus;
+                }
+                finally
+                {
+                    _explicitRequest.Release();
+                }
+            },
+            cancellationToken);
+
+    private bool EnsureReady(bool force)
     {
         lock (_gate)
         {
             if (_connection is not null && _session is not null)
             {
+                Publish(InputAccessState.Granted);
                 return true;
             }
 
-            if (DateTime.UtcNow < _nextAttempt)
+            if (!force && DateTime.UtcNow < _nextAttempt)
             {
                 return false;
             }
 
-            _nextAttempt = DateTime.UtcNow + RetryDelay;
+            Publish(InputAccessState.Requesting);
 
             try
             {
@@ -68,14 +120,43 @@ public sealed partial class PortalControlSession(ILoggerFactory loggerFactory, I
 
                 _connection = connection;
                 _session = session;
+                _nextAttempt = default;
                 LogGranted(logger);
+                Publish(InputAccessState.Granted);
                 return true;
             }
-            catch (Exception error) when (error is PortalException or InvalidOperationException)
+            catch (PortalException error)
             {
+                // The desktop answered and said no (or could not show its question). This is an authorization
+                // answer rather than a broken mechanism: retrying is meaningful.
+                //
+                // The backoff starts when the answer arrives, not when the question was asked. A dialog can stay up
+                // for minutes; with the deadline measured from the start, the next input after a late refusal would
+                // immediately ask again and the controller would never see the refusal it is supposed to report.
+                _nextAttempt = DateTime.UtcNow + RetryDelay;
                 LogRefused(logger, error.Message);
+                Publish(InputAccessState.Denied, error.Message);
                 return false;
             }
+            catch (InvalidOperationException error)
+            {
+                // There is no session bus, no app id or no portal to ask. Retrying the same thing will not help until
+                // the environment changes, but the controller is told what is missing rather than nothing.
+                _nextAttempt = DateTime.UtcNow + RetryDelay;
+                LogRefused(logger, error.Message);
+                Publish(InputAccessState.Unavailable, error.Message);
+                return false;
+            }
+        }
+    }
+
+    private void Publish(InputAccessState state, string? reason = null)
+    {
+        var status = new InputAccessStatus(state, reason);
+        var previous = Interlocked.Exchange(ref _status, status);
+        if (previous != status)
+        {
+            AccessStatusChanged?.Invoke(this, status);
         }
     }
 
@@ -109,6 +190,10 @@ public sealed partial class PortalControlSession(ILoggerFactory loggerFactory, I
             _session = null;
             _connection?.Dispose();
             _connection = null;
+            _nextAttempt = default;
+
+            // The next input asks the desktop again, and the controller is told that the old answer no longer holds.
+            Publish(InputAccessState.NotRequested);
         }
     }
 

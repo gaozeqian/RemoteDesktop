@@ -13,7 +13,7 @@ set -e
 case "$1" in
     remove)
         if command -v systemctl >/dev/null 2>&1; then
-            systemctl --global disable remotedesktop-host.service >/dev/null 2>&1 || true
+            systemctl --global disable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
         fi
         ;;
 

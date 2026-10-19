@@ -20,6 +20,10 @@ public sealed partial class TerminalTabViewModel(IPeerConnection connection, str
     [ObservableProperty]
     public partial string Title { get; set; } = string.Create(CultureInfo.InvariantCulture, $"{number}: {shell ?? "shell"}");
 
+    // The tab strip's automation peer asks ToString for the item's accessible name; without this it is the type
+    // name ("TerminalTabViewModel"), which tells a screen reader nothing.
+    public override string ToString() => Title;
+
     /// <summary>Why there is nothing to type into (failed to open, shell ended, connection lost); empty while it works.</summary>
     [ObservableProperty]
     public partial string Status { get; set; } = string.Empty;

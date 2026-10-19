@@ -8,7 +8,16 @@
         Icon="/Assets/icon-256.png"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="1100" Height="720" MinWidth="760" MinHeight="480">
-  <Grid RowDefinitions="*,Auto,Auto,180" Margin="12" RowSpacing="{DynamicResource RdSpaceMd}">
+  <!-- The transfer list gets a share of the window rather than a fixed 180 px: a transfer row is two lines and a
+       progress bar, so that fixed height showed barely two rows and every later transfer looked missing until the
+       list was scrolled. -->
+  <Grid Margin="12" RowSpacing="{DynamicResource RdSpaceMd}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="3*" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="2*" MinHeight="160" />
+    </Grid.RowDefinitions>
     <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="{DynamicResource RdSpaceMd}">
       <v:FilePaneView DataContext="{Binding LocalPane}" />
       <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="{DynamicResource RdSpaceSm}">

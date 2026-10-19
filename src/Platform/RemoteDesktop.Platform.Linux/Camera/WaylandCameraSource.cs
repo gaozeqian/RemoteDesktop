@@ -16,17 +16,17 @@ namespace RemoteDesktop.Platform.Linux.Camera;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Not yet run against a camera.</b> Every line below is patterned on <see cref="PipeWireScreenCapturer"/>,
-/// which is verified against a real compositor, and the pieces that are not plumbing — the format requests, the
-/// JPEG decode, the 4:2:2 rearrangement — have tests and real byte-level fixtures. What has never happened is the
-/// whole thing running: this machine reports no camera and has no <c>/dev/video*</c>. Treat it as a starting point
-/// that needs a machine with a camera, not as a feature that has been shown to work.
+/// Run against a real camera: a 4K USB webcam on Ubuntu 26.04, reached through the desktop portal's camera node
+/// after the user has granted access. The portal hands over a PipeWire descriptor rather than a device, so the
+/// camera is read the way a captured screen is: ask for a format, take buffers as they arrive. What differs is what
+/// comes in them — a webcam offers motion JPEG, or raw 4:2:2, and neither is the BGRx a compositor sends — so frames
+/// are turned into the NV12 the ports promise before they are handed out.
 /// </para>
 /// <para>
-/// The camera is a node in the desktop's own PipeWire graph, reached through the descriptor the portal handed over,
-/// and it is read exactly the way a captured screen is: ask for a format, take buffers as they arrive. What differs
-/// is what comes in them — a webcam offers JPEG, or raw 4:2:2, and neither is the BGRx a compositor sends — so
-/// frames are turned into the NV12 the ports promise before they are handed out.
+/// The buffer description sent alongside the formats is deliberately thin. The v4l2 source behind the portal has
+/// its own Buffers parameter, and PipeWire intersects the two; repeating a property such as the block size means it
+/// has to agree exactly, and a disagreement surfaces only as <c>EINVAL</c> from the link. See
+/// <see cref="SpaPodBuilder.BufferParams"/>.
 /// </para>
 /// <para>
 /// Nothing is converted on PipeWire's thread. That thread is shared with every other client on the machine and
@@ -61,6 +61,18 @@ public sealed partial class WaylandCameraSource : ICameraSource
     private nint _events;
     private GCHandle _self;
     private int _disposed;
+
+    /// <summary>
+    /// Whether <see cref="Start"/> has connected the stream and asked for a format.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="_stream"/> on purpose. <see cref="Open"/> creates the stream object but cannot start it
+    /// — the picture size is not known until <see cref="CaptureAsync"/> is called — so the handle is already non-zero
+    /// when the first frame is wanted. The first version tested the handle for zero as the "not started" signal, which
+    /// meant <see cref="Start"/> never ran at all: the stream was never connected, no frames arrived, and the
+    /// controller waited for a stream description until its timeout.
+    /// </remarks>
+    private int _started;
 
     private volatile bool _jpeg;
     private int _width;
@@ -123,7 +135,7 @@ public sealed partial class WaylandCameraSource : ICameraSource
     {
         ArgumentNullException.ThrowIfNull(mode);
 
-        if (_stream == 0)
+        if (Interlocked.Exchange(ref _started, 1) == 0)
         {
             Start(mode);
         }
@@ -281,9 +293,9 @@ public sealed partial class WaylandCameraSource : ICameraSource
 
     /// <summary>Asks the camera for a picture in the mode the caller wants.</summary>
     /// <remarks>
-    /// Connected with nothing, then told the format — the same two steps the screen path needs, and for the same
-    /// observed reason: the identical pods handed to <c>pw_stream_connect</c> are refused with <c>-EINVAL</c> and no
-    /// explanation, while <c>pw_stream_update_params</c> accepts them.
+    /// The format requests and the buffer description are handed over at connect, together. The v4l2 source
+    /// negotiates its format during the link's allocation, so a stream that connects first and describes its buffers
+    /// afterwards has already been asked to allocate by the time the two can be reconciled.
     /// </remarks>
     private unsafe void Start(CameraMode mode)
     {
@@ -293,26 +305,19 @@ public sealed partial class WaylandCameraSource : ICameraSource
         PipeWire.ThreadLoopLock(_loop);
         try
         {
-            var connected = PipeWire.StreamConnect(
-                _stream,
-                PipeWire.DirectionInput,
-                PipeWire.IdAny,
-                PipeWire.StreamFlagAutoconnect | PipeWire.StreamFlagMapBuffers,
-                0,
-                0);
-
-            if (connected < 0)
-            {
-                throw new InvalidOperationException(
-                    $"PipeWire refused the camera stream (error {connected}): {DescribeState(_stream)}");
-            }
-
-            // JPEG first: a webcam almost always has it, it is a fraction of the bytes, and the decode costs less
-            // than moving a raw frame around does. YUY2 second, as the format a camera produces natively when it
-            // will not give JPEG — asking for something the device does not have would leave PipeWire inserting a
-            // converter between us and the sensor.
+            // Motion JPEG first: a V4L2 camera advertises it as mjpg, which is a distinct SPA subtype from jpeg, and
+            // asking only for jpeg makes the v4l2 source answer "no more input formats". A portal source that
+            // speaks jpeg is asked for next. YUY2 last, as the format a camera produces natively when it will not
+            // give JPEG — asking for something the device does not have would leave PipeWire inserting a converter
+            // between us and the sensor.
             byte[][] pods =
             [
+                // Only the buffer properties the stream has to state itself: the count, one block, and the memory
+                // type. Block size and stride come from the source's own Buffers parameter, because PipeWire
+                // intersects the two and a repeated property has to match exactly. Without a data type here the
+                // allocated buffers carry SPA_ID_INVALID and the link mixer rejects them. See BufferParams.
+                SpaPodBuilder.BufferParams(count: 4),
+                SpaPodBuilder.EnumFormatMjpg(mode.Width, mode.Height, mode.FrameRate),
                 SpaPodBuilder.EnumFormatJpeg(mode.Width, mode.Height, mode.FrameRate),
                 SpaPodBuilder.EnumFormatYuyv(mode.Width, mode.Height, mode.FrameRate),
             ];
@@ -329,11 +334,21 @@ public sealed partial class WaylandCameraSource : ICameraSource
                     parameters[i] = buffers[i];
                 }
 
-                var updated = PipeWire.StreamUpdateParams(_stream, (nint)parameters, (uint)pods.Length);
-                if (updated < 0)
+                // The formats are handed over at connect rather than through UpdateParams. The camera path needs the
+                // buffer description to be part of the same negotiation; a stream that connects with nothing
+                // allocates before it has seen the format and fails in the v4l2 source's buffer setup.
+                var connected = PipeWire.StreamConnect(
+                    _stream,
+                    PipeWire.DirectionInput,
+                    PipeWire.IdAny,
+                    PipeWire.StreamFlagAutoconnect | PipeWire.StreamFlagMapBuffers | PipeWire.StreamFlagNoConvert,
+                    (nint)parameters,
+                    (uint)pods.Length);
+
+                if (connected < 0)
                 {
                     throw new InvalidOperationException(
-                        $"The camera refused {mode.Width}x{mode.Height} (error {updated}): {DescribeState(_stream)}");
+                        $"PipeWire refused the camera stream (error {connected}): {DescribeState(_stream)}");
                 }
             }
             finally
@@ -392,8 +407,11 @@ public sealed partial class WaylandCameraSource : ICameraSource
                 switch (property.Key)
                 {
                     case SpaPodBuilder.FormatMediaSubtype when value.Type == SpaPodType.Id:
-                        _jpeg = value.AsId() == SpaPodBuilder.MediaSubtypeJpeg;
-                        LogSettled(_logger, _jpeg ? "JPEG" : "raw");
+                        var subtype = value.AsId();
+                        _jpeg = subtype is SpaPodBuilder.MediaSubtypeJpeg or SpaPodBuilder.MediaSubtypeMjpg;
+                        LogSettled(
+                            _logger,
+                            subtype == SpaPodBuilder.MediaSubtypeMjpg ? "MJPEG" : _jpeg ? "JPEG" : "raw");
                         break;
 
                     case SpaPodBuilder.FormatVideoSize when value.Type == SpaPodType.Rectangle:

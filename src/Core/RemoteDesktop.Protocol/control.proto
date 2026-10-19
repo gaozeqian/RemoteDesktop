@@ -15,6 +15,8 @@ message ControlMessage {
     Ping ping = 5;
     Pong pong = 6;
     GrantChanged grant_changed = 7;
+    InputAccessChanged input_access_changed = 8;
+    RequestInputAccess request_input_access = 9;
   }
 }
 
@@ -76,4 +78,34 @@ message Pong {
 message GrantChanged {
   SessionModeMessage mode = 1;
   uint32 granted_permissions = 2;
+}
+
+enum InputAccessStateMessage {
+  INPUT_ACCESS_UNKNOWN = 0;
+  // No separate grant exists on the host platform; the session grant is the whole answer.
+  INPUT_ACCESS_NOT_APPLICABLE = 1;
+  // The operating system has not been asked yet; on Wayland it asks on the first input.
+  INPUT_ACCESS_NOT_REQUESTED = 2;
+  // The host is showing, or about to show, the system permission question.
+  INPUT_ACCESS_REQUESTING = 3;
+  INPUT_ACCESS_GRANTED = 4;
+  INPUT_ACCESS_DENIED = 5;
+  // The injection mechanism itself is unavailable (portal, session bus or libei).
+  INPUT_ACCESS_UNAVAILABLE = 6;
+}
+
+// Host -> controller whenever the operating system's permission for input changes. A controller shows a banner and
+// stops capturing input while the state is DENIED or UNAVAILABLE; GRANTED restores it. The session grant remains a
+// separate question: it says whether the host's policy allows control at all.
+message InputAccessChanged {
+  InputAccessStateMessage state = 1;
+  string reason = 2;
+  // Monotonic across every send to one controller, so a status that was in flight while a session started cannot
+  // overwrite a newer one. A receiver ignores anything not greater than the last sequence it applied.
+  uint64 sequence = 3;
+}
+
+// Controller -> host: ask the desktop again, ignoring the backoff a refusal left behind. The host answers with
+// InputAccessChanged (possibly REQUESTING first) for every controller that may control.
+message RequestInputAccess {
 }

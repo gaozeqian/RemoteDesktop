@@ -3,11 +3,12 @@ using System.Security.Cryptography;
 using Google.Protobuf;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.Control;
-using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Application.Sessions;
@@ -30,7 +31,8 @@ public sealed partial class HostSessionService(
     SessionTelemetry telemetry,
     SessionLifecycle lifecycle,
     ILogger<HostSessionService> logger,
-    ISystemKeepAwake? keepAwake = null) : BackgroundService
+    ISystemKeepAwake? keepAwake = null,
+    IInputAccess? inputAccess = null) : BackgroundService
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
 
@@ -40,6 +42,10 @@ public sealed partial class HostSessionService(
 
     private readonly ConcurrentDictionary<SessionId, HostedSession> _hosted = [];
 
+    /// <summary>Orders input-authorization reports so a session's first status cannot overwrite a newer one.</summary>
+    private readonly Lock _inputAccessReportLock = new();
+    private long _inputAccessSequence;
+
     public IReadOnlyCollection<SessionContext> ActiveSessions => [.. _hosted.Values.Select(h => h.Context)];
 
     public event EventHandler<HostSessionEventArgs>? SessionStarted;
@@ -48,28 +54,43 @@ public sealed partial class HostSessionService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        if (inputAccess is not null)
         {
-            IPeerConnection connection;
-            try
-            {
-                connection = await listener.AcceptAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            inputAccess.StatusChanged += OnInputAccessChanged;
+        }
 
-            // Half-open connections are cheap to start and expensive to hold; anything over the limit is dropped here.
-            if (!admission.TryEnter())
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
             {
-                admission.RecordRefusal();
-                LogTooManyHandshakes(logger, connection.RemoteDevice, admission.InFlight, admission.Refused);
-                await connection.DisposeAsync().ConfigureAwait(false);
-                continue;
-            }
+                IPeerConnection connection;
+                try
+                {
+                    connection = await listener.AcceptAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
 
-            _ = ServeAsync(connection, stoppingToken);
+                // Half-open connections are cheap to start and expensive to hold; anything over the limit is dropped here.
+                if (!admission.TryEnter())
+                {
+                    admission.RecordRefusal();
+                    LogTooManyHandshakes(logger, connection.RemoteDevice, admission.InFlight, admission.Refused);
+                    await connection.DisposeAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                _ = ServeAsync(connection, stoppingToken);
+            }
+        }
+        finally
+        {
+            if (inputAccess is not null)
+            {
+                inputAccess.StatusChanged -= OnInputAccessChanged;
+            }
         }
     }
 
@@ -116,6 +137,14 @@ public sealed partial class HostSessionService(
                 var hosted = new HostedSession(session, control!, end);
                 _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
+
+                // The controller is told where input authorization stands before it can send anything. A session that
+                // is only allowed to watch has no use for the answer.
+                if (inputAccess is not null && session.Grant.Allows(Permissions.ControlInput))
+                {
+                    await SendCurrentInputAccessAsync(hosted, end.Token).ConfigureAwait(false);
+                }
+
                 keepAwake?.Acquire();
                 telemetry.Track(session, end.Token);
                 lifecycle.Track(session, end.Token);
@@ -228,6 +257,15 @@ public sealed partial class HostSessionService(
                     var pong = new ControlMessage { Pong = new Pong { Timestamp = message.Ping.Timestamp } };
                     await hosted.WriteControlAsync(pong, sessionEnd.Token).ConfigureAwait(false);
                 }
+                else if (message.BodyCase == ControlMessage.BodyOneofCase.RequestInputAccess)
+                {
+                    // The request may open a system dialog and wait for the person at this machine, so it must not
+                    // hold up the control channel: pings and a disconnect have to keep working while it is open.
+                    if (inputAccess is not null && hosted.Context.Grant.Allows(Permissions.ControlInput))
+                    {
+                        _ = RequestInputAccessAsync(hosted, sessionEnd.Token);
+                    }
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException)
@@ -337,6 +375,96 @@ public sealed partial class HostSessionService(
     /// <summary>Whether the session has a channel of this type open right now (e.g. the camera is streaming).</summary>
     public bool IsChannelOpen(SessionId id, ChannelType type) => _hosted.TryGetValue(id, out var hosted) && hosted.HasOpen(type);
 
+    // Every controller that may control is told, not only the one whose input triggered the change: the portal grant
+    // is host-wide, and after one person allows it the others can control too.
+    private void OnInputAccessChanged(object? sender, InputAccessStatus status)
+    {
+        foreach (var hosted in _hosted.Values)
+        {
+            if (hosted.Context.Grant.Allows(Permissions.ControlInput))
+            {
+                _ = SendInputAccessAsync(hosted, status, hosted.End.Token);
+            }
+        }
+    }
+
+    // The status and its sequence are taken together under the lock. A live change that races with a session's first
+    // report therefore either happens before it (and is included in what the first report reads) or after it (and
+    // gets the larger sequence). Neither can leave an older status looking newer.
+    private async Task SendCurrentInputAccessAsync(HostedSession hosted, CancellationToken cancellationToken)
+    {
+        InputAccessStatus status;
+        ulong sequence;
+        lock (_inputAccessReportLock)
+        {
+            status = inputAccess!.Status;
+            sequence = (ulong)++_inputAccessSequence;
+        }
+
+        await SendInputAccessAsync(hosted, status, sequence, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendInputAccessAsync(HostedSession hosted, InputAccessStatus status, CancellationToken cancellationToken)
+    {
+        ulong sequence;
+        lock (_inputAccessReportLock)
+        {
+            sequence = (ulong)++_inputAccessSequence;
+        }
+
+        await SendInputAccessAsync(hosted, status, sequence, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendInputAccessAsync(
+        HostedSession hosted,
+        InputAccessStatus status,
+        ulong sequence,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await hosted.WriteControlAsync(
+                new ControlMessage
+                {
+                    InputAccessChanged = new InputAccessChanged
+                    {
+                        State = ControlMessages.ToMessage(status.State),
+                        Reason = status.Reason ?? string.Empty,
+                        Sequence = sequence,
+                    },
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException
+                                       or ObjectDisposedException or OperationCanceledException)
+        {
+            // The controller left while the report was in flight; the status itself has not changed.
+            LogInputAccessReportFailed(logger, hosted.Context.Id, ex.Message);
+        }
+    }
+
+    private async Task RequestInputAccessAsync(HostedSession hosted, CancellationToken cancellationToken)
+    {
+        if (inputAccess is not { } access)
+        {
+            return;
+        }
+
+        try
+        {
+            // The event raised by RequestAsync already broadcasts to every controller; this send makes sure the one
+            // that asked always gets an answer, even when the state did not actually change.
+            var status = await access.RequestAsync(cancellationToken).ConfigureAwait(false);
+            await SendInputAccessAsync(hosted, status, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException
+                                       or NotSupportedException or TimeoutException or ObjectDisposedException
+                                       or OperationCanceledException)
+        {
+            LogInputAccessRequestFailed(logger, hosted.Context.Id, ex.Message);
+        }
+    }
+
     // Closes what the new grant no longer covers and tells the controller.
     private async Task ApplyGrantAsync(HostedSession hosted, CancellationToken cancellationToken)
     {
@@ -401,6 +529,12 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: refused {Channel} channel ({Result}).")]
     private static partial void LogChannelRefused(ILogger logger, SessionId sessionId, ChannelType channel, DispatchResult result);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Session {SessionId}: could not report the input authorization state: {Reason}")]
+    private static partial void LogInputAccessReportFailed(ILogger logger, SessionId sessionId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: the input authorization request failed: {Reason}")]
+    private static partial void LogInputAccessRequestFailed(ILogger logger, SessionId sessionId, string reason);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Session {SessionId}: {Channel} channel failed.")]
     private static partial void LogChannelFailed(ILogger logger, SessionId sessionId, ChannelType channel, Exception exception);

@@ -143,6 +143,25 @@ public sealed partial class WaylandCameraEnumerator(
     }
 
     /// <summary>
+    /// Drops the remembered list and the refusal backoff after the camera grant changed.
+    /// </summary>
+    /// <remarks>
+    /// Both values were produced under the previous answer. Without this, a grant made in the client's settings would
+    /// appear to do nothing for up to <see cref="RetryDelay"/>, and a list cached from before a refusal would keep
+    /// reporting cameras that can no longer be opened.
+    /// </remarks>
+    internal void Forget()
+    {
+        lock (_gate)
+        {
+            _listed = null;
+            _listedAt = default;
+            _nextAttempt = default;
+            _granted = false;
+        }
+    }
+
+    /// <summary>
     /// The connection access was granted on, for the factory that opens a camera to take a descriptor from.
     /// </summary>
     /// <remarks>

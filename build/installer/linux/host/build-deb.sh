@@ -53,7 +53,9 @@ dotnet publish "$root/src/Hosts/RemoteDesktop.HostService" \
 
 cp -a "$native/libmsquic.so.2" "$native/libmsquic.so.2.6.2" "$program/" 2>/dev/null || cp -a "$native/libmsquic.so.2" "$program/"
 
-install -m 0644 "$root/build/service/linux/remotedesktop-host.service" "$work/usr/lib/systemd/user/"
+install -m 0644 "$root/build/service/linux/app-RemoteDesktopHost.service" "$work/usr/lib/systemd/user/"
+mkdir -p "$work/usr/share/applications"
+install -m 0644 "$root/build/installer/linux/host/RemoteDesktopHost.desktop" "$work/usr/share/applications/"
 
 install -m 0755 "$root/build/installer/linux/host/postinst" "$work/DEBIAN/postinst"
 install -m 0755 "$root/build/installer/linux/host/postrm" "$work/DEBIAN/postrm"

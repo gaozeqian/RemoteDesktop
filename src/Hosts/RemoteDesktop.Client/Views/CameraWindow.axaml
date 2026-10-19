@@ -29,6 +29,8 @@
           </ComboBox>
           <Button Content="开始" Command="{Binding StartCommand}" Classes="accent" VerticalAlignment="Center" />
           <Button Content="停止" Command="{Binding StopCommand}" VerticalAlignment="Center" />
+          <Button Content="刷新" Command="{Binding RefreshCamerasCommand}" IsEnabled="{Binding !IsStreaming}"
+                  VerticalAlignment="Center" />
           <Button Content="{Binding RecordButtonText}" Command="{Binding ToggleRecordingCommand}"
                   IsVisible="{Binding IsStreaming}" VerticalAlignment="Center" />
         </StackPanel>

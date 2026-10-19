@@ -21,6 +21,13 @@ public static class HostControlProtocol
     public const string CameraStopCommand = "camera-stop";
     public const string FixedPasswordCommand = "fixed-password";
 
+    /// <summary>Grants or refuses the host's camera use; the argument is <c>allow</c> or <c>deny</c>.</summary>
+    public const string CameraPermissionCommand = "camera-permission";
+
+    public const string AllowCamera = "allow";
+
+    public const string DenyCamera = "deny";
+
     /// <summary>The service refused a command; the argument carries the reason.</summary>
     public const string ErrorCommand = "error";
 

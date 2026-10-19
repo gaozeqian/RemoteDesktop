@@ -13,7 +13,7 @@ case "$1" in
         # symlink under /etc/systemd/user, so each account picks it up the next time it logs in. That is also why
         # deb-systemd-helper is not used here — it only knows about system units.
         if command -v systemctl >/dev/null 2>&1; then
-            systemctl --global enable remotedesktop-host.service >/dev/null 2>&1 || true
+            systemctl --global enable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
             systemctl --global daemon-reload >/dev/null 2>&1 || true
         fi
 

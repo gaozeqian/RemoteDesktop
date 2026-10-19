@@ -1,4 +1,5 @@
 using RemoteDesktop.Abstractions.Agent;
+using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
@@ -20,6 +21,10 @@ public sealed record HostSessionInfo(string Id, string Controller, string Mode, 
 /// <param name="IsService">True when the host runs in the background service rather than inside the UI.</param>
 /// <param name="HasFixedPassword">Whether a fixed password for unattended access has been configured.</param>
 /// <param name="RendezvousUri">The signaling server this device is configured to use, shown when it cannot be reached.</param>
+/// <param name="CameraAccess">
+/// Whether this host may use the cameras. Null on platforms whose operating system asks when a camera is opened;
+/// on Linux it is the explicit grant the portal cannot ask a background host for.
+/// </param>
 public sealed record HostStatus(
     int? DeviceId,
     string ServerState,
@@ -28,7 +33,8 @@ public sealed record HostStatus(
     string? AgentState,
     bool IsService,
     bool HasFixedPassword = false,
-    string? RendezvousUri = null);
+    string? RendezvousUri = null,
+    CameraAccessState? CameraAccess = null);
 
 /// <summary>
 /// What the UI needs from the "be controlled" side of this machine, whether that side runs in the UI process itself
@@ -51,6 +57,13 @@ public interface IHostControl
 
     /// <summary>Configures or clears the long-lived fixed password for unattended access.</summary>
     Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Grants or refuses the controlled end's use of its cameras, for platforms that need an explicit grant.
+    /// </summary>
+    /// <exception cref="NotSupportedException">This platform has no separate camera grant.</exception>
+    /// <exception cref="InvalidOperationException">The grant could not be written; the message says why.</exception>
+    Task SetCameraAccessAsync(bool allowed, CancellationToken cancellationToken);
 }
 
 /// <summary>Answers from the host components living in this process.</summary>
@@ -61,9 +74,10 @@ public sealed class LocalHostControl(
     IAgentGateway? agent,
     bool isService,
     ISecretStore? secrets = null,
-    string? rendezvousUri = null) : IHostControl
+    string? rendezvousUri = null,
+    ICameraAccess? cameraAccess = null) : IHostControl
 {
-    public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken)
+    public async Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken)
     {
         var active = sessions.ActiveSessions.Select(s => new HostSessionInfo(
             s.Id.ToString(),
@@ -76,7 +90,11 @@ public sealed class LocalHostControl(
             ? state.Detail is { } detail ? $"{state.Status} ({state.Desktop}): {detail}" : $"{state.Status} ({state.Desktop})"
             : null;
 
-        return Task.FromResult(new HostStatus(
+        var camera = cameraAccess is null
+            ? (CameraAccessState?)null
+            : await cameraAccess.GetStateAsync(cancellationToken).ConfigureAwait(false);
+
+        return new HostStatus(
             rendezvous.DeviceId?.Value,
             rendezvous.State.ToString(),
             credentials.TemporaryPassword,
@@ -84,7 +102,8 @@ public sealed class LocalHostControl(
             agentState,
             isService,
             !string.IsNullOrEmpty(credentials.FixedPassword),
-            rendezvousUri));
+            rendezvousUri,
+            camera);
     }
 
     public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken)
@@ -135,5 +154,15 @@ public sealed class LocalHostControl(
         }
 
         return Task.CompletedTask;
+    }
+
+    public async Task SetCameraAccessAsync(bool allowed, CancellationToken cancellationToken)
+    {
+        if (cameraAccess is null)
+        {
+            throw new NotSupportedException("This platform has no separate camera access grant.");
+        }
+
+        await cameraAccess.SetAllowedAsync(allowed, cancellationToken).ConfigureAwait(false);
     }
 }

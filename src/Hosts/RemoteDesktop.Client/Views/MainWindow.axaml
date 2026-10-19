@@ -167,9 +167,9 @@
 
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceMd}">
               <StackPanel Spacing="{DynamicResource RdSpaceSm}">
-                <TextBox Text="{Binding RemoteDeviceId}" AutomationProperties.Name="远程设备代码" PlaceholderText="请输入远程设备代码 (如 123 456 789)"
+                <TextBox Text="{Binding RemoteDeviceId, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="远程设备代码" PlaceholderText="请输入远程设备代码 (如 123 456 789)"
                          MinHeight="44" VerticalContentAlignment="Center" />
-                <TextBox Text="{Binding RemotePassword}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="连接密码"
+                <TextBox Text="{Binding RemotePassword, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="连接密码"
                          MinHeight="44" VerticalContentAlignment="Center" />
               </StackPanel>
               <Button Grid.Column="1" Content="连接" Classes="primaryLarge" Command="{Binding ConnectCommand}"
@@ -313,7 +313,7 @@
 
                 <StackPanel Spacing="{DynamicResource RdSpaceXs}" MaxWidth="360" HorizontalAlignment="Left">
                   <TextBlock Text="连接密码" Classes="label" />
-                  <TextBox Text="{Binding SelectedRecentDevice.Password}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="该设备的密码"
+                  <TextBox Text="{Binding SelectedRecentDevice.Password, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="连接密码" PasswordChar="●" PlaceholderText="该设备的密码"
                            MinHeight="40" VerticalContentAlignment="Center" />
                   <CheckBox IsChecked="{Binding SelectedRecentDevice.RememberPassword}" Content="记住该设备的密码" />
                 </StackPanel>
@@ -377,7 +377,7 @@
 
                       <Border Classes="inset" IsVisible="{Binding IsEditingFixedPassword}">
                         <StackPanel Spacing="{DynamicResource RdSpaceSm}">
-                          <TextBox Text="{Binding NewFixedPassword}" AutomationProperties.Name="固定密码" PasswordChar="●"
+                          <TextBox Text="{Binding NewFixedPassword, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="固定密码" PasswordChar="●"
                                    PlaceholderText="输入新固定密码（至少 8 位）" />
                           <TextBlock Text="{Binding FixedPasswordError}" Classes="danger"
                                      IsVisible="{Binding FixedPasswordError, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -387,6 +387,24 @@
                           </StackPanel>
                         </StackPanel>
                       </Border>
+                    </StackPanel>
+
+                    <!-- Linux only: the camera portal asks for a system access dialog that GNOME only lets the
+                         focused application show. A background host never is, so the grant is made explicit here. -->
+                    <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{x:Static vm:MainWindowViewModel.HasCameraAccess}">
+                      <TextBlock Text="摄像头权限" Classes="sectionHeader" />
+                      <TextBlock Classes="caption" TextWrapping="Wrap"
+                                 Text="Linux 的后台宿主不能弹出桌面的摄像头授权框（GNOME 只允许焦点应用弹出）。这里允许一次后，控制端才能列出并使用本机摄像头；可随时撤销。" />
+                      <StackPanel Orientation="Horizontal" Spacing="{DynamicResource RdSpaceSm}">
+                        <TextBlock Text="{Binding CameraAccessStatus}" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource RdAccentBrush}" />
+                        <Button Content="允许" Command="{Binding AllowCameraAccessCommand}"
+                                IsEnabled="{Binding !IsCameraAccessBusy}" />
+                        <Button Content="撤销" Command="{Binding RevokeCameraAccessCommand}"
+                                IsEnabled="{Binding !IsCameraAccessBusy}" />
+                      </StackPanel>
+                      <TextBlock Text="{Binding CameraAccessError}" Classes="danger" TextWrapping="Wrap"
+                                 IsVisible="{Binding CameraAccessError, Converter={x:Static ObjectConverters.IsNotNull}}" />
                     </StackPanel>
 
                     <!-- 无人值守的另一半：固定密码管"用什么密码进"，这里管"开机后谁在等"。macOS 独占——Windows 的

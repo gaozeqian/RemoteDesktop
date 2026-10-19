@@ -45,6 +45,24 @@ public static partial class HostControlHandler
                     await control.StopCameraAsync(sessionId, timeout.Token).ConfigureAwait(false);
                     await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
                     break;
+                case HostControlProtocol.CameraPermissionCommand:
+                    try
+                    {
+                        await control.SetCameraAccessAsync(
+                            string.Equals(request.Argument, HostControlProtocol.AllowCamera, StringComparison.Ordinal),
+                            timeout.Token).ConfigureAwait(false);
+                        await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest("ok"), timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+                    {
+                        LogRefusedCameraPermission(logger, ex.Message);
+                        await HostControlProtocol.WriteLineAsync(
+                            stream,
+                            new HostControlRequest(HostControlProtocol.ErrorCommand, ex.Message),
+                            timeout.Token).ConfigureAwait(false);
+                    }
+
+                    break;
                 case HostControlProtocol.FixedPasswordCommand:
                     try
                     {
@@ -75,4 +93,7 @@ public static partial class HostControlHandler
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a fixed password: {Reason}")]
     private static partial void LogRefusedFixedPassword(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a camera-permission change: {Reason}")]
+    private static partial void LogRefusedCameraPermission(ILogger logger, string reason);
 }

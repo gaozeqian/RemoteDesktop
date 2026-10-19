@@ -242,6 +242,14 @@ public class HostControlTests
 
         public List<string> CameraStopped { get; } = [];
 
+        public bool? CameraAllowed { get; private set; }
+
+        public Task SetCameraAccessAsync(bool allowed, CancellationToken cancellationToken)
+        {
+            CameraAllowed = allowed;
+            return Task.CompletedTask;
+        }
+
         public Task StopCameraAsync(string sessionId, CancellationToken cancellationToken)
         {
             CameraStopped.Add(sessionId);

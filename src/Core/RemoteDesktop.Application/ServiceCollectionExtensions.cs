@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Agent;
+using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Features;
@@ -124,7 +125,8 @@ public static class ServiceCollectionExtensions
             sp.GetService<IAgentGateway>(),
             isService,
             sp.GetService<ISecretStore>(),
-            sp.GetService<TransportOptions>()?.RendezvousUri?.ToString()));
+            sp.GetService<TransportOptions>()?.RendezvousUri?.ToString(),
+            sp.GetService<ICameraAccess>()));
         return services;
     }
 }

@@ -71,6 +71,9 @@ internal static unsafe partial class PipeWire
     /// <summary>PW_STREAM_FLAG_MAP_BUFFERS — mmap the buffers, so <c>data</c> is a usable pointer.</summary>
     internal const uint StreamFlagMapBuffers = 1 << 2;
 
+    /// <summary>PW_STREAM_FLAG_NO_CONVERT — the adapter passes the format through instead of converting it.</summary>
+    internal const uint StreamFlagNoConvert = 1 << 5;
+
     /// <summary>
     /// PW_ID_ANY — no particular target.
     /// </summary>

@@ -116,12 +116,34 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             }
 
             SelectedCamera = Cameras.FirstOrDefault();
-            Message = Cameras.Count == 0 ? "被控端没有可用的摄像头。" : null;
+
+            // An empty list now means exactly that: the host listed its cameras and there were none. A host that
+            // has not been granted the camera answers with a failure and a sentence saying so, which the catch
+            // below shows, so the two are no longer collapsed into one message.
+            Message = Cameras.Count == 0 ? "被控端没有连接摄像头。" : null;
         }
         catch (CameraException ex)
         {
             Message = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Asks the host for the camera list again, after the person at the host granted access while this window was open.
+    /// </summary>
+    [RelayCommand]
+    private async Task RefreshCamerasAsync()
+    {
+        if (IsStreaming)
+        {
+            return;
+        }
+
+        Cameras.Clear();
+        Modes.Clear();
+        SelectedCamera = null;
+        Message = null;
+        await InitializeAsync();
     }
 
     partial void OnSelectedCameraChanged(CameraChoice? value)
@@ -178,7 +200,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             // CameraViewer gives the host thirty seconds to answer. An unanswered permission prompt on the other
             // machine is the ordinary way to reach this, and it must read as a timeout, not end the command on the
             // UI thread — an unobserved exception there used to take the whole client down.
-            Message = "被控端没有在 30 秒内响应。请在对方机器的摄像头授权弹窗上选择「允许」后重试。";
+            Message = "被控端没有在 30 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。";
             IsStreaming = false;
         }
     }
@@ -231,21 +253,27 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
         }
 
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RemoteDesktop");
-        var filePath = RecordingFile.NextPath(folder, "Camera");
-        var fileName = Path.GetFileName(filePath);
-
-        var newRecorder = _recorderFactory.Create();
+        string? fileName = null;
+        IVideoRecorder? newRecorder = null;
         try
         {
+            var filePath = RecordingFile.NextPath(folder, "Camera");
+            fileName = Path.GetFileName(filePath);
+            newRecorder = _recorderFactory.Create();
             newRecorder.Start(filePath, details.Width, details.Height, Math.Clamp(details.FrameRate, 1, 60), 3000);
         }
         catch (Exception ex)
         {
             // Media Foundation fails in more ways than can be listed (no encoder, codec refused the size, disk refused
-            // the path). Report it: letting it escape an async command would end the process instead.
-            await newRecorder.DisposeAsync();
-            LogRecordingStartFailed(_logger, ex, fileName);
-            RecordingStatusMessage = $"无法开始录制（{fileName}）：系统编码器不可用或路径不可写。";
+            // the path). Report it: letting it escape an async command would end the process instead. The folder is
+            // created by NextPath, so a failure there means the disk itself refused it; the log keeps the reason.
+            if (newRecorder is not null)
+            {
+                await newRecorder.DisposeAsync();
+            }
+
+            LogRecordingStartFailed(_logger, ex, string.IsNullOrEmpty(fileName) ? folder : fileName);
+            RecordingStatusMessage = $"无法开始录制（{fileName ?? "录像文件夹"}）：系统编码器不可用或路径不可写。";
             return;
         }
 

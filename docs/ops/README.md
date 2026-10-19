@@ -819,17 +819,21 @@ host 包没有界面，固定密码用命令行设置（以运行 host 的那个
 
 ```sh
 /usr/lib/remotedesktop-host/RemoteDesktop.HostService --set-fixed-password '至少8位'
-systemctl --user restart remotedesktop-host
+systemctl --user restart app-RemoteDesktopHost.service
 ```
 
 ```sh
-systemctl --user status remotedesktop-host
-journalctl --user -u remotedesktop-host -f
+systemctl --user status app-RemoteDesktopHost.service
+journalctl --user -u app-RemoteDesktopHost.service -f
 ```
+
+> 单元名是 `app-RemoteDesktopHost.service`，不是过去的 `remotedesktop-host`。桌面的 portal 从 systemd
+> 单元名反推应用 ID（这里是 `RemoteDesktopHost`），摄像头权限按这个 ID 记账，包里还要有同名
+> `RemoteDesktopHost.desktop`。改单元名等于换了应用身份，已经授予的摄像头权限会失效。
 
 - 装完第一次打开客户端，会显示 9 位设备代码和临时密码——两台机器互相输入对方的代码和密码即可连接。
 
-### 4. 第一次连接会弹两个对话框
+### 4. 第一次连接会弹两个对话框（摄像头权限是另一次授权）
 
 第一次共享屏幕时，桌面会问一次"允许共享哪块屏"，**答过就记住了**（restore token 存在
 `~/.local/share/RemoteDesktop/secrets`）。第一次要控制时还会再问一次，而且**每次连接都会问**——
@@ -838,13 +842,30 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 所以一台无人值守的 Linux 机器可以**被观看**，但**没人坐在跟前就没法被操作**。要无人值守地操作，
 只能用 Windows 的被控端。
 
+控制对话框里要打开"允许远程交互"再点"分享"；只点"分享"而没有打开它，键鼠不会被授权。控制端会一直显示
+当前状态：对话框弹出期间显示"已请求被控端授权控制"，被拒绝或对话框被关掉后显示"被控端未允许控制：当前
+只能观看"并带"重试授权"按钮。被拒绝后宿主不会立刻重复弹窗（默认退避 30 秒），点"重试授权"会立即再请求
+一次，不必重新连接。这个状态来自宿主控制通道的 `InputAccessChanged`，因此即使控制端和被控端不在同一台
+机器上，操作者也能知道该去被控端点什么。
+
+摄像头权限和上面两个对话框不同：后台宿主没有焦点，GNOME 不允许它弹出 portal 的摄像头授权框。需要在被控端
+本机安装客户端，打开「高级设置 → 安全 → 摄像头权限」点"允许"；没有图形客户端时可运行（以运行宿主的登录
+用户执行，服务需已在运行）：
+
+```sh
+/usr/lib/remotedesktop-host/RemoteDesktop.HostService --camera-access allow
+/usr/lib/remotedesktop-host/RemoteDesktop.HostService --camera-access deny    # 撤销
+```
+
+允许一次后，portal 对这台宿主不再询问；权限记在 `RemoteDesktopHost` 应用 ID 下，换单元名或换用户会失效。
+
 ### 5. 设备代码是空的
 
 1. **服务器地址**：「高级设置」里填的是不是另一台机器也能访问到的地址（`127.0.0.1` 只能自己连自己）。
 2. **服务器在不在**：`curl http://<服务器>:5080/health`。
-3. **改完配置要重启**：`systemctl --user restart remotedesktop-host`。
+3. **改完配置要重启**：`systemctl --user restart app-RemoteDesktopHost.service`。
 4. **看日志**：`~/.local/share/RemoteDesktop/logs/`。
-5. **服务起不来**：`journalctl --user -u remotedesktop-host` 和同目录下的 `startup-error.log`。
+5. **服务起不来**：`journalctl --user -u app-RemoteDesktopHost.service` 和同目录下的 `startup-error.log`。
 
 ### 6. 屏幕共享不起来
 

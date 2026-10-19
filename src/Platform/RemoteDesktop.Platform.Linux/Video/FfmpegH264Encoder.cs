@@ -294,11 +294,29 @@ public sealed unsafe class FfmpegH264Encoder : IVideoEncoder
 
         _context->profile = ffmpeg.AV_PROFILE_H264_MAIN;
 
-        // Presets are the encoder's own options, so these only apply where the encoder knows the name. A hardware
-        // encoder without them ignores the calls and is configured by the fields above.
-        SetOption("preset", options.Preference == EncoderPreference.Quality ? "medium" : "veryfast");
-        SetOption("tune", "zerolatency");
-        SetOption("rc_mode", "CBR");
+        // Presets are the encoder's own options, and the names are not shared between encoders: x264's table has no
+        // p1..p7, and NVENC's has no veryfast or zerolatency. Setting an unknown value does not just get ignored —
+        // libavcodec logs a parse error, and the option keeps its default, so a hardware encoder was silently running
+        // without the preset that was asked for. Each encoder is given only the names it knows.
+        switch (_name)
+        {
+            case "libx264":
+                SetOption("preset", options.Preference == EncoderPreference.Quality ? "medium" : "veryfast");
+                SetOption("tune", "zerolatency");
+                break;
+
+            case "h264_nvenc":
+                // p1 is the fastest preset and p7 the slowest; there is no x264-style tune to set alongside it, and
+                // max_b_frames = 0 above is what keeps the encoder from holding pictures back.
+                SetOption("preset", options.Preference == EncoderPreference.Quality ? "p4" : "p1");
+                SetOption("rc_mode", "CBR");
+                break;
+
+            case "h264_vaapi":
+                // VA-API has no preset or tune of its own; its rate control is the part that matters here.
+                SetOption("rc_mode", "CBR");
+                break;
+        }
 
         // Constant bitrate, so that a burst on screen cannot push the link past what it can carry.
         SetOption("maxrate", bitsPerSecond);

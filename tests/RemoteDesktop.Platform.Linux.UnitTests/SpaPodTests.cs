@@ -142,6 +142,19 @@ public sealed class SpaPodTests
     }
 
     [Fact]
+    public void A_choice_reads_its_alternatives_as_values_not_as_nested_pods()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // The first alternative's first word is 30. Read as a nested pod header it claims a body of 30 bytes and the
+        // parser throws; a real v4l2 source's framerate choice starts with the fraction 30/1, which is exactly what
+        // used to make every camera start log "a pod claims 30 bytes of body but only 8 are present".
+        var pod = SpaPod.Parse(Choice(type: 0, Id(30), Id(30))).UnwrapChoice();
+
+        Assert.Equal(30u, pod.AsId());
+    }
+
+    [Fact]
     public void A_choice_with_no_alternatives_is_refused()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
@@ -280,14 +293,23 @@ public sealed class SpaPodTests
         var header = new byte[16];
         BinaryPrimitives.WriteUInt32LittleEndian(header, type);
 
-        // child_size is the length of one alternative, and a choice with none is a thing a driver can send even
-        // though it is not useful; the builder has to be able to make one for that to be tested.
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), alternatives.Length == 0 ? 0u : (uint)alternatives[0].Length);
+        // The child header describes ONE alternative: its body size and type. A choice with none is a thing a driver
+        // can send even though it is not useful; the builder has to be able to make one for that to be tested.
+        if (alternatives.Length > 0)
+        {
+            var first = SpaPod.Parse(alternatives[0]);
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), (uint)first.Size);
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(12), (uint)first.Type);
+        }
+
         body.AddRange(header);
 
+        // The alternatives are bare values, each `child.size` bytes, not complete pods: a real builder writes only the
+        // body of each value here. A fixture that copied whole pods would make the parser agree with the wrong layout.
         foreach (var alternative in alternatives)
         {
-            body.AddRange(alternative);
+            var pod = SpaPod.Parse(alternative);
+            body.AddRange(alternative.AsSpan(SpaPod.HeaderSize, pod.Size).ToArray());
         }
 
         return Pod(SpaPodType.Choice, [.. body]);

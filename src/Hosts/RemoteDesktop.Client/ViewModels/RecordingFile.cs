@@ -14,6 +14,11 @@ internal static class RecordingFile
 {
     public static string NextPath(string folder, string prefix)
     {
+        // The recordings folder does not exist on a fresh install, and a recorder handed a path inside a missing
+        // directory fails with an error that names neither the folder nor the reason. Creating it here means the
+        // first recording works, and the same call site covers the screen and the camera.
+        Directory.CreateDirectory(folder);
+
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         var path = Path.Combine(folder, $"{prefix}_{stamp}.mp4");
 

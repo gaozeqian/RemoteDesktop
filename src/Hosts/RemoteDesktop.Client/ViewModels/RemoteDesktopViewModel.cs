@@ -42,6 +42,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     private CameraWindowViewModel? _camera;
     private readonly Func<IPeerConnection, CameraWindowViewModel>? _cameraFactory;
     private bool _updatingDisplays;
+    private bool _hostAllowsControl;
     private int _closed;
 
     public RemoteDesktopViewModel(
@@ -73,7 +74,8 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         _input = input;
         _audio = audio;
         _clipboard = clipboard;
-        CanControl = input is not null;
+        _hostAllowsControl = input is not null;
+        UpdateInputAccess();
         CanTransferFiles = session.Context.Grant.Allows(Permissions.FileTransfer);
         CanUseTerminal = session.Context.Grant.Allows(Permissions.Terminal);
         // Deliberately not derived from the controller's own injector the way CanControl is: whether Ctrl+Alt+Del
@@ -92,6 +94,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         viewer.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
         session.Closed += (_, _) => Dispatcher.UIThread.Post(() => _ = CloseAsync());
         session.GrantChanged += (_, _) => Dispatcher.UIThread.Post(() => _ = OnGrantChangedAsync());
+        session.InputAccessChanged += (_, _) => Dispatcher.UIThread.Post(UpdateInputAccess);
         UpdateStatus();
         UpdateDisplays();
     }
@@ -107,9 +110,31 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [ObservableProperty]
     public partial string StatusText { get; set; } = "正在等待画面…";
 
-    /// <summary>False in watch mode, and from the moment the host switches the session to watch-only: input is neither captured nor sent.</summary>
+    /// <summary>
+    /// Whether this window captures and sends input. False in watch mode, when the host switches the session to
+    /// watch-only, and while the controlled end's desktop has refused or cannot receive synthetic input.
+    /// </summary>
     [ObservableProperty]
     public partial bool CanControl { get; set; }
+
+    /// <summary>
+    /// Where the controlled end's operating system stands on injecting input, as the host reports it. Null when the
+    /// host has not said: an older host or a platform with no separate permission. Silence is not a refusal.
+    /// </summary>
+    [ObservableProperty]
+    public partial InputAccessStatus? InputAccess { get; set; }
+
+    /// <summary>What to tell the user about <see cref="InputAccess"/>; empty when there is nothing worth saying.</summary>
+    [ObservableProperty]
+    public partial string? InputAccessMessage { get; set; }
+
+    /// <summary>Whether the host refused or cannot inject, so asking it again is the useful action.</summary>
+    [ObservableProperty]
+    public partial bool CanRetryInputAccess { get; set; }
+
+    /// <summary>A retry has been sent and its answer has not arrived yet.</summary>
+    [ObservableProperty]
+    public partial bool IsInputAccessRequesting { get; set; }
 
     /// <summary>
     /// Whether this session may raise Ctrl+Alt+Del on the host. False against a host that cannot do it — which is not
@@ -323,20 +348,27 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         }
 
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RemoteDesktop");
-        var filePath = RecordingFile.NextPath(folder, "Screen");
-        var fileName = Path.GetFileName(filePath);
-
-        var newRecorder = _recorderFactory.Create();
+        string? fileName = null;
+        IVideoRecorder? newRecorder = null;
         try
         {
+            var filePath = RecordingFile.NextPath(folder, "Screen");
+            fileName = Path.GetFileName(filePath);
+            newRecorder = _recorderFactory.Create();
             newRecorder.Start(filePath, info.Width, info.Height, 30, 4000);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Media Foundation fails in more ways than can be listed (no encoder, codec refused the size, disk
-            // refused the path). Report it: letting it escape an async command would end the process instead.
-            await newRecorder.DisposeAsync();
-            RecordingStatusMessage = $"无法开始录制（{fileName}）：系统编码器不可用或路径不可写。";
+            // refused the path). Report it: letting it escape an async command would end the process instead. The
+            // exception is logged with the path: the message the window shows has room for a cause, not a stack.
+            if (newRecorder is not null)
+            {
+                await newRecorder.DisposeAsync();
+            }
+
+            LogRecordingStartFailed(_logger, ex, string.IsNullOrEmpty(fileName) ? folder : fileName);
+            RecordingStatusMessage = $"无法开始录制（{fileName ?? "录像文件夹"}）：系统编码器不可用或路径不可写。";
             return;
         }
 
@@ -378,6 +410,9 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
 
         RecordingStatusMessage = $"正在录制: {_recordingFileName} · {recorder.WrittenFrames} 帧";
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not start recording the screen to {FileName}.")]
+    private static partial void LogRecordingStartFailed(ILogger logger, Exception ex, string fileName);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Stopping the screen recording failed ({Failure}).")]
     private static partial void LogRecordingStopFailed(ILogger logger, Exception ex, VideoRecorderFailure failure);
@@ -511,10 +546,72 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         await _session.DisposeAsync();
     }
 
+    /// <summary>Mirrors the host's input authorization into the banner and into whether input is captured at all.</summary>
+    private void UpdateInputAccess()
+    {
+        var status = _session.InputAccess;
+        InputAccess = status;
+        IsInputAccessRequesting = false;
+
+        if (!_session.Context.Grant.Allows(Permissions.ControlInput))
+        {
+            // The host withdrew control entirely; the operating system's answer has nothing left to govern here.
+            InputAccessMessage = null;
+            CanRetryInputAccess = false;
+            UpdateCanControl();
+            return;
+        }
+
+        (InputAccessMessage, CanRetryInputAccess) = status?.State switch
+        {
+            InputAccessState.Requesting =>
+                ("已请求被控端授权控制。请在被控端桌面上允许系统弹出的对话框。", false),
+            InputAccessState.Denied => (status.Reason is { Length: > 0 } reason
+                ? $"被控端未允许控制：当前只能观看。（{reason}）"
+                : "被控端未允许控制：当前只能观看。请在被控端桌面上允许后重试。", true),
+            InputAccessState.Unavailable => (status.Reason is { Length: > 0 } reason
+                ? $"被控端无法注入键鼠：{reason}"
+                : "被控端无法注入键鼠：输入服务不可用。", true),
+            _ => (null, false),
+        };
+
+        UpdateCanControl();
+    }
+
+    private void UpdateCanControl()
+    {
+        // Denied and Unavailable are both "input would be sent and thrown away"; NotRequested still allows it because
+        // the first event is what asks the desktop. The host grant is a separate gate that the host enforces.
+        var blocked = _session.InputAccess?.State is InputAccessState.Denied or InputAccessState.Unavailable;
+        CanControl = _hostAllowsControl && _input is not null && !blocked;
+    }
+
+    /// <summary>Asks the host to put the desktop's permission question up again.</summary>
+    [RelayCommand]
+    private async Task RetryInputAccessAsync()
+    {
+        if (IsInputAccessRequesting || !_session.Context.Grant.Allows(Permissions.ControlInput))
+        {
+            return;
+        }
+
+        IsInputAccessRequesting = true;
+        try
+        {
+            await _session.RequestInputAccessAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+        {
+            IsInputAccessRequesting = false;
+            InputAccessMessage = $"无法请求被控端授权：{ex.Message}";
+        }
+    }
+
     // The host took something away mid-session: stop offering it. The host has already closed those channels.
     private async Task OnGrantChangedAsync()
     {
         var grant = _session.Context.Grant;
+        _hostAllowsControl = grant.Allows(Permissions.ControlInput) && _input is not null;
         if (!grant.Allows(Permissions.ControlInput))
         {
             CanControl = false;
@@ -561,6 +658,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             }
         }
 
+        UpdateInputAccess();
         UpdateTitle();
     }
 

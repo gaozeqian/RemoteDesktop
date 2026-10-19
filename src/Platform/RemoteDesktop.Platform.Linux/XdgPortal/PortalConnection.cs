@@ -57,6 +57,15 @@ public sealed partial class PortalConnection : IDisposable
     private const string Camera = "org.freedesktop.portal.Camera";
     private const string RequestInterface = "org.freedesktop.portal.Request";
 
+    // The camera grant is kept here rather than in a file of ours. The portal reads it when AccessCamera is called,
+    // and a grant written anywhere else would be invisible to it. The interface is an implementation detail of
+    // xdg-desktop-portal, used because GNOME cannot show the access dialog to a background host whose window is not
+    // focused; see CameraAccess and docs/usage/README.md §6.
+    private const string PermissionStore = "org.freedesktop.impl.portal.PermissionStore";
+    private const string PermissionStorePath = "/org/freedesktop/impl/portal/PermissionStore";
+    private const string PermissionTable = "devices";
+    private const string CameraPermissionId = "camera";
+
     /// <summary>SPA_SOURCE_MONITOR — a whole screen rather than one window.</summary>
     public const uint SourceMonitor = 1;
 
@@ -259,6 +268,78 @@ public sealed partial class PortalConnection : IDisposable
         {
             throw new PortalException(result.Response, "The desktop did not grant access to the camera.");
         }
+    }
+
+    /// <summary>
+    /// The camera grant the portal has recorded for an app id.
+    /// </summary>
+    /// <remarks>
+    /// The store answers <c>["yes"]</c>, <c>["no"]</c>, or not at all. "Not at all" is the normal first-run state and
+    /// arrives as a D-Bus error, which the caller maps to <c>Unset</c>.
+    /// </remarks>
+    public async Task<string[]> GetCameraPermissionAsync(string appId, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(PermissionStore, PermissionStorePath, PermissionStore, "GetPermission", "sss", MessageFlags.None);
+        w.WriteString(PermissionTable);
+        w.WriteString(CameraPermissionId);
+        w.WriteString(appId);
+        var message = w.CreateMessage();
+
+        return await _connection
+            .CallMethodAsync(
+                message,
+                static (Message m, object? _) => m.GetBodyReader().ReadArrayOfString(),
+                null)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records the camera grant for an app id.
+    /// </summary>
+    /// <remarks>
+    /// This is the one write the desktop will not do for us on a host with no focused window. It is only called from
+    /// an explicit person-driven action in the UI, and the same store is what GNOME's privacy settings read.
+    /// </remarks>
+    public async Task SetCameraPermissionAsync(string appId, bool allowed, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(PermissionStore, PermissionStorePath, PermissionStore, "SetPermission", "sbssas", MessageFlags.None);
+        w.WriteString(PermissionTable);
+        w.WriteBool(true);
+        w.WriteString(CameraPermissionId);
+        w.WriteString(appId);
+        w.WriteArray(new[] { allowed ? "yes" : "no" });
+        var message = w.CreateMessage();
+
+        _ = await _connection
+            .CallMethodAsync(message, static (Message m, object? _) => true, null)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Removes the camera grant for an app id, returning it to the "not asked yet" state.</summary>
+    /// <remarks>
+    /// The product's revoke writes <c>no</c> instead, because "ask again" is the dialog a background host cannot show.
+    /// This exists for tests and diagnostics that need to leave no trace.
+    /// </remarks>
+    internal async Task DeleteCameraPermissionAsync(string appId, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var w = _connection.GetMessageWriter();
+        w.WriteMethodCallHeader(PermissionStore, PermissionStorePath, PermissionStore, "DeletePermission", "sss", MessageFlags.None);
+        w.WriteString(PermissionTable);
+        w.WriteString(CameraPermissionId);
+        w.WriteString(appId);
+        var message = w.CreateMessage();
+
+        _ = await _connection
+            .CallMethodAsync(message, static (Message m, object? _) => true, null)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

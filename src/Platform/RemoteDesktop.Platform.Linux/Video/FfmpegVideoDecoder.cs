@@ -274,9 +274,14 @@ public sealed unsafe class FfmpegVideoDecoder : IVideoDecoder
         for (var row = 0; row < rows; row++)
         {
             var rowStart = row * width;
+            var sourceRow = row * sourceStride;
+
+            // One chroma sample covers two pixels, so the source advances once per output pair. Reading the source
+            // at the output's byte offset skips every other sample and spills into the next chroma row, which shows
+            // up as the picture's colours copied a few hundred pixels to the side and smeared downward.
             for (var column = 0; column < width; column += 2)
             {
-                var source = (row * sourceStride) + column;
+                var source = sourceRow + (column / 2);
                 destination[rowStart + column] = u[source];
                 destination[rowStart + column + 1] = v[source];
             }

@@ -59,6 +59,18 @@
       </Grid>
     </Border>
 
+    <!-- The controlled end's desktop can refuse synthetic input even though the session's grant allows control; this
+         says so instead of leaving the user typing into nothing, and offers the one action that can change it. -->
+    <Border DockPanel.Dock="Top" Classes="banner warning" Margin="12,8,12,0"
+            IsVisible="{Binding InputAccessMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource RdSpaceMd}">
+        <TextBlock Text="{Binding InputAccessMessage}" Classes="warning" VerticalAlignment="Center" />
+        <Button Grid.Column="1" Content="重试授权" Command="{Binding RetryInputAccessCommand}"
+                IsVisible="{Binding CanRetryInputAccess}" IsEnabled="{Binding !IsInputAccessRequesting}"
+                VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
     <!-- The screen is focusable so keyboard input goes to the remote desktop instead of moving focus around the window.
          The host's real pointer is drawn on the overlay above it. Screen and Overlay must stay siblings in this same
          Grid cell with identical bounds: the letterbox maths reads Screen.Bounds and positions the cursor on Overlay. -->

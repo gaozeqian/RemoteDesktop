@@ -46,6 +46,10 @@ public sealed partial class TransferItemViewModel : ObservableObject
 
     public string Title => $"{(_job.Direction == TransferDirection.Upload ? "↑" : "↓")} {_job.FileName}";
 
+    // The transfer list's automation peer asks ToString for the row's accessible name; without this it is the type
+    // name ("TransferItemViewModel").
+    public override string ToString() => Title;
+
     [ObservableProperty]
     public partial string Status { get; set; } = string.Empty;
 

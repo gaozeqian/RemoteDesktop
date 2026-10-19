@@ -54,6 +54,24 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
         }
     }
 
+    public async Task SetCameraAccessAsync(bool allowed, CancellationToken cancellationToken)
+    {
+        var answer = await RequestAsync<HostControlRequest>(
+            HostControlProtocol.CameraPermissionCommand,
+            allowed ? HostControlProtocol.AllowCamera : HostControlProtocol.DenyCamera,
+            cancellationToken).ConfigureAwait(false);
+
+        if (answer is null)
+        {
+            throw new InvalidDataException("The host service sent no answer to the camera-permission command.");
+        }
+
+        if (string.Equals(answer.Command, HostControlProtocol.ErrorCommand, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(answer.Argument ?? "The host refused the camera permission.");
+        }
+    }
+
     private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {
         // The address is a named pipe on Windows and a Unix domain socket elsewhere; see HostControlEndpoint for why

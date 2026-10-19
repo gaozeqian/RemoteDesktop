@@ -23,7 +23,8 @@ public sealed partial class CameraModule(
     IUserContextGuard guard,
     VideoCodecSelector codecs,
     TimeProvider time,
-    ILogger<CameraModule> logger) : IFeatureModule
+    ILogger<CameraModule> logger,
+    ICameraAccess? cameraAccess = null) : IFeatureModule
 {
     private const int MaxRequestBytes = 64 * 1024;
     private const int MaxFrameRate = 30;
@@ -58,6 +59,16 @@ public sealed partial class CameraModule(
                 switch (request.BodyCase)
                 {
                     case CameraRequest.BodyOneofCase.List:
+                        // A list that is empty because the desktop was never granted the camera and a list that is
+                        // empty because no camera is plugged in need different answers: the first is something the
+                        // person at the host can fix with one click, the second is not. The controller would
+                        // otherwise show the same "no cameras" sentence for both.
+                        if (await CameraAccessRefusalAsync(cancellationToken).ConfigureAwait(false) is { } refusal)
+                        {
+                            await FailAsync(stream, CameraError.NotAllowed, refusal, cancellationToken).ConfigureAwait(false);
+                            return;
+                        }
+
                         await SendAsync(stream, new CameraEvent { Cameras = Describe(cameras.GetCameras()) }, cancellationToken).ConfigureAwait(false);
                         break;
                     case CameraRequest.BodyOneofCase.Open:
@@ -90,6 +101,38 @@ public sealed partial class CameraModule(
             .ThenBy(m => Math.Abs(m.FrameRate - wanted))
             .Cast<CameraMode?>()
             .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// The sentence to send instead of a camera list when the desktop has not granted this host access, or <c>null</c>
+    /// when listing should go ahead.
+    /// </summary>
+    private async Task<string?> CameraAccessRefusalAsync(CancellationToken cancellationToken)
+    {
+        if (cameraAccess is null)
+        {
+            // Platforms whose operating system asks for the camera when it is opened have no grant to read.
+            return null;
+        }
+
+        CameraAccessState state;
+        try
+        {
+            state = await cameraAccess.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or IOException)
+        {
+            // Not being able to read the grant is not the same as it being refused: listing still goes ahead, and an
+            // enumeration that cannot reach the portal produces the ordinary empty list.
+            return null;
+        }
+
+        return state switch
+        {
+            CameraAccessState.Unset or CameraAccessState.Denied =>
+                "被控端未允许摄像头访问。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。",
+            _ => null,
+        };
     }
 
     private async Task StreamAsync(Stream stream, OpenCamera open, SessionContext session, CancellationToken cancellationToken)

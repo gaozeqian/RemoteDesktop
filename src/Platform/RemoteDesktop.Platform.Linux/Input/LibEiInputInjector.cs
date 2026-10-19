@@ -32,7 +32,7 @@ namespace RemoteDesktop.Platform.Linux.Input;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
+public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, IDisposable
 {
     /// <summary>BTN_LEFT and the four to its right, from linux/input-event-codes.h.</summary>
     private const uint ButtonLeft = 0x110;
@@ -63,11 +63,63 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
     private IReadOnlyList<DisplayInfo> _cachedDisplays = [];
     private DateTime _cachedAt;
 
+    /// <summary>Set when libei itself fails after the portal has answered; overrides the portal's status.</summary>
+    private InputAccessStatus? _injectorFailure;
+    private int _disposed;
+
     public LibEiInputInjector(IDisplayEnumerator displays, PortalControlSession control, ILogger<LibEiInputInjector> logger)
     {
         _displays = displays;
         _control = control;
         _logger = logger;
+        _control.AccessStatusChanged += OnControlAccessStatusChanged;
+    }
+
+    /// <inheritdoc />
+    public InputAccessStatus Status => Volatile.Read(ref _injectorFailure) ?? _control.AccessStatus;
+
+    /// <inheritdoc />
+    public event EventHandler<InputAccessStatus>? StatusChanged;
+
+    /// <inheritdoc />
+    public async Task<InputAccessStatus> RequestAsync(CancellationToken cancellationToken)
+    {
+        // An explicit retry is a fresh answer, not the old failure.
+        Interlocked.Exchange(ref _injectorFailure, null);
+        var status = await _control.RequestAccessAsync(cancellationToken).ConfigureAwait(false);
+
+        // A setup failure earlier tore the libei connection down; now that the desktop has answered, rebuild it.
+        // This does not block on a dialog: the portal call above is what asked, and it has returned.
+        if (status.State == InputAccessState.Granted)
+        {
+            lock (_gate)
+            {
+                _ = EnsureConnected();
+            }
+        }
+
+        return Status;
+    }
+
+    private void OnControlAccessStatusChanged(object? sender, InputAccessStatus status) => RaiseStatus();
+
+    private void RaiseStatus() => StatusChanged?.Invoke(this, Status);
+
+    private void FailInjection(string reason)
+    {
+        var status = new InputAccessStatus(InputAccessState.Unavailable, reason);
+        if (Interlocked.Exchange(ref _injectorFailure, status) != status)
+        {
+            RaiseStatus();
+        }
+    }
+
+    private void ClearInjectionFailure()
+    {
+        if (Interlocked.Exchange(ref _injectorFailure, null) is not null)
+        {
+            RaiseStatus();
+        }
     }
 
     public void Inject(InputEvent inputEvent)
@@ -137,13 +189,25 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _control.AccessStatusChanged -= OnControlAccessStatusChanged;
+
+        // Stop the pump without holding the lock it takes in Remember/Forget: holding it here would deadlock the
+        // join against the pump's own event handling.
+        _running = false;
+        var pump = _pump;
+        var stopped = pump is null || pump.Join(TimeSpan.FromSeconds(2));
+        _pump = null;
+
         lock (_gate)
         {
-            _running = false;
-            _pump?.Join(TimeSpan.FromSeconds(2));
-            _pump = null;
-
-            if (_ei != 0)
+            // If the pump did not stop, it may still be inside libei; leaking the sender is the safe end of that
+            // race, and it only happens when the process is going away anyway.
+            if (stopped && _ei != 0)
             {
                 LibEi.Unref(_ei);
                 _ei = 0;
@@ -213,6 +277,7 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
         catch (Exception error) when (error is InvalidOperationException or NotSupportedException or PortalException)
         {
             LogCannotInject(_logger, error.Message);
+            FailInjection(error.Message);
 
             if (_ei != 0)
             {
@@ -231,6 +296,7 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
         if (descriptor < 0)
         {
             LogCannotInject(_logger, "libei gave no descriptor to watch.");
+            FailInjection("libei gave no descriptor to watch.");
             return;
         }
 
@@ -270,6 +336,13 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
                 }
             }
         }
+
+        // A loop that ends while it is still meant to run lost the connection. Disposal sets _running to false first,
+        // so this reports an actual failure rather than an orderly shutdown.
+        if (_running)
+        {
+            FailInjection("The input connection to the desktop ended.");
+        }
     }
 
     private void Handle(int type, nint device, nint seat)
@@ -301,6 +374,9 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
                 // grounds that it would be evaluated whether or not anything is listening.
                 var capabilities = DescribeCapabilities(device);
                 LogDeviceAdded(_logger, capabilities);
+
+                // A device made it through, so an earlier setup failure no longer describes this connection.
+                ClearInjectionFailure();
                 break;
 
             case LibEi.EventDeviceResumed:
@@ -333,6 +409,7 @@ public sealed partial class LibEiInputInjector : IInputInjector, IDisposable
 
             case LibEi.EventDisconnect:
                 LogCannotInject(_logger, "The desktop ended the input session.");
+                FailInjection("The desktop ended the input session.");
                 break;
 
             default:
