@@ -10,6 +10,41 @@ permissions:
   contents: read
 
 jobs:
+  # 版本只有一个来源：Directory.Build.props。资产名来自 Tag，包内版本来自那个文件——两者不一致时，Release 标题与
+  # MSI 的 ProductVersion 会各说各话，而三个平台的打包 job 都不会失败。先在这里拦住。
+  #
+  # 同时要求 CHANGELOG 里有对应小节：发布说明是随 Tag 一起发出去的，写没写只有人知道；把它变成一条会红的检查。
+  check-version:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Check the tag, the product version and the changelog agree
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
+          if [[ -z "$version" ]]; then
+            echo "::error file=Directory.Build.props::No <Version> element."
+            exit 1
+          fi
+
+          # 只接受 v<三段数字>：Windows Installer 只认这种版本，带 -rc.1 的 Tag 打不出包，早失败好过在 WiX 里失败。
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Directory.Build.props::<Version> must be three numeric parts (major.minor.build); an MSI cannot carry a pre-release suffix."
+            exit 1
+          fi
+
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$version</Version> in Directory.Build.props."
+            exit 1
+          fi
+
+          if ! grep -Fq "## [$version]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No '## [$version]' section. Turn the [未发布] notes into the release's section before tagging."
+            exit 1
+          fi
+
   # The Linux packages. A separate job rather than a step, because a .deb has to be built on Linux: dpkg-deb does
   # not exist on the Windows runner and the publish has to be a Linux one anyway. Nothing is signed here — the
   # signing in the job below is Authenticode, which has no meaning to dpkg.
@@ -17,6 +52,7 @@ jobs:
   # 这个 job 与下面两个一样，自己把测试跑一遍。三个平台在这件事上必须一致：release 是唯一一个发出去之前
   # 没人再检查一遍的构建，而"Linux 那个 job 只打包"会让 Linux 成为唯一一个从未被测试过的发布产物。
   build-linux:
+    needs: check-version
     # 与 ci.yml 的 build-linux 用同一个镜像，而不是 ubuntu-latest：发出去的包应该出自包脚本被验证过的那台
     # 机器，而不是出自 ubuntu-latest 这个月恰好指代的某个版本。
     runs-on: ubuntu-26.04
@@ -78,6 +114,7 @@ jobs:
   # macOS 安装包（.pkg）。先跑，因为下面的发布 job 需要它的产物才能发版——
   # 只发出 Windows 的三个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
   build-macos:
+    needs: check-version
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
     # dyld 拒绝在更老的系统上加载（docs/ports/README.md"最低系统版本是 macOS 26"）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
@@ -213,7 +250,7 @@ jobs:
     #
     # 等两个打包 job 先做完：发布是一个原子动作，缺一个产物就不该发
     # （见上面 build-linux 与 build-macos 的注释）。
-    needs: [build-linux, build-macos]
+    needs: [check-version, build-linux, build-macos]
     runs-on: windows-latest
 
     # 权限配置：允许向 Releases 写入文件
@@ -352,8 +389,8 @@ jobs:
         run: |
           # 三个包都在同一个 artifacts/installer/windows/ 下，角色写在文件名里。**构建产物**的名字来自 wixproj 的
           # OutputName，与 macOS、Linux 同一个形状 <产品>-<角色>-<平台>-<架构>-<版本>：
-          # RemoteDesktop-Client-Windows-<版本>-x64.msi、RemoteDesktop-Host-Windows-<版本>-x64.msi、
-          # RemoteDesktop-Server-Windows-<版本>-x64.msi。带 Tag 的是**发布产物**的名字（下面重命名之后）。
+          # RemoteDesktop-Client-Windows-x64-<版本>.msi、RemoteDesktop-Host-Windows-x64-<版本>.msi、
+          # RemoteDesktop-Server-Windows-x64-<版本>.msi。带 Tag 的是**发布产物**的名字（下面重命名之后）。
           # 三个 glob 各匹配各的角色，前缀互不重叠，不再需要 notlike 排除。
           $installerFolder = 'artifacts/installer/windows'
           $client = Get-ChildItem -Path "$installerFolder/RemoteDesktop-Client-Windows-x64-*.msi" -ErrorAction SilentlyContinue |

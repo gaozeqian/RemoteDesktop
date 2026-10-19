@@ -83,7 +83,7 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 | 路径 | 是什么 |
 |---|---|
-| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 三个 `.msi`（`RemoteDesktop-Client-Windows-<版本>-x64.msi` 客户端、`RemoteDesktop-Host-Windows-<版本>-x64.msi` 被控端、`RemoteDesktop-Server-Windows-<版本>-x64.msi` 服务端），macOS 三个 `.pkg`，Linux 三个 `.deb`。三平台同一个形状 `<产品>-<角色>-<平台>-<架构>-<版本>`，角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
+| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 三个 `.msi`（`RemoteDesktop-Client-Windows-x64-<版本>.msi` 客户端、`RemoteDesktop-Host-Windows-x64-<版本>.msi` 被控端、`RemoteDesktop-Server-Windows-x64-<版本>.msi` 服务端），macOS 三个 `.pkg`，Linux 三个 `.deb`。三平台同一个形状 `<产品>-<角色>-<平台>-<架构>-<版本>`，角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
 | `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `Remote Desktop.app`；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/` 与 `Ops/` |
 | `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
 | `artifacts/test-results/<平台>/` | 测试报告（`dotnet test --report-trx` 产出的 `.trx`），按跑测试的机器分平台 |

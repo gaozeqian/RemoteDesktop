@@ -108,13 +108,13 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp -R "$PUBLISH_DIR/." "$MACOS_DIR/"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
 
-# The version in the bundle should be the version that was built, not a copy that drifts.
+# The version in the bundle should be the version that was built, not a copy that drifts. Substituted the same way
+# the host's Info.plist is: one mechanism for both bundles, and the file in the repository states that it is a
+# placeholder rather than an old release.
 VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$REPO_ROOT/Directory.Build.props" | head -1)"
 VERSION="${VERSION:-0.0.0}"
 
-cp "$SCRIPT_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS_DIR/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$CONTENTS_DIR/Info.plist"
+sed "s/__VERSION__/$VERSION/g" "$SCRIPT_DIR/Info.plist" > "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$CONTENTS_DIR/Info.plist"
 
 # PkgInfo is what pre-CFBundleInfo-era code looks for; AppKit still reads it.

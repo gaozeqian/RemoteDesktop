@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using RemoteDesktop.Application;
 
 namespace RemoteDesktop.Platform.Windows.UnitTests;
 
@@ -65,6 +66,24 @@ public sealed class InstallerPackageTests
         Assert.Contains(package.Rows("SELECT `Name` FROM `Icon`", 1), row => row[0] == "AppIcon");
         Assert.Equal("AppIcon", Assert.Single(package.Rows("SELECT `Value` FROM `Property` WHERE `Property` = 'ARPPRODUCTICON'", 1))[0]);
         Assert.Contains(package.Rows("SELECT `Icon_` FROM `Shortcut`", 1), row => row[0] == "AppIcon");
+    }
+
+    /// <summary>
+    /// The number Settings > Apps shows is the number the build was made from, plus the fourth part MSI requires.
+    /// Nothing else checks that: the build script computes it, and a package left over from an earlier build would
+    /// happily sit in artifacts/ and be reviewed as if it were this one.
+    /// </summary>
+    [Fact]
+    public void The_package_version_is_the_product_version_in_four_parts()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        using var package = new MsiPackage(Msi!);
+
+        var productVersion = Assert.Single(
+            package.Rows("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'", 1))[0];
+
+        Assert.Equal($"{ProductVersion.Display}.0", productVersion);
     }
 
     [Fact]

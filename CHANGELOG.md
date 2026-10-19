@@ -2,6 +2,36 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · 版本设置评审修复
+
+版本只有一个来源（根 `Directory.Build.props` 的 `<Version>`），但它在产物名、程序集、打包脚本与文档里派生出了
+三种拼写和两套顺序。这一轮把派生规则收敛成两件事：**包与界面用三段，遥测用带提交哈希的完整串**；构建产物名
+三平台统一为 `<产品>-<角色>-<平台>-<架构>-<版本>`。发布流程同时补上了机器检查——此前 Tag、包内版本与
+CHANGELOG 三者是否一致，只靠人记得。
+
+### Fixed
+
+- **下一次打 Tag 会在“找 MSI”这步失败**：两个 wixproj 的 `OutputName` 是 `<平台>-<版本>-<架构>`，而
+  `release.yml` 与 `verify-packages` 按 `<平台>-<架构>-<版本>` 找——命名统一的改动（`fe48153`）不在 `v0.3.0`
+  里，所以这条路径从没跑过一次发布。Windows 三个包改为架构在前、版本在后，与 macOS/Linux 一致，现有 glob 即可
+  匹配。Windows 的构建产物名从 `RemoteDesktop-Client-Windows-0.3.0.0-x64.msi` 变为
+  `RemoteDesktop-Client-Windows-x64-0.3.0.0.msi`（被控端、服务端同理）；发布资产名不变。
+- **Tag 与包内版本可以各说各话**：`release.yml` 新增 `check-version` job，核对 `GITHUB_REF_NAME == v<Version>`
+  且 `CHANGELOG.md` 有 `## [<版本>]` 小节；三个打包 job 都依赖它。`docs/ops/README.md` 的发布步骤补上了
+  “先升 `<Version>`、把 `[未发布]` 收成版本小节、再打 Tag”，并写明预发布版本无法用 MSI 表达。
+- **运维控制台的版本号写死在 `index.html`**：新增匿名端点 `GET /api/version`（读程序集），侧栏改为运行时读取；
+  顺带去掉了过期的“阶段 M1”。
+- **Docker 镜像 tag 写死 `0.3.0`**：默认改为 `dev`，用 `REMOTEDESKTOP_VERSION` 指定；两个镜像各加
+  `org.opencontainers.image.version` 标签，随构建参数写入。
+- **macOS 客户端 `Info.plist` 的版本是字面量**：改为 `__VERSION__`，与 host 用同一套替换，仓库里的文件不再
+  假装自己是一个已发布的版本。
+- **文档与测试里的版本示例会过期**：`docs/ops/README.md`、`build/signing/README.md` 改成 `<版本>` 占位符；
+  遥测“产品真实版本可通过”的用例改为读取 `AssemblyInformationalVersion`，不再拿写死的 `0.3.0+…` 当样本。
+- **同一产品三种版本拼写**：新增 `RemoteDesktop.Application.ProductVersion` 与
+  `RemoteDesktop.Server.Shared.ProductVersion`（客户端与服务端各一份，因为两侧不共享工具程序集；
+  `ProductVersionTests` 断言两份一致）。界面侧栏、服务端节点信息用 `Display`（三段），遥测用 `Full`（带提交
+  哈希）；`InstallerPackageTests` 新增断言，MSI 的 `ProductVersion` 必须等于 `<Version>` 加 `.0`。
+
 ## [未发布] · 运维监控台：端到端测试
 
 在 Windows 11 上把控制台放进真实部署里跑：Rendezvous、Relay、Ops 三个进程，真实 SQLite，两个真实客户端分别走

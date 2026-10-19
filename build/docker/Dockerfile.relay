@@ -9,6 +9,8 @@ COPY src/Server/ src/Server/
 RUN dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app
 COPY --from=build /app ./
 

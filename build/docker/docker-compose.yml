@@ -14,6 +14,11 @@
 # file on one machine — two rendezvous containers on SQLite would each hand out their own device ids.
 name: remotedesktop
 
+# A local build is not a release, so the image tags default to "dev" rather than to a product version that would go
+# stale the moment Directory.Build.props changes. Set it when the image has to be identifiable later:
+#   export REMOTEDESKTOP_VERSION=0.4.0
+# The version compiled into the assemblies always comes from Directory.Build.props; this only names the image.
+
 services:
   postgres:
     image: pgvector/pgvector:pg18
@@ -36,7 +41,9 @@ services:
     build:
       context: ../..
       dockerfile: build/docker/Dockerfile.rendezvous
-    image: remotedesktop/rendezvous:0.3.0
+      args:
+        VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+    image: remotedesktop/rendezvous:${REMOTEDESKTOP_VERSION:-dev}
     environment:
       # The address handed to clients for relayed connections. It must be reachable by the clients, so 127.0.0.1
       # only works when everything runs on the same machine.
@@ -71,7 +78,9 @@ services:
     build:
       context: ../..
       dockerfile: build/docker/Dockerfile.relay
-    image: remotedesktop/relay:0.3.0
+      args:
+        VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+    image: remotedesktop/relay:${REMOTEDESKTOP_VERSION:-dev}
     environment:
       Relay__Port: 5082
       Relay__SharedKey: ${RELAY_SHARED_KEY:-}

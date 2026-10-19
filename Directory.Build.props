@@ -12,6 +12,12 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Company>RemoteDesktop</Company>
     <Product>Remote Desktop</Product>
+    <!--
+      The product version, and the only place one is written down. Every installer, bundle, package name and telemetry
+      payload derives from it; the build scripts read this element rather than keeping a copy. Three numbers, because
+      Windows Installer requires major.minor.build (the packaging scripts append the fourth .0), and because a
+      pre-release suffix cannot be expressed in an MSI.
+    -->
     <Version>0.3.0</Version>
   </PropertyGroup>
 

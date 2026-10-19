@@ -10,6 +10,10 @@ COPY src/Server/ src/Server/
 RUN dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+# The version in the image's metadata is the one it was built from (docker-compose.yml passes it through). It is
+# informational only: the assemblies carry the same number from Directory.Build.props.
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app
 COPY --from=build /app ./
 

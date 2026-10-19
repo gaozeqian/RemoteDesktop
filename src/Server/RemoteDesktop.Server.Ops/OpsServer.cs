@@ -103,6 +103,7 @@ public static class OpsServer
 
         app.MapOpsAuth();
         app.MapOpsHealth();
+        app.MapOpsVersion();
         app.MapOpsNodes();
         app.MapOpsOverview();
         app.MapOpsSessions();

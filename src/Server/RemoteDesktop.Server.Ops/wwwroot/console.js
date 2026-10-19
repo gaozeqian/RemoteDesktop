@@ -36,6 +36,7 @@ const el = {
   logout: document.getElementById("logoutButton"),
   theme: document.getElementById("themeToggle"),
   clock: document.getElementById("clock"),
+  consoleVersion: document.getElementById("consoleVersion"),
   pageTitle: document.getElementById("pageTitle"),
   pages: {
     overview: document.getElementById("page-overview"),
@@ -1408,9 +1409,29 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+/* ---------------- version ---------------- */
+
+async function loadVersion() {
+  if (!el.consoleVersion) {
+    return;
+  }
+
+  try {
+    const { status, payload } = await api("/api/version");
+    if (status === 200 && payload && payload.version) {
+      el.consoleVersion.textContent = `Console v${payload.version}`;
+    }
+  } catch {
+    // The sidebar keeps "Console": a missing version is better than a made-up one.
+  }
+}
+
 /* ---------------- start ---------------- */
 
 (async () => {
+  // Independent of sign-in: the sidebar is on the login screen too.
+  loadVersion();
+
   try {
     const { status, payload } = await api("/api/me");
     if (status === 200 && payload) {

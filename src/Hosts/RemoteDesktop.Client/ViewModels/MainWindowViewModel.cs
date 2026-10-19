@@ -9,6 +9,7 @@ using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
+using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Setup;
@@ -244,7 +245,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? ServerAddressError { get; set; }
 
-    public string ClientVersion { get; } = typeof(MainWindowViewModel).Assembly.GetName().Version?.ToString() ?? "未知";
+    // The same three-part number the packages and the bundle carry. AssemblyVersion would say 0.3.0.0, which is a
+    // different number on the same build - see ProductVersion for why the product has one answer.
+    public string ClientVersion { get; } = ProductVersion.Display;
 
     /// <summary>The sidebar's version line, built from <see cref="ClientVersion"/> so the two cannot disagree.</summary>
     public string ClientVersionLabel => $"Remote Desktop {ClientVersion}";

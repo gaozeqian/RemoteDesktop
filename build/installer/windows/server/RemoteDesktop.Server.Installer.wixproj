@@ -5,13 +5,15 @@
          community fixes, so the installer is kept to standard features (no custom actions of our own beyond calling
          the server executable) to keep a later move to another tool cheap. Same choice as the client installer. -->
     <InstallerPlatform>x64</InstallerPlatform>
-    <OutputName>RemoteDesktop-Server-Windows-$(ProductVersion)-x64</OutputName>
+    <!-- Architecture before version, like the client and host packages: one shape on all three platforms, and the
+         shape release.yml and verify-packages look for. -->
+    <OutputName>RemoteDesktop-Server-Windows-x64-$(ProductVersion)</OutputName>
     <OutputType>Package</OutputType>
     <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Passed by Build-ServerInstaller.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder>
+    <!-- Passed by Build-ServerInstaller.ps1: -p:ProductVersion=<four-part version> -p:SourceRoot=<publish folder>
          [-p:DefaultRendezvousUrl=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <!-- What the signaling server listens on: the address baked into the installed Rendezvous\appsettings.json (read

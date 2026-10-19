@@ -138,7 +138,7 @@ public class SessionProjectionTests
                 transport = "direct",
                 rttMilliseconds = 18,
                 platform = (string?)null,
-                version = "0.3.0",
+                version = "1.2.3",
             }));
 
         Assert.NotNull(state);
@@ -146,7 +146,7 @@ public class SessionProjectionTests
         Assert.Equal("direct", state.Transport);
         Assert.Equal("control", state.Mode);
         Assert.Equal(18d, state.RttMs);
-        Assert.Equal("0.3.0", state.Version);
+        Assert.Equal("1.2.3", state.Version);
         Assert.Null(state.Platform);
     }
 
@@ -156,7 +156,7 @@ public class SessionProjectionTests
         var paired = SessionProjection.Apply(null, Event(OpsEventKinds.RelayPaired, new { }, seconds: 5));
         var enriched = SessionProjection.Apply(
             paired,
-            Event(OpsEventKinds.SessionTelemetry, new { role = "host", mode = "view", transport = "relayed", platform = "windows", version = "0.3.0" }, seconds: 20));
+            Event(OpsEventKinds.SessionTelemetry, new { role = "host", mode = "view", transport = "relayed", platform = "windows", version = "1.2.3" }, seconds: 20));
 
         Assert.Equal("relay", enriched!.Source);
         Assert.Equal("relay", enriched.Transport);   // the heartbeat says "relayed"; the column keeps one spelling

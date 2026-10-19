@@ -52,7 +52,7 @@ public static class RendezvousServer
         services.AddSingleton(new NodeInfo(
             options.Name,
             "rendezvous",
-            typeof(RendezvousServer).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+            ProductVersion.Display,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
         // The counters exist whether or not the endpoint is served: the paths that count never ask whether anyone is

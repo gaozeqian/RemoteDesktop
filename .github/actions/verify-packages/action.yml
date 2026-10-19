@@ -139,8 +139,8 @@ runs:
       run: |
         $installerFolder = 'artifacts/installer/windows'
 
-        # The build produces RemoteDesktop-Client-Windows-<version>-x64.msi, RemoteDesktop-Host-Windows-<version>-x64.msi
-        # and RemoteDesktop-Server-Windows-<version>-x64.msi, all into the one folder because the role is already in the
+        # The build produces RemoteDesktop-Client-Windows-x64-<version>.msi, RemoteDesktop-Host-Windows-x64-<version>.msi
+        # and RemoteDesktop-Server-Windows-x64-<version>.msi, all into the one folder because the role is already in the
         # file name — the same <产品>-<角色>-<平台>-<架构>-<版本> shape as the macOS and Linux packages. Three globs, one per
         # role, each matching its own prefix, so a stale package from another role is never picked up.
         $client = @(Get-ChildItem -Path "$installerFolder/RemoteDesktop-Client-Windows-x64-*.msi" -ErrorAction SilentlyContinue)

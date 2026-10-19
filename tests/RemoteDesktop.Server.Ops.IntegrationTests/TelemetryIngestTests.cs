@@ -39,7 +39,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
                     mode = "control",
                     transport = "relayed",
                     rttMilliseconds = 31,
-                    version = "0.3.0",
+                    version = "1.2.3",
                 },
                 correlation),
         ]);
@@ -57,7 +57,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
             Assert.Equal("relay", session.Transport);
             Assert.Equal("relay", session.Source);
             Assert.Equal(31, session.RttMs);
-            Assert.Equal("0.3.0", session.Version);
+            Assert.Equal("1.2.3", session.Version);
         }
     }
 
@@ -79,7 +79,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
                     mode = "view",
                     transport = "direct",
                     rttMilliseconds = 12,
-                    version = "0.3.0",
+                    version = "1.2.3",
                 },
                 sessionId),
         ]);
@@ -115,7 +115,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
                     transport = "direct",
                     rttMilliseconds = 0,
                     platform = "linux",
-                    version = "0.3.0",
+                    version = "1.2.3",
                 },
                 sessionId),
         ]);

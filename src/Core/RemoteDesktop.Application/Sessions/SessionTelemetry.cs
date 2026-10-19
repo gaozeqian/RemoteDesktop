@@ -1,4 +1,3 @@
-using System.Reflection;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling.Messages;
@@ -25,8 +24,6 @@ public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient
 {
     /// <summary>How long the first report waits, so that an RTT exists to put in it.</summary>
     private static readonly TimeSpan FirstReportDelay = TimeSpan.FromSeconds(5);
-
-    private static readonly string ProductVersion = ReadVersion();
 
     /// <summary>Whether this process reports at all. Both the switch and a signaling connection are required.</summary>
     public bool Enabled => options.Enabled && rendezvous is not null;
@@ -100,7 +97,8 @@ public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient
             Transport = context.Connection.Path == ConnectionPath.Relayed
                 ? TelemetryTransport.Relayed
                 : TelemetryTransport.Direct,
-            Version = ProductVersion,
+            // The commit suffix is deliberate here: two builds of the same release version must be distinguishable.
+            Version = ProductVersion.Full,
         };
 
         if (context.Connection.RelaySessionId is { Length: > 0 } relaySessionId)
@@ -131,13 +129,5 @@ public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient
         }
 
         return OperatingSystem.IsMacOS() ? "macos" : "linux";
-    }
-
-    private static string ReadVersion()
-    {
-        var assembly = typeof(SessionTelemetry).Assembly;
-        return assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            ?? assembly.GetName().Version?.ToString()
-            ?? "0.0.0";
     }
 }

@@ -91,11 +91,12 @@ pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
 ```
 
 在 Linux/macOS 上，把脚本里的 `dotnet publish` 目标换成对应 RID、并跳过 WiX 那一步（WiX 只能在 Windows 上打 MSI），
-也可以只用 osslsigncode 单独签已经打好的文件：
+也可以只用 osslsigncode 单独签已经打好的文件。文件名里的 `<版本>` 是四段版本（`Directory.Build.props` 的三段加
+`.0`，例如 `0.4.0.0`），以 `artifacts/installer/windows/` 里的实际产物为准：
 
 ```bash
 osslsigncode sign -h sha256 -n RemoteDesktop -ts http://timestamp.digicert.com \
-  -pkcs12 codesign.pfx -pass "$PASS" -in RemoteDesktop-Client-Windows-0.3.0.0-x64.msi -out signed.msi
+  -pkcs12 codesign.pfx -pass "$PASS" -in RemoteDesktop-Client-Windows-x64-<版本>.msi -out signed.msi
 osslsigncode verify -in signed.msi
 ```
 
@@ -215,13 +216,13 @@ pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -TimestampSe
 
 ```powershell
 # 安装包
-Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-Client-Windows-0.3.0.0-x64.msi | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\artifacts\installer\windows\RemoteDesktop-Client-Windows-x64-<版本>.msi | Format-List Status, SignerCertificate
 
 # 装好的程序
 Get-AuthenticodeSignature 'C:\Program Files\RemoteDesktop\RemoteDesktop.Client.exe' | Format-List Status, SignerCertificate
 
 # 用 signtool（装了 SDK 时）
-signtool verify /pa /v .\artifacts\RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
+signtool verify /pa /v .\artifacts\installer\windows\RemoteDesktop-Client-Windows-x64-<版本>.msi
 ```
 
 ## macOS（Developer ID + 公证）

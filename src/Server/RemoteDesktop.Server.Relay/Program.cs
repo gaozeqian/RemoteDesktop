@@ -43,7 +43,7 @@ builder.WebHost.UseUrls(relayOptions.HttpEndpoint);
 builder.Services.AddSingleton(new NodeInfo(
     relayOptions.Name,
     "relay",
-    typeof(UdpRelay).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+    ProductVersion.Display,
     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
 var app = builder.Build();

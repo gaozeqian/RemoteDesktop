@@ -8,14 +8,17 @@
     <!-- Passed by Build-ClientInstaller.ps1 -HostOnly. Global properties, so they are visible here before this file is
          evaluated; the host package needs a name and an identity of its own, or it would try to upgrade the client. -->
     <HostOnly Condition="'$(HostOnly)' == ''">0</HostOnly>
-    <OutputName Condition="'$(HostOnly)' == '1'">RemoteDesktop-Host-Windows-$(ProductVersion)-x64</OutputName>
-    <OutputName Condition="'$(HostOnly)' != '1'">RemoteDesktop-Client-Windows-$(ProductVersion)-x64</OutputName>
+    <!-- The architecture goes before the version, which is the one shape all three platforms produce
+         (<产品>-<角色>-<平台>-<架构>-<版本>) and what release.yml and verify-packages look for. With the version
+         first, the release's own glob matched nothing. -->
+    <OutputName Condition="'$(HostOnly)' == '1'">RemoteDesktop-Host-Windows-x64-$(ProductVersion)</OutputName>
+    <OutputName Condition="'$(HostOnly)' != '1'">RemoteDesktop-Client-Windows-x64-$(ProductVersion)</OutputName>
     <OutputType>Package</OutputType>
     <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Passed by Build-ClientInstaller.ps1: -p:ProductVersion=0.3.0 -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
+    <!-- Passed by Build-ClientInstaller.ps1: -p:ProductVersion=<four-part version> -p:SourceRoot=<publish folder> [-p:DefaultRendezvousUri=...] -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <ProductName Condition="'$(HostOnly)' == '1'">Remote Desktop Host</ProductName>
     <ProductName Condition="'$(HostOnly)' != '1'">Remote Desktop</ProductName>

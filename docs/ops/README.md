@@ -83,13 +83,16 @@ curl http://127.0.0.1:5090/health
 
 ```powershell
 pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
-# 产物：artifacts/installer/windows/RemoteDesktop-Server-Windows-<版本>-x64.msi
+# 产物：artifacts/installer/windows/RemoteDesktop-Server-Windows-x64-<版本>.msi
 ```
+
+下面的命令里 `<版本>` 是**四段**版本（`Directory.Build.props` 的三段加 `.0`，例如 `0.4.0.0`）：Windows Installer
+只认四段数字。以 `artifacts/installer/windows/` 里的实际文件名为准，本文不再写死某一版。
 
 安装时可以把该定的都定掉（全部可省略，省略即用下表默认值）：
 
 ```powershell
-msiexec /i RemoteDesktop-Server-Windows-0.3.0.0-x64.msi /qn `
+msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
   RENDEZVOUSURL="https://0.0.0.0:5080" `
   RELAYPUBLICENDPOINT="203.0.113.10:5082" `
   POSTGRESCONNECTIONSTRING="Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=..." `
@@ -619,17 +622,25 @@ Restart-Service RemoteDesktopOps
 地址用 `wss://` 就要求服务器自己有 TLS 证书（见第 4 节）；局域网里用自签证书时，构建客户端安装包加
 `-ServerCertificate` 把服务器证书的公钥打进包并装进受信任根，就不用每台机器手工导入。
 
-### 3. 触发自动发布
+### 3. 升版本并触发自动发布
 
-在本地完成开发后：
+版本只有一处：仓库根 `Directory.Build.props` 的 `<Version>`。九个安装包、`.app` 的 `Info.plist` 与遥测都从它派生，
+所以发布前**先改它，再打 Tag**：
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+1. 把 `Directory.Build.props` 里的 `<Version>` 改成这次要发的三段数字（例如 `0.4.0`）。Windows Installer 只认
+   `major.minor.build`，脚本会补成四段 `0.4.0.0`；`0.4.0-rc.1` 这类版本拒绝构建，所以**预发布也只能用数值版本**。
+2. 在 `CHANGELOG.md` 里把 `[未发布]` 的各小节合并成 `## [0.4.0] - YYYY-MM-DD`（没有内容就补一节）。
+3. 提交这两处改动。
+4. 打 Tag 并推送：
 
-GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Releases 页面就会出现
-`RemoteDesktop-Client-Windows-x64-v1.0.0.msi` 和 `RemoteDesktop-Server-Windows-x64-v1.0.0.msi`。
+   ```bash
+   git tag v0.4.0
+   git push origin v0.4.0
+   ```
+
+流水线第一步 `check-version` 会核对 Tag 与 `<Version>`、以及 `CHANGELOG.md` 里有没有对应小节；任何一处不一致
+都会在打包前失败。之后 GitHub Actions 拉三个平台各跑测试、打包，几分钟后您的 Releases 页面会出现**九个**包，
+名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如 `RemoteDesktop-Client-Windows-x64-v0.4.0.msi`）。
 
 服务器地址是**编进包里的**，所以同一个 Tag 用不同地址出包没有意义：要换地址就出新的 Tag。
 
@@ -642,25 +653,27 @@ GitHub Actions 会自动拉起 Windows 构建机，几分钟后，您的 Release
 
 ### 2. 安装
 
+下面的 `<版本>` 同样是四段版本（`Directory.Build.props` 的三段加 `.0`，例如 `0.4.0.0`），以实际产物文件名为准：
+
 ```powershell
 # 图形界面（推荐给一般用户）
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi
 
 # 静默安装，指定服务器地址
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 
 # 静默安装到别的目录
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
-只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop-Host-Windows-<版本>-x64.msi`：同样的服务与会话 Agent、同样的
+只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop-Host-Windows-x64-<版本>.msi`：同样的服务与会话 Agent、同样的
 `RENDEZVOUSURI` 属性，只是没有客户端与开始菜单项。它和客户端包装在同一个目录、用同一个 `RemoteDesktopHost`
 服务与 `%ProgramData%\RemoteDesktop` 设备身份，所以**一台机器只装其中一个**：想同时具备"控制别人"与"被别人
 控制"两种角色，只装**客户端**包就够了（它本来就带被控端）；Host 包是给"只能被控、不允许控制别人"的机器用的。
 装第二个时安装程序会明确拒绝，先卸掉已有的那个再装。
 
 ```powershell
-msiexec /i RemoteDesktop-Host-Windows-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
 安装完成后：
@@ -691,13 +704,13 @@ msiexec /i RemoteDesktop-Host-Windows-0.3.0.0-x64.msi /qn RENDEZVOUSURI="ws://19
 
 ```powershell
 # 升级（保留设备身份、日志和服务器地址；服务器地址以安装包里的为准）
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 
 # 卸载（保留设备身份和日志，重装后设备代码不变）
-msiexec /x RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn
+msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 
 # 卸载并删除设备身份与日志（这台机器下次安装会得到新的设备代码）
-msiexec /x RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn REMOVEDATA=1
+msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn REMOVEDATA=1
 ```
 
 **升级前最好先退出客户端**。安装包会把残留的 `RemoteDesktop.Client.exe` 和 `RemoteDesktop.SessionAgent.exe` 关掉，
@@ -706,14 +719,14 @@ msiexec /x RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /qn REMOVEDATA=1
 
 ```powershell
 Get-Process RemoteDesktop.Client -ErrorAction SilentlyContinue | Stop-Process
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi
 ```
 
 服务不用担心：安装包会先停服务，服务停止时会结束它启动的 Agent（实测 2 秒内退出）。
 出问题时用日志装：
 
 ```powershell
-msiexec /i RemoteDesktop-Client-Windows-0.3.0.0-x64.msi /l*v "$env:TEMP\rd-install.log"
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /l*v "$env:TEMP\rd-install.log"
 ```
 
 安装失败时 Windows 也会在"应用程序"事件日志里记下来（来源 `MsiInstaller`，含具体错误码和失败的那一步）。
@@ -940,7 +953,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 ```powershell
 .\build\installer\windows\host\Build-HostInstaller.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws
-# 产出 artifacts/installer/windows/RemoteDesktop-Host-Windows-<版本>-x64.msi
+# 产出 artifacts/installer/windows/RemoteDesktop-Host-Windows-x64-<版本>.msi
 ```
 
 两个包走同一个脚本（`Build-ClientInstaller.ps1 -HostOnly`）：服务定义、崩溃重启、UDP 防火墙规则和
@@ -951,7 +964,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 机器唯一能直接输入固定密码的地方。留空表示不修改已有密码；勾选“清除已设置”则清掉。静默安装等价于：
 
 ```powershell
-msiexec /i RemoteDesktop-Host-Windows-<版本>-x64.msi /qn `
+msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
   RENDEZVOUSURI="ws://rd.example.com:5080/ws" `
   FIXEDPASSWORD="至少8位"
 # 清除已有固定密码：CLEARFIXEDPASSWORD=1
@@ -968,7 +981,7 @@ msiexec /i RemoteDesktop-Host-Windows-<版本>-x64.msi /qn `
 
 ```powershell
 .\build\installer\windows\server\Build-ServerInstaller.ps1
-# 产出 artifacts/installer/windows/RemoteDesktop-Server-Windows-<版本>-x64.msi
+# 产出 artifacts/installer/windows/RemoteDesktop-Server-Windows-x64-<版本>.msi
 ```
 
 打包脚本做四件事：发布可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名，

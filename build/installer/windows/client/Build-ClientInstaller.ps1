@@ -52,7 +52,7 @@ param(
     [string]$Configuration = 'Release',
 
     # Build the controlled end's package: the service and the session agent, no client window, no shortcut. The default
-    # output folder and the MSI name change with it (artifacts\app\windows\host, RemoteDesktop-Host-Windows-<version>-x64.msi).
+    # output folder and the MSI name change with it (artifacts\app\windows\host, RemoteDesktop-Host-Windows-x64-<version>.msi).
     [switch]$HostOnly,
 
     # Code-signing certificate to use (thumbprint, or the subject of one). Left empty, a suitable certificate is looked

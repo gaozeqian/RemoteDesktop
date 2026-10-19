@@ -32,7 +32,7 @@ public class SessionTelemetryTests
     public void A_session_id_that_is_not_a_uuid_is_refused(string sessionId)
     {
         Assert.False(SessionTelemetry.TryCreate(
-            sessionId, null, "controller", "control", "direct", 10, null, "0.3.0", out _, out var error));
+            sessionId, null, "controller", "control", "direct", 10, null, "1.2.3", out _, out var error));
         Assert.Contains("session id", error, StringComparison.Ordinal);
     }
 
@@ -70,12 +70,15 @@ public class SessionTelemetryTests
     [Fact]
     public void The_version_the_product_actually_reports_is_accepted()
     {
-        // AssemblyInformationalVersion is "0.3.0+<40-char commit hash>"; that is 46 characters, not a payload.
+        // The reporting side sends AssemblyInformationalVersion, which carries the commit hash as well as the
+        // version. Reading it from the product rather than writing a sample is what makes this test notice when the
+        // real string stops fitting the validation — the limit used to be 32, and every heartbeat was refused.
+        var version = ProductVersion.Full;
+
         Assert.True(SessionTelemetry.TryCreate(
-            SessionId, null, "host", "control", "direct", 0, "windows",
-            "0.3.0+db9820fe0cb5d3dc26e1f292ae8d49c6e886469b", out var telemetry, out var error));
+            SessionId, null, "host", "control", "direct", 0, "windows", version, out var telemetry, out var error));
         Assert.Empty(error);
-        Assert.StartsWith("0.3.0+", telemetry.Version, StringComparison.Ordinal);
+        Assert.Equal(version, telemetry.Version);
     }
 
     [Fact]
@@ -109,7 +112,7 @@ public class SessionTelemetryTests
             "direct",
             23,
             null,
-            "0.3.0",
+            "1.2.3",
             out telemetry,
             out error);
 }
