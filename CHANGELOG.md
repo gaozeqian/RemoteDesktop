@@ -2,6 +2,17 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Windows 端到端测试
+
+在 Windows 11 + NVIDIA 上以 Docker（rendezvous + relay + ops + PostgreSQL）跑真实用户流程：直连与中继、终端、
+文件传输、服务端容器重建、摄像头、观看模式，以及屏幕与摄像头录制。发现并修复：
+
+### Fixed
+
+- **中继空闲回收覆盖客户端的结束时间**：`session.ended` 先到时，约两分钟后的 `session.relay_closed` 会把
+  `endedAt` / `endReason` 改成更晚的 idle；现在只合并字节数，结束时间取最早、原因保留第一次。`SessionFailed`
+  同样不再把已结束的会话往后推。
+
 ## [未发布] · Docker 部署评审修复
 
 服务端的三条部署路径里，Docker 是唯一没有被 CI 构建过的一条。一次针对 `build/docker/` 的评审同时发现了两个
@@ -24,8 +35,11 @@
   代理 `/ws` 与 `/health`）。局域网明文直连需要显式设置 `RENDEZVOUS_BIND_IP=0.0.0.0`。
 - **SQLite 单机方案起不来**：镜像以 UID 1654 运行，新建的 `/data` 卷属于 root，SQLite 报 `SQLITE_CANTOPEN`。
   信令与监控台镜像在 `USER` 之前创建 `/data` 并 chown；文档补上卷与依赖的移除步骤。
-- **监控台没有 Docker 部署**：新增 `Dockerfile.ops` 与 `docker-compose.ops.yml`，带独立 `ops-data` 卷、管理员
-  创建命令、节点地址与事件签名密钥；5090 只发布到回环。
+- **监控台没有 Docker 部署**：新增 `Dockerfile.ops` 与 `docker-compose.ops.yml`，复用 PostgreSQL（与设备注册表
+  同库，表名以 `ops_` 开头）、带 DataProtection 卷、管理员创建命令、节点地址与事件签名密钥；5090 只发布到回环。
+- **容器启动时的两条噪声日志**：rendezvous/ops 镜像补装 `libgssapi-krb5-2`，Npgsql 不再打印
+  `Cannot load library libgssapi_krb5.so.2`；ops 的 DataProtection 密钥目录由镜像创建并挂到 `ops-dataprotection`
+  卷，ASP.NET Core 不再警告密钥会随容器消失。
 - **中继没有健康检查、日志无上限**：compose 给中继加 `/health` 探针，并给所有服务加 json-file 轮转
   （10 MB × 5）。
 - **compose 的必填项与依赖关系**：`RELAY_SHARED_KEY`、`RELAY_PUBLIC_ENDPOINT`、`NODE_TOKEN` 改为 compose 级

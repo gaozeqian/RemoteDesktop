@@ -13,6 +13,15 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+
+# Npgsql probes for GSSAPI when it initializes its authentication mechanisms. Without the library the probe prints
+# "Cannot load library libgssapi_krb5.so.2" on every start; password authentication still works, but an error line in
+# a log an operator is told to read is not acceptable when a small package removes it. It also makes Kerberos-based
+# PostgreSQL authentication available to deployments that need it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+
 # The version in the image's metadata is the one it was built from (docker-compose.yml passes it through). It is
 # informational only: the assemblies carry the same number from Directory.Build.props.
 ARG VERSION=dev
