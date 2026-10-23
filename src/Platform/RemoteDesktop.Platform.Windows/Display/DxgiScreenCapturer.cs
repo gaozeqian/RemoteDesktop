@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Display;
@@ -11,8 +12,10 @@ using Vortice.DXGI;
 namespace RemoteDesktop.Platform.Windows.Display;
 
 [SupportedOSPlatform("windows")]
-public sealed class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenCapturerFactory, IAsyncDisposable
+public sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenCapturerFactory, IAsyncDisposable
 {
+    private const int SmRemoteSession = 0x1000;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<string, SharedDisplayCapture> _captures = new(StringComparer.Ordinal);
 
@@ -45,13 +48,46 @@ public sealed class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenC
         {
             if (!_captures.TryGetValue(display.Id, out capture!))
             {
-                capture = new SharedDisplayCapture(display, static d => new DxgiScreenCapturer(d), loggers.CreateLogger<SharedDisplayCapture>());
+                capture = new SharedDisplayCapture(display, CreateCapturer, loggers.CreateLogger<SharedDisplayCapture>());
                 _captures[display.Id] = capture;
             }
         }
 
         return capture.Subscribe();
     }
+
+    /// <summary>
+    /// Desktop Duplication is unavailable over Remote Desktop, and some adapters cannot duplicate their output at
+    /// all. Both cases fall back to the GDI copier rather than leaving the controller on a black screen forever.
+    /// </summary>
+    private IScreenCapturer CreateCapturer(DisplayInfo display)
+    {
+        var logger = loggers.CreateLogger<DxgiScreenCapturerFactory>();
+        if (GetSystemMetrics(SmRemoteSession) != 0)
+        {
+            LogRemoteSession(logger, display.Id);
+            return new GdiScreenCapturer(display);
+        }
+
+        try
+        {
+            return new DxgiScreenCapturer(display);
+        }
+        catch (Exception ex) when (ex is SharpGenException or InvalidOperationException)
+        {
+            LogDuplicationUnavailable(logger, display.Id, ex);
+            return new GdiScreenCapturer(display);
+        }
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetrics(int index);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Capturing display {Display} with GDI: this is a Remote Desktop session.")]
+    private static partial void LogRemoteSession(ILogger logger, string display);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Desktop Duplication is unavailable for display {Display}; falling back to GDI.")]
+    private static partial void LogDuplicationUnavailable(ILogger logger, string display, Exception exception);
 }
 
 /// <summary>

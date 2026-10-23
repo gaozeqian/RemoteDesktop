@@ -77,9 +77,96 @@ internal static partial class SessionProcessLauncher
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint CreateNoWindow = 0x08000000;
 
+    // WTS_INFO_CLASS value used below.
+    private const int WtsUserName = 5;
+
     public static bool IsLocalSystem { get; } = WindowsIdentity.GetCurrent().IsSystem;
 
-    public static uint GetActiveSessionId() => WTSGetActiveConsoleSessionId();
+    /// <summary>
+    /// The session whose desktop should be streamed: an active user session, preferring the console when somebody is
+    /// logged on there, and falling back to the console session itself (the login or lock screen) when no user session
+    /// exists. RDP sessions are ordinary user sessions: a host reached over Remote Desktop has no user on the physical
+    /// console, and following WTSGetActiveConsoleSessionId alone would show its login screen instead of the user's
+    /// desktop.
+    /// </summary>
+    public static uint GetActiveSessionId()
+    {
+        var console = WTSGetActiveConsoleSessionId();
+        var sessions = EnumerateSessions();
+        if (sessions.Count == 0)
+        {
+            return console;
+        }
+
+        var active = sessions
+            .Where(session => session.State == (int)WtsConnectState.Active && HasUser(session.SessionId))
+            .Select(session => session.SessionId)
+            .ToList();
+        if (active.Contains(console))
+        {
+            return console;
+        }
+
+        if (active.Count > 0)
+        {
+            return active.Max();
+        }
+
+        // A disconnected RDP session still has the user's desktop (and its agent can reconnect when the user comes
+        // back), which is more useful than the console's login screen. The console wins when it has a user of its own.
+        var disconnected = sessions
+            .Where(session => session.State == (int)WtsConnectState.Disconnected && HasUser(session.SessionId))
+            .Select(session => session.SessionId)
+            .ToList();
+        if (disconnected.Contains(console))
+        {
+            return console;
+        }
+
+        return disconnected.Count > 0 ? disconnected.Max() : console;
+    }
+
+    private static List<WtsSessionInfo> EnumerateSessions()
+    {
+        var sessions = new List<WtsSessionInfo>();
+        if (!WTSEnumerateSessions(0, 0, 1, out var buffer, out var count) || buffer == 0)
+        {
+            return sessions;
+        }
+
+        try
+        {
+            var size = Marshal.SizeOf<WtsSessionInfo>();
+            for (var index = 0; index < count; index++)
+            {
+                sessions.Add(Marshal.PtrToStructure<WtsSessionInfo>(buffer + (index * size)));
+            }
+        }
+        finally
+        {
+            WTSFreeMemory(buffer);
+        }
+
+        return sessions;
+    }
+
+    private static bool HasUser(uint sessionId)
+    {
+        if (!WTSQuerySessionInformation(0, sessionId, WtsUserName, out var buffer, out var bytes) || buffer == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            // An empty user name comes back as the two bytes of the terminating NUL.
+            return bytes > 2 && !string.IsNullOrEmpty(Marshal.PtrToStringUni(buffer));
+        }
+        finally
+        {
+            WTSFreeMemory(buffer);
+        }
+    }
 
     /// <exception cref="NoUserLoggedOnException">The user desktop was requested but nobody is logged on.</exception>
     /// <exception cref="AgentUnavailableException">The requested desktop cannot be reached with the current privileges.</exception>
@@ -256,6 +343,17 @@ internal static partial class SessionProcessLauncher
     [LibraryImport("kernel32.dll")]
     private static partial uint WTSGetActiveConsoleSessionId();
 
+    [LibraryImport("wtsapi32.dll", EntryPoint = "WTSEnumerateSessionsW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSEnumerateSessions(nint server, int reserved, int version, out nint sessionInfo, out int count);
+
+    [LibraryImport("wtsapi32.dll", EntryPoint = "WTSQuerySessionInformationW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSQuerySessionInformation(nint server, uint sessionId, int infoClass, out nint buffer, out int bytesReturned);
+
+    [LibraryImport("wtsapi32.dll")]
+    private static partial void WTSFreeMemory(nint memory);
+
     [LibraryImport("wtsapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool WTSQueryUserToken(uint sessionId, out nint token);
@@ -336,5 +434,20 @@ internal static partial class SessionProcessLauncher
         public nint hThread;
         public int dwProcessId;
         public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WtsSessionInfo
+    {
+        public uint SessionId;
+        public nint WinStationName;
+        public int State;
+    }
+
+    // WTS_CONNECTSTATE_CLASS; only the states the selection distinguishes are named.
+    private enum WtsConnectState
+    {
+        Active = 0,
+        Disconnected = 4,
     }
 }

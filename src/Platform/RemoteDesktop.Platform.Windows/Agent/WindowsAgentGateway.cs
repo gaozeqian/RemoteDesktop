@@ -23,10 +23,11 @@ public sealed class AgentGatewayOptions
 }
 
 /// <summary>
-/// Keeps one agent running in the active console session, on the desktop that currently has the input: the user's
-/// own, or the secure one (login, lock screen, UAC). The agent itself notices when the input desktop changes and says
-/// so; the supervisor then replaces it with one of the other kind. It also follows the console across logon, logoff
-/// and fast user switching, and restarts a crashed agent with a growing pause.
+/// Keeps one agent running in the active user session (preferring the console when a user is logged on there), on the
+/// desktop that currently has the input: the user's own, or the secure one (login, lock screen, UAC). The agent itself
+/// notices when the input desktop changes and says so; the supervisor then replaces it with one of the other kind. It
+/// also follows the session across logon, logoff, RDP connect/disconnect and fast user switching, and restarts a
+/// crashed agent with a growing pause.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILogger<WindowsAgentGateway> logger) : BackgroundService, IAgentGateway
