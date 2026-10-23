@@ -6,4 +6,8 @@
 # The installers build Windows packages out of the same sources; nothing in the container needs them.
 build/installer/
 build/signing/
+# The compose files read build/docker/.env, which holds the database password, relay key and node token. None of the
+# images needs it, and a remote builder must not receive it.
+**/.env
+**/.env.*
 *.log

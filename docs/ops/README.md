@@ -388,8 +388,8 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 | 设置 | 默认 | 管什么 |
 |---|---|---|
 | `Rendezvous:MaxConnections` | 4096 | 同时服务多少台设备；超出的在 WebSocket 升级前就被拒，不占内存 |
-| `Rendezvous:MaxConnectionsPerAddress` | 64 | 一个来源地址最多占多少条连接 |
-| `Rendezvous:RegistrationBurst` / `RegistrationRefill` | 8 / 30 秒 | 一个来源地址注册设备的速度。注册就是领一个身份，而"每设备"的限额都以身份计数，所以这条最要紧 |
+| `Rendezvous:MaxConnectionsPerAddress` | 256 | 一个来源地址最多占多少条连接 |
+| `Rendezvous:RegistrationBurst` / `RegistrationRefill` | 256 / 5 秒 | 一个来源地址注册设备的速度。注册就是领一个身份，而"每设备"的限额都以身份计数，所以这条最要紧 |
 | `Rendezvous:ConnectRequestBurst` / `ConnectRequestRefill` | 10 / 3 秒 | 一台设备发起连接请求的速度（防止拿它去轰炸别人的弹窗） |
 | `Rendezvous:MaxPendingRequestsPerDevice` | 8 | 一台设备同时挂起的连接请求数 |
 | `Rendezvous:MaxPendingRequests` | 4096 | 全服务器同时挂起的连接请求数 |
@@ -413,29 +413,140 @@ sc.exe start RemoteDesktopRelay
 
 ### 7. 用 Docker 部署（Linux 服务器首选）
 
-仓库里已经准备好两个镜像和一份 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10 运行时（不装 SDK）：
+仓库里已经准备好三个镜像和一组 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10
+运行时（不装 SDK）。三个镜像分别是信令、中继与监控台；监控台是可选 overlay。
 
 ```bash
 cd build/docker
-export RELAY_SHARED_KEY="$(openssl rand -base64 48)"   # PowerShell: $env:RELAY_SHARED_KEY = "..."
-export RELAY_PUBLIC_ENDPOINT="203.0.113.10:5082"     # 客户端要能连到的中继**地址**（不能写域名）
+cp .env.example .env      # 填好四个必填值；.env 已被 git 忽略
 docker compose up -d --build
 ```
 
-- 暴露的端口：`5080/tcp`（信令 + `/health`）、`5081/udp`（地址反射）、`5082/udp`（中继）。
-  **三个都要放通**，UDP 那两个少一个都会让直连打洞或中继失效。
-- 两个服务器都会在**启动时校验密钥**：`RELAY_SHARED_KEY` 缺失、太短（少于 32 字节）或不是 base64 时，
-  容器会立刻退出并说明原因，不会带着弱密钥跑起来。
-- `RELAY_PUBLIC_ENDPOINT` 必须是客户端可达的地址。写成 `127.0.0.1:5082` 只有所有东西都在同一台机器上时才对。
-- 健康检查：`curl http://<服务器>:5080/health` 返回 `Healthy`；`docker compose ps` 里 rendezvous 会显示 `(healthy)`。
-- 停掉：`docker compose down`（加 `-v` 会连同数据库数据卷一起清掉，慎用）。
-- **设备代码持久化（PostgreSQL 或 SQLite）**：Compose 默认启动 PostgreSQL 服务与独立数据卷（`postgres-data`）。
-  Rendezvous 会自动建立数据表，将设备证书指纹与 9 位设备代码的映射持久化在数据库中；
-  即使服务重启、升级或重建容器，所有被控端的设备代码永久固定不变，完全保障无人值守长效可用。
-  如果本地开发不需要 PostgreSQL，留空 `Rendezvous__PostgresConnectionString` 会回退为纯内存模式。
-  单机部署也可以去掉 `postgres` 服务，改成 `Rendezvous__Database__Provider=sqlite` +
-  `Rendezvous__Database__Path=/data/rendezvous.db` 并给 `/data` 挂一个卷；但**不要**同时起两个 Rendezvous
-  容器——两个文件会给同一台设备发不同的码。
+> **需要 Docker Engine 23+。** 三个 Dockerfile 用 BuildKit 的 NuGet cache mount 加速构建；Docker Desktop 和
+> 现代 Docker Engine 默认启用 BuildKit。
+
+`docker compose` 自动读取 `build/docker/.env`。必填的四项：
+
+| 变量 | 生成方式 | 用途 |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `openssl rand -base64 24` | PostgreSQL 口令；没有默认值 |
+| `RELAY_SHARED_KEY` | `openssl rand -base64 48` | 中继票据签名密钥；信令与中继必须同值 |
+| `RELAY_PUBLIC_ENDPOINT` | 例如 `203.0.113.10:5082` | 客户端被要求使用的中继**地址**（必须是地址，不是域名） |
+| `NODE_TOKEN` | `openssl rand -base64 32` | `/internal/*` 与 `/metrics` 的 Bearer；信令、中继、监控台同值 |
+
+两个网络服务器都会在**启动时校验密钥**：`RELAY_SHARED_KEY` 缺失、太短（少于 32 字节）或不是 base64 时，
+容器会立刻退出并说明原因，不会带着弱密钥跑起来。`RELAY_PUBLIC_ENDPOINT` 必须是客户端可达的地址；
+写成 `127.0.0.1:5082` 只有所有东西都在同一台机器上时才对。
+
+#### 公网：用 TLS overlay
+
+默认 compose 把信令发布在 `127.0.0.1:5080`，公网客户端连不到它。公网部署用 Caddy overlay 终止 TLS：
+
+```bash
+export RENDEZVOUS_DOMAIN=rd.example.com   # 写进 .env 也可以
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+```
+
+Caddy 为该域名申请并续期证书，只转发 `/ws` 与 `/health`；`/internal` 与 `/metrics` 不经过代理。客户端地址是
+`wss://rd.example.com/ws`。80/443 必须可用；如果 80 被占用，Caddy 的 HTTP-01 验证与 HTTP→HTTPS 跳转会失败，
+需要改用 DNS 验证或把证书交给别的代理。
+
+#### 局域网：显式选择明文直连
+
+如果只在可信局域网里用，可以跳过 TLS，把信令绑到所有网卡：
+
+```bash
+RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
+```
+
+客户端用 `ws://<服务器>:5080/ws`。这是**明文**：设备码、在线状态、谁在连谁以及中继票据都在线上可读。不要把它
+用在公网；公网请用上一节的 TLS overlay。
+
+#### 端口与防火墙
+
+- `5080/tcp`：信令 + `/health`，默认只绑回环；TLS overlay 通过 Caddy 暴露 443。
+- `5081/udp`：地址反射。**必须放通**，否则直连打洞拿不到自己的公网地址。
+- `5082/udp`：中继。**必须放通**，否则直连失败的连接没有退路。
+- 中继的 HTTP 面（`/health`、`/metrics`，见 `Relay:HttpEndpoint`）默认只在容器内回环，不对外发布。
+- Docker 通过自己的 iptables 链发布 `ports:`，常见配置下 **ufw 不会拦住这些端口**。要限制 5080，用默认的回环
+  绑定或 DOCKER-USER 规则，不要只依赖 ufw。
+- `RENDEZVOUS_TRUSTED_PROXIES` 默认 `172.16.0.0/12`，覆盖 Docker 的默认 bridge 网段。这个范围很宽：如果局域网
+  本身也用 172.16/12，就把它缩到代理的实际地址或 compose 专用网段，别把客户端网段一起包含进去。
+- 地址反射依赖容器看到客户端真实的 UDP 源地址。标准 Docker bridge + iptables DNAT 会保留它；rootless Docker、
+  slirp4netns 或某些 userland-proxy 配置会改写源地址，表现为双方拿到同一个地址、直连打洞失效（连接退回中继）。
+  这类环境里对两个 UDP 服务使用 `network_mode: host`，或先用两个客户端验证一次直连。
+- `POSTGRES_PASSWORD`、`RELAY_SHARED_KEY`、`NODE_TOKEN` 通过环境变量传入，宿主机上的 `docker inspect` 能看到；
+  自建单机通常可以接受，要求更严时把 compose 放在只有运维能登录的宿主机上。
+
+#### 内部 API 与 `NODE_TOKEN`
+
+信令的 `/internal/v1/*` 与 `/metrics` 和 `/ws` 共用 5080。`NODE_TOKEN` 为空时，节点只接受**回环地址**发来的
+调用；Docker 里从别的容器或网络来的请求会被 401，所以监控台和跨机部署必须设置它。三个进程读取的键不同：
+
+```text
+信令    Rendezvous:NodeToken
+中继    Relay:NodeToken
+控制台  Ops:NodeToken
+```
+
+三处必须同值。只设 `Ops:NodeToken` 时控制台会带着 token 去请求，而节点因为没有配置而只接受回环调用：跨机或
+容器里的控制台会 401（同机回环仍然可用，但那是回环豁免，不是 token 生效）。
+
+#### 监控台（可选）
+
+监控台不在基础 compose 里，用 overlay 启动：
+
+```bash
+export OPS_INGEST_KEY="$(openssl rand -base64 32)"   # 写进 .env 也可以
+docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
+```
+
+控制台发布在 `127.0.0.1:5090`，不直接对公网开放；远程访问用 SSH 隧道或自己的 TLS 反向代理。首次登录用刚建的
+管理员（口令 + TOTP）。在控制台的节点管理里登记两个节点，baseUrl 用 Docker 服务名：
+
+```text
+rendezvous   http://rendezvous:5080
+relay        http://relay:5083
+```
+
+`OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。会话、告警与
+审计数据存在 `ops-data` 卷里的 `ops.db`。控制台的 `Ops:RequireTotp` 默认开启，别关。
+
+#### 数据持久化与备份
+
+- 默认把设备码存在 PostgreSQL（`postgres-data` 卷）。容器重建、镜像升级不会改变设备码。
+- 备份：`docker compose exec -T postgres pg_dump -U remotedesktop remotedesktop > remotedesktop-$(date +%F).sql`。
+- `docker compose down -v` 会连数据卷一起删掉；不要在不确认备份时加 `-v`。
+- 监控台的库在 `ops-data` 卷里的 `ops.db`；备份同样要在停止写入时进行（或把卷拷出来）。它记录的是监控历史与
+  审计，不影响远程连接。
+- **单机可以不用 PostgreSQL**：设置 `Rendezvous__Database__Provider=sqlite`、
+  `Rendezvous__Database__Path=/data/rendezvous.db`，给 `rendezvous` 挂一个 `/data` 卷，并删掉 `postgres` 服务、
+  `Rendezvous__Database__ConnectionString` 与 `depends_on`。镜像里的 `/data` 属于运行用户（UID 1654），新建的
+  命名卷会继承它，所以直接可用。**不要**同时起两个 Rendezvous 容器连 SQLite——两个文件会给同一台设备发不同的码。
+- PostgreSQL 与 SQLite 之间切换会重发所有设备码，除非按“数据库怎么选”一节的步骤搬数据。
+
+#### 健康检查与日志
+
+```bash
+curl http://127.0.0.1:5080/health      # 默认只绑回环；TLS overlay 走 https://<域名>/health
+docker compose ps                      # 各服务都应显示 healthy
+```
+
+健康检查只探端口；数据库通不通看 `/health` 的返回（rendezvous 的 `/health` 会查库）。所有服务都配了
+json-file 日志轮转（10 MB × 5）；更长的日志交给宿主机或日志驱动。
+
+#### 升级
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+用了 TLS 或监控台 overlay 的话，把同样的 `-f` 参数带上。设备码在数据卷里，不受影响。TLS 证书在 `caddy-data` 卷里，Caddy 自动续期。升级前先看 `CHANGELOG.md` 的
+“不兼容变更”；配置里新增的必填项会在 `docker compose up` 时报出来。基础镜像用浮动 tag（`10.0`、`postgres:18`、
+`caddy:2`），Dependabot 会跟踪更新；需要可复现构建时把它们换成 digest。compose 里的内存上限是“公网上的限额”
+那组默认值的起点，调大 `MaxConnections` 之类时一起调。
 
 ### 8. 防火墙
 
@@ -506,6 +617,13 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 Restart-Service RemoteDesktopOps
 ```
 
+Docker 用可选的 ops overlay（见 §二 7）：
+
+```bash
+cd build/docker
+docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
+```
+
 #### 首个管理员
 
 没有默认口令、没有网页初始化入口。`--create-admin <用户名>` 交互式设口令，打印 TOTP 密钥与 `otpauth://` URI，
@@ -519,16 +637,20 @@ Restart-Service RemoteDesktopOps
 | `Ops:Listen` | `http://127.0.0.1:5090` | Kestrel 监听地址；对外由反向代理上 TLS |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString` |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
-| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 不校验（仅回环时安全），三个进程同一值 |
+| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
 | `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知 |
 | `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
 
+> 内部 API 的 token 不是 `Ops` 段独有的：控制台读 `Ops:NodeToken`，信令读 `Rendezvous:NodeToken`，中继读
+> `Relay:NodeToken`。三处必须同值；只设 `Ops:NodeToken` 时，跨机或容器里的控制台会 401（同机回环仍然可用，
+> 但那是回环豁免，不是 token 生效）。Docker 的基础 compose 已经把同一个 `NODE_TOKEN` 传给两个节点。
+
 #### 让总览出现数字：三件事缺一不可
 
-1. **节点能上报指标**：信令服务设 `Rendezvous:MetricsEnabled=true`；中继默认就有 `/metrics`。
-2. **控制台里登记节点**：节点管理页登记两个节点的 `baseUrl`（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）。
+1. **节点能上报指标**：信令服务设 `Rendezvous:MetricsEnabled=true`；中继默认就有 `/metrics`。Docker 的 ops overlay 已为信令打开。
+2. **控制台里登记节点**：节点管理页登记两个节点的 `baseUrl`（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）。Docker 部署里控制台和节点在同一 compose 网络，用服务名：`http://rendezvous:5080`、`http://relay:5083`。
 3. **事件通道**：信令/中继把会话事件推给控制台，三处要同一个 HMAC 密钥（`openssl rand -base64 32`）：
 
    ```text
@@ -538,6 +660,7 @@ Restart-Service RemoteDesktopOps
    "Ops": { "Ingest": { "Keys": { "k1": "<同一个 Base64>" } } }
    ```
 
+   Docker 的 ops overlay 用环境变量 `OPS_INGEST_KEY` 配这一组值，两边的 Endpoint 是 `http://ops:5090`。
    密钥不配，控制台收不到任何事件——`/ingest/events` 返回 503，而不是收到伪造数据。会话、链路、告警、心跳
    全是这条通道进来的；只有节点指标走抓取那条。
 
@@ -1350,7 +1473,7 @@ remotedesktop --self-check
 
 - 丢包 / 码率：无来源（见上）。
 - 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
-- 节点鉴权只有部署级 `Ops:NodeToken`；每节点令牌未做。
+- 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
 - 明确**单实例**：抓取/告警求值/保留清理都靠 `ops_lease` 抢独占；多副本需要再把带租约的 worker 拆出去，未做
   SignalR backplane。
 - Windows 侧控制台现在是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件

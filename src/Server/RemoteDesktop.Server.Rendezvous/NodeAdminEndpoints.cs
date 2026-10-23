@@ -29,7 +29,10 @@ public static class NodeAdminEndpoints
             DevicePresence presence,
             IOptions<RendezvousOptions> options) =>
         {
-            if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+            if (!NodeTokenGuard.IsAuthorized(
+                    context.Request.Headers.Authorization.ToString(),
+                    options.Value.NodeToken,
+                    context.Connection.RemoteIpAddress))
             {
                 return Results.Unauthorized();
             }
@@ -76,7 +79,10 @@ public static class NodeAdminEndpoints
             IOptions<RendezvousOptions> options,
             CancellationToken cancellationToken) =>
         {
-            if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+            if (!NodeTokenGuard.IsAuthorized(
+                    context.Request.Headers.Authorization.ToString(),
+                    options.Value.NodeToken,
+                    context.Connection.RemoteIpAddress))
             {
                 return Results.Unauthorized();
             }

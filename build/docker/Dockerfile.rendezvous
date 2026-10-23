@@ -3,11 +3,14 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Project files first, so restoring is cached until a dependency changes.
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/Core/ src/Core/
 COPY src/Server/ src/Server/
-RUN dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
+# The cache mount keeps NuGet downloads out of the layer: a source change re-runs restore, but against the local
+# cache rather than the network. Full project-file splitting would add a second copy of every path for a marginal
+# gain; the downloads are the expensive part. This needs BuildKit, which is the default in Docker 23+.
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 # The version in the image's metadata is the one it was built from (docker-compose.yml passes it through). It is
@@ -16,6 +19,11 @@ ARG VERSION=dev
 LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app
 COPY --from=build /app ./
+
+# SQLite deployments point at /data. A fresh named volume mounted there is root-owned unless the image has the
+# directory first, and the server runs as the non-root app user. Creating it here gives the volume that ownership
+# when Docker initializes it; the PostgreSQL path does not write here and is unaffected.
+RUN mkdir -p /data && chown $APP_UID:$APP_UID /data
 
 # Signaling (WebSocket on /ws, health on /health) and the UDP address reflector.
 EXPOSE 5080/tcp

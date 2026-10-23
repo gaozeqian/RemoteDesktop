@@ -25,7 +25,19 @@ builder.Services.AddOpsEvents(builder.Configuration, relayOptions.Name);
 builder.Services.AddSingleton(sp =>
 {
     var options = sp.GetRequiredService<IOptions<RelayOptions>>().Value;
-    var key = Convert.FromBase64String(options.SharedKey);
+
+    // A missing key already produces the length message below. A malformed one used to surface as a raw
+    // FormatException (and, in a container, a stack trace in the logs), which does not say what to fix.
+    byte[] key;
+    try
+    {
+        key = Convert.FromBase64String(options.SharedKey);
+    }
+    catch (FormatException)
+    {
+        throw new InvalidOperationException("Relay:SharedKey must be base64 (generate one with: openssl rand -base64 48).");
+    }
+
     if (key.Length < 32)
     {
         throw new InvalidOperationException("Relay:SharedKey must be a base64 key of at least 32 bytes.");
@@ -51,12 +63,18 @@ var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 app.MapGet("/metrics", (HttpContext context, UdpRelay relay, IOptions<RelayOptions> options) =>
-    NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken)
+    NodeTokenGuard.IsAuthorized(
+        context.Request.Headers.Authorization.ToString(),
+        options.Value.NodeToken,
+        context.Connection.RemoteIpAddress)
         ? Results.Text(RelayMetrics.Render(relay.Snapshot()), RelayMetrics.ContentType)
         : Results.Unauthorized());
 
 app.MapGet("/internal/v1/info", (HttpContext context, NodeInfo info, IOptions<RelayOptions> options) =>
-    NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken)
+    NodeTokenGuard.IsAuthorized(
+        context.Request.Headers.Authorization.ToString(),
+        options.Value.NodeToken,
+        context.Connection.RemoteIpAddress)
         ? Results.Ok(info)
         : Results.Unauthorized());
 

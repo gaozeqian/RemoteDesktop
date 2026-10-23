@@ -1,17 +1,35 @@
 # The servers and database, ready to run:
 #
 #   cd build/docker
-#   export RELAY_SHARED_KEY="$(openssl rand -base64 48)"       # PowerShell: $env:RELAY_SHARED_KEY = ...
-#   export RELAY_PUBLIC_ENDPOINT="203.0.113.10:5082"           # the ADDRESS clients will be told to relay through (not a name)
-#   export POSTGRES_PASSWORD="$(openssl rand -base64 24)"      # required: there is no default password
+#   cp .env.example .env        # fill in the four required values
 #   docker compose up -d --build
 #
-# Device codes are stored persistently in PostgreSQL (volume postgres-data):
-# they survive restarts and upgrades, ensuring unattended access never loses its target device IDs.
+# Signaling is published on 127.0.0.1 only so it is not reachable in plaintext from the network. For a public server,
+# put the Caddy overlay in front (it obtains and renews the certificate):
+#
+#   RENDEZVOUS_DOMAIN=rd.example.com docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# A plaintext LAN-only deployment is an explicit choice — bind signaling to every interface instead:
+#
+#   RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
+#
+# and have clients use ws://<server>:5080/ws. The internal management API stays protected by NODE_TOKEN either way.
+#
+# The monitoring console is optional; docker-compose.ops.yml adds it. See docs/ops/README.md §7.
+#
+# Device codes are stored persistently in PostgreSQL (volume postgres-data), so unattended access keeps its device
+# IDs across restarts and upgrades.
 #
 # A single server does not need PostgreSQL: set Rendezvous__Database__Provider=sqlite and
-# Rendezvous__Database__Path=/data/rendezvous.db with a volume for /data, and drop the postgres service. That is one
-# file on one machine — two rendezvous containers on SQLite would each hand out their own device ids.
+# Rendezvous__Database__Path=/data/rendezvous.db, mount a volume at /data, and remove the postgres service, the
+# database environment values and the depends_on entry below. The image creates /data with the server's UID, so a
+# fresh named volume is writable. Two rendezvous containers on SQLite would each hand out their own device ids.
+#
+# Required values (generate the secrets; do not reuse the placeholders in .env.example):
+#   POSTGRES_PASSWORD       openssl rand -base64 24
+#   RELAY_SHARED_KEY        openssl rand -base64 48
+#   RELAY_PUBLIC_ENDPOINT   the ADDRESS clients are told to relay through, e.g. 203.0.113.10:5082 (not a name)
+#   NODE_TOKEN              openssl rand -base64 32; shared by signaling, relay and the console
 name: remotedesktop
 
 # A local build is not a release, so the image tags default to "dev" rather than to a product version that would go
@@ -21,13 +39,13 @@ name: remotedesktop
 
 services:
   postgres:
-    image: pgvector/pgvector:pg18
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_DB: remotedesktop
       POSTGRES_USER: remotedesktop
       # Required, with no default: a database password that is written down in the repository is not a password.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, for example: export POSTGRES_PASSWORD="$(openssl rand -base64 24)"}
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, for example: export POSTGRES_PASSWORD="$(openssl rand -base64 24)"}'
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -36,6 +54,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
 
   rendezvous:
     build:
@@ -47,12 +72,22 @@ services:
     environment:
       # The address handed to clients for relayed connections. It must be reachable by the clients, so 127.0.0.1
       # only works when everything runs on the same machine.
-      Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:-127.0.0.1:5082}
-      Rendezvous__RelaySharedKey: ${RELAY_SHARED_KEY:-}
+      Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:?set RELAY_PUBLIC_ENDPOINT, for example 203.0.113.10:5082}
+      Rendezvous__RelaySharedKey: ${RELAY_SHARED_KEY:?set RELAY_SHARED_KEY, for example openssl rand -base64 48}
       Rendezvous__ReflectorPort: 5081
-      Rendezvous__PostgresConnectionString: Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}
+      # The internal management API shares this listener. An empty token now means "loopback callers only", but a
+      # required one keeps the console usable from another container and is what the console and relay use too.
+      Rendezvous__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
+      # The reverse proxies allowed to set X-Forwarded-For. 172.16.0.0/12 covers Docker's default bridge networks,
+      # but it is broad: if the LAN also uses that range, narrow it to the proxy's address or the compose network.
+      # Set RENDEZVOUS_TRUSTED_PROXIES when the daemon uses a different address pool.
+      Rendezvous__TrustedProxies__0: ${RENDEZVOUS_TRUSTED_PROXIES:-172.16.0.0/12}
+      Rendezvous__Database__Provider: postgres
+      Rendezvous__Database__ConnectionString: "Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}"
     ports:
-      - "5080:5080/tcp"   # signaling: clients connect here (WebSocket /ws, health /health)
+      # Loopback by default: use docker-compose.tls.yml for public TLS, or set RENDEZVOUS_BIND_IP=0.0.0.0 for a
+      # plaintext LAN deployment.
+      - "${RENDEZVOUS_BIND_IP:-127.0.0.1}:5080:5080/tcp"
       - "5081:5081/udp"   # address reflection: tells each side what the other sees
     restart: unless-stopped
     depends_on:
@@ -66,9 +101,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     # The image already runs as a non-root user; this takes away the ways back up from it.
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     deploy:
       resources:
         limits:
@@ -83,14 +125,27 @@ services:
     image: remotedesktop/relay:${REMOTEDESKTOP_VERSION:-dev}
     environment:
       Relay__Port: 5082
-      Relay__SharedKey: ${RELAY_SHARED_KEY:-}
+      Relay__SharedKey: ${RELAY_SHARED_KEY:?set RELAY_SHARED_KEY, for example openssl rand -base64 48}
+      Relay__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
     ports:
       - "5082:5082/udp"
     restart: unless-stopped
-    depends_on:
-      - rendezvous
+    healthcheck:
+      # The HTTP face is loopback-only inside the container; this is also the endpoint the ops console scrapes.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5083' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     deploy:
       resources:
         limits:

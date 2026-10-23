@@ -1,0 +1,83 @@
+# Optional ops console. Use together with the base file:
+#
+#   export OPS_INGEST_KEY="$(openssl rand -base64 32)"
+#   docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d --build
+#
+# The first administrator is created interactively; there is no default account and no first-visit setup page:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
+#
+# The console is published on 127.0.0.1:5090 only. Reach it through an SSH tunnel or put your own TLS reverse proxy in
+# front; do not publish 5090 on the internet. In the console, register the two nodes by their Docker service names:
+#
+#   rendezvous   http://rendezvous:5080
+#   relay        http://relay:5083
+#
+# OpsEvents carries session facts to the console; OPS_INGEST_KEY must be at least 32 bytes of base64 and is the same
+# value in Ops__Ingest__Keys__k1 and in both nodes' OpsEvents__Key.
+name: remotedesktop
+
+services:
+  rendezvous:
+    environment:
+      # The console scrapes /metrics; the same NodeToken protects it.
+      Rendezvous__MetricsEnabled: "true"
+      OpsEvents__Endpoint: http://ops:5090
+      OpsEvents__Key: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
+      OpsEvents__KeyId: k1
+
+  relay:
+    environment:
+      # The base file leaves the relay's HTTP face on container loopback. The console is another container, so it
+      # needs to listen on the compose network; NodeToken (set in the base file) still protects it.
+      Relay__HttpEndpoint: http://0.0.0.0:5083
+      OpsEvents__Endpoint: http://ops:5090
+      OpsEvents__Key: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
+      OpsEvents__KeyId: k1
+
+  ops:
+    build:
+      context: ../..
+      dockerfile: build/docker/Dockerfile.ops
+      args:
+        VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+    image: remotedesktop/ops:${REMOTEDESKTOP_VERSION:-dev}
+    environment:
+      Ops__Listen: http://0.0.0.0:5090
+      Ops__Database__Provider: sqlite
+      Ops__Database__Path: /data/ops.db
+      Ops__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
+      Ops__Ingest__Keys__k1: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
+    ports:
+      # Loopback only: the console has its own sign-in and TOTP, but it is not a public listener.
+      - "127.0.0.1:5090:5090/tcp"
+    volumes:
+      - ops-data:/data
+    restart: unless-stopped
+    depends_on:
+      rendezvous:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5090' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  ops-data:

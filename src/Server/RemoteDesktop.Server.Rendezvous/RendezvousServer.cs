@@ -109,7 +109,10 @@ public static class RendezvousServer
         {
             app.MapGet(MetricsPath, async (HttpContext context, ServerMetrics metrics, ConnectionQuota quota, DevicePresence presence, IOptions<RendezvousOptions> options) =>
             {
-                if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+                if (!NodeTokenGuard.IsAuthorized(
+                        context.Request.Headers.Authorization.ToString(),
+                        options.Value.NodeToken,
+                        context.Connection.RemoteIpAddress))
                 {
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     return;
@@ -121,7 +124,10 @@ public static class RendezvousServer
 
         // What this node is, for the console's node list. The same shape the relay serves, from the same contract.
         app.MapGet("/internal/v1/info", (HttpContext context, NodeInfo info, IOptions<RendezvousOptions> options) =>
-            NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken)
+            NodeTokenGuard.IsAuthorized(
+                context.Request.Headers.Authorization.ToString(),
+                options.Value.NodeToken,
+                context.Connection.RemoteIpAddress)
                 ? Results.Ok(info)
                 : Results.Unauthorized());
 
@@ -136,7 +142,10 @@ public static class RendezvousServer
             int? limit,
             CancellationToken cancellationToken) =>
         {
-            if (!NodeTokenGuard.IsAuthorized(context.Request.Headers.Authorization.ToString(), options.Value.NodeToken))
+            if (!NodeTokenGuard.IsAuthorized(
+                    context.Request.Headers.Authorization.ToString(),
+                    options.Value.NodeToken,
+                    context.Connection.RemoteIpAddress))
             {
                 return Results.Unauthorized();
             }

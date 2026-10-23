@@ -113,6 +113,40 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
     }
 }
 
+function Test-IsLoopbackUrl([string]$Url) {
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $true }
+
+    $rest = $Url
+    if ($rest -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+        $rest = $rest.Substring($Matches[0].Length)
+    }
+
+    $authority = ($rest -split '/', 2)[0]
+    if ($authority.StartsWith('[')) {
+        $end = $authority.IndexOf(']')
+        $hostName = if ($end -gt 0) { $authority.Substring(1, $end - 1) } else { $authority }
+    }
+    else {
+        $hostName = ($authority -split ':', 2)[0]
+    }
+
+    return $hostName -in @('127.0.0.1', 'localhost', '::1')
+}
+
+function Test-NodeToken([string]$Token, [string]$ListenUrl, [string]$Where) {
+    if (-not [string]::IsNullOrWhiteSpace($Token)) {
+        Add-Ok "$Where 配置了内部 API 的 NodeToken。"
+        return
+    }
+
+    if (Test-IsLoopbackUrl $ListenUrl) {
+        Add-Ok "$Where 没有配置 NodeToken；内部 API 只接受回环调用（$ListenUrl）。"
+        return
+    }
+
+    Add-Finding "$Where 的 NodeToken 为空而监听地址不是回环（$ListenUrl）：内部 API 只接受回环调用，跨机或容器里的控制台会 401；同机反向代理如果转发 /internal/* 又没有把真实客户端地址写进 X-Forwarded-For，外部调用会被当成回环。用 openssl rand -base64 32 生成一个，信令、中继、控制台三处同值。"
+}
+
 function Test-RendezvousUri([string]$Uri, [string]$Where) {
     if ([string]::IsNullOrWhiteSpace($Uri)) {
         Add-Finding "$Where 没有配置服务器地址（Transport:RendezvousUri 为空），设备拿不到设备代码。"
@@ -210,6 +244,21 @@ foreach ($entry in $settingsToCheck) {
 
     # 信令监听地址。
     if ($settings.PSObject.Properties['Urls']) { Test-SignalingUrl -Url ([string]$settings.Urls) -Where $entry.Role }
+
+    # 内部管理 API 的 NodeToken。信令与中继各读自己的键；没写监听地址时用 Kestrel 的回环默认值。
+    if ($settings.PSObject.Properties['Rendezvous']) {
+        $nodeToken = $null
+        if ($settings.Rendezvous.PSObject.Properties['NodeToken']) { $nodeToken = [string]$settings.Rendezvous.NodeToken }
+        $listenUrl = if ($settings.PSObject.Properties['Urls']) { [string]$settings.Urls } else { 'http://localhost:5000' }
+        Test-NodeToken -Token $nodeToken -ListenUrl $listenUrl -Where $entry.Role
+    }
+
+    if ($settings.PSObject.Properties['Relay']) {
+        $relayToken = $null
+        if ($settings.Relay.PSObject.Properties['NodeToken']) { $relayToken = [string]$settings.Relay.NodeToken }
+        $relayHttp = if ($settings.Relay.PSObject.Properties['HttpEndpoint']) { [string]$settings.Relay.HttpEndpoint } else { 'http://127.0.0.1:5083' }
+        Test-NodeToken -Token $relayToken -ListenUrl $relayHttp -Where $entry.Role
+    }
 
     # 数据库（只有 Rendezvous 才有意义）。新的写法是 Rendezvous:Database:{Provider,ConnectionString,Path}；
     # 老机器上只有 PostgresConnectionString，它仍然意味着"用 PostgreSQL"，所以在这里折算成同一个 provider。

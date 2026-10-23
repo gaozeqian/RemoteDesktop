@@ -2,6 +2,53 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布] · Docker 部署评审修复
+
+服务端的三条部署路径里，Docker 是唯一没有被 CI 构建过的一条。一次针对 `build/docker/` 的评审同时发现了两个
+启动级阻断（compose 文件不是合法 YAML、中继镜像缺少 ASP.NET 运行时）、一个默认公网可达的未授权管理接口，以及
+一条文档承诺但实际起不来的 SQLite 路径。这一轮修复连同同批发现的部署隐患一起处理，并给这条路径补上 CI 的
+构建与启动冒烟测试。
+
+### Fixed
+
+- **compose 文件不是合法 YAML**：`POSTGRES_PASSWORD` 的必填提示里有一个冒号加空格，未加引号的普通标量让它变成了
+  映射，`docker compose up` 在解析阶段就失败。改为单引号标量。
+- **中继容器起不来**：`Dockerfile.relay` 基于 `dotnet/runtime`，而中继是 ASP.NET Core 宿主（`/health`、
+  `/metrics`、`/internal/v1/info` 都是 Kestrel 端点），发布产物要求 `Microsoft.AspNetCore.App`，容器以退出码
+  150 结束。基础镜像改为 `dotnet/aspnet`。
+- **内部管理接口默认公网可达**：`/internal/v1/*` 与信令共用 5080，`NodeToken` 为空时守卫直接放行，任何人都能
+  枚举 9 位设备码、封禁设备或断开会话。`NodeTokenGuard` 在未配置 token 时只接受回环调用；compose 要求
+  `NODE_TOKEN` 并同时传给信令与中继。新增单元测试与真宿主集成测试。既有的跨机 Ops 部署如果没有配置 token，
+  升级后会收到 401——按 `docs/ops/README.md` 在三个进程上配置同值。
+- **默认明文信令**：5080 现在默认只绑 `127.0.0.1`；新增 `docker-compose.tls.yml` + `Caddyfile`（自动证书，只
+  代理 `/ws` 与 `/health`）。局域网明文直连需要显式设置 `RENDEZVOUS_BIND_IP=0.0.0.0`。
+- **SQLite 单机方案起不来**：镜像以 UID 1654 运行，新建的 `/data` 卷属于 root，SQLite 报 `SQLITE_CANTOPEN`。
+  信令与监控台镜像在 `USER` 之前创建 `/data` 并 chown；文档补上卷与依赖的移除步骤。
+- **监控台没有 Docker 部署**：新增 `Dockerfile.ops` 与 `docker-compose.ops.yml`，带独立 `ops-data` 卷、管理员
+  创建命令、节点地址与事件签名密钥；5090 只发布到回环。
+- **中继没有健康检查、日志无上限**：compose 给中继加 `/health` 探针，并给所有服务加 json-file 轮转
+  （10 MB × 5）。
+- **compose 的必填项与依赖关系**：`RELAY_SHARED_KEY`、`RELAY_PUBLIC_ENDPOINT`、`NODE_TOKEN` 改为 compose 级
+  必填（缺失即失败，而不是带默认值跑起来）；去掉中继对信令的无意义 `depends_on`；数据库改用新键
+  `Rendezvous:Database:Provider` / `ConnectionString`。
+- **部署缺少必填值清单**：新增 `build/docker/.env.example`，集中列出四个必填变量及其生成方式。
+- **`.env` 会进入 Docker 构建上下文**：`.env.example` 被复制成 `.env` 后，旧的 `.dockerignore` 没有排除它，里面
+  的数据库口令、中继密钥与 node token 会随构建上下文发给远端 builder。`.dockerignore` 现在排除 `**/.env*`。
+- **内部 API 的部署自查**：`Invoke-SecurityAudit.ps1` 在监听地址不是回环且 `NodeToken` 为空时报告不安全默认值；
+  `docs/design/README.md` 的“部署者必须自己做的事”补上这一条。三个应用容器同时加了 `cap_drop: [ALL]`。
+- **构建缓存说明与事实不符**：信令与中继的 Dockerfile 原本在 `dotnet publish` 前复制全部源码，注释却说
+  restore 会被缓存。三个 Dockerfile 现在都用 BuildKit 的 NuGet cache mount，注释也改成真实行为。
+- **开发配置进入发布物**：`appsettings.Development.json` 里有仓库公开的固定中继密钥，`dotnet publish` 会把它
+  带进安装包与镜像。两个服务端工程的发布输出现在排除该文件。
+- **中继对非法 base64 密钥抛原始 `FormatException`**：改为与信令相同的、说明怎么生成的错误消息。
+- **PostgreSQL 基础镜像不必要**：compose 从 `pgvector/pgvector:pg18` 改为官方 `postgres:18`（代码没有使用任何
+  向量扩展）。
+- **`docs/ops/README.md` 的限额表过时**：`MaxConnectionsPerAddress` 从 64 改为代码实际的 256，
+  `RegistrationBurst` / `RegistrationRefill` 从 8 / 30 秒改为 256 / 5 秒；Docker 小节补齐 TLS、
+  `NODE_TOKEN`、`TrustedProxies`、备份、Ops overlay、Docker 防火墙行为与 SQLite 步骤。
+- **Docker 路径没有 CI**：`ci.yml` 新增 `docker` job，解析三个 compose 配置、构建三个镜像，并启动信令与中继
+  检查 `/health` 与内部接口的 401/200 行为。
+
 ## [未发布] · 版本设置评审修复
 
 版本只有一个来源（根 `Directory.Build.props` 的 `<Version>`），但它在产物名、程序集、打包脚本与文档里派生出了

@@ -6,15 +6,23 @@ WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/Core/ src/Core/
 COPY src/Server/ src/Server/
-RUN dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
+# The cache mount keeps NuGet downloads out of the layer; see Dockerfile.rendezvous. This needs BuildKit (the default
+# in Docker 23+).
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+# The relay is an ASP.NET Core host: /health, /metrics and /internal/v1/info are Kestrel endpoints even though the
+# forwarding itself is plain UDP. It therefore needs the ASP.NET shared framework, not just the .NET runtime.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app
 COPY --from=build /app ./
 
 EXPOSE 5082/udp
+# The loopback-only HTTP face: /health, /metrics and /internal/v1/info. The base compose file does not publish it;
+# docker-compose.ops.yml makes it reachable to the console over the compose network.
+EXPOSE 5083/tcp
 
 USER $APP_UID
 ENTRYPOINT ["dotnet", "RemoteDesktop.Server.Relay.dll"]

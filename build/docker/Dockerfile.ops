@@ -1,0 +1,27 @@
+# The ops console: node health, devices, sessions, alerts and audit. Optional; see docker-compose.ops.yml.
+# Build from the repository root:  docker build -f build/docker/Dockerfile.ops .
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY src/Core/ src/Core/
+COPY src/Server/ src/Server/
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish src/Server/RemoteDesktop.Server.Ops -c Release --no-self-contained -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="$VERSION"
+WORKDIR /app
+COPY --from=build /app ./
+
+# The console's SQLite database and nothing else live here; see Dockerfile.rendezvous for why the image creates it
+# before dropping privileges.
+RUN mkdir -p /data && chown $APP_UID:$APP_UID /data
+
+# The console listens on all interfaces inside the container so it can be reached by a proxy or a published loopback
+# port; it is not a public listener by default.
+EXPOSE 5090/tcp
+
+USER $APP_UID
+ENTRYPOINT ["dotnet", "RemoteDesktop.Server.Ops.dll"]

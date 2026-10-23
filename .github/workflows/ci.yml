@@ -151,6 +151,97 @@ jobs:
       # do not assert that what they packed is in there. Same shared action as the other two platforms.
       - uses: ./.github/actions/verify-packages
 
+  docker:
+    # The Docker path was the only deployment nobody built: the compose file was invalid YAML and the relay image was
+    # based on the runtime image even though the relay is an ASP.NET app, so both blockers were live at once. Parsing
+    # every compose file and starting the images here turns those into ordinary red pull requests.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      POSTGRES_PASSWORD: ci-postgres-password
+      # Test-only values. Both are valid base64 and long enough for the servers' start-up checks; they are not secrets.
+      RELAY_SHARED_KEY: dGVzdHRlc3R0ZXN0dGVzdHRlc3R0ZXN0dGVzdHRlc3R0ZXN0dGVzdA==
+      RELAY_PUBLIC_ENDPOINT: 203.0.113.10:5082
+      NODE_TOKEN: ci-node-token
+      OPS_INGEST_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
+      RENDEZVOUS_DOMAIN: rd.example.com
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the compose files parse
+        run: |
+          docker compose -f build/docker/docker-compose.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.tls.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+      - name: Validate the Caddyfile
+        run: |
+          docker run --rm \
+            -e RENDEZVOUS_DOMAIN="$RENDEZVOUS_DOMAIN" \
+            -v "$PWD/build/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build the server images
+        run: |
+          docker build -f build/docker/Dockerfile.rendezvous -t remotedesktop/rendezvous:ci .
+          docker build -f build/docker/Dockerfile.relay -t remotedesktop/relay:ci .
+          docker build -f build/docker/Dockerfile.ops -t remotedesktop/ops:ci .
+      - name: Smoke test rendezvous
+        run: |
+          set -euo pipefail
+          docker run -d --name rd-rendezvous \
+            -e Rendezvous__RelayEndpoint="$RELAY_PUBLIC_ENDPOINT" \
+            -e Rendezvous__RelaySharedKey="$RELAY_SHARED_KEY" \
+            -e Rendezvous__NodeToken="$NODE_TOKEN" \
+            -p 15080:5080 \
+            remotedesktop/rendezvous:ci
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:15080/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:15080/health
+
+          # The internal face must refuse an unauthenticated caller from outside the container, and accept the token.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:15080/internal/v1/info)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $NODE_TOKEN" http://127.0.0.1:15080/internal/v1/info)" = "200"
+      - name: Smoke test the relay
+        run: |
+          set -euo pipefail
+          # The HTTP face is loopback in a normal deployment. The smoke test moves it to the container's external
+          # interface and publishes that, which is what proves the web host — not just the UDP socket — came up.
+          docker run -d --name rd-relay \
+            -e Relay__SharedKey="$RELAY_SHARED_KEY" \
+            -e Relay__NodeToken="$NODE_TOKEN" \
+            -e Relay__HttpEndpoint=http://0.0.0.0:5083 \
+            -p 15083:5083 \
+            remotedesktop/relay:ci
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:15083/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:15083/health
+      - name: Smoke test the ops console
+        run: |
+          set -euo pipefail
+          docker run -d --name rd-ops \
+            -e Ops__Listen=http://0.0.0.0:5090 \
+            -e Ops__Database__Path=/data/ops.db \
+            -p 15090:5090 \
+            remotedesktop/ops:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:15090/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:15090/ >/dev/null
+      - name: Stop the containers
+        if: always()
+        run: docker rm -f rd-rendezvous rd-relay rd-ops || true
+
   docs:
     # Documentation *formatting*: blank lines around headings and lists, indentation, ``` fences tagged with a
     # language. It is one job on one runner because it is a pure text rule with nothing platform-specific in it.

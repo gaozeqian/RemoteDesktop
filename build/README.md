@@ -41,8 +41,10 @@ macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote 
 `RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。不能复用客户端
 bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被单独授予屏幕录制/辅助功能，且不能带着控制端 UI。
 
-`docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。上面那张树里
-其余四项都服从 `<平台>/<角色>`，只有它不分层。
+`docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有三个
+（信令、中继、监控台），`docker-compose.yml` 只启动前两个；监控台与 TLS 是显式加载的 overlay：
+`docker-compose.ops.yml` 与 `docker-compose.tls.yml`（后者带一个 Caddyfile）。上面那张树里其余四项都服从
+`<平台>/<角色>`，只有它不分层。
 
 ## "本目录"与子目录各放什么
 

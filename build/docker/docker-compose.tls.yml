@@ -1,0 +1,47 @@
+# Optional TLS termination for a public server. Use together with the base file:
+#
+#   export RENDEZVOUS_DOMAIN=rd.example.com
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# Caddy obtains and renews a certificate for the domain and forwards only /ws and /health. Signaling stays bound to
+# loopback (the base file's default); clients use wss://<domain>/ws. /internal and /metrics are not proxied.
+#
+# Ports 80 and 443 must be free on the host; Caddy uses 80 for the HTTP-01 challenge and the redirect to HTTPS.
+name: remotedesktop
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      rendezvous:
+        condition: service_healthy
+    environment:
+      RENDEZVOUS_DOMAIN: ${RENDEZVOUS_DOMAIN:?set RENDEZVOUS_DOMAIN, for example rd.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    healthcheck:
+      # Caddy's admin API is loopback-only and on by default. This proves the process is serving; certificate
+      # issuance failures are in its logs and on the client side.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy-data:
+  caddy-config:

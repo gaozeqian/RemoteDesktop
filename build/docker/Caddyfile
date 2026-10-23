@@ -1,0 +1,6 @@
+# TLS termination for the signaling server. Only the two public paths are forwarded: the management API and metrics
+# must never be reachable through the proxy.
+{$RENDEZVOUS_DOMAIN} {
+	reverse_proxy /ws* rendezvous:5080
+	reverse_proxy /health rendezvous:5080
+}
