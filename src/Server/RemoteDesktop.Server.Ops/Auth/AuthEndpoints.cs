@@ -22,11 +22,19 @@ public static class AuthEndpoints
 
         var group = endpoints.MapGroup("/api/auth");
 
-        group.MapPost("/login", async (LoginRequest request, HttpContext context, AuthService auth, CancellationToken cancellationToken) =>
+        group.MapPost("/login", async (LoginRequest request, HttpContext context, AuthService auth, OpsOptions options, CancellationToken cancellationToken) =>
         {
             var outcome = await auth
                 .SignInAsync(request.Username, request.Password, Address(context), context.Request.Headers.UserAgent.ToString(), cancellationToken)
                 .ConfigureAwait(false);
+
+            // With TOTP disabled this step already produced a session. Without the cookies the browser would be told
+            // "signed in" and then 401 on every request, which makes the documented Ops:RequireTotp=false mode a
+            // console nobody can use.
+            if (outcome.Session is { } session)
+            {
+                SetSessionCookies(context, session, options);
+            }
 
             return Results.Json(Describe(outcome), statusCode: StatusFor(outcome.Status));
         }).AllowAnonymous();

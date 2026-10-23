@@ -75,7 +75,7 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
                 e.Name,
                 e.IsDirectory,
                 (long)e.Size,
-                e.ModifiedUnixMs == 0 ? DateTimeOffset.MinValue : DateTimeOffset.FromUnixTimeMilliseconds(e.ModifiedUnixMs),
+                e.ModifiedUnixMs == 0 ? DateTimeOffset.MinValue : FileTimestamps.FromUnixMilliseconds(e.ModifiedUnixMs),
                 (FileEntryAttributes)e.Attributes))],
             listing.Truncated);
     }

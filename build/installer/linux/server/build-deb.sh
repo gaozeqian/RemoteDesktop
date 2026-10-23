@@ -50,6 +50,16 @@ rm -f "$work/usr/lib/remotedesktop-server/Rendezvous/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Relay/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Ops/appsettings"*.json
 
+# Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
+find "$work/usr/lib/remotedesktop-server" -type f -name '*.pdb' -delete
+
+# The licence and the third-party notices travel with the binaries they cover. Debian expects the licence at
+# /usr/share/doc/<package>/copyright; the notices sit beside it under the name the generator gives them.
+doc="$work/usr/share/doc/remotedesktop-server"
+mkdir -p "$doc"
+install -m 0644 "$root/LICENSE" "$doc/copyright"
+install -m 0644 "$root/THIRD-PARTY-NOTICES.md" "$doc/third-party-notices.md"
+
 install -m 0644 "$root/build/service/linux/remotedesktop-rendezvous.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-relay.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-ops.service" "$work/lib/systemd/system/"

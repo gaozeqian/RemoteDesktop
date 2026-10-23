@@ -34,7 +34,7 @@ name: remotedesktop
 
 # A local build is not a release, so the image tags default to "dev" rather than to a product version that would go
 # stale the moment Directory.Build.props changes. Set it when the image has to be identifiable later:
-#   export REMOTEDESKTOP_VERSION=0.4.0
+#   export REMOTEDESKTOP_VERSION=1.0.0
 # The version compiled into the assemblies always comes from Directory.Build.props; this only names the image.
 
 services:

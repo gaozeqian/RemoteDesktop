@@ -21,8 +21,13 @@ namespace RemoteDesktop.Platform.Linux.Setup;
 [SupportedOSPlatform("linux")]
 public static class LinuxSetup
 {
-    /// <summary>The unit the package registers for the controlled end.</summary>
-    public const string HostServiceUnit = "remotedesktop-host";
+    /// <summary>
+    /// The unit the package registers for the controlled end. The name is not ours to shorten: xdg-desktop-portal
+    /// derives the app id from `app-<ApplicationID>.service`, and the desktop entry has to match it for the camera
+    /// permission. This used to say `remotedesktop-host`, which no package has installed since the rename, so the
+    /// restart after changing the address silently did nothing.
+    /// </summary>
+    public const string HostServiceUnit = "app-RemoteDesktopHost.service";
 
     /// <summary>
     /// Restarts the controlled end so it picks up a new address, if this machine is running one.

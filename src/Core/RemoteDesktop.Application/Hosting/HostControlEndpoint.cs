@@ -96,10 +96,25 @@ public static class HostControlEndpoint
     [UnsupportedOSPlatform("windows")]
     public static void EnsureSocketDirectory(string address)
     {
-        if (Path.GetDirectoryName(address) is { Length: > 0 } directory)
+        if (Path.GetDirectoryName(address) is not { Length: > 0 } directory)
         {
-            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            return;
         }
+
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(directory, mode);
+
+        // CreateDirectory's mode applies only when it creates the directory; an existing one keeps whatever mode it
+        // had. That matters for the /tmp fallback, where another local user can create the name first: the mode would
+        // stay theirs, and the socket (and the fixed password typed into it) would be theirs too. Setting the mode
+        // fails unless this process owns the directory, so the host stops instead of using it. A link is refused for
+        // the same reason - the directory that would be protected and the one actually used would differ.
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException($"The control-socket directory '{directory}' is a symbolic link.");
+        }
+
+        File.SetUnixFileMode(directory, mode);
     }
 }
 

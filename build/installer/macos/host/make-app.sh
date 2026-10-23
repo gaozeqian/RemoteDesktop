@@ -51,6 +51,7 @@ fi
 APP_DIR="$OUTPUT_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 # version.sh owns the read and its rules, so a missing or malformed <Version> fails here instead of producing a
 # 0.0.0 bundle.
@@ -79,6 +80,14 @@ if [[ -e "$APP_DIR" ]]; then
 fi
 mkdir -p "$MACOS_DIR" "$CONTENTS_DIR/Resources"
 cp -R "$PUBLISH_DIR/." "$MACOS_DIR/"
+
+# Symbols belong to the machine that built the bundle, not the one that installs it. The MSIs already strip them.
+find "$MACOS_DIR" -type f -name '*.pdb' -delete
+
+# The licence and the notices that cover the bundled MIT/BSD/Apache components travel inside the bundle, so they
+# remain readable after installation rather than only on the installer's licence page.
+cp "$REPO_ROOT/LICENSE" "$RESOURCES_DIR/LICENSE.txt"
+cp "$REPO_ROOT/THIRD-PARTY-NOTICES.md" "$RESOURCES_DIR/THIRD-PARTY-NOTICES.md"
 sed "s/__VERSION__/$VERSION/g" "$SCRIPT_DIR/Info.plist" > "$CONTENTS_DIR/Info.plist"
 chmod +x "$MACOS_DIR/RemoteDesktop.HostService"
 

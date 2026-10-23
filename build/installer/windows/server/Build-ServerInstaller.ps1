@@ -586,6 +586,11 @@ Write-Host 'Generating the license RTF...'
 & (Join-Path $sharedDirectory 'New-LicenseRtf.ps1') -Text $licenseText -Rtf $licenseRtf
 if (-not (Test-Path -LiteralPath $licenseRtf)) { throw "The license RTF was not written to $licenseRtf." }
 
+# The licence and the third-party notices go into the installed folder with the binaries they cover. The wizard's
+# licence page shows the same LICENSE, but a page is not a copy anybody can read after the installer has closed.
+Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $PublishDirectory -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD-PARTY-NOTICES.md') -Destination $PublishDirectory -Force
+
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 

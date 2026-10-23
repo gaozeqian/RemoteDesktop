@@ -31,7 +31,7 @@ internal sealed class NoUserLoggedOnException : Exception
 /// agent pipe can be created with the right access rules before the process exists.
 /// </summary>
 [SupportedOSPlatform("windows")]
-internal sealed class PreparedLaunch(DesktopKind desktop, uint sessionId, nint primaryToken, nint environment, SecurityIdentifier? user) : IDisposable
+internal sealed class PreparedLaunch(DesktopKind desktop, uint sessionId, nint primaryToken, nint environment, SecurityIdentifier? user, bool environmentOwned = false) : IDisposable
 {
     public DesktopKind Desktop { get; } = desktop;
 
@@ -41,6 +41,9 @@ internal sealed class PreparedLaunch(DesktopKind desktop, uint sessionId, nint p
     public nint PrimaryToken { get; } = primaryToken;
 
     public nint Environment { get; } = environment;
+
+    /// <summary>True when <see cref="Environment"/> was allocated here instead of by CreateEnvironmentBlock.</summary>
+    public bool EnvironmentOwned { get; } = environmentOwned;
 
     /// <summary>The account the agent runs as, which must be allowed on its pipe; null for SYSTEM.</summary>
     public SecurityIdentifier? User { get; } = user;
@@ -190,6 +193,7 @@ internal static partial class SessionProcessLauncher
         nint source = 0;
         nint primary = 0;
         nint environment = 0;
+        nint sanitizedEnvironment = 0;
         try
         {
             if (desktop == DesktopKind.User)
@@ -222,10 +226,18 @@ internal static partial class SessionProcessLauncher
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
 
-            using var identity = new WindowsIdentity(primary);
-            var prepared = new PreparedLaunch(desktop, sessionId, primary, environment, desktop == DesktopKind.User ? identity.User : null);
-            primary = 0;
+            // The block CreateEnvironmentBlock returns is the user's own; the agent is about to run with UIAccess, and
+            // a standard user can put DOTNET_STARTUP_HOOKS in their environment. The .NET host runs that hook before
+            // Main, which would put user code inside the UIAccess process - exactly the boundary UIAccess exists to
+            // enforce. Rebuild the block without the host's variables and with the machine's PATH/COMSPEC.
+            sanitizedEnvironment = SanitizeEnvironment(environment);
+            DestroyEnvironmentBlock(environment);
             environment = 0;
+
+            using var identity = new WindowsIdentity(primary);
+            var prepared = new PreparedLaunch(desktop, sessionId, primary, sanitizedEnvironment, desktop == DesktopKind.User ? identity.User : null, environmentOwned: true);
+            primary = 0;
+            sanitizedEnvironment = 0;
             return prepared;
         }
         finally
@@ -243,6 +255,11 @@ internal static partial class SessionProcessLauncher
             if (environment != 0)
             {
                 DestroyEnvironmentBlock(environment);
+            }
+
+            if (sanitizedEnvironment != 0)
+            {
+                Marshal.FreeHGlobal(sanitizedEnvironment);
             }
         }
     }
@@ -295,9 +312,73 @@ internal static partial class SessionProcessLauncher
 
         if (launch.Environment != 0)
         {
-            DestroyEnvironmentBlock(launch.Environment);
+            if (launch.EnvironmentOwned)
+            {
+                Marshal.FreeHGlobal(launch.Environment);
+            }
+            else
+            {
+                DestroyEnvironmentBlock(launch.Environment);
+            }
         }
     }
+
+    /// <summary>
+    /// Rebuilds an environment block without the variables that can make the .NET host load user-chosen code.
+    /// </summary>
+    /// <remarks>
+    /// The agent is a self-contained .NET application started with UIAccess. <c>DOTNET_STARTUP_HOOKS</c> (and the
+    /// other host variables) are read before <c>Main</c> and honoured from the process environment, which the service
+    /// had taken from the user's token. A standard user could therefore run code inside a UIAccess process. The
+    /// variables are dropped rather than blanked; PATH and COMSPEC are replaced with the machine's own values, so a
+    /// user-writable directory on the user's PATH cannot be searched for a DLL either.
+    /// </remarks>
+    private static nint SanitizeEnvironment(nint block)
+    {
+        var entries = new List<string>();
+        for (var cursor = block; ;)
+        {
+            var entry = Marshal.PtrToStringUni(cursor);
+            if (string.IsNullOrEmpty(entry))
+            {
+                break;
+            }
+
+            cursor += (entry.Length + 1) * sizeof(char);
+
+            var equals = entry.IndexOf('=', StringComparison.Ordinal);
+            if (equals <= 0)
+            {
+                continue;
+            }
+
+            var name = entry[..equals];
+            if (IsHostVariable(name) || name.Equals("PATH", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("COMSPEC", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            entries.Add(entry);
+        }
+
+        if (Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) is { Length: > 0 } machinePath)
+        {
+            entries.Add("Path=" + machinePath);
+        }
+
+        entries.Add("ComSpec=" + Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"));
+
+        // The block is a sequence of NUL-terminated strings ending in an empty one. StringToHGlobalUni adds its own
+        // terminator, so the extra NUL here produces the required pair.
+        return Marshal.StringToHGlobalUni(string.Join('\0', entries) + "\0\0");
+    }
+
+    private static bool IsHostVariable(string name) =>
+        name.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("CORECLR_", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("COMPLUS_", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("COREHOST_", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Puts the UIAccess flag on a token, which is what lets the agent be started at all (see the class remarks).</summary>
     /// <remarks>Requires SeTcbPrivilege, which the LocalSystem the service runs as holds.</remarks>

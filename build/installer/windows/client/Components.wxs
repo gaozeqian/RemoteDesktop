@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   The components that need more than "a file": the service, the shortcuts and the settings file. Everything else is
   generated from the publish output into Files.generated.wxs.
@@ -196,21 +196,20 @@
       <!-- Before validation, because that is when Windows decides whether a restart will be needed. -->
       <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
       <!--
-        Installing only: "NOT REMOVE" is the whole condition, and nothing else may be added to it.
+        Installing only, and only on a fresh install: "NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed".
 
-        An earlier version of this line read "NOT REMOVE OR UPGRADINGPRODUCTCODE", meaning to cover the new product of an
-        upgrade. It did the opposite: during a major upgrade the installer sets UPGRADINGPRODUCTCODE while it *removes
-        the old product*, so the condition became true there too, and the old product ran this action after its own
-        files had been deleted. Windows then reported error 1721 ("a program required for this install to complete
-        could not be run") for an executable that was no longer there, and the installation rolled back with 1603 -
-        three upgrades in a row failed exactly that way.
-
-        During an upgrade the new product installs with REMOVE empty, so "NOT REMOVE" is already true when it should be,
-        and false while the old product is being removed.
+        The appsettings.json this action rewrites is NeverOverwrite, so an upgrade keeps the address the machine was
+        configured with. Running the action on top of that would put the new package's built-in default (often
+        ws://127.0.0.1:5080/ws) back, silently disconnecting every upgraded machine whose address was set at install
+        time or edited later. The first half of the condition decides "not a removal"; the second decides "not an
+        upgrade". They are different questions, and an earlier version of this line confused them: it read
+        "NOT REMOVE OR UPGRADINGPRODUCTCODE", and UPGRADINGPRODUCTCODE is set while the *old* product is being removed,
+        so the old product ran this action after its own files had been deleted and every upgrade rolled back with
+        1603. WIX_UPGRADE_DETECTED is set on the new product's install instead, which is the side this action runs on.
       -->
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
-              Condition="NOT REMOVE" />
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
 
       <?ifdef var.HostOnly ?>
       <!-- Before ConfigureSystem, and before the service is started: the service reads the fixed password once, at

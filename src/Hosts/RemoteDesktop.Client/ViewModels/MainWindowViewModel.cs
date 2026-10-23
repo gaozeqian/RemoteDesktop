@@ -268,7 +268,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? ServerAddressError { get; set; }
 
-    // The same three-part number the packages and the bundle carry. AssemblyVersion would say 0.3.0.0, which is a
+    // The same three-part number the packages and the bundle carry. AssemblyVersion would say 1.0.0.0, which is a
     // different number on the same build - see ProductVersion for why the product has one answer.
     public string ClientVersion { get; } = ProductVersion.Display;
 

@@ -69,7 +69,7 @@ body:
     attributes:
       label: 版本或提交
       description: 安装包版本号，或 `git rev-parse --short HEAD` 的结果
-      placeholder: 0.3.0.0 / 4f14524
+      placeholder: 1.0.0.0 / 4f14524
     validations:
       required: true
 

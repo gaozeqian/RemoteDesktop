@@ -2,25 +2,111 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [未发布] · Windows 端到端测试
+## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
+
+首个正式版。自 0.3.0 起，产品从 Windows 单平台扩展到 Windows、macOS (Apple Silicon) 与 Linux，三个平台各出
+控制端、被控端与服务端三个安装包；服务端补齐 SQLite/PostgreSQL 可插拔存储与 Rendezvous + Relay + Ops 的
+完整交付形态。下面按主题记录这一轮的全部变更。
+
+### 上线前评审修复（2026-10-23）
+
+发布前的全量审查发现了下面这些问题，都在这一轮修复；其余已记录、但需要产品决策或上游修复的问题见
+`docs/design/README.md` 的"还没有做的事"。
+
+#### Security
+
+- **控制端下载时，远端目录名可以写出目标目录**：递归下载把被控端返回的目录名直接 `Path.Combine` 到本地
+  目标目录，而本地文件访问策略是 `Unrestricted`。一个恶意被控端把目录叫作 `../../.ssh`，就能让控制端在
+  用户目录里建目录并写入文件（例如 `authorized_keys`），进而取得控制端账号的代码执行。现在每个远端名字
+  （文件和目录）都先过 `FileAccessPolicy.NormalizeName`，绝对路径、`..` 与分隔符在拼接前被拒绝。
+- **被控端会话表的"查重 + 插入"不是原子的**：两个同时通过认证的连接可以声明同一个 `Hello.session_id`，
+  第二个覆盖第一个，第一个会话仍在运行却不在 `ActiveSessions` 里，降级/断开/运维控制台都够不到它，
+  `MaxSessions` 也挡不住。现在容量检查与 id 预留放在同一把锁里，id 冲突改用新 id，会话结束按
+  （id, 实例）成对移除。
+- **Ops 登录锁定可以靠用户名拼写绕过**：账户查找会 trim + 转大写，锁定键却用原始字符串，
+  `admin` / `Admin` / `admin ` 各自有一份失败预算。现在两边用同一个规范化键。
+- **Ops 二次验证没有失败预算**：知道密码的人可以无限次 `/login` 换新 challenge，每个 challenge 再试 5 次
+  六位码。新增一个与密码预算分离、跨 challenge 与成功密码都不清零的 TOTP 失败预算。
+- **信令默认信任本机回环代理的 `X-Forwarded-For`**：同机 nginx/Caddy 转发的请求可以自带任意来源地址，
+  按 IP 的限流与注册预算因此失效，构造 `127.0.0.1` 还能碰到未配置 `NodeToken` 时的回环兜底。默认信任已
+  移除，只有 `Rendezvous:TrustedProxies` 列出的代理才被采信；文档的 nginx 示例补上 XFF，并说明只代理
+  `/ws` 与 `/health`。
+- **固定密码升级后仍接受低于 8 位的旧值**：`Load` 现在拒绝低于 `MinimumLength` 的存量密码，把它当作未设置；
+  操作员重新设置时走已有的长度校验。
+- **Windows 文件传输接受 UNC 路径**：未配置共享根时，`\\attacker\share\x` 会让被控端以登录用户身份向任意
+  SMB 服务器认证（泄露 NetNTLM 哈希）。现在没有配置 UNC 根时一律拒绝网络共享路径。
+- **UIAccess Agent 继承了用户的环境块**：标准用户可以在自己的环境里设置 `DOTNET_STARTUP_HOOKS`，
+  .NET 宿主会在 `Main` 之前执行它——而 Agent 是以 UIAccess 启动的，于是用户代码进入了本应突破 UIPI 的那个
+  进程。现在服务重建环境块，去掉 `DOTNET_*` / `CORECLR_*` / `COMPLUS_*` / `COREHOST_*`，PATH 与 COMSPEC
+  改用机器级值。
+- **Windows 数据目录的 ACL 只在"目录不存在"时设置**：`%ProgramData%` 默认允许普通用户创建子目录，先占住
+  `RemoteDesktop\secrets` 的用户会让服务跳过加固，机器级 DPAPI 密文随后落在该用户控制的目录里。现在每次启动
+  都校验并重设 ACL，拒绝重解析点；无法加固时服务启动失败而不是接受。
+- **macOS 签名/公证构建缺少摄像头 entitlement**：硬化运行时下 AVFoundation 会拒绝采集，而 ad-hoc 开发构建
+  看不出问题。两个 app 使用的 entitlements 加入 `com.apple.security.device.camera`。
+- **Linux 客户端重启了一个不存在的 systemd 单元**：改服务器地址后调用 `systemctl --user restart
+  remotedesktop-host`，实际单元名是 `app-RemoteDesktopHost.service`，失败被吞掉。现在用正确的名字。
+- **Linux 控制 socket 的 /tmp 回退目录不校验属主与权限**：`CreateDirectory(mode)` 不会收紧已存在的目录；
+  现在显式设置 0700（非属主会失败）并拒绝符号链接。
+- **macOS 被控端崩溃后不会重启**：launchd 作业的 `KeepAlive` 从 `false` 改为 `SuccessfulExit=false`，
+  异常退出后 10 秒节流重启；正常退出不受影响。
+- **控制管道读取没有超时**：Windows 命名管道是全局命名空间，另一个本机进程可以占住同名实例不回应，客户端
+  启动会一直等。现在连接后 5 秒无应答即失败。
+- **手动安装脚本升级时会覆盖配置、缺少防火墙规则**：`Install-HostService.ps1` 不再覆盖已有的
+  `appsettings.json`，会先结束残留的 Agent/客户端进程，并补上与 MSI 相同的程序级 UDP 入站规则。
+
+#### Fixed
+
+- **`Ops:RequireTotp=false` 时登录页永远进不去**：`/login` 已经不产生 challenge，却没有写入会话 cookie，
+  前端显示已登录、之后每个 `/api` 请求都是 401。现在 `/login` 拿到 session 时同样设置两个 cookie。
+- **审计链在两条记录同一毫秒时会误报被篡改**：追加按 `(ts DESC, id DESC)` 取前一条，校验却按
+  `(ts ASC, id ASC)` 走，随机 id 可能让新记录排到前一条之前。现在追加时保证存储时间戳严格递增。
+- **管理动作在节点调用抛异常后永久卡在 approved**：DNS 失败、超时或连接拒绝时 `CompleteActionAsync` 从未执行，
+  重试又只接受 pending。现在所有结果（包括取消）都会写入终态；关闭行时不再使用可能已取消的请求 token。
+- **`/ingest/events` 对 chunked 请求先缓冲再查长度**：没有 `Content-Length` 时能把整个请求读进内存再拒绝。
+  现在边读边计数，超过 1 MiB 立即 413。
+- **被控端/客户端会被越界的远端数值打成崩溃**：信令 `Registered` 的设备号与反射端口、中继端点端口、
+  视频帧时间戳、文件修改时间都来自对端。现在在构造 `DeviceId` / `IPEndPoint` / `DateTimeOffset` 前校验，
+  非法值按协议错误处理，而不是把传输线程（以及整个宿主服务）带走。
+- **摄像头流信息可以要求 1 GiB 帧缓冲**：上限从 16384×16384 收到 8K（8192 边长、7680×4320 像素），与桌面流
+  一致。
+- **终端中间序列缓冲无上限**：被控端程序持续输出 `ESC [` + 0x20–0x2F 就能把控制端堆撑爆；现在与 OSC 一样
+  上限 4096 字节，超限按忽略序列处理。
+- **每个会话可以无上限地开通道**：每个通道都占一份帧缓冲。现在每会话最多 24 个并发通道，超出的通道直接关闭。
+- **QUIC 入站请求无并发上限**：每次连接请求都会新建一个 QUIC listener 与 UDP socket；现在同时准备的上限为
+  32，接受队列有界，满了丢弃而不是无限排队。listener 本身每次约 1.2 MB 的上游原生泄漏见
+  `docs/design/README.md` 的"还没有做的事"，1.0.0 没有解决它。
+- **Windows MSI 升级/修复会覆盖已配置的服务器地址 / 监听地址与 TLS**：`ConfigureSystem` 在升级与修复时也会运行，把
+  `NeverOverwrite` 保留的 `appsettings.json` 重写成安装包默认值（客户端回到 `ws://127.0.0.1:5080/ws`，
+  服务端回到明文 `http://0.0.0.0:5080`）。现在它只在全新安装时运行；升级保留操作员配置。
+- **第三方组件清单过期且漏掉运维控制台**：Dependabot 升到 10.0.13 / NAudio 3.2.0 后清单仍是 10.0.12 /
+  3.1.0，生成脚本也没有遍历 `RemoteDesktop.Server.Ops`。已加入 Ops 并重新生成。
+- **安装包不带许可证与第三方声明、Linux/macOS 还带 PDB**：三个 `.deb` 现在安装
+  `/usr/share/doc/<包>/copyright` 与声明；macOS 客户端/被控端 app 内带 `LICENSE.txt` 与声明，服务端载荷带
+  `/usr/local/share/doc/remotedesktop-server/`；Windows MSI 把两份文件装进安装目录；Linux 与 macOS 包去掉
+  `*.pdb`（Windows 原本就去）。
+- **发布前的版本与变更日志**：`<Version>` 升到 1.0.0，21 个 `[未发布]` 小节收进本版本；文档与模板里过期的
+  `0.3.0` / `0.4.0` 示例一并更新。
+
+### Windows 端到端测试
 
 在 Windows 11 + NVIDIA 上以 Docker（rendezvous + relay + ops + PostgreSQL）跑真实用户流程：直连与中继、终端、
 文件传输、服务端容器重建、摄像头、观看模式，以及屏幕与摄像头录制。发现并修复：
 
-### Fixed
+#### Fixed
 
 - **中继空闲回收覆盖客户端的结束时间**：`session.ended` 先到时，约两分钟后的 `session.relay_closed` 会把
   `endedAt` / `endReason` 改成更晚的 idle；现在只合并字节数，结束时间取最早、原因保留第一次。`SessionFailed`
   同样不再把已结束的会话往后推。
 
-## [未发布] · Docker 部署评审修复
+### Docker 部署评审修复
 
 服务端的三条部署路径里，Docker 是唯一没有被 CI 构建过的一条。一次针对 `build/docker/` 的评审同时发现了两个
 启动级阻断（compose 文件不是合法 YAML、中继镜像缺少 ASP.NET 运行时）、一个默认公网可达的未授权管理接口，以及
 一条文档承诺但实际起不来的 SQLite 路径。这一轮修复连同同批发现的部署隐患一起处理，并给这条路径补上 CI 的
 构建与启动冒烟测试。
 
-### Fixed
+#### Fixed
 
 - **compose 文件不是合法 YAML**：`POSTGRES_PASSWORD` 的必填提示里有一个冒号加空格，未加引号的普通标量让它变成了
   映射，`docker compose up` 在解析阶段就失败。改为单引号标量。
@@ -63,14 +149,14 @@
 - **Docker 路径没有 CI**：`ci.yml` 新增 `docker` job，解析三个 compose 配置、构建三个镜像，并启动信令与中继
   检查 `/health` 与内部接口的 401/200 行为。
 
-## [未发布] · 版本设置评审修复
+### 版本设置评审修复
 
 版本只有一个来源（根 `Directory.Build.props` 的 `<Version>`），但它在产物名、程序集、打包脚本与文档里派生出了
 三种拼写和两套顺序。这一轮把派生规则收敛成两件事：**包与界面用三段，遥测用带提交哈希的完整串**；构建产物名
 三平台统一为 `<产品>-<角色>-<平台>-<架构>-<版本>`。发布流程同时补上了机器检查——此前 Tag、包内版本与
 CHANGELOG 三者是否一致，只靠人记得。
 
-### Fixed
+#### Fixed
 
 - **下一次打 Tag 会在“找 MSI”这步失败**：两个 wixproj 的 `OutputName` 是 `<平台>-<版本>-<架构>`，而
   `release.yml` 与 `verify-packages` 按 `<平台>-<架构>-<版本>` 找——命名统一的改动（`fe48153`）不在 `v0.3.0`
@@ -108,13 +194,13 @@ CHANGELOG 三者是否一致，只靠人记得。
 - **`<版本>` 在三平台文档里会串**：`docs/ops/README.md` 增加版本形态表，明确 Windows 四段、macOS/Linux 三段、
   发布资产用 Tag；`build/README.md` 说明 `version.sh` 的位置与职责。
 
-## [未发布] · 运维监控台：端到端测试
+### 运维监控台：端到端测试
 
 在 Windows 11 上把控制台放进真实部署里跑：Rendezvous、Relay、Ops 三个进程，真实 SQLite，两个真实客户端分别走
 直连与中继，事件用真实 HMAC 通道，Webhook 用本机接收器；页面用 Edge（Playwright）逐页操作。API 侧 96 项、
 浏览器侧 34 项断言全部通过，并发现、修复了下面七处。
 
-### Fixed
+#### Fixed
 
 - **直连会话在控制台变成两行**：控制器在直连路径构造 `QuicPeerConnection` 时没有带上服务端签发的
   `RelaySessionId`（中继路径带了），控制端心跳因此无法归并到信令行，控制台为同一次会话多出一行只有质量数据的
@@ -139,7 +225,7 @@ CHANGELOG 三者是否一致，只靠人记得。
 - **控制台没有 favicon**：浏览器每次打开都记一条 `/favicon.ico` 404。控制台现在带产品图标
   （`wwwroot/favicon.ico`），`index.html` 明确引用；端到端断言该路径返回 200。
 
-### Notes
+#### Notes
 
 - 真实场景覆盖：登录（错误口令、错误动态码、TOTP）、三角色权限、节点登记/抓取/停用/删除、签名事件与重放、
   会话投影与详情、告警开/认领/恢复/Webhook、两段式断开与封禁/解封、设备代理与分页、审计链篡改检测、
@@ -148,13 +234,13 @@ CHANGELOG 三者是否一致，只靠人记得。
   仍在本机因 Intel QSV `E_UNEXPECTED` 失败（与上一轮 Windows 端到端记录一致，属环境/驱动问题，与本轮改动无关）；
   其余项目全部通过。
 
-## [未发布] · Windows UI 与产品图标评审
+### Windows UI 与产品图标评审
 
 在 Windows 11 Enterprise 26200 上对客户端界面与产品图标做逐屏评审（深浅色各一轮、真实服务端与客户端），
 并用 UI Automation、图标逐尺寸渲染与实际构建的最小 MSI 核对。完整记录见
 [`docs/reviews/ui-and-icon-review-2026-10-18.md`](docs/reviews/ui-and-icon-review-2026-10-18.md) 的第二轮。
 
-### Fixed
+#### Fixed
 
 - **独立被控端模式的说明与事实相反**：被控端在本进程内运行时，界面仍说“本机控制端代码”与主页不同、
   主页显示的是后台服务代码；首帧也用默认文案，等轮询回来才纠正。托管模式现在由 `ClientEnvironment`
@@ -179,24 +265,24 @@ CHANGELOG 三者是否一致，只靠人记得。
 - **浅色下隐藏文件元数据对比度不足**：不再对整行应用 50% 透明度，只淡化图标与文件名，大小和日期保持
   不透明；浅色下这两列恢复到 tertiary 文字的 4.82:1，隐藏状态仍能从图标与文件名看出。
 
-### Notes
+#### Notes
 
 - 图标主体占比 89% 在 Windows 上不构成问题，第一轮 R3 的 macOS 栅格决定仍待定。
 - 四段版本号 `0.3.0.0`、浅色主题下终端保持深色：均为既有观察，本轮未改。评审为深色 12 张、浅色 11 张
   截图与 UIA 读取，未实际安装 MSI，也未覆盖混合 DPI。
 
-## [未发布] · Windows 多显示器端到端测试
+### Windows 多显示器端到端测试
 
 在 Dell Latitude 5420 / Intel Iris Xe（驱动 32.0.101.7092）上接两块显示器：DISPLAY2 2560×1440 主屏 +
 DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务端和两个客户端跑控制/观看会话，逐项验证：
 
-### Fixed
+#### Fixed
 
 - **显示器下拉框的无障碍名称与值**：ComboBox 没有 `AutomationProperties.Name`，折叠状态下的值取自
   `DisplayChoice.ToString()`，读屏会念成 `DisplayChoice { Id = …, Label = … }`。现在名称是“显示器”，
   `DisplayChoice` 的 `ToString()` 返回标签（`DISPLAY2 · 2560×1440 · 主`）。
 
-### Verified
+#### Verified
 
 - 控制端下拉框列出两块显示器并正确标注主屏；双向切换后状态栏、画面分辨率和被控端日志
   （`Now streaming display …`）同步变化。
@@ -211,18 +297,18 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - 新增 `DxgiCaptureTests.Captures_every_attached_display_at_its_own_size`：逐一复制每块已连接显示器并断言
   帧尺寸与枚举结果一致，覆盖左置副屏的负坐标与“每输出一个复制接口”的限制。
 
-### Notes
+#### Notes
 
 - 两块显示器都是 16:9，非 16:9 的 letterbox 映射未覆盖；拔插是用 `DisplaySwitch` 切换拓扑模拟的，
   不是物理拔线；混合 DPI 缩放未单独覆盖。QSV 硬件编码器仍按前述限制回退软件编码。
 
-## [未发布] · Windows 端到端测试修复
+### Windows 端到端测试修复
 
 在 Windows 11 Enterprise（26200）/ .NET 10.0.13 上用 Release 构建、真实服务端与多个独立客户端实例跑用户场景：
 先在本机以未安装后台服务的 standalone 被控端连接，再启动三个控制器同时观看，另跑文件传输、终端、摄像头、
 录制、固定密码、设备列表与服务器中断恢复。
 
-### Fixed
+#### Fixed
 
 - **第二个及之后的并发会话一建立就断开**：Windows 一个进程对同一个输出只允许一个
   `IDXGIOutput1::DuplicateOutput`，第二个返回 `E_INVALIDARG`，于是被控端日志是
@@ -240,7 +326,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
   仍出 NV12”的实机用例；此前 `CameraTests.Stopping_the_capture_releases_the_camera_so_it_can_be_opened_again`
   在这台机器上失败，现在通过。
 
-### Notes
+#### Notes
 
 - **硬件编码器在这台机器上每次都回退到软件编码**：Intel Iris Xe（Windows 11 26200）的 QSV H.264 MFT 是
   异步、D3D11-aware 的硬件 MFT；它接受解锁、输入/输出类型和每一帧输入，但第一次 `ProcessOutput` 返回
@@ -272,12 +358,12 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - 剪贴板文本双向稳定；图片剪贴板在连接期间可保持，但两端在同一台机器上共享同一个系统剪贴板，
   跨机传输未被这轮验证覆盖。
 
-## [未发布] · macOS UI 与图标评审
+### macOS UI 与图标评审
 
 在 macOS 26 上逐屏核对界面与产品图标，详见
 [`docs/reviews/ui-and-icon-review-2026-10-18.md`](docs/reviews/ui-and-icon-review-2026-10-18.md)。
 
-### Changed
+#### Changed
 
 - **macOS 客户端 bundle 改名为 `Remote Desktop.app`**：Dock 悬停提示读的是 `.app` 文件名，而不是
   `CFBundleDisplayName`——即使 LaunchServices 已报告 “Remote Desktop”，旧的 `RemoteDesktop.app` 仍显示
@@ -287,7 +373,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - **主窗口标题从“远程桌面”改为 “Remote Desktop”**：与 Dock 提示、菜单栏与产品名一致（撤销上一轮为
   Linux 中文一致性所做的改动）。
 
-### Fixed
+#### Fixed
 
 - **三个控制器时，第三个会话的“仅观看/断开”落在横幅视口外**：每项说明与按钮原先竖排，约 100pt 高，
   150pt 的视口只露出两项半。改为说明与操作同一行；三个控制器的实机截图确认三项操作全部可见。
@@ -299,7 +385,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
   viewmodel 里的注释说明了不要换回 emoji 的原因。
 - **终端窗口的下拉框标签是英文 “Shell”**：改为“终端类型”，`AutomationProperties.Name` 同步更新。
 
-### Notes
+#### Notes
 
 - **亮色外观已实机核验**：主页、设备列表、三项高级设置、远程桌面、文件传输、终端、摄像头与被控端警告
   横幅逐屏截图；正文、次级文字、警告色与按钮均清晰。唯一观察：文件传输中的隐藏文件整行以 50% 透明度
@@ -307,11 +393,11 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - macOS 图标主体占画布 89%，比 Apple 的 824/1024 栅格大约 10%；本轮只记录（R3），未改图形比例。
 - 版本号段数与固定密码“关闭”按钮等 P3 观察项见评审文档。
 
-## [未发布] · macOS 端到端测试修复
+### macOS 端到端测试修复
 
 在 macOS 26.7 / Apple Silicon 上用真实签名的客户端 bundle、真实服务端与两个独立客户端实例跑端到端场景时发现的问题。
 
-### Fixed
+#### Fixed
 
 - **设置 6–7 位固定密码会让客户端直接崩溃**：窗口自己留了一份长度下限（6），而
   `FixedPasswordPolicy.MinimumLength` 早已提高到 8。密码通过窗口校验后在 `LocalHostControl` 抛出
@@ -343,11 +429,11 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
   Auto 列被标题挤窄后，“902 226 105”显示成“002 226 105”。代码改为 `NoWrap`，需要让位时由标题省略号
   截断。
 
-## [未发布] · 当前平台 UI 与图标修复
+### 当前平台 UI 与图标修复
 
 针对 Ubuntu 26.04 / GNOME Wayland 的实机评审，按 P0→P3 处理。
 
-### Changed
+#### Changed
 
 - **应用图标改为原创矢量**：不再从 Windows `mstsc.exe` 提取图标，`icon.svg` 现在是真正的矢量（此前是
   base64 包装的 256px PNG）。16/24px 使用去掉支架、放大显示器与指针的简化版，512/1024px 由几何直接渲染；
@@ -361,7 +447,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - **窗口标题**：主窗口从 “Remote Desktop” 改为“远程桌面”，与其它窗口及 `.desktop` 的 `Name[zh_CN]` 一致。
 - **路径占位符**从“所有驱动器”改为“所有位置”，不再使用 Windows 术语。
 
-### Fixed
+#### Fixed
 
 - **Linux 无人值守限制不够醒目**：固定密码区块的 portal 限制从 12px tertiary caption 改为 warning banner。
 - **可访问性名称**：主页输入框、连接方式、文件行、路径/名称输入、复制按钮与终端关闭按钮补齐
@@ -369,7 +455,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - **文件传输空状态**：没有传输时显示“暂无传输”，不再是一块空白。
 - **Linux standalone 托管说明**：高级设置显示“被控端在本进程内运行（未安装后台服务）”，不再是空行。
 
-### Notes
+#### Notes
 
 - **Wayland 后端已评估，本次不切换**：`Avalonia.Wayland` 12.1.4 能启动原生窗口，但该窗口没有出现在 AT-SPI
   树中（会回退无障碍与自动化），且 Fluent 12.1.4 没有 HighContrast 变体。XWayland 在 1.333 分数缩放下的
@@ -377,11 +463,11 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - 高对比度模式仍不跟随；`_NET_WM_ICON` 仍只有 128×128 一档（Avalonia X11 后端行为）；AppStream metainfo
   仍未提供。
 
-## [未发布] · Linux 端到端测试修复
+### Linux 端到端测试修复
 
 在 Ubuntu 26.04 / GNOME Wayland 上用真实服务端、客户端与 HostService 跑端到端场景时发现的三处问题。
 
-### Fixed
+#### Fixed
 
 - **关闭终端会在 `crash.log` 里留下一条“崩溃”**：结束终端时先关闭 PTY，仍在读取输出的那一端会以
   `EBADF` 失败；收尾里的 `ContinueWith` 没有观察该异常，终结器把它当作未观察异常交给 `CrashLog`。
@@ -394,12 +480,12 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
   现在 EIS 描述符只连接一次，设备到达前的输入与以前一样被丢弃；portal 的 D-Bus 拒绝也统一转成
   `PortalException`，不再以未预期异常的形式结束通道。
 
-## [未发布] · 九个安装包：三平台 × 控制端 / 被控端 / 服务端
+### 九个安装包：三平台 × 控制端 / 被控端 / 服务端
 
 三个平台现在各出三个角色，共九个安装包。服务端那一个包统一是 **Rendezvous + Relay + Ops**：
 控制台没有前两者就没有数字可看，分成两个包只会多出"装了一半"的状态。
 
-### Added
+#### Added
 
 - [Windows] **被控端 MSI**（`RemoteDesktop-Host-Windows-<版本>-x64.msi`）：只装 `RemoteDesktop.HostService` 与
   `RemoteDesktop.SessionAgent`，没有客户端窗口与开始菜单项。走 `Build-ClientInstaller.ps1 -HostOnly`，
@@ -422,7 +508,7 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
 - [CI] **`release.yml` 出九个资产**：Windows 三个 MSI、macOS 三个 `.pkg`、Linux 三个 `.deb`，少一个就不发版；
   `verify-packages` 按平台逐个打开包，检查 Ops、被控端登录项与客户端载荷都在。
 
-### Fixed
+#### Fixed
 
 - **跨平台发布会把 macOS 的 dylib 塞进 Linux 包**：`RemoteDesktop.Transport` 与 `Platform.MacOS` 的条件看的是
   **构建机**是不是 macOS，而不是**目标**是不是；而项目引用在内部构建时又被去掉了 `RuntimeIdentifier`，所以
@@ -437,18 +523,18 @@ DISPLAY1 1920×1080（位于主屏左侧，桌面 X 为负）。用真实服务�
   就跟着它走。现在相对路径按程序目录解析，`%ProgramData%` 也会展开；Windows 包据此把库放在
   `%ProgramData%\Remote Desktop Server\ops.db`。
 
-### Notes
+#### Notes
 
 - macOS 的 client（`RemoteDesktop.app`）与 host（`Remote Desktop Host.app`）是**两个不同 bundle**，TCC 授权也分开；
   一台机器通常只装一个。两个都装会得到两个被控端（两个设备码、两个监听），不建议。
 - Windows 客户端 MSI 仍然同时装客户端、服务与被控端 Agent——**一台机器想同时具备控制与被控两种角色，装客户端包就够了**；
   新的 Host 包是给"只能被控、不允许控制别人"的机器用的，两者不能并行安装。
 
-## [未发布] · 运维监控台：交付面
+### 运维监控台：交付面
 
 M6：把控制台从"能跑"变成"干净机器按文档从零装到能登录"。核心是文档与打包，不是新功能。
 
-### Added
+#### Added
 
 - [Linux] **`remotedesktop-ops.service`**：systemd 单元，回环监听 `127.0.0.1:5090`，库落在
   `/var/lib/remotedesktop-server/ops.db`，与信令/中继同账号、同样加固。
@@ -457,16 +543,16 @@ M6：把控制台从"能跑"变成"干净机器按文档从零装到能登录"�
 - [Docs] **`docs/ops/README.md` §二 10「运维监控台」**：启动三种方式、首个管理员、关键配置、让总览出现数字的三件事
   （指标 + 登记节点 + 事件通道密钥）、管理动作与审计、安全边界。
 
-### Notes
+#### Notes
 
 - 控制台是**可选**的：不装它远程桌面照常工作，装上后默认只在回环监听，对外是反向代理的决定。
 
-## [未发布] · 运维监控台：管理动作
+### 运维监控台：管理动作
 
 M5：控制台第一次能**反向影响数据面**——断开会话、封禁 / 解封设备。任何会改到设备或会话的动作都要两个人：
 一个发起、一个批准，发起人不能批准自己的动作，两步各留一条审计。
 
-### Added
+#### Added
 
 - [Signaling] **`ServerMessage.admin_command`** 与 **`Register.client_capabilities`**：能力位协商——被控端声明支持后，
   信令才会下发 `AdminCommand`；旧客户端永远收不到。
@@ -480,17 +566,17 @@ M5：控制台第一次能**反向影响数据面**——断开会话、封禁 /
   加一张动作表）。会话页"请求断开"、设备页"封禁 / 解封"、管理动作页。
 - [Tests] 集成 30（新增两段式复核闭环、发起人不能自批、封禁经批准到达节点），存储 29（新增封禁持久化与旧表迁移）。
 
-### Notes
+#### Notes
 
 - 断开会话按**被控端所知的会话 id**（`client_session_id`，来自心跳）寻址：中继的 `correlation_id` 被控端并不认识。
 - `admin_command` 发后不管：控制台不等待被控端确认，被控端不支持时节点返回 409、动作记为 `failed` 并写审计。
 
-## [未发布] · 运维监控台：客户端心跳
+### 运维监控台：客户端心跳
 
 M4：控制台补上最后一块只有客户端才知道的事实——这次会话跑在什么系统上、延迟多少、走的是直连还是中继。
 **默认关闭**：打开 `Telemetry:Enabled` 之前，客户端不发一个字节。
 
-### Added
+#### Added
 
 - [Signaling] **`TelemetryReport`**（`ClientMessage.telemetry`）：会话 id、角色、模式、链路、RTT、平台、版本，
   每 30 秒一条，走已有信令连接。字段集合是封闭的，没有设备名、地址、窗口标题或输入的位置。
@@ -509,23 +595,23 @@ M4：控制台补上最后一块只有客户端才知道的事实——这次会
   `IntervalSeconds`。发送只入队，队列满或断线时丢弃，绝不阻塞会话。
 - [Docs] `docs/usage/README.md` §8 写明打开后到底有什么字段、没有什么字段。
 
-### Changed
+#### Changed
 
 - [Transport] `IPeerConnection.RelaySessionId` 由连接自己携带，控制器与被控端都从服务端下发的中继信息里拿到它。
 
-### Notes
+#### Notes
 
 - **丢包与码率仍未上报**：.NET 的 QUIC API 不暴露每条连接的丢包统计，编码器的码率是设置值不是实测吞吐量。
   与其填两个永远是 0 的字段，不如让它们保持"—"。
 - 心跳的最坏滞后是一个上报周期（30 秒）：会话刚开始、或被控端刚连上时，质量列先是"—"。
 
-## [未发布] · 运维监控台：骨架、登录与审计
+### 运维监控台：骨架、登录与审计
 
 运维监控台的第一个可运行版本（计划里的 M0）。它现在能做的是**登录一个空控制台**：账号、TOTP、CSRF、审计链、
 基线库表都已落地，数据源还没有接——页面上每个数字都是"—"，这是有意的，见 `docs/ops/README.md` 的
 "数据从哪来（范围合同）"一节。
 
-### Added
+#### Added
 
 - [Ops] **`RemoteDesktop.Server.Ops`**：独立部署的 Web 控制台，默认只监听 `127.0.0.1:5090`；Windows 服务
   `RemoteDesktopOps` / systemd 单元 `remotedesktop-ops`。默认 SQLite，可换 PostgreSQL（`Ops:Database`）。
@@ -542,12 +628,12 @@ M4：控制台补上最后一块只有客户端才知道的事实——这次会
 - [Tests] 单元 51 项（口令、TOTP 的 RFC 向量、Base32、审计链、锁闭、签名、配置、指标类型），集成 8 项（真 Kestrel +
   SQLite：401、登录全流程、CSRF、锁闭、伪造 Cookie）；架构测试新增"控制台分层"规则。
 
-## [未发布] · 运维监控台：告警与审计
+### 运维监控台：告警与审计
 
 M3：控制台开始会喊人。规则是结构化的（单指标 / 比值 / 抓取失败），条件必须持续满足一段时间才开告警；每条告警
 只开一次、可认领、恢复后自动关闭。审计日志补上列表与哈希链校验。
 
-### Added
+#### Added
 
 - [Ops] **规则与求值**：`AlertStateMachine` 用 `forSeconds` 判断"持续多久"，未命中立刻清零；去重键同一时刻只允许
   一条未恢复告警。求值每 15 秒一次（`Ops:AlertIntervalSeconds`），新建的部署自动种一条"节点抓取失败"规则。
@@ -562,12 +648,12 @@ M3：控制台开始会喊人。规则是结构化的（单指标 / 比值 / 抓
 - [Tests] 单元 86 项（新增状态机、比较器、哈希链篡改与删除检测），集成 22 项（新增完整告警闭环：失败节点 → 开告警
   → 认领 → 停用节点 → 自动恢复，以及审计链校验）。
 
-## [未发布] · 运维监控台：事件与会话
+### 运维监控台：事件与会话
 
 M2：信令与中继把"服务器看见了什么"推给控制台，控制台把它折成一条可以点开的会话；设备页通过信令服务的分页查询
 读注册表，控制台仍然不碰别人的数据库。
 
-### Added
+#### Added
 
 - [Shared] **`IOpsEventSink`**：有界队列（4096）+ 后台批量发送，HMAC-SHA256 签名（`X-Ops-Key-Id` /
   `X-Ops-Timestamp` / `X-Ops-Signature`），失败重试三次后丢弃并计数。`Publish` 永不阻塞、永不抛——它站在握手与
@@ -589,12 +675,12 @@ M2：信令与中继把"服务器看见了什么"推给控制台，控制台把�
 - [Tests] 单元 75 项（新增 8 项投影规则，含乱序到达与坏 payload），集成 20 项（新增签名入库、重放不重复、
   伪造签名 401、过期时间戳 401、发送端签名可验证、设备代理与分页）；存储单测新增设备目录分页。
 
-## [未发布] · 运维监控台：节点抓取与总览
+### 运维监控台：节点抓取与总览
 
 M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，控制台每 10 秒抓一次，总览的四个 KPI 与流量图都从
 抓到的序列算出来——没有读数时仍然是"—"，不补 0。
 
-### Added
+#### Added
 
 - [Relay] **HTTP 面**：`/metrics`（Prometheus 文本）、`/health`、`/internal/v1/info`，默认监听
   `http://127.0.0.1:5083`（`Relay:HttpEndpoint`）。宿主从 Worker SDK 改为 Web SDK，UDP 循环不变。
@@ -615,13 +701,13 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
 - [Tests] 单元 67 项（新增解析器与速率），集成 12 项（新增假节点 HTTP 服务 → 登记 → 抓取 → 总览断言，
   含抓取失败与重名拒绝）。
 
-## [未发布] · 服务端：SQLite 与可插拔存储
+### 服务端：SQLite 与可插拔存储
 
 信令服务器的设备代码不再只能存在 PostgreSQL 里。新增 SQLite（单机部署装完即用）和一个显式的 provider 设置，
 存储层独立成 `RemoteDesktop.Server.Storage`：再加一种数据库是一个文件加一行 switch，不是改一遍宿主。
 换库仍然意味着设备码重发，除非按 `docs/ops/README.md` 的手工步骤迁移。
 
-### Added
+#### Added
 
 - [Server] **SQLite 存储**：`SqliteDeviceRegistry`，WAL 模式、写串行化、`device_id` 的 `CHECK` 约束
   （SQLite 按值定类型，没有约束就会存进文本）。文件位置由 `Rendezvous:Database:Path` 指定。
@@ -636,29 +722,29 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   `configure-server.sh` 的 `--database` / `--database-path`，`.deb` 的 `RD_DATABASE` / `RD_DATABASE_PATH`，
   MSI 的 `DATABASEPROVIDER` / `DATABASEPATH` 属性。
 
-### Changed
+#### Changed
 
 - **`Rendezvous:Database` 的 provider 是显式的**，不再靠"有没有连接串"推断。没有新设置时行为与之前完全一致。
 - **健康检查改为询问已注册的存储实例**，不再自己读一遍连接串——那两处读的键本来就可能不是同一个
   （注册表有 `ConnectionStrings:Postgres` 回退，健康检查没有），只配了回退键的部署会在 `/health` 上抛异常。
 - **契约测试**：`DeviceRegistryContractTests` 同时跑内存与 SQLite；原来那三条只测内存的用例已由它取代。
 
-### Fixed
+#### Fixed
 
 - **配置步骤不再清空没提到的数据库设置。** `--configure-system` 以前把"没给"和"给空"当成一回事：
   `Set-ServerConfiguration.ps1 -TlsGenerate` 只传 TLS 参数，却会把 `PostgresConnectionString` 写成空串，
   下次重启所有设备码改变——而文档承诺的是"没给的保持不动"。现在 null = 不动，`auto` / 空串才是明确表态。
 
-## [未发布] · macOS (Apple Silicon) 与 Linux 平台支持
+### macOS (Apple Silicon) 与 Linux 平台支持
 
 新增 `RemoteDesktop.Platform.MacOS` 与 `RemoteDesktop.Platform.Linux` 两个平台项目（`net10.0`，与 Windows 侧
 同形），实现全部平台端口，使同一份客户端代码可在三个系统上构建运行；两个移植共享新增的
 `RemoteDesktop.Platform.Posix` 层（伪终端、0600 文件密钥库、用户上下文守卫）。核心层（`Domain` /
 `Application` / `Media` / `Protocol` / `Signaling`）**零改动**，依赖规则（`Architecture.UnitTests`）无需修改。
 
-### Added
+#### Added
 
-#### macOS
+##### macOS
 
 - [Platform] **屏幕采集与输入注入**：ScreenCaptureKit 截屏（含光标）、CGEvent 键鼠注入，统一坐标换算
   （虚拟桌面用逻辑点、采集返回像素、输入用归一化 0..1）。
@@ -673,7 +759,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   与原生辅助库构建 `native/macos/build-native.sh`（扁平 C ABI，44 个导出入口）。
 - [CI] 新增 `build-macos` job（`macos-26`，arm64）。
 
-#### Linux
+##### Linux
 
 - [Platform] **Linux 被控端与客户端**：屏幕走桌面 portal + PipeWire，输入走 libei，编解码走 libavcodec，
   音频走 PulseAudio，防休眠走 logind。
@@ -686,7 +772,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   `~/.local/share/RemoteDesktop/appsettings.json` 叠在上面。客户端里那个「修改服务器地址」在 Linux 上也能用，
   写的就是这一份，客户端和被控端共用。
 
-#### 两端共通
+##### 两端共通
 
 - **`--self-check`**：一条命令问完这台机器能不能用。macOS 的版本在 bundle 内逐一验证每个平台端口与行为探针；
   Linux 的版本检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal、显示布局、PipeWire、libei、
@@ -696,7 +782,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   把两个 MSI、两个 `.pkg` 和三个 `.deb` 一起发出；CI 在每个 PR 上构建三平台的包并检查包内容——不检查的话，
   构建脚本坏了要等到发版才知道。
 
-#### 仓库结构与跨平台一致性
+##### 仓库结构与跨平台一致性
 
 - **`.gitattributes`**：此前仓库里**一个 git 属性都没有**，行尾全靠各人机器上的 `core.autocrlf`——而那是个本地
   设置，对这个跨平台保证没有任何强制力。现在在仓库层面声明：`.sh` / `Dockerfile` / Debian 维护脚本 / `.plist` /
@@ -802,7 +888,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
 - **`build-deb.sh` 不再依赖 GNU 专属的 `sed -i`**：改用 `awk` 写临时文件再 `mv`（BSD 的 `sed -i` 把参数当成备份
   后缀，替换里的 `\n` 也不是换行）。
 
-#### 文档与仓库约定
+##### 文档与仓库约定
 
 - **文档体系重排：从 27 份收敛到 13 份**（`docs/` 一份正文对应一类读者，`build/` 与 `native/` 各一份），
   目标是"一个目录一份完整文档"——读者按目录名找到东西，打开就是全文，不必猜该看哪一份。
@@ -839,7 +925,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   （MD060 表格列风格就是这么来的，一次报了 249 条本仓库长期在用的表格写法），`@latest` 会让构建在某天早上
   无故变红。同时把全仓 60 处未标语言的代码围栏补上语言（`text` / `bash` / `powershell`），并修掉其余格式问题。
 
-### Changed
+#### Changed
 
 - **宿主装配按平台分开**：`Platform.Windows` / `Platform.MacOS` / `Platform.Linux` 各自注册同一批端口，
   业务代码不知道自己在哪个平台上；客户端由 `ClientPlatformRegistration` 在运行时选层。
@@ -893,7 +979,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   这同时堵上一个洞——架构规则按**程序集名前缀**加载程序集，`RemoteDesktop.Posix` 因此一直没被
   `Platform` 那条规则看到（见 Fixed）。
 
-### Fixed
+#### Fixed
 
 - [UI] **Linux 上的三处平台说明文案说成了 macOS 的**：`高级设置` 里由 `OperatingSystem.Is*()` 选边的说明文字
   （固定密码存储、服务器地址改动、本机控制端代码）写的是"Windows / 非 Windows"二分支，非 Windows 即
@@ -939,7 +1025,7 @@ M1：控制台开始显示真实数字。中继有了 HTTP 面和字节统计，
   为空。同一份代码三次运行里挂了两次，master 因此变红。现在第二帧缺席也按同一理由跳过；生命周期检查仍在
   （非空时那两行断言照跑），只是不再把一个环境事实判成失败。
 
-### 平台上的边界与未验证项
+#### 平台上的边界与未验证项
 
 **macOS**
 

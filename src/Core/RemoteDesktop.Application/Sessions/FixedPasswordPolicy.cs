@@ -41,7 +41,15 @@ public static class FixedPasswordPolicy
             }
 
             var password = Encoding.UTF8.GetString(bytes).Trim();
-            return string.IsNullOrEmpty(password) ? null : password;
+            if (string.IsNullOrEmpty(password))
+            {
+                return null;
+            }
+
+            // A password stored before the floor was raised is not grandfathered in: the whole point of enforcing the
+            // rule at the service was that the installed base is exactly where the weak ones are. Returning null makes
+            // the host behave as if no fixed password were set; the operator sets a new one, which is validated.
+            return IsAcceptable(password) ? password : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         {

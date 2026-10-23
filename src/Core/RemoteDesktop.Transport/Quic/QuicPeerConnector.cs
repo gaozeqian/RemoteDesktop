@@ -107,6 +107,14 @@ public sealed partial class QuicPeerConnector(
             return null;
         }
 
+        // The port came from the server; IPEndPoint throws for 0 and for anything above 65535, and that exception is
+        // not one the reconnect loop catches. Treat a nonsensical relay as "no relay" and try the other paths.
+        if (ready.Relay.Endpoint.Port is < 1 or > 65535)
+        {
+            attempts.Add($"the server offered relay port {ready.Relay.Endpoint.Port}");
+            return null;
+        }
+
         var relay = new IPEndPoint(address, (int)ready.Relay.Endpoint.Port);
         int port;
         using (var socket = PunchSocket.Bind())

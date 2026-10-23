@@ -27,7 +27,23 @@ public sealed partial class QuicPeerListener(
     TransportOptions options,
     ILogger<QuicPeerListener> logger) : IPeerListener
 {
-    private readonly Channel<IPeerConnection> _accepted = Channel.CreateUnbounded<IPeerConnection>();
+    /// <summary>How many connect requests may be preparing a port at once. Each one holds a UDP socket and a QUIC
+    /// listener; the signaling server's request budget already limits how fast a device can ask, but not how many
+    /// devices ask at the same time.</summary>
+    private const int MaxConcurrentRequests = 32;
+
+    private readonly Lock _requestGate = new();
+
+    private int _requests;
+
+    // Bounded, and dropping rather than blocking: if the session service cannot take an accepted connection, holding
+    // an unbounded queue of live QUIC connections would be a slower way to run out of memory.
+    private readonly Channel<IPeerConnection> _accepted = Channel.CreateBounded<IPeerConnection>(
+        new BoundedChannelOptions(MaxConcurrentRequests)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -44,11 +60,39 @@ public sealed partial class QuicPeerListener(
 
         await foreach (var incoming in rendezvous.ReadIncomingAsync(cancellationToken).ConfigureAwait(false))
         {
-            _ = HandleAsync(incoming, cancellationToken);
+            // Drop rather than queue without bound. The controller will time out and retry; nothing on this machine
+            // is spent on a request that cannot be served now anyway.
+            lock (_requestGate)
+            {
+                if (_requests >= MaxConcurrentRequests)
+                {
+                    LogTooManyRequests(logger, incoming.ControllerDeviceId, MaxConcurrentRequests);
+                    continue;
+                }
+
+                _requests++;
+            }
+
+            _ = HandleAndReleaseAsync(incoming, cancellationToken);
         }
     }
 
     public ValueTask<IPeerConnection> AcceptAsync(CancellationToken cancellationToken) => _accepted.Reader.ReadAsync(cancellationToken);
+
+    private async Task HandleAndReleaseAsync(IncomingConnection incoming, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleAsync(incoming, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_requestGate)
+            {
+                _requests--;
+            }
+        }
+    }
 
     private async Task HandleAsync(IncomingConnection incoming, CancellationToken cancellationToken)
     {
@@ -87,10 +131,13 @@ public sealed partial class QuicPeerListener(
                 // The listener is disposed when this block ends; the accepted connection lives on.
                 var path = relay is not null && connection.RemoteEndPoint.Equals(relay) ? ConnectionPath.Relayed : ConnectionPath.Direct;
                 LogAccepted(logger, device, path, connection.RemoteEndPoint);
-                await _accepted.Writer.WriteAsync(
-                    new QuicPeerConnection(
-                        connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint, SessionIdOf(incoming)),
-                    cancellationToken).ConfigureAwait(false);
+                var peer = new QuicPeerConnection(
+                    connection, device, path, identity.Fingerprint, incoming.ControllerFingerprint, SessionIdOf(incoming));
+                if (!_accepted.Writer.TryWrite(peer))
+                {
+                    LogAcceptedQueueFull(logger, device);
+                    await peer.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -166,6 +213,12 @@ public sealed partial class QuicPeerListener(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Device} did not complete the connection in time.")]
     private static partial void LogAcceptTimedOut(ILogger logger, DeviceId device);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dropped a connect request from {Device}: {Count} are already being prepared.")]
+    private static partial void LogTooManyRequests(ILogger logger, uint device, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dropped an accepted connection from {Device}: the session queue is full.")]
+    private static partial void LogAcceptedQueueFull(ILogger logger, DeviceId device);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Incoming connection from {Device} failed.")]
     private static partial void LogHandleFailed(ILogger logger, string device, Exception exception);

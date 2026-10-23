@@ -123,8 +123,20 @@ public sealed class AuthService(
             return new SignInOutcome(SignInStatus.InvalidCredentials);
         }
 
+        // A second budget, separate from the password one. The password step resets its key on a correct password —
+        // which is exactly what an attacker who already knows the password would do to get a fresh set of guesses
+        // after starting a new challenge. This key survives both new challenges and a correct password, so the
+        // effort needed to brute-force the six digits does not scale with how many challenges one can mint.
+        var totpKey = TotpKeyFor(address, user.Username);
+        if (throttle.IsLocked(totpKey, out var retryAfter))
+        {
+            return new SignInOutcome(SignInStatus.Locked, RetryAfter: retryAfter);
+        }
+
         if (!Totp.Verify(user.TotpSecret, code ?? string.Empty, time.GetUtcNow()))
         {
+            throttle.RecordFailure(totpKey);
+
             if (!challenges.RecordFailure(challengeId!))
             {
                 await AuditAsync(user.Username, "auth.totp.locked", user.Id, address, "denied", cancellationToken)
@@ -134,6 +146,7 @@ public sealed class AuthService(
             return new SignInOutcome(SignInStatus.InvalidCredentials);
         }
 
+        throttle.Reset(totpKey);
         challenges.Remove(challengeId!);
         return new SignInOutcome(SignInStatus.Succeeded, Session: await CreateSessionAsync(user, address, userAgent, cancellationToken).ConfigureAwait(false));
     }
@@ -177,6 +190,12 @@ public sealed class AuthService(
         await AuditAsync(user.Username, "auth.login", user.Id, address, "success", cancellationToken).ConfigureAwait(false);
         return new AuthSession(token, csrf, user);
     }
+
+    /// <summary>
+    /// The failure budget for the second factor, kept apart from the password's by a prefix in the same table.
+    /// </summary>
+    private static string TotpKeyFor(string? address, string username) =>
+        string.Concat("totp\n", LoginThrottle.KeyFor(address, username));
 
     private Task<string> AuditAsync(string actor, string action, string target, string? address, string result, CancellationToken cancellationToken) =>
         store.AppendAuditAsync(

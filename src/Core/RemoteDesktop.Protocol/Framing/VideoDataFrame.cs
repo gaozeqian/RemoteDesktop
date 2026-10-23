@@ -46,5 +46,18 @@ public static class VideoDataFrame
 
     private static long ToUnixMicroseconds(DateTimeOffset time) => (time.UtcTicks - DateTime.UnixEpoch.Ticks) / 10;
 
-    private static DateTimeOffset FromUnixMicroseconds(long value) => new(DateTime.UnixEpoch.Ticks + (value * 10), TimeSpan.Zero);
+    private static DateTimeOffset FromUnixMicroseconds(long value)
+    {
+        // The value is chosen by the other computer. Multiplying it by ten and handing it to the constructor used to
+        // overflow or throw ArgumentOutOfRangeException, which is not the InvalidDataException the receive loop
+        // catches for malformed frames - so one bad timestamp ended the whole stream instead of one frame.
+        try
+        {
+            return new DateTimeOffset(checked(DateTime.UnixEpoch.Ticks + checked(value * 10)), TimeSpan.Zero);
+        }
+        catch (Exception ex) when (ex is OverflowException or ArgumentOutOfRangeException)
+        {
+            throw new InvalidDataException("Video frame capture time is out of range.", ex);
+        }
+    }
 }

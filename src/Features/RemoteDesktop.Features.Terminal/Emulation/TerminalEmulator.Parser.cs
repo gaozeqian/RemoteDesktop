@@ -96,7 +96,7 @@ public sealed partial class TerminalEmulator
             case State.EscapeIntermediate:
                 if (b <= 0x2F)
                 {
-                    _intermediates.Append((char)b);
+                    if (!TryAppendIntermediate(b)) { return; }
                 }
                 else if (b <= 0x7E)
                 {
@@ -112,7 +112,7 @@ public sealed partial class TerminalEmulator
             case State.CsiIntermediate:
                 if (b <= 0x2F)
                 {
-                    _intermediates.Append((char)b);
+                    if (!TryAppendIntermediate(b)) { return; }
                 }
                 else if (b >= 0x40 && b <= 0x7E)
                 {
@@ -279,7 +279,7 @@ public sealed partial class TerminalEmulator
 
         if (b <= 0x2F)
         {
-            _intermediates.Append((char)b);
+            if (!TryAppendIntermediate(b)) { return; }
             _state = State.EscapeIntermediate;
         }
         else if (b <= 0x7E)
@@ -321,7 +321,7 @@ public sealed partial class TerminalEmulator
         }
         else if (b <= 0x2F)
         {
-            _intermediates.Append((char)b);
+            if (!TryAppendIntermediate(b)) { return; }
             _state = State.CsiIntermediate;
         }
         else if (b >= 0x40 && b <= 0x7E)
@@ -877,4 +877,25 @@ public sealed partial class TerminalEmulator
     }
 
     private static byte Clamp(int value) => (byte)Math.Clamp(value, 0, 255);
+
+    /// <summary>
+    /// Adds one intermediate byte, refusing to grow the buffer without bound.
+    /// </summary>
+    /// <remarks>
+    /// The sequence is terminated by the next final byte, and an unterminated one can be as long as the sender likes:
+    /// a program on the other computer printing ESC [ followed by an endless run of 0x20-0x2F would otherwise grow
+    /// this string with every byte and take the controller's heap with it. Past the cap the sequence is treated like
+    /// any other malformed one: ignored until its final byte.
+    /// </remarks>
+    private bool TryAppendIntermediate(byte b)
+    {
+        if (_intermediates.Length >= MaxStringLength)
+        {
+            _state = State.CsiIgnore;
+            return false;
+        }
+
+        _intermediates.Append((char)b);
+        return true;
+    }
 }

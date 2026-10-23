@@ -86,9 +86,20 @@ public sealed class LoginThrottle(TimeProvider time, int maxFailures = 5, int lo
         }
     }
 
-    /// <summary>Address and user name, as one opaque key. Neither half is logged from here.</summary>
+    /// <summary>
+    /// Address and user name, as one opaque key. Neither half is logged from here.
+    /// </summary>
+    /// <remarks>
+    /// The user name is folded the same way the account lookup folds it (trim, upper-case). The throttle and the
+    /// lookup have to agree on what "the same account" means: keying on the raw spelling let "admin", "Admin" and
+    /// "admin " share one account but not one failure budget, so the lockout could be sidestepped by respelling the
+    /// name on every attempt.
+    /// </remarks>
     public static string KeyFor(string? address, string? username) =>
-        string.Concat(address ?? "-", "\n", username ?? "-");
+        string.Concat(address ?? "-", "\n", NormalizeUsername(username));
+
+    private static string NormalizeUsername(string? username) =>
+        string.IsNullOrWhiteSpace(username) ? "-" : username.Trim().ToUpperInvariant();
 
     private void Prune(DateTimeOffset now)
     {

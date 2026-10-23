@@ -5,6 +5,13 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(800);
 
+    /// <summary>
+    /// How long the service has to answer once connected. The pipe name is global on Windows, so another local
+    /// process can own an instance and simply never reply; without this the client waited before its window appeared,
+    /// with no way to tell a wedged service from a slow one.
+    /// </summary>
+    private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>True when a host service answers on its control pipe.</summary>
     public static async Task<bool> IsAvailableAsync(string pipeName, CancellationToken cancellationToken)
     {
@@ -83,7 +90,16 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
         await using (stream.ConfigureAwait(false))
         {
             await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);
-            return await HostControlProtocol.ReadLineAsync<T>(stream, cancellationToken).ConfigureAwait(false);
+            using var responseTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            responseTimeout.CancelAfter(ResponseTimeout);
+            try
+            {
+                return await HostControlProtocol.ReadLineAsync<T>(stream, responseTimeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"The host service did not answer within {ResponseTimeout.TotalSeconds:0} seconds.");
+            }
         }
     }
 }

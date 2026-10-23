@@ -53,6 +53,16 @@ dotnet publish "$root/src/Hosts/RemoteDesktop.HostService" \
 
 cp -a "$native/libmsquic.so.2" "$native/libmsquic.so.2.6.2" "$program/" 2>/dev/null || cp -a "$native/libmsquic.so.2" "$program/"
 
+# Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
+find "$program" -type f -name '*.pdb' -delete
+
+# The licence and the third-party notices travel with the binaries they cover. Debian expects the licence at
+# /usr/share/doc/<package>/copyright; the notices sit beside it under the name the generator gives them.
+doc="$work/usr/share/doc/remotedesktop-host"
+mkdir -p "$doc"
+install -m 0644 "$root/LICENSE" "$doc/copyright"
+install -m 0644 "$root/THIRD-PARTY-NOTICES.md" "$doc/third-party-notices.md"
+
 install -m 0644 "$root/build/service/linux/app-RemoteDesktopHost.service" "$work/usr/lib/systemd/user/"
 mkdir -p "$work/usr/share/applications"
 install -m 0644 "$root/build/installer/linux/host/RemoteDesktopHost.desktop" "$work/usr/share/applications/"

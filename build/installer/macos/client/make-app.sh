@@ -106,6 +106,14 @@ echo "==> Assembling $APP_NAME"
 [[ -e "$APP_DIR" ]] && rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp -R "$PUBLISH_DIR/." "$MACOS_DIR/"
+
+# Symbols belong to the machine that built the bundle, not the one that installs it. The MSIs already strip them.
+find "$MACOS_DIR" -type f -name '*.pdb' -delete
+
+# The licence and the notices that cover the bundled MIT/BSD/Apache components travel inside the bundle, so they
+# remain readable after installation rather than only on the installer's licence page.
+cp "$REPO_ROOT/LICENSE" "$RESOURCES_DIR/LICENSE.txt"
+cp "$REPO_ROOT/THIRD-PARTY-NOTICES.md" "$RESOURCES_DIR/THIRD-PARTY-NOTICES.md"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
 
 # The version in the bundle should be the version that was built, not a copy that drifts. Substituted the same way

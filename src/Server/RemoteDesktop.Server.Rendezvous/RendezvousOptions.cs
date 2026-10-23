@@ -94,7 +94,9 @@ public sealed class RendezvousOptions
     /// <summary>
     /// The reverse proxies in front of this server, as IP addresses or networks such as <c>10.0.0.0/8</c>. Only these
     /// may set the client's address through <c>X-Forwarded-For</c> — the header is trivially forged, so believing it
-    /// from anybody would turn every per-address limit into a suggestion. Loopback is always believed.
+    /// from anybody would turn every per-address limit into a suggestion. Loopback is not special: a proxy on this
+    /// machine has to be listed too, because "the connection came from 127.0.0.1" says nothing about who wrote the
+    /// header.
     /// </summary>
     public string[] TrustedProxies { get; set; } = [];
 

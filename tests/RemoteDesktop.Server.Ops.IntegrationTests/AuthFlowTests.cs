@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using RemoteDesktop.Server.Ops.Core;
@@ -123,6 +124,53 @@ public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtur
     }
 
     [Fact]
+    public async Task Respelling_the_same_name_does_not_get_a_fresh_failure_budget()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        // The lookup folds the name (trim, upper-case); the throttle used to key on the raw spelling, so every one of
+        // these was a different account for the lockout but the same account for the password check.
+        foreach (var spelling in new[] { "ghost", "Ghost", " ghost ", "GHOST", "ghost\t" })
+        {
+            var refused = await client.PostAsJsonAsync("/api/auth/login", new { username = spelling, password = "wrong" }, Ct);
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+        }
+
+        var locked = await client.PostAsJsonAsync("/api/auth/login", new { username = "gHoSt", password = "wrong" }, Ct);
+        Assert.Equal(HttpStatusCode.TooManyRequests, locked.StatusCode);
+    }
+
+    [Fact]
+    public async Task Wrong_second_factor_codes_are_budgeted_across_challenges()
+    {
+        var (http, _) = fixture.CreateClient();
+        using var client = http;
+
+        // A correct password starts a fresh challenge; it must not also reset the second factor's failure budget,
+        // or five guesses per challenge becomes unlimited guesses for anyone who has the password.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var login = await LoginAsync(client, "totpuser");
+            var refused = await client.PostAsJsonAsync(
+                "/api/auth/totp",
+                new { challenge = login.Challenge, code = WrongCode(fixture.TotpTestSecret) },
+                Ct);
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+        }
+
+        var next = await LoginAsync(client, "totpuser");
+        var locked = await client.PostAsJsonAsync(
+            "/api/auth/totp",
+            new { challenge = next.Challenge, code = WrongCode(fixture.TotpTestSecret) },
+            Ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, locked.StatusCode);
+        var body = await locked.Content.ReadFromJsonAsync<LoginResponse>(Ct);
+        Assert.Equal("locked", body!.Status);
+    }
+
+    [Fact]
     public async Task An_expired_or_forged_session_cookie_is_refused()
     {
         var (http, _) = fixture.CreateClient();
@@ -133,6 +181,15 @@ public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtur
         var response = await client.SendAsync(request, Ct);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>
+    /// A six-digit value that is not the current code and is far enough away not to match a neighbouring window.
+    /// </summary>
+    private static string WrongCode(string secret)
+    {
+        var current = int.Parse(Totp.Compute(secret, DateTimeOffset.UtcNow), CultureInfo.InvariantCulture);
+        return ((current + 500_000) % 1_000_000).ToString("D6", CultureInfo.InvariantCulture);
     }
 
     private static async Task<LoginResponse> LoginAsync(HttpClient client, string username)

@@ -100,6 +100,17 @@ public sealed class FileAccessPolicy
             throw new FileOperationException(FileError.InvalidPath, "The path is not valid.", ex);
         }
 
+        // A UNC path is not a local file: opening one makes Windows authenticate to the named server as this user.
+        // With no roots configured the file browser otherwise accepts \\attacker\share\x and hands the remote side a
+        // way to collect the logged-in user's NetNTLM hash (or reach shares on the internal network). A deployment
+        // that really means to share a network folder configures that UNC path as a root; everything outside it is
+        // refused like any other path outside a root.
+        if (IsWindows && full.StartsWith(@"\\", StringComparison.Ordinal) &&
+            !_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal)))
+        {
+            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+        }
+
         if (IsWindows && full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsReserved))
         {
             throw Invalid("The path contains a reserved device name.");

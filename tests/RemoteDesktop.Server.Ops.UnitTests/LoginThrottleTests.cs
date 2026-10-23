@@ -50,4 +50,14 @@ public class LoginThrottleTests
         Assert.False(throttle.IsLocked(LoginThrottle.KeyFor("10.0.0.2", "alice"), out _));
         Assert.False(throttle.IsLocked(LoginThrottle.KeyFor("10.0.0.1", "bob"), out _));
     }
+
+    [Fact]
+    public void Spelling_variants_of_a_name_share_the_accounts_budget()
+    {
+        // The account lookup trims and upper-cases; a throttle that did not would let an attacker spend five guesses
+        // on each spelling of the same account.
+        Assert.Equal(
+            LoginThrottle.KeyFor("10.0.0.1", "alice"),
+            LoginThrottle.KeyFor("10.0.0.1", "  ALICE\t"));
+    }
 }

@@ -184,6 +184,10 @@ manually. Open <b>System Settings → Privacy &amp; Security</b> and enable Remo
 </body></html>
 HTML
 
+# The same licence text the Windows packages show and the other two macOS packages already carry. Without it a
+# first-time install never displays the terms it is accepting.
+cp "$REPO_ROOT/LICENSE" "$RES_DIR/License.txt"
+
 cat > "$WORK_DIR/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
@@ -193,6 +197,7 @@ cat > "$WORK_DIR/distribution.xml" <<XML
     <options customize="never" require-scripts="false" rootVolumeOnly="true" hostArchitectures="$ARCH"/>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
+    <license file="License.txt"/>
     <choices-outline>
         <line choice="default">
             <line choice="$BUNDLE_ID"/>

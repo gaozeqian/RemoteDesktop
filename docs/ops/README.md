@@ -86,7 +86,7 @@ pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 # 产物：artifacts/installer/windows/RemoteDesktop-Server-Windows-x64-<版本>.msi
 ```
 
-下面的命令里 `<版本>` 是**四段**版本（`Directory.Build.props` 的三段加 `.0`，例如 `0.4.0.0`）：Windows Installer
+下面的命令里 `<版本>` 是**四段**版本（`Directory.Build.props` 的三段加 `.0`，例如 `1.0.0.0`）：Windows Installer
 只认四段数字。Linux/macOS 的同名占位符仍是三段，见 §三 的版本形态表。以 `artifacts/installer/windows/` 里的
 实际文件名为准，本文不再写死某一版。
 
@@ -150,6 +150,10 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 装到 `/usr/local/remotedesktop-server`，并把三个服务器注册成 **launchd 守护进程**
 （`com.remotedesktop.rendezvous` / `com.remotedesktop.relay` / `com.remotedesktop.ops`，开机自启、崩溃重启）
 —— 这就是 Windows 那三个服务的对应物。
+
+> **已知边界**：这三个守护进程目前以 **root** 运行（plist 没有 `UserName`，安装脚本也没有创建专用账户）。
+> Linux 包会创建 `remotedesktop` 账户并以它运行；macOS 包在 1.0.0 里还没有做到这一点。把服务端放在公网前，
+> 请按最小权限原则自行评估，或用一个普通账户手工加载 plist。
 
 ```bash
 sudo installer -pkg <文件>.pkg -target /
@@ -338,6 +342,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 1h;   # 信令是长连接，默认 60 秒会把设备反复踢下线
     }
 
@@ -348,11 +353,15 @@ server {
 代理后面要告诉服务器**谁才是真客户端**，否则按来源地址的限流会把整个代理看成一台机器：
 
 ```jsonc
-"Rendezvous": { "TrustedProxies": ["172.16.0.0/12"] }   // 你的代理地址或网段
+"Rendezvous": { "TrustedProxies": ["127.0.0.1"] }       // 同一台机器上的 nginx/Caddy
+"Rendezvous": { "TrustedProxies": ["172.16.0.0/12"] }   // 容器网络里的代理
 ```
 
-`X-Forwarded-For` 谁都能写，所以只有这里列出的地址发来的才被采信（不配就只信本机回环）。同时记得把
-5080 从公网关上，只让代理能连它。
+`X-Forwarded-For` 谁都能写，所以只有这里列出的地址发来的才被采信；**不配就谁都不信，包括本机回环**——
+连接来自 127.0.0.1 只说明它是本机某个进程，不说明它写进去的地址是真是假。代理必须自己把真实地址写进
+`X-Forwarded-For`（上面的 nginx 配置已经这么做；Caddy 默认会写）。同时记得把 5080 从公网关上，只让代理能连它，
+并且**只代理 `/ws` 与 `/health`**：`/internal/v1/*` 是给控制台用的，不配 `NodeToken` 时只接受回环调用，
+一个把任意路径都转发的本机代理会替外面的请求满足这个条件。
 
 > UDP 5081（地址反射）和 5082（中继）不走这个代理，仍然是明文 UDP：中继只转发 QUIC 密文，看不到内容；
 > 反射服务只回一句"你从哪来"。凭据（中继票据）走的是信令，已经在上面的 TLS 里了。
@@ -680,11 +689,11 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 
 | 平台 | 包内版本 | 构建产物名 | 发布资产名 |
 |---|---|---|---|
-| Windows | `0.4.0.0`（三段 + `.0`，MSI 只认四段数字） | `RemoteDesktop-Client-Windows-x64-0.4.0.0.msi` | `RemoteDesktop-Client-Windows-x64-v0.4.0.msi` |
-| macOS | `0.4.0`（`CFBundleShortVersionString`、`CFBundleVersion`、`pkgbuild --version` 同值） | `RemoteDesktop-Client-macOS-arm64-0.4.0.pkg` | `RemoteDesktop-Client-macOS-arm64-v0.4.0.pkg` |
-| Linux | `0.4.0`（`control` 的 `Version`） | `RemoteDesktop-Client-Linux-amd64-0.4.0.deb` | `RemoteDesktop-Client-Linux-amd64-v0.4.0.deb` |
+| Windows | `1.0.0.0`（三段 + `.0`，MSI 只认四段数字） | `RemoteDesktop-Client-Windows-x64-1.0.0.0.msi` | `RemoteDesktop-Client-Windows-x64-v1.0.0.msi` |
+| macOS | `1.0.0`（`CFBundleShortVersionString`、`CFBundleVersion`、`pkgbuild --version` 同值） | `RemoteDesktop-Client-macOS-arm64-1.0.0.pkg` | `RemoteDesktop-Client-macOS-arm64-v1.0.0.pkg` |
+| Linux | `1.0.0`（`control` 的 `Version`） | `RemoteDesktop-Client-Linux-amd64-1.0.0.deb` | `RemoteDesktop-Client-Linux-amd64-v1.0.0.deb` |
 
-三段的源只有 `Directory.Build.props`；Windows 的第四段由打包脚本追加，macOS/Linux 不改写。发布资产名用 Tag，所以包内版本与资产名不会逐字相同。`0.4.0-rc.1` 这类后缀不受支持：MSI 装不下，macOS 的 bundle version 也不接受。Linux 的 `Version` 不带 Debian revision（是 `0.3.0`，不是 `0.3.0-1`）：这是自发布包；若将来由发行版重打包，revision 由打包者追加。Windows 文件属性里的“产品版本”也是三段；提交哈希只出现在遥测的 `Full` 里（`AssemblyMetadata("Commit")`），不在文件元数据里。
+三段的源只有 `Directory.Build.props`；Windows 的第四段由打包脚本追加，macOS/Linux 不改写。发布资产名用 Tag，所以包内版本与资产名不会逐字相同。`1.0.0-rc.1` 这类后缀不受支持：MSI 装不下，macOS 的 bundle version 也不接受。Linux 的 `Version` 不带 Debian revision（是 `1.0.0`，不是 `1.0.0-1`）：这是自发布包；若将来由发行版重打包，revision 由打包者追加。Windows 文件属性里的“产品版本”也是三段；提交哈希只出现在遥测的 `Full` 里（`AssemblyMetadata("Commit")`），不在文件元数据里。
 
 | 产物 | 平台 | 装的是什么 |
 |---|---|---|
@@ -762,20 +771,20 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 版本只有一处：仓库根 `Directory.Build.props` 的 `<Version>`。九个安装包、`.app` 的 `Info.plist` 与遥测都从它派生，
 所以发布前**先改它，再打 Tag**：
 
-1. 把 `Directory.Build.props` 里的 `<Version>` 改成这次要发的三段数字（例如 `0.4.0`）。Windows Installer 只认
-   `major.minor.build`，脚本会补成四段 `0.4.0.0`；`0.4.0-rc.1` 这类版本拒绝构建，所以**预发布也只能用数值版本**。
-2. 在 `CHANGELOG.md` 里把 `[未发布]` 的各小节合并成 `## [0.4.0] - YYYY-MM-DD`（没有内容就补一节）。
+1. 把 `Directory.Build.props` 里的 `<Version>` 改成这次要发的三段数字（例如 `1.0.0`）。Windows Installer 只认
+   `major.minor.build`，脚本会补成四段 `1.0.0.0`；`1.0.0-rc.1` 这类版本拒绝构建，所以**预发布也只能用数值版本**。
+2. 在 `CHANGELOG.md` 里把 `[未发布]` 的各小节合并成 `## [1.0.0] - YYYY-MM-DD`（没有内容就补一节）。
 3. 提交这两处改动。
 4. 打 Tag 并推送：
 
    ```bash
-   git tag v0.4.0
-   git push origin v0.4.0
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
 
 流水线第一步 `check-version` 会核对 Tag 与 `<Version>`、以及 `CHANGELOG.md` 里有没有对应小节；任何一处不一致
 都会在打包前失败。之后 GitHub Actions 拉三个平台各跑测试、打包，几分钟后您的 Releases 页面会出现**九个**包，
-名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如 `RemoteDesktop-Client-Windows-x64-v0.4.0.msi`）。
+名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如 `RemoteDesktop-Client-Windows-x64-v1.0.0.msi`）。
 
 服务器地址是**编进包里的**，所以同一个 Tag 用不同地址出包没有意义：要换地址就出新的 Tag。
 
@@ -788,7 +797,7 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 
 ### 2. 安装
 
-下面的 `<版本>` 同样是四段版本（`Directory.Build.props` 的三段加 `.0`，例如 `0.4.0.0`），以实际产物文件名为准：
+下面的 `<版本>` 同样是四段版本（`Directory.Build.props` 的三段加 `.0`，例如 `1.0.0.0`），以实际产物文件名为准：
 
 ```powershell
 # 图形界面（推荐给一般用户）
@@ -1475,7 +1484,10 @@ remotedesktop --self-check
 - 丢包 / 码率：无来源（见上）。
 - 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
 - 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
-- 明确**单实例**：抓取/告警求值/保留清理都靠 `ops_lease` 抢独占；多副本需要再把带租约的 worker 拆出去，未做
-  SignalR backplane。
+- 明确**单实例**：抓取与告警求值按单实例设计，多副本协调（`ops_lease`）只有表、尚未接到 worker 上；多副本
+  需要先把带租约的 worker 拆出去，未做 SignalR backplane。
+- **没有保留清理 worker**：指标样本、事件、会话记录和过期管理会话会一直增长（每个节点每 10 秒一条样本）。
+  `OpsStore` 里有按时间删除的方法，但没有宿主服务调用它们。长期部署需要自行备份/归档并定期清理，否则数据库
+  会持续变大直到磁盘耗尽。
 - Windows 侧控制台现在是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
   手工 `sc.exe create` 仍然可行，但不是安装包的做法。

@@ -260,6 +260,9 @@ jobs:
     env:
       PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
       PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
+      # Only a boolean is needed here: the note below has to say whether the macOS packages were signed, and the
+      # packages themselves are built in the other job.
+      MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
 
     steps:
       - name: Checkout Code
@@ -302,7 +305,7 @@ jobs:
           if ($address) {
               Write-Host "The client installer will point at $address."
               "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
-              $note = "客户端安装包已内置信令服务器地址 ``$address``：装完直接可用。"
+              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装后需在客户端里填写（它们不参与这里的变量）。"
           } else {
               Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
 
@@ -315,6 +318,29 @@ jobs:
                   '> 部署步骤见 [docs/ops/README.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/README.md)。'
               ) -join "`n"
           }
+
+          # The boundaries a downloader has to know before installing, not after. Written here rather than left to
+          # the generated notes, which describe commits and not what the package will or will not protect.
+          $boundaries = [System.Collections.Generic.List[string]]::new()
+          $boundaries.Add('> [!WARNING]')
+          $boundaries.Add('> **Windows 本机用户边界**：控制管道对本机任何已登录用户开放，可读取设备码与临时密码、')
+          $boundaries.Add('> 设置固定密码。单用户机器上这没有问题；多人共用且彼此不信任的机器上，应把本机用户都视为可信。')
+          $boundaries.Add('> 见 [安全边界](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/design/README.md#3-安全边界)。')
+
+          if ($env:MACOS_SIGNED -ne 'true') {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
+              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          }
+
+          if (-not $env:PFX_BASE64) {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')
+          }
+
+          $note = $note + "`n`n" + ($boundaries -join "`n")
 
           # 有地址就写清是哪一个，没有就提醒要自己填——两种都是一个句子，所以这个文件总是存在。
           # GitHub 会把它放在自动生成的 release notes 前面。

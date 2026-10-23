@@ -175,7 +175,7 @@ message TelemetryReport {
   uint32 rtt_millis = 6;
   // Host only: "windows", "macos" or "linux". Empty from a controller.
   string platform = 7;
-  // Product version of the reporting process, e.g. "0.3.0".
+  // Product version of the reporting process, e.g. "1.0.0".
   string version = 8;
 }
 

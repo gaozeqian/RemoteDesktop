@@ -351,11 +351,22 @@ public sealed partial class CameraViewer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// The largest camera stream this will set up buffers for. The same argument as
+    /// <c>DesktopViewer.MaxDimension</c>: every stream info allocates four bytes per pixel, and the size is whatever
+    /// the other computer says it is. A camera that really produces 8K UHD is already at the edge of what exists;
+    /// 16384x16384 would be a gigabyte allocated on request, and alternating sizes would do it again on every
+    /// StreamInfo. 8K is far past any camera anybody points this at.
+    /// </summary>
+    private const int MaxDimension = 8192;
+
+    private const long MaxPixels = 7680L * 4320;
+
     private void OnStreamInfo(CameraStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > 16384 || height > 16384)
+        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
         {
             throw new InvalidDataException($"Invalid stream size {width}x{height}.");
         }

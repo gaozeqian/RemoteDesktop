@@ -339,17 +339,35 @@ public sealed class TransferManager : IAsyncDisposable
         int depth,
         CancellationToken cancellationToken)
     {
+        // The name comes from the side being read, and on a download that side is the remote computer. A listing is
+        // just a message: nothing stops it from calling a folder "../../.ssh" or "/home/user/.config/autostart".
+        // The file path was already checked when the job was created (FileTransferClient.DownloadAsync calls
+        // NormalizeName), but directories are joined here, and a recursive download would create - and then write
+        // files into - whatever this produced. Validate it with the destination's own rules before it is used.
+        string name;
+        try
+        {
+            name = FileAccessPolicy.NormalizeName(item.Name);
+        }
+        catch (FileOperationException ex)
+        {
+            var rejected = CreateJob(direction, item.Name, sourcePath, destinationFolder, policy, item.Size);
+            created.Add(rejected);
+            rejected.SetState(TransferState.Failed, ex.Message);
+            return;
+        }
+
         if (!item.IsDirectory)
         {
-            var job = CreateJob(direction, item.Name, sourcePath, destinationFolder, policy, item.Size);
+            var job = CreateJob(direction, name, sourcePath, destinationFolder, policy, item.Size);
             created.Add(job);
             Start(job);
             return;
         }
 
-        var target = to.Combine(destinationFolder, item.Name);
         try
         {
+            var target = to.Combine(destinationFolder, name);
             if (depth >= MaxDepth)
             {
                 throw new FileOperationException(FileError.Io, "The folders are nested too deeply.");

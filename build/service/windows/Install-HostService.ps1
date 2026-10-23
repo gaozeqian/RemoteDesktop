@@ -48,9 +48,22 @@ if ($existing) {
     Start-Sleep -Seconds 2
 }
 
+# An agent or client left over from a previous run keeps the executables mapped, and the copy then fails after the
+# old service has already been removed. The MSI kills them for the same reason.
+Get-Process -Name RemoteDesktop.SessionAgent, RemoteDesktop.Client -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
 Write-Host "Copying files to $InstallDirectory ..."
 New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
-Copy-Item -Path (Join-Path $source '*') -Destination $InstallDirectory -Recurse -Force
+
+# appsettings.json is the operator's file, not the build's: a re-run to upgrade must not reset the server address the
+# machine was configured with. Only a first install takes the packaged default.
+$settingsPath = Join-Path $InstallDirectory 'appsettings.json'
+$hasSettings = Test-Path -LiteralPath $settingsPath
+Copy-Item -Path (Join-Path $source '*') -Destination $InstallDirectory -Recurse -Force -Exclude 'appsettings.json'
+if (-not $hasSettings) {
+    Copy-Item -LiteralPath (Join-Path $source 'appsettings.json') -Destination $InstallDirectory -Force
+}
 
 if ($RendezvousUri) {
     $settingsPath = Join-Path $InstallDirectory 'appsettings.json'
@@ -67,6 +80,14 @@ New-Service -Name $ServiceName -DisplayName 'Remote Desktop Host' `
 
 # Restart after a crash: 5 s, 5 s, then 30 s; forget the failure count after a day.
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+
+# The same program-scoped UDP rule the MSI creates. Without it direct connections are silently replaced by the relay.
+$ruleName = 'Remote Desktop peer connections (UDP)'
+if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $ruleName -Description 'Incoming connections from other Remote Desktop devices.' `
+        -Direction Inbound -Program $exe -Protocol UDP -Action Allow -Profile Any | Out-Null
+    Write-Host "Firewall rule '$ruleName' added."
+}
 
 if (-not $SkipSasPolicy) {
     # Windows ignores SendSAS from services unless this policy allows it (1 = services, 2 = ease-of-access apps, 3 = both).

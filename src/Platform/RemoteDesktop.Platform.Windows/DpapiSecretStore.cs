@@ -46,7 +46,7 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
     // device key: only SYSTEM, administrators and the account running this process get in.
     private void EnsureDirectory()
     {
-        if (Directory.Exists(directory) || scope != DataProtectionScope.LocalMachine)
+        if (scope != DataProtectionScope.LocalMachine)
         {
             Directory.CreateDirectory(directory);
             return;
@@ -66,7 +66,30 @@ public sealed class DpapiSecretStore(string directory, DataProtectionScope scope
             Directory.CreateDirectory(parent);
         }
 
-        security.CreateDirectory(directory);
+        if (!Directory.Exists(directory))
+        {
+            security.CreateDirectory(directory);
+            return;
+        }
+
+        // It already existed. ProgramData's default ACL lets any user create folders there, so "it exists" is exactly
+        // the case where an unprivileged user may have made it first. A reparse point is worse: applying the ACL here
+        // would protect a different directory and leave the real one readable. Refuse either rather than write a
+        // machine-scope DPAPI secret into a folder somebody else controls.
+        var info = new DirectoryInfo(directory);
+        if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException($"The secret directory '{directory}' is a reparse point.");
+        }
+
+        try
+        {
+            info.SetAccessControl(security);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.Principal.IdentityNotMappedException or InvalidOperationException)
+        {
+            throw new IOException($"The secret directory '{directory}' could not be protected.", ex);
+        }
     }
 
     private string GetPath(string name)

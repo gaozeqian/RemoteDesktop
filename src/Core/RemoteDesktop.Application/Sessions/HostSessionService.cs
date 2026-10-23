@@ -40,13 +40,42 @@ public sealed partial class HostSessionService(
     /// phone and a laptop needs, and low enough that opening sessions in a loop cannot spend the machine.</summary>
     private const int MaxSessions = 16;
 
+    /// <summary>
+    /// How many channels one session may have open at once. The products use fewer than ten (video, input, clipboard,
+    /// audio, one file transfer, camera, terminal); the rest is headroom. Without a cap, a controller can open every
+    /// stream the transport allows and leave each one holding a frame buffer.
+    /// </summary>
+    private const int MaxChannelsPerSession = 24;
+
     private readonly ConcurrentDictionary<SessionId, HostedSession> _hosted = [];
+
+    /// <summary>
+    /// Makes "is there room?" and "reserve this id" one step. Without it two connections that passed authentication at
+    /// the same moment could both see space, both adopt the same announced id, and the second insert replaced the
+    /// first - leaving a live session that is absent from <see cref="ActiveSessions"/> and that downgrade, revoke and
+    /// the ops console cannot reach.
+    /// </summary>
+    private readonly Lock _hostedGate = new();
 
     /// <summary>Orders input-authorization reports so a session's first status cannot overwrite a newer one.</summary>
     private readonly Lock _inputAccessReportLock = new();
     private long _inputAccessSequence;
 
     public IReadOnlyCollection<SessionContext> ActiveSessions => [.. _hosted.Values.Select(h => h.Context)];
+
+    /// <summary>
+    /// A context whose id is not already in the table. Called while <see cref="_hostedGate"/> is held, so the answer
+    /// cannot be taken by another session before the caller inserts it.
+    /// </summary>
+    private SessionContext ReserveId(SessionContext session)
+    {
+        while (_hosted.ContainsKey(session.Id))
+        {
+            session = new SessionContext(SessionId.New(), session.Role, session.Connection, session.Grant);
+        }
+
+        return session;
+    }
 
     public event EventHandler<HostSessionEventArgs>? SessionStarted;
 
@@ -127,15 +156,25 @@ public sealed partial class HostSessionService(
                 // Every session holds its own channels and buffers, and each of those costs this machine memory for
                 // as long as it lives. A password is all it takes to get this far, so without a ceiling one
                 // controller — or somebody who was given the password — can open sessions until the machine gives up.
-                if (_hosted.Count >= MaxSessions)
+                using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                HostedSession hosted;
+                lock (_hostedGate)
                 {
-                    LogTooManySessions(logger, connection.RemoteDevice, _hosted.Count);
-                    return;
+                    if (_hosted.Count >= MaxSessions)
+                    {
+                        LogTooManySessions(logger, connection.RemoteDevice, _hosted.Count);
+                        return;
+                    }
+
+                    // The id was checked for a collision during authentication, but another session may have claimed
+                    // it since. Falling back to a fresh id here is what makes the check and the insert one decision;
+                    // the controller learns the id from AuthResult and may end up reporting under a different one,
+                    // which is visible as two rows rather than as a session that disappeared from every list.
+                    session = ReserveId(session);
+                    hosted = new HostedSession(session, control!, end);
+                    _hosted[session.Id] = hosted;
                 }
 
-                using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                var hosted = new HostedSession(session, control!, end);
-                _hosted[session.Id] = hosted;
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
 
                 // The controller is told where input authorization stands before it can send anything. A session that
@@ -155,7 +194,9 @@ public sealed partial class HostSessionService(
                 }
                 finally
                 {
-                    _hosted.TryRemove(session.Id, out _);
+                    // Value-aware: a controller may announce an id again after the first session with it ended, and a
+                    // late finally from the first must not remove the second.
+                    _hosted.TryRemove(new KeyValuePair<SessionId, HostedSession>(session.Id, hosted));
                     hosted.Dispose();
                     keepAwake?.Release();
                     LogSessionEnded(logger, session.Id);
@@ -286,8 +327,15 @@ public sealed partial class HostSessionService(
         {
             while (await hosted.Context.Connection.AcceptChannelAsync(cancellationToken).ConfigureAwait(false) is { } channel)
             {
-                running.Add(DispatchAsync(channel, hosted, cancellationToken));
                 running.RemoveAll(t => t.IsCompleted);
+                if (running.Count >= MaxChannelsPerSession)
+                {
+                    LogTooManyChannels(logger, hosted.Context.Id, running.Count);
+                    await channel.DisposeAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                running.Add(DispatchAsync(channel, hosted, cancellationToken));
             }
         }
         catch (OperationCanceledException)
@@ -526,6 +574,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a connection from {Controller}: {Active} sessions are already running.")]
     private static partial void LogTooManySessions(ILogger logger, DeviceId controller, int active);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: refused a channel; {Open} are already open.")]
+    private static partial void LogTooManyChannels(ILogger logger, SessionId sessionId, int open);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: refused {Channel} channel ({Result}).")]
     private static partial void LogChannelRefused(ILogger logger, SessionId sessionId, ChannelType channel, DispatchResult result);

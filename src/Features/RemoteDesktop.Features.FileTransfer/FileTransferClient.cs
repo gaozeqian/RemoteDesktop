@@ -195,7 +195,7 @@ public static class FileTransferClient
                 var accepted = answer.DownloadAccepted;
                 Check(accepted.Status);
                 var size = (long)accepted.Size;
-                var modified = DateTimeOffset.FromUnixTimeMilliseconds(accepted.ModifiedUnixMs);
+                var modified = FileTimestamps.FromUnixMilliseconds(accepted.ModifiedUnixMs);
 
                 var final = destination;
                 if (Directory.Exists(final))
@@ -298,7 +298,7 @@ public static class FileTransferClient
             File.Move(partial, final, overwrite: false);
         }
 
-        File.SetLastWriteTimeUtc(final, modified.UtcDateTime);
+        FileTimestamps.TrySetLastWriteTime(final, modified);
     }
 
     private static async Task<FileResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken) =>

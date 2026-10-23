@@ -120,9 +120,33 @@ public static class ActionEndpoints
             await AuditAsync(store, context, actor, "action.approve", approved.Id, $"approved {approved.Kind} on device {approved.DeviceId}", at, cancellationToken)
                 .ConfigureAwait(false);
 
-            var (state, error) = await ExecuteAsync(store, httpClientFactory, options, approved, cancellationToken).ConfigureAwait(false);
-            await store.CompleteActionAsync(approved.Id, state, time.GetUtcNow().ToUnixTimeMilliseconds(), error, cancellationToken).ConfigureAwait(false);
-            await AuditAsync(store, context, actor, "action.execute", approved.Id, $"{state} {approved.Kind}", time.GetUtcNow(), cancellationToken)
+            // Once the row says "approved" the only way out of that state is CompleteActionAsync. A node call that
+            // throws (DNS failure, timeout, connection refused) used to escape as a 500 and leave the row approved
+            // forever: an emergency revoke that the UI reported as an error could never be retried, because approval
+            // only accepts a pending row. Every outcome is turned into a terminal state instead.
+            (string State, string? Error) outcome;
+            try
+            {
+                outcome = await ExecuteAsync(store, httpClientFactory, options, approved, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                outcome = (ActionStates.Failed, "the node did not answer before the request timed out");
+            }
+            catch (OperationCanceledException)
+            {
+                outcome = (ActionStates.Failed, "the approval was cancelled before the node answered");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException)
+            {
+                outcome = (ActionStates.Failed, $"the node call failed: {ex.Message}");
+            }
+
+            // None rather than the request's token: the row must be closed even when the browser has already gone
+            // away, which is one of the ways an action used to be left approved forever.
+            await store.CompleteActionAsync(approved.Id, outcome.State, time.GetUtcNow().ToUnixTimeMilliseconds(), outcome.Error, CancellationToken.None)
+                .ConfigureAwait(false);
+            await AuditAsync(store, context, actor, "action.execute", approved.Id, $"{outcome.State} {approved.Kind}", time.GetUtcNow(), CancellationToken.None)
                 .ConfigureAwait(false);
 
             return Results.Ok(Describe((await store.FindActionAsync(approved.Id, cancellationToken).ConfigureAwait(false))!));

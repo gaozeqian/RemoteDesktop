@@ -195,14 +195,25 @@ public static class RendezvousServer
     /// <summary>
     /// The addresses the per-address limits are counted against. Behind a reverse proxy the socket address is the
     /// proxy's, so the client's own address only exists in <c>X-Forwarded-For</c> — a header anybody can write, which
-    /// is why only the proxies named in the settings are believed. The framework's loopback default is kept.
+    /// is why only the proxies named in the settings are believed.
     /// </summary>
+    /// <remarks>
+    /// The framework's built-in trust of loopback proxies is removed first. Keeping it made every request that
+    /// arrived through a proxy on the same machine trusted to set its own address from a header the client controls,
+    /// which is the normal shape of the documented nginx/Caddy deployment: per-address limits and the registration
+    /// budget became per-attacker-chosen-value, and a crafted header could even make the node API's no-token
+    /// loopback fallback accept a request that came from outside. A proxy that really is on this machine has to be
+    /// named in <c>Rendezvous:TrustedProxies</c> like any other.
+    /// </remarks>
     private static ForwardedHeadersOptions ForwardedHeaderOptions(WebApplication app)
     {
         var options = new ForwardedHeadersOptions
         {
             ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
         };
+
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
 
         foreach (var entry in app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.TrustedProxies)
         {

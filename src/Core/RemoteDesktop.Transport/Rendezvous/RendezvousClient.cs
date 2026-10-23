@@ -260,7 +260,22 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
             throw new InvalidDataException("Registration was refused.");
         }
 
-        DeviceId = new DeviceId((int)registered.Registered.DeviceId);
+        // Both numbers were chosen by the server. Constructing DeviceId or an IPEndPoint from an out-of-range value
+        // throws ArgumentOutOfRangeException, which is not what the transport's reconnect loop catches - one bad
+        // message from a buggy or malicious server would stop the host service instead of being retried.
+        if (!Domain.DeviceId.TryParse(
+                ((uint)registered.Registered.DeviceId).ToString(CultureInfo.InvariantCulture),
+                out var deviceId))
+        {
+            throw new InvalidDataException("The server sent an invalid device id.");
+        }
+
+        if (registered.Registered.ReflectorPort is < 1 or > 65535)
+        {
+            throw new InvalidDataException("The server sent an invalid reflector port.");
+        }
+
+        DeviceId = deviceId;
         ReflectorEndPoint = await ResolveReflectorAsync((int)registered.Registered.ReflectorPort, cancellationToken).ConfigureAwait(false);
         LogRegistered(logger, DeviceId.Value);
     }

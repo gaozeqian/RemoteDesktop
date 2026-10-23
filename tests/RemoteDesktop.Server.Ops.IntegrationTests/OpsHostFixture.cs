@@ -39,6 +39,12 @@ public sealed class OpsHostFixture : IAsyncLifetime
     /// <summary>TOTP secret of the <c>operator</c> account — the two-person review needs a requester who is not an admin.</summary>
     public string OperatorSecret { get; } = Totp.GenerateSecret();
 
+    /// <summary>
+    /// TOTP secret of an account reserved for second-factor tests, so a lockout test cannot disturb the accounts the
+    /// action-approval tests sign in with.
+    /// </summary>
+    public string TotpTestSecret { get; } = Totp.GenerateSecret();
+
     /// <summary>The HMAC key servers sign event batches with, as configured for the test host.</summary>
     public byte[] IngestKey { get; } = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
 
@@ -98,6 +104,8 @@ public sealed class OpsHostFixture : IAsyncLifetime
             new OpsAdminUser(Guid.NewGuid().ToString("N"), "lockme", PasswordHasher.Hash(Password), LockedSecret, OpsRoles.Viewer, false, now));
         await store.CreateUserAsync(
             new OpsAdminUser(Guid.NewGuid().ToString("N"), "operator", PasswordHasher.Hash(Password), OperatorSecret, OpsRoles.Operator, false, now));
+        await store.CreateUserAsync(
+            new OpsAdminUser(Guid.NewGuid().ToString("N"), "totpuser", PasswordHasher.Hash(Password), TotpTestSecret, OpsRoles.Viewer, false, now));
     }
 
     /// <summary>Stops the host and removes the database and its WAL sidecars.</summary>

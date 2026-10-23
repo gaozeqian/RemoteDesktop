@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   The components that need more than "a file": the three services, the inbound firewall rules that let clients reach
   the two network servers, and their settings files. Everything else is generated from the publish output into
@@ -232,36 +232,34 @@
 
     <InstallExecuteSequence>
       <!--
-        Installing only: "NOT REMOVE" is what decides that, and nothing about a removal may be added to it.
+        Fresh installs only: "NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed".
 
-        An earlier version of the client installer's line read "NOT REMOVE OR UPGRADINGPRODUCTCODE", meaning to cover
-        the new product of an upgrade. It did the opposite: during a major upgrade the installer sets
-        UPGRADINGPRODUCTCODE while it *removes the old product*, so the condition became true there too, and the old
-        product ran this action after its own files had been deleted. Windows then reported error 1721 ("a program
-        required for this install to complete could not be run") for an executable that was no longer there, and the
-        installation rolled back with 1603 - three upgrades in a row failed exactly that way.
+        The three settings files are NeverOverwrite, so an upgrade keeps what the operator configured. Running these
+        actions on top would put the package's built-in defaults back - plain http on 0.0.0.0, and the relay endpoint
+        guessed from the machine's first non-loopback address - silently downgrading an upgraded server's TLS and
+        possibly redirecting its relay address. "Not a removal" and "not an upgrade" are different questions:
+        UPGRADINGPRODUCTCODE is set while the *old* product is being removed, which is why an earlier condition using
+        it ran the action after the old files were gone and failed the upgrade with 1603. WIX_UPGRADE_DETECTED is set
+        on the new product's install, which is the side this action runs on.
 
-        During an upgrade the new product installs with REMOVE empty, so "NOT REMOVE" is already true when it should
-        be, and false while the old product is being removed.
-
-        The second half of each condition below is not about removal at all: it picks which of the two command lines
-        runs. The first is for TLSCERTIFICATEPATH saying "auto" (what the package defaults to) or holding nothing at
-        all, the second for it naming a file; between them every value it can have is covered, so an installation
-        neither configures twice nor leaves the four shared values at their defaults. It reads only properties this
-        installer always sets, never one the installer engine sets by itself, which is what UPGRADINGPRODUCTCODE was.
+        The last part of each condition is not about upgrades at all: it picks which of the two command lines runs.
+        The first is for TLSCERTIFICATEPATH saying "auto" (what the package defaults to) or holding nothing at all,
+        the second for it naming a file; between them every value it can have is covered, so a fresh install neither
+        configures twice nor leaves the four shared values at their defaults. It reads only properties this installer
+        always sets, never one the installer engine sets by itself, which is what UPGRADINGPRODUCTCODE was.
       -->
       <!-- The property the second line reads is put in place immediately before it, and this is the only ordering that
            matters among the three: the setter runs in the immediate pass, the two command lines are deferred and are
            built (with the property as it stands then) as their turn comes. -->
       <Custom Action="SetConfigureArguments"
               Before="ConfigureSystem"
-              Condition="NOT REMOVE" />
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
-              Condition="NOT REMOVE AND (TLSCERTIFICATEPATH=&quot;auto&quot; OR TLSCERTIFICATEPATH=&quot;&quot;)" />
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed AND (TLSCERTIFICATEPATH=&quot;auto&quot; OR TLSCERTIFICATEPATH=&quot;&quot;)" />
       <Custom Action="ConfigureSystemWithTls"
               After="ConfigureSystem"
-              Condition="NOT REMOVE AND TLSCERTIFICATEPATH&lt;&gt;&quot;auto&quot; AND TLSCERTIFICATEPATH&lt;&gt;&quot;&quot;" />
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed AND TLSCERTIFICATEPATH&lt;&gt;&quot;auto&quot; AND TLSCERTIFICATEPATH&lt;&gt;&quot;&quot;" />
     </InstallExecuteSequence>
 
     <!-- ==========================================================================================================

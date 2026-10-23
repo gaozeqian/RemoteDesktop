@@ -8,8 +8,8 @@ namespace RemoteDesktop.Application;
 /// <remarks>
 /// <para>
 /// There is one number: <c>&lt;Version&gt;</c> in the repository's <c>Directory.Build.props</c>. The SDK derives three
-/// artefacts from it — <c>AssemblyVersion</c> (<c>0.3.0.0</c>), <c>FileVersion</c> (<c>0.3.0.0</c>) and
-/// <c>AssemblyInformationalVersion</c> (<c>0.3.0+&lt;commit&gt;</c>) — and each surface used to pick whichever one it
+/// artefacts from it — <c>AssemblyVersion</c> (<c>1.0.0.0</c>), <c>FileVersion</c> (<c>1.0.0.0</c>) and
+/// <c>AssemblyInformationalVersion</c> (<c>1.0.0+&lt;commit&gt;</c>) — and each surface used to pick whichever one it
 /// happened to reach for: the sidebar showed four parts, a package showed three, and telemetry carried the commit hash.
 /// </para>
 /// <para>
@@ -27,10 +27,10 @@ public static class ProductVersion
 {
     private static readonly string Value = Read();
 
-    /// <summary>The version without the commit suffix, e.g. <c>0.3.0</c>.</summary>
+    /// <summary>The version without the commit suffix, e.g. <c>1.0.0</c>.</summary>
     public static string Display { get; } = Value.Split('+', 2)[0];
 
-    /// <summary>The informational version as built, e.g. <c>0.3.0+db9820fe…</c>.</summary>
+    /// <summary>The informational version as built, e.g. <c>1.0.0+db9820fe…</c>.</summary>
     public static string Full => Value;
 
     private static string Read()
@@ -43,7 +43,7 @@ public static class ProductVersion
 
         // The build puts the commit in an AssemblyMetadata attribute rather than in AssemblyInformationalVersion:
         // Windows shows the informational version as the file's "Product version", and a commit hash there is noise
-        // in a field people read. Rejoining the two here keeps telemetry's "0.3.0+<sha>" while the metadata stays
+        // in a field people read. Rejoining the two here keeps telemetry's "1.0.0+<sha>" while the metadata stays
         // three-part.
         string? commit = null;
         foreach (var attribute in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())

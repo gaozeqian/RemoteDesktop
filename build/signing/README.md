@@ -92,7 +92,7 @@ pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
 
 在 Linux/macOS 上，把脚本里的 `dotnet publish` 目标换成对应 RID、并跳过 WiX 那一步（WiX 只能在 Windows 上打 MSI），
 也可以只用 osslsigncode 单独签已经打好的文件。文件名里的 `<版本>` 是四段版本（`Directory.Build.props` 的三段加
-`.0`，例如 `0.4.0.0`），以 `artifacts/installer/windows/` 里的实际产物为准：
+`.0`，例如 `1.0.0.0`），以 `artifacts/installer/windows/` 里的实际产物为准：
 
 ```bash
 osslsigncode sign -h sha256 -n RemoteDesktop -ts http://timestamp.digicert.com \

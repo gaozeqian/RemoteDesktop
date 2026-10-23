@@ -141,6 +141,16 @@ cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Rendezvous/." "$SERVER_DIR/Rendezvous/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Relay/." "$SERVER_DIR/Relay/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Ops/." "$SERVER_DIR/Ops/"
 
+# Symbols belong to the machine that built the package, not the one that installs it. The MSIs already strip them.
+find "$SERVER_DIR" -type f -name '*.pdb' -delete
+
+# The licence and the notices travel with the binaries they cover; the installer's licence page alone is not a copy
+# that survives the installer.
+DOC_DIR="$STAGE_DIR/usr/local/share/doc/remotedesktop-server"
+mkdir -p "$DOC_DIR"
+cp "$REPO_ROOT/LICENSE" "$DOC_DIR/copyright"
+cp "$REPO_ROOT/THIRD-PARTY-NOTICES.md" "$DOC_DIR/third-party-notices.md"
+
 # The shipped settings are a template, not the live file. A .pkg has no conffile concept: a payload file with the same
 # path is overwritten on upgrade, which would put the build's defaults back over what the operator configured — and,
 # for the signaling server, throw away the relay key every client and relay has been given. The live appsettings.json

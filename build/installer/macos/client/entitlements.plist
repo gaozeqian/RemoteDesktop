@@ -10,14 +10,19 @@
 
   The two JIT entitlements are what a .NET runtime needs once the hardened runtime is switched on, which is required
   for notarization. They are harmless before that, so they are carried from the start rather than remembered later.
-  TCC permissions (screen recording, accessibility, camera) are NOT entitlements — the user grants those, and macOS
-  ties the grant to this bundle's signing identity.
+
+  The camera entitlement is not a TCC grant — the user still has to approve the camera — but under the hardened
+  runtime AVFoundation refuses the capture unless the process carries it. Without it a signed/notarized build is
+  exactly the build where the camera feature does not work, while an ad-hoc development build does. Screen recording
+  and accessibility are only TCC grants and have no entitlement of their own here.
 -->
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
 	<true/>
 </dict>
 </plist>

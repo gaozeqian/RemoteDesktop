@@ -67,11 +67,21 @@ public static partial class IngestEndpoints
                 return Results.Unauthorized();
             }
 
+            // Read with the limit applied while reading, not after. CopyToAsync accepted whatever Kestrel would
+            // deliver - a chunked request has no Content-Length to check - and only then did the length test run, so
+            // an unauthenticated caller could make the console buffer up to Kestrel's request limit before being
+            // refused. A chunked body is refused at the first byte past the cap.
             using var buffer = new MemoryStream();
-            await context.Request.Body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (buffer.Length > MaxBodyBytes)
+            var chunk = new byte[16 * 1024];
+            int read;
+            while ((read = await context.Request.Body.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
             {
-                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                if (buffer.Length + read > MaxBodyBytes)
+                {
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                }
+
+                buffer.Write(chunk, 0, read);
             }
 
             var body = buffer.ToArray();

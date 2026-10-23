@@ -603,6 +603,11 @@ Write-Host 'Generating the license RTF...'
 & (Join-Path $installerDirectory '..\..\New-LicenseRtf.ps1') | ForEach-Object { Write-Host "  $_" }
 if ($LASTEXITCODE -ne 0) { throw 'The license RTF could not be generated.' }
 
+# The licence and the third-party notices go into the installed folder with the binaries they cover. The wizard's
+# licence page shows the same LICENSE, but a page is not a copy anybody can read after the installer has closed.
+Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $PublishDirectory -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD-PARTY-NOTICES.md') -Destination $PublishDirectory -Force
+
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 

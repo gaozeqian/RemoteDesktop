@@ -35,11 +35,18 @@ public sealed partial class OpsStore
         {
             await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
 
-            var previous = await ReadLatestHashAsync(connection, cancellationToken).ConfigureAwait(false);
+            var (previous, previousTimestamp) = await ReadLatestAsync(connection, cancellationToken).ConfigureAwait(false);
+
+            // Verification walks the chain in (ts, id) order, so the new row has to be last in that order too. Callers
+            // often write several records with one captured "now" (the alert evaluator does), and ids are random, so
+            // two rows with the same millisecond could sort either way: the second row could point at a row that
+            // verification visits after it, and an untouched log would be reported as tampered. Keeping the stored
+            // timestamp strictly increasing makes the append order and the verification order the same thing.
+            var timestamp = Math.Max(entry.Timestamp, previousTimestamp + 1);
             var hash = AuditChain.Compute(
                 previous,
                 AuditChain.Fields(
-                    entry.Timestamp,
+                    timestamp,
                     entry.Actor,
                     entry.Action,
                     entry.Target,
@@ -55,7 +62,7 @@ public sealed partial class OpsStore
             Bind(
                 command,
                 ("@id", entry.Id),
-                ("@ts", entry.Timestamp),
+                ("@ts", timestamp),
                 ("@actor", entry.Actor),
                 ("@action", entry.Action),
                 ("@target", entry.Target),
@@ -74,13 +81,22 @@ public sealed partial class OpsStore
         }
     }
 
-    /// <summary>The newest hash, or <see cref="AuditChain.Genesis"/> when the log is empty.</summary>
-    private static async Task<string> ReadLatestHashAsync(DbConnection connection, CancellationToken cancellationToken)
+    /// <summary>
+    /// The newest hash and timestamp, or <see cref="AuditChain.Genesis"/> and <c>long.MinValue</c> when the log is
+    /// empty.
+    /// </summary>
+    private static async Task<(string Hash, long Timestamp)> ReadLatestAsync(DbConnection connection, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT hash FROM ops_audit_log ORDER BY ts DESC, id DESC LIMIT 1;";
-        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return value as string ?? AuditChain.Genesis;
+        command.CommandText = "SELECT hash, ts FROM ops_audit_log ORDER BY ts DESC, id DESC LIMIT 1;";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return (AuditChain.Genesis, long.MinValue);
+        }
+
+        return (reader.GetString(0), reader.GetInt64(1));
     }
 
     /// <summary>Number of audit records, for the shell's health line and for tests.</summary>

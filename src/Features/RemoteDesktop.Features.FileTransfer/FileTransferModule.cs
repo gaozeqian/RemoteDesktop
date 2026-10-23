@@ -151,7 +151,17 @@ public sealed partial class FileTransferModule(
         }
 
         var size = (long)request.Size;
-        var modified = DateTimeOffset.FromUnixTimeMilliseconds(request.ModifiedUnixMs);
+        DateTimeOffset modified;
+        try
+        {
+            modified = FileTimestamps.FromUnixMilliseconds(request.ModifiedUnixMs);
+        }
+        catch (FileOperationException ex)
+        {
+            await RespondAsync(stream, Failure(ex), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var finalPath = Path.Combine(directory, name);
         var overwrite = request.ConflictPolicy == ConflictPolicy.Overwrite;
         if (Directory.Exists(finalPath))
@@ -247,7 +257,7 @@ public sealed partial class FileTransferModule(
             throw new FileOperationException(FileError.AccessDenied, "The file could not be put in place.", ex);
         }
 
-        File.SetLastWriteTimeUtc(finalPath, modified.UtcDateTime);
+        FileTimestamps.TrySetLastWriteTime(finalPath, modified);
     }
 
     private static FileResponse List(LocalFileOperations operations, string path)

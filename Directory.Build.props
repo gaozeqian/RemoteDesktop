@@ -18,11 +18,11 @@
       Windows Installer requires major.minor.build (the packaging scripts append the fourth .0), and because a
       pre-release suffix cannot be expressed in an MSI.
     -->
-    <Version>0.3.0</Version>
+    <Version>1.0.0</Version>
     <!--
       The commit goes into a separate assembly attribute, not into AssemblyInformationalVersion. The file's
       "Product version" on Windows is the informational version, so leaving the hash there put it in a field meant
-      for people (Explorer, the file properties dialog). Telemetry still gets "0.3.0+<sha>" - ProductVersion.Full
+      for people (Explorer, the file properties dialog). Telemetry still gets "1.0.0+<sha>" - ProductVersion.Full
       joins the two - while the UI, the packages and the file metadata stay three-part.
     -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
