@@ -55,6 +55,42 @@ cp -a "$native/libmsquic.so.2" "$native/libmsquic.so.2.6.2" "$program/" 2>/dev/n
 
 # Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
 find "$program" -type f -name '*.pdb' -delete
+# A package built for a particular deployment can carry that deployment's address, so the client works on first
+# launch instead of asking the person to find the setting. Empty keeps the built-in default.
+rendezvous=${RD_RENDEZVOUS_URI:-}
+if [ -n "$rendezvous" ]; then
+    case "$rendezvous" in
+        ws://*|wss://*) ;;
+        *) echo "RD_RENDEZVOUS_URI must start with ws:// or wss:// (got '$rendezvous')." >&2; exit 1 ;;
+    esac
+    case "$rendezvous" in
+        *'&'*|*'#'*|*'\\'*|*'"'*)
+            echo "RD_RENDEZVOUS_URI contains a character this script cannot safely substitute." >&2; exit 1 ;;
+    esac
+
+    settings="$program/appsettings.json"
+    sed "s#\"RendezvousUri\"[[:space:]]*:[[:space:]]*\"[^\"]*\"#\"RendezvousUri\": \"$rendezvous\"#" \
+        "$settings" > "$settings.new"
+    mv "$settings.new" "$settings"
+    grep -Fq "\"$rendezvous\"" "$settings" || {
+        echo "Could not set Transport:RendezvousUri in $settings." >&2
+        exit 1
+    }
+fi
+
+# A self-signed signaling certificate has to be trusted as a root before wss:// works. Installing it through
+# update-ca-certificates makes it part of the system bundle the .NET client reads.
+server_certificate=${RD_SERVER_CERTIFICATE:-}
+if [ -n "$server_certificate" ]; then
+    [ -f "$server_certificate" ] || {
+        echo "RD_SERVER_CERTIFICATE '$server_certificate' does not exist." >&2
+        exit 1
+    }
+    certificate_directory="$work/usr/local/share/ca-certificates"
+    mkdir -p "$certificate_directory"
+    install -m 0644 "$server_certificate" "$certificate_directory/remotedesktop-signaling-host.crt"
+fi
+
 
 # The licence and the third-party notices travel with the binaries they cover. Debian expects the licence at
 # /usr/share/doc/<package>/copyright; the notices sit beside it under the name the generator gives them.

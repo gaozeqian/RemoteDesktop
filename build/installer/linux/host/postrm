@@ -15,6 +15,12 @@ case "$1" in
         if command -v systemctl >/dev/null 2>&1; then
             systemctl --global disable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
         fi
+
+        # See the client's postrm: the trust entry this package may have added goes with it.
+        rm -f /usr/local/share/ca-certificates/remotedesktop-signaling-host.crt
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
+        fi
         ;;
 
     purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)

@@ -18,6 +18,13 @@ case "$1" in
             gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
         fi
 
+        # A site-specific build can carry the signaling server's self-signed certificate. Trust it as a root so
+        # wss:// works without the person importing it by hand. The update only touches the system CA bundle.
+        if [ -f /usr/local/share/ca-certificates/remotedesktop-signaling-client.crt ] &&
+            command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
+        fi
+
         # The same two libraries the host needs, for the same reason: the loader will not notice them missing until
         # the picture is already supposed to be on screen.
         missing=""

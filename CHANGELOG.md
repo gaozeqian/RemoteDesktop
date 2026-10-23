@@ -88,6 +88,13 @@
 - **发布前的版本与变更日志**：`<Version>` 升到 1.0.0，21 个 `[未发布]` 小节收进本版本；文档与模板里过期的
   `0.3.0` / `0.4.0` 示例一并更新。
 
+#### Added
+
+- **Linux 安装包可按部署定制**：客户端与被控端的 `build-deb.sh` 支持 `RD_RENDEZVOUS_URI` 与
+  `RD_SERVER_CERTIFICATE`。前者写进包内的 `Transport:RendezvousUri`，后者通过 postinst 的
+  `update-ca-certificates` 装进系统信任库，卸载时由 postrm 移除；这样部署自签名 TLS 的服务器不用每台机器
+  手工导入证书。
+
 ### Windows 端到端测试
 
 在 Windows 11 + NVIDIA 上以 Docker（rendezvous + relay + ops + PostgreSQL）跑真实用户流程：直连与中继、终端、

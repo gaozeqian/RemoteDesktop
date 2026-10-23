@@ -17,6 +17,12 @@ case "$1" in
             systemctl --global daemon-reload >/dev/null 2>&1 || true
         fi
 
+        # See the client's postinst: trust a signaling certificate this package was built with, if any.
+        if [ -f /usr/local/share/ca-certificates/remotedesktop-signaling-host.crt ] &&
+            command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
+        fi
+
         # The libraries this program loads by name at run time. dpkg has already refused the installation if any of
         # the declared ones were missing, so this is about the two cases dpkg cannot see: a package installed with
         # --force-depends, and the encoder, which may exist but have been built without the codec that makes it

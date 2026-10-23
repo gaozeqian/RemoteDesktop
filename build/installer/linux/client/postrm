@@ -16,6 +16,13 @@ case "$1" in
         if command -v gtk-update-icon-cache >/dev/null 2>&1; then
             gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
         fi
+
+        # The certificate this package may have added to the system trust store goes with it. The generated bundle
+        # entry under /etc/ssl/certs is removed by update-ca-certificates noticing the source is gone.
+        rm -f /usr/local/share/ca-certificates/remotedesktop-signaling-client.crt
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
+        fi
         ;;
 
     purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
