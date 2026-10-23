@@ -1,0 +1,19 @@
+# Direct TLS on 5080 with a self-signed certificate, for a server the clients reach by an address no public
+# authority knows.
+#
+#   TLS_CERT_PATH=../signing/certificates/rd.lan.pfx
+#   TLS_CERT_PASSWORD=...
+#   RENDEZVOUS_BIND_IP=0.0.0.0
+#   docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-compose.ops.yml up -d
+#
+# 5080/tcp is the TLS listener the clients use (wss://<address>:5080/ws). 5082/tcp is an internal plain-HTTP listener
+# for the ops console only: the console reaches it by service name inside the compose network and therefore does not
+# have to trust the self-signed certificate. Neither the relay's 5082/udp nor the reflector's 5081/udp is affected.
+services:
+  rendezvous:
+    environment:
+      Urls: "${RENDEZVOUS_URLS:-https://0.0.0.0:5080;http://0.0.0.0:5082}"
+      Kestrel__Certificates__Default__Path: /certs/signaling.pfx
+      Kestrel__Certificates__Default__Password: "${TLS_CERT_PASSWORD:?set TLS_CERT_PASSWORD}"
+    volumes:
+      - ${TLS_CERT_PATH:?set TLS_CERT_PATH}:/certs/signaling.pfx:ro
