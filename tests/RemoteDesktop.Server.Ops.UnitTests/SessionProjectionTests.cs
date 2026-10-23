@@ -60,6 +60,40 @@ public class SessionProjectionTests
         Assert.NotNull(state.EndedAt);
     }
 
+    /// <summary>
+    /// The relay's idle sweep runs about two minutes after a disconnect. It is the only source of the byte counters,
+    /// but it is not a later end: the clients already said when and why the session closed.
+    /// </summary>
+    [Fact]
+    public void A_relay_close_after_a_client_end_keeps_the_earlier_end_and_still_records_bytes()
+    {
+        var ended = SessionProjection.Apply(
+            null,
+            Event(OpsEventKinds.SessionEnded, new { reason = "closed" }, seconds: 30));
+        var closed = SessionProjection.Apply(
+            ended,
+            Event(OpsEventKinds.RelayClosed, new { bytesToHost = 1000L, bytesToController = 2500L, reason = "idle" }, seconds: 120));
+
+        Assert.Equal(30_000, closed!.EndedAt);
+        Assert.Equal("closed", closed.EndReason);
+        Assert.Equal(1000, closed.BytesIn);
+        Assert.Equal(2500, closed.BytesOut);
+    }
+
+    [Fact]
+    public void A_failure_after_a_client_end_does_not_move_the_end_later()
+    {
+        var ended = SessionProjection.Apply(
+            null,
+            Event(OpsEventKinds.SessionEnded, new { reason = "closed" }, seconds: 30));
+        var failed = SessionProjection.Apply(
+            ended,
+            Event(OpsEventKinds.SessionFailed, new { reason = "timeout" }, seconds: 120));
+
+        Assert.Equal(30_000, failed!.EndedAt);
+        Assert.Equal("closed", failed.EndReason);
+    }
+
     [Fact]
     public void A_client_end_report_closes_the_session_with_its_reason()
     {

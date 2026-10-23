@@ -511,15 +511,16 @@ relay        http://relay:5083
 ```
 
 `OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。会话、告警与
-审计数据存在 `ops-data` 卷里的 `ops.db`。控制台的 `Ops:RequireTotp` 默认开启，别关。
+审计数据存在 PostgreSQL（与设备注册表同一个库，表名以 `ops_` 开头）；备份 `postgres-data` 或 `pg_dump` 一次
+覆盖两者。控制台的 DataProtection 键存在 `ops-dataprotection` 卷里，容器重建不会丢。`Ops:RequireTotp` 默认开启，别关。
 
 #### 数据持久化与备份
 
 - 默认把设备码存在 PostgreSQL（`postgres-data` 卷）。容器重建、镜像升级不会改变设备码。
 - 备份：`docker compose exec -T postgres pg_dump -U remotedesktop remotedesktop > remotedesktop-$(date +%F).sql`。
 - `docker compose down -v` 会连数据卷一起删掉；不要在不确认备份时加 `-v`。
-- 监控台的库在 `ops-data` 卷里的 `ops.db`；备份同样要在停止写入时进行（或把卷拷出来）。它记录的是监控历史与
-  审计，不影响远程连接。
+- 监控台的数据也在 PostgreSQL；备份 `postgres-data`（或 `pg_dump`）就同时覆盖设备码、监控历史与审计。它不影响
+  远程连接。
 - **单机可以不用 PostgreSQL**：设置 `Rendezvous__Database__Provider=sqlite`、
   `Rendezvous__Database__Path=/data/rendezvous.db`，给 `rendezvous` 挂一个 `/data` 卷，并删掉 `postgres` 服务、
   `Rendezvous__Database__ConnectionString` 与 `depends_on`。镜像里的 `/data` 属于运行用户（UID 1654），新建的
@@ -635,7 +636,7 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `Ops:Listen` | `http://127.0.0.1:5090` | Kestrel 监听地址；对外由反向代理上 TLS |
-| `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString` |
+| `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |

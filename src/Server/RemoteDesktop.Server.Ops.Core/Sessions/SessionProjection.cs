@@ -81,8 +81,8 @@ public static class SessionProjection
 
                 OpsEventKinds.SessionFailed => Merge(current, envelope, at, state => state with
                 {
-                    EndedAt = at,
-                    EndReason = String(root, "reason") ?? "failed",
+                    EndedAt = Earliest(state.EndedAt, at),
+                    EndReason = state.EndReason ?? String(root, "reason") ?? "failed",
                 }),
 
                 // A client's report that the session closed. Both ends send one, and for a direct session this is the
@@ -101,13 +101,16 @@ public static class SessionProjection
                     StartedAt = Earliest(state.StartedAt, at),
                 }),
 
+                // The relay's idle sweep can arrive minutes after both clients have reported the session ended. It is
+                // evidence for the byte counters, not a later end: the first end fact and its reason stay, and only
+                // the counters are filled in.
                 OpsEventKinds.RelayClosed => Merge(current, envelope, at, state => state with
                 {
                     Transport = "relay",
                     Source = "relay",
                     RelayNodeId = envelope.Node,
-                    EndedAt = at,
-                    EndReason = String(root, "reason") ?? "closed",
+                    EndedAt = Earliest(state.EndedAt, at),
+                    EndReason = state.EndReason ?? String(root, "reason") ?? "closed",
                     BytesIn = Int64(root, "bytesToHost") ?? state.BytesIn,
                     BytesOut = Int64(root, "bytesToController") ?? state.BytesOut,
                 }),

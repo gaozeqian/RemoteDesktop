@@ -10,14 +10,22 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish src/Server/RemoteDesktop.Server.Ops -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+
+# See Dockerfile.rendezvous: the console can be pointed at PostgreSQL, and Npgsql probes for GSSAPI at start-up.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app
 COPY --from=build /app ./
 
-# The console's SQLite database and nothing else live here; see Dockerfile.rendezvous for why the image creates it
-# before dropping privileges.
-RUN mkdir -p /data && chown $APP_UID:$APP_UID /data
+# /data is where a SQLite deployment keeps ops.db (the shipped compose overlay uses PostgreSQL instead). The
+# DataProtection directory is created and owned the same way so a named volume mounted there is writable by the app
+# user; without it ASP.NET Core warns that its keys will disappear with the container.
+RUN mkdir -p /data /home/app/.aspnet/DataProtection-Keys \
+    && chown -R $APP_UID:$APP_UID /data /home/app/.aspnet
 
 # The console listens on all interfaces inside the container so it can be reached by a proxy or a published loopback
 # port; it is not a public listener by default.

@@ -44,17 +44,23 @@ services:
     image: remotedesktop/ops:${REMOTEDESKTOP_VERSION:-dev}
     environment:
       Ops__Listen: http://0.0.0.0:5090
-      Ops__Database__Provider: sqlite
-      Ops__Database__Path: /data/ops.db
+      # The console uses the same PostgreSQL instance as the device registry. Its tables are the ops_* ones, so the
+      # two schemas coexist in one database; a backup of postgres-data covers both.
+      Ops__Database__Provider: postgres
+      Ops__Database__ConnectionString: "Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}"
       Ops__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
       Ops__Ingest__Keys__k1: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
     ports:
       # Loopback only: the console has its own sign-in and TOTP, but it is not a public listener.
       - "127.0.0.1:5090:5090/tcp"
     volumes:
-      - ops-data:/data
+      # Created and owned by the image. Without this, ASP.NET Core stores its keys in the container layer and warns
+      # that they will disappear with it.
+      - ops-dataprotection:/home/app/.aspnet/DataProtection-Keys
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       rendezvous:
         condition: service_healthy
       relay:
@@ -80,4 +86,4 @@ services:
           memory: 512M
 
 volumes:
-  ops-data:
+  ops-dataprotection:
