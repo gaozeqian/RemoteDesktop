@@ -150,6 +150,25 @@
                   ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot;&quot;"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!--
+      A major upgrade from 0.3.0 could remove the old product's appsettings.json and then skip the new product's
+      component with the same GUID, leaving the service with no settings at all. It then fell back to the built-in
+      localhost address and retried forever. The package now ships a copy of the settings it was built with, and this
+      action restores appsettings.json from that copy when it is missing.
+
+      "if not exist" is what keeps an operator's settings: on a normal install and on every upgrade where the file
+      survived, the action does nothing. The default file is a normal component of the package (generated into the
+      file list from appsettings.default.json), so it is present even when the old product's component machinery
+      skipped the real settings file.
+
+      Through cmd.exe and Return="ignore" for the same reason as ConfigureSystem: a configuration step must never
+      leave a half-installed product behind.
+    -->
+    <CustomAction Id="RestoreDefaultSettings"
+                  Directory="SystemFolder"
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c if not exist &quot;[INSTALLFOLDER]appsettings.json&quot; copy /Y &quot;[INSTALLFOLDER]appsettings.default.json&quot; &quot;[INSTALLFOLDER]appsettings.json&quot;"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
     <?ifdef var.HostOnly ?>
     <!--
       The fixed password, straight into the service's own secret store (DPAPI machine scope) before the service starts.
@@ -210,6 +229,13 @@
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
               Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
+
+      <!-- After InstallFiles, on install and upgrade alike: if a major upgrade left appsettings.json missing, put the
+           built-in one back; if it is there, this does nothing. This is also what a repair runs, which is how a
+           machine upgraded before this fix can be repaired without reinstalling. -->
+      <Custom Action="RestoreDefaultSettings"
+              After="InstallFiles"
+              Condition="NOT REMOVE" />
 
       <?ifdef var.HostOnly ?>
       <!-- Before ConfigureSystem, and before the service is started: the service reads the fixed password once, at

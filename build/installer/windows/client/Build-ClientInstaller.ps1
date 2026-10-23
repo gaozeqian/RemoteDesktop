@@ -594,6 +594,11 @@ connected to if the signaling server runs there. For anything else, build again 
 "@
 }
 
+# A copy of the settings this package was built with. The installer restores appsettings.json from it when a major
+# upgrade left the original missing (see RestoreDefaultSettings in Components.wxs); it is a normal file in the
+# generated list, so it exists even when the Settings component was skipped.
+Copy-Item -LiteralPath $settingsPath -Destination (Join-Path $PublishDirectory 'appsettings.default.json') -Force
+
 $version = Get-ProductVersion
 
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.

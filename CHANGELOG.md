@@ -79,6 +79,10 @@
 - **Windows MSI 升级/修复会覆盖已配置的服务器地址 / 监听地址与 TLS**：`ConfigureSystem` 在升级与修复时也会运行，把
   `NeverOverwrite` 保留的 `appsettings.json` 重写成安装包默认值（客户端回到 `ws://127.0.0.1:5080/ws`，
   服务端回到明文 `http://0.0.0.0:5080`）。现在它只在全新安装时运行；升级保留操作员配置。
+- **Windows MSI 从 0.3.0 升级后丢失 `appsettings.json`**：major upgrade 移除了旧包的设置文件，而新包的同 GUID
+  组件被跳过，服务于是回退到 `ws://127.0.0.1:5080/ws`，日志每 30 秒报一次 `Rendezvous connection lost`，设备
+  永远不再注册。MSI 现在随包携带 `appsettings.default.json`，并新增 deferred action `RestoreDefaultSettings`：
+  安装、升级或修复后如果 `appsettings.json` 不存在就从默认文件恢复；已存在的配置不会被覆盖。
 - **第三方组件清单过期且漏掉运维控制台**：Dependabot 升到 10.0.13 / NAudio 3.2.0 后清单仍是 10.0.12 /
   3.1.0，生成脚本也没有遍历 `RemoteDesktop.Server.Ops`。已加入 Ops 并重新生成。
 - **安装包不带许可证与第三方声明、Linux/macOS 还带 PDB**：三个 `.deb` 现在安装
