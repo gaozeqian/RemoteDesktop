@@ -9,7 +9,7 @@ COPY src/Server/ src/Server/
 # The cache mount keeps NuGet downloads out of the layer: a source change re-runs restore, but against the local
 # cache rather than the network. Full project-file splitting would add a second copy of every path for a marginal
 # gain; the downloads are the expensive part. This needs BuildKit, which is the default in Docker 23+.
-RUN --mount=type=cache,target=/root/.nuget/packages \
+RUN --mount=type=cache,id=nuget-rd,target=/root/.nuget/packages,sharing=locked \
     dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

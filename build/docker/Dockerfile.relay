@@ -8,7 +8,7 @@ COPY src/Core/ src/Core/
 COPY src/Server/ src/Server/
 # The cache mount keeps NuGet downloads out of the layer; see Dockerfile.rendezvous. This needs BuildKit (the default
 # in Docker 23+).
-RUN --mount=type=cache,target=/root/.nuget/packages \
+RUN --mount=type=cache,id=nuget-rd,target=/root/.nuget/packages,sharing=locked \
     dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
 
 # The relay is an ASP.NET Core host: /health, /metrics and /internal/v1/info are Kestrel endpoints even though the

@@ -9,6 +9,14 @@
 # 5080/tcp is the TLS listener the clients use (wss://<address>:5080/ws). 5082/tcp is an internal plain-HTTP listener
 # for the ops console only: the console reaches it by service name inside the compose network and therefore does not
 # have to trust the self-signed certificate. Neither the relay's 5082/udp nor the reflector's 5081/udp is affected.
+#
+# The .pfx is bind-mounted into the container, which runs as UID 1654. That user has to be able to read it, and a
+# certificate created with the repository's scripts is 0600 by design; grant the container user read access without
+# making the private key readable by everybody:
+#
+#   setfacl -m u:1654:r-- <the .pfx>
+#
+# Re-apply it if the certificate file is regenerated.
 services:
   rendezvous:
     environment:
