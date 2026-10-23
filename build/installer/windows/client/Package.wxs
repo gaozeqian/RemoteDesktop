@@ -46,14 +46,14 @@
     -->
     <?ifdef var.HostOnly ?>
     <Upgrade Id="6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30">
-      <UpgradeVersion Minimum="0.0.0" Maximum="999.99.99" IncludeMinimum="yes" IncludeMaximum="no"
+      <UpgradeVersion Minimum="0.0.0" Maximum="255.255.65535" IncludeMinimum="yes" IncludeMaximum="no"
                       Property="CLIENTPACKAGEINSTALLED" OnlyDetect="yes" />
     </Upgrade>
     <Launch Condition="NOT CLIENTPACKAGEINSTALLED"
             Message="This machine already has the client package, which also installs the controlled end. Uninstall it first if you want the controlled-end-only package here." />
     <?else?>
     <Upgrade Id="3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03">
-      <UpgradeVersion Minimum="0.0.0" Maximum="999.99.99" IncludeMinimum="yes" IncludeMaximum="no"
+      <UpgradeVersion Minimum="0.0.0" Maximum="255.255.65535" IncludeMinimum="yes" IncludeMaximum="no"
                       Property="HOSTPACKAGEINSTALLED" OnlyDetect="yes" />
     </Upgrade>
     <Launch Condition="NOT HOSTPACKAGEINSTALLED"
@@ -78,23 +78,25 @@
       The fixed password for unattended access. It has a single space rather than no value because a control is only
       editable while its property is defined (the same reason the server's certificate box arrives holding a space);
       the setup command trims it, so a space means "leave what is there alone". Secure so the deferred action receives
-      it, and in MsiHiddenProperties so it does not end up in the installer log.
+      it, and Hidden so it does not end up in the installer log. MsiHiddenProperties itself is a special MSI property
+      and may not be authored directly (WiX 5 errors WIX0070); Hidden is the supported way to add to it.
 
       The host package has no window, so this page is the only place a fresh host can be given a password without a
       command line. The value is passed to the service executable as an argument; a double quote in it would break the
       command line, and the page says so.
     -->
-    <Property Id="FIXEDPASSWORD" Value=" " Secure="yes" />
+    <Property Id="FIXEDPASSWORD" Value=" " Secure="yes" Hidden="yes" />
     <Property Id="CLEARFIXEDPASSWORD" Value="0" Secure="yes" />
-    <Property Id="MsiHiddenProperties" Value="FIXEDPASSWORD" />
     <?endif?>
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RemoteDesktop" />
     </StandardDirectory>
+    <?ifndef var.HostOnly ?>
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="AppShortcutFolder" Name="Remote Desktop" />
     </StandardDirectory>
+    <?endif?>
 
     <Feature Id="Main" Title="$(var.ProductName)" Level="1" AllowAbsent="no">
       <!-- The window of this computer and the controller for others. Not in the host-only package. -->

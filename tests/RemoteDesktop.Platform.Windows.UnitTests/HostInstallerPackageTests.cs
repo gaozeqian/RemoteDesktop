@@ -101,8 +101,9 @@ public sealed class HostInstallerPackageTests
         // naming the client's UpgradeCode and a launch condition on it; this checks both halves, because a launch
         // condition whose row never made it into the package is a package that installs and then misbehaves.
         var upgrades = package.Rows("SELECT `UpgradeCode`, `ActionProperty` FROM `Upgrade`", 2);
+        // Windows Installer stores a GUID in braces; the WiX source spells the same value without them.
         Assert.Contains(upgrades, row =>
-            row[0].Equals("6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30", StringComparison.OrdinalIgnoreCase));
+            string.Equals(row[0].Trim('{', '}'), "6f3c1a26-9b57-4d0e-8f2a-5c7b1e4d9a30", StringComparison.OrdinalIgnoreCase));
         var launch = package.Rows("SELECT `Condition` FROM `LaunchCondition`", 1);
         Assert.Contains(launch, row => row[0].Contains("CLIENTPACKAGEINSTALLED", StringComparison.Ordinal));
 

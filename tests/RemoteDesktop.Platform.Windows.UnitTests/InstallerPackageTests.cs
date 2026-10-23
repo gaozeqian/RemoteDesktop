@@ -142,8 +142,9 @@ public sealed class InstallerPackageTests
         // alongside this one would be a second service for the same pipe and code, so each package blocks the other;
         // the row is checked because an Upgrade element that never made it into the package blocks nothing.
         var upgrades = package.Rows("SELECT `UpgradeCode` FROM `Upgrade`", 1);
+        // Windows Installer stores a GUID in braces; the WiX source spells the same value without them.
         Assert.Contains(upgrades, row =>
-            row[0].Equals("3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03", StringComparison.OrdinalIgnoreCase));
+            string.Equals(row[0].Trim('{', '}'), "3d9e7b41-6c2a-4f18-8b57-2e4c1a9d6f03", StringComparison.OrdinalIgnoreCase));
         var launch = package.Rows("SELECT `Condition` FROM `LaunchCondition`", 1);
         Assert.Contains(launch, row => row[0].Contains("HOSTPACKAGEINSTALLED", StringComparison.Ordinal));
 
