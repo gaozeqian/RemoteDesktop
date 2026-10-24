@@ -6,7 +6,8 @@ using RemoteDesktop.Server.Ops.Storage;
 namespace RemoteDesktop.Server.Ops;
 
 /// <summary>
-/// The commands an installer runs before the service exists: today, creating the first administrator.
+/// The commands an installer runs before the service exists: creating the first administrator, and registering the
+/// server's own nodes so a fresh console has somewhere to read from.
 /// </summary>
 /// <remarks>
 /// Creating the first account is a command rather than a web page because a "first visit" setup screen is an
@@ -26,13 +27,24 @@ public static class SetupCommands
         ArgumentNullException.ThrowIfNull(output);
 
         exitCode = 0;
-        if (args.Length == 0 || !string.Equals(args[0], "--create-admin", StringComparison.Ordinal))
+        if (args.Length == 0)
         {
             return false;
         }
 
-        exitCode = CreateAdminAsync(args, output).GetAwaiter().GetResult();
-        return true;
+        if (string.Equals(args[0], "--create-admin", StringComparison.Ordinal))
+        {
+            exitCode = CreateAdminAsync(args, output).GetAwaiter().GetResult();
+            return true;
+        }
+
+        if (string.Equals(args[0], "--seed-local-nodes", StringComparison.Ordinal))
+        {
+            exitCode = SeedLocalNodesAsync(args, output).GetAwaiter().GetResult();
+            return true;
+        }
+
+        return false;
     }
 
     private static async Task<int> CreateAdminAsync(string[] args, TextWriter output)
@@ -40,24 +52,15 @@ public static class SetupCommands
         var username = args.Length > 1 ? args[1] : null;
         if (string.IsNullOrWhiteSpace(username))
         {
-            output.WriteLine("用法: RemoteDesktop.Server.Ops --create-admin <用户名>");
+            output.WriteLine("用法: RemoteDesktop.Server.Ops --create-admin <用户名> [--config-directory <目录>]");
             return 2;
         }
 
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true)
-            .AddEnvironmentVariables()
-            .Build();
-
-        var options = configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
-        try
+        var (options, error) = ReadOptions(args);
+        if (error is not null)
         {
-            options.Database.Validate();
-        }
-        catch (InvalidOperationException ex)
-        {
-            output.WriteLine(ex.Message);
+            output.WriteLine(error);
+            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
             return 2;
         }
 
@@ -117,6 +120,125 @@ public static class SetupCommands
         output.WriteLine("把上面的 URI 导入验证器（大多数应用也支持手动输入密钥）。");
         output.WriteLine("密钥只显示这一次；丢失后只能再建一个管理员账号。");
         return 0;
+    }
+
+    /// <summary>
+    /// Registers the signaling and relay servers shipped beside this console. The installer calls this once: a console
+    /// with no nodes has nowhere to read devices from, and these two addresses are the ones it already configured.
+    /// A table that already has rows is left alone, so an operator's own list — including the removal of one of these
+    /// rows — survives a reinstall.
+    /// </summary>
+    private static async Task<int> SeedLocalNodesAsync(string[] args, TextWriter output)
+    {
+        var rendezvous = Argument(args, "--rendezvous-base-url");
+        var relay = Argument(args, "--relay-base-url");
+        if (string.IsNullOrWhiteSpace(rendezvous) && string.IsNullOrWhiteSpace(relay))
+        {
+            output.WriteLine("用法: RemoteDesktop.Server.Ops --seed-local-nodes --config-directory <目录> [--rendezvous-base-url <URL>] [--relay-base-url <URL>]");
+            return 2;
+        }
+
+        var candidates = new List<(string Name, string Role, string Url)>(2);
+        if (!string.IsNullOrWhiteSpace(rendezvous))
+        {
+            candidates.Add(("rendezvous-local", "rendezvous", rendezvous.Trim()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(relay))
+        {
+            candidates.Add(("relay-local", "relay", relay.Trim()));
+        }
+
+        foreach (var (_, _, url) in candidates)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+                || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+            {
+                output.WriteLine($"地址 '{url}' 必须是 http:// 或 https:// 开头的绝对地址。");
+                return 2;
+            }
+        }
+
+        var (options, error) = ReadOptions(args);
+        if (error is not null)
+        {
+            output.WriteLine(error);
+            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
+            return 2;
+        }
+
+        using var store = OpsStore.Open(options.Database);
+        await store.EnsureSchemaAsync().ConfigureAwait(false);
+        if (await store.CountNodesAsync().ConfigureAwait(false) > 0)
+        {
+            output.WriteLine("控制台里已经登记过节点，未做任何修改。");
+            return 0;
+        }
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var (name, role, url) in candidates)
+        {
+            await store.CreateNodeAsync(
+                new OpsNode(
+                    Guid.NewGuid().ToString("N"),
+                    name,
+                    role,
+                    url,
+                    Region: null,
+                    Enabled: true,
+                    LastScrapeAt: null,
+                    LastScrapeOk: null,
+                    now)).ConfigureAwait(false);
+            output.WriteLine($"已登记节点: {name}（{role}）→ {url}");
+        }
+
+        output.WriteLine("控制台启动后约 10 秒出现第一份节点数据；设备管理页从信令节点读取设备列表。");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads the settings the service itself reads. The packaged service keeps them in /etc, not next to the program;
+    /// without a way to point the commands at that directory they would use a different database, or refuse to run
+    /// because there is no database path at all.
+    /// </summary>
+    private static (OpsOptions Options, string? Error) ReadOptions(string[] args)
+    {
+        var configDirectory = Argument(args, "--config-directory") ?? AppContext.BaseDirectory;
+
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(configDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+
+        var options = configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
+
+        // A relative SQLite path is relative to the settings it was written in, the same reading the service gives
+        // it. The command used to resolve it against the caller's working directory, which is how an administrator
+        // ended up creating an account in a database the service would never open.
+        if (string.Equals(options.Database.Provider, OpsDatabaseSettings.Sqlite, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(options.Database.Path)
+            && !Path.IsPathRooted(options.Database.Path))
+        {
+            options.Database.Path = Path.Combine(configDirectory, options.Database.Path);
+        }
+
+        try
+        {
+            options.Database.Validate();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (options, ex.Message);
+        }
+
+        return (options, null);
+    }
+
+    private static string? Argument(string[] args, string name)
+    {
+        var index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
     /// <summary>

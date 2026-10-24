@@ -1,44 +1,205 @@
 #!/bin/sh
 #
-# Configures the two servers after their files are in place: makes the account they run as, turns the settings in
-# /etc/default/remotedesktop-server into the files they actually read, and starts them.
+# Configures the servers after their files are in place: makes the account they run as, turns the answers from the
+# installation questions into the files they actually read, and starts them.
 #
 # The work of writing the settings is not done here. It is done by the server itself, with --configure-system, which
 # is the same step the Windows installer runs — so both platforms produce the same files by the same code, and this
 # script only has to say where things are.
 set -e
 
+. /usr/share/debconf/confmodule
+
 INSTALL_DIRECTORY=/etc/remotedesktop-server
 PROGRAM_DIRECTORY=/usr/lib/remotedesktop-server
 SERVICE_USER=remotedesktop
 DEFAULTS=/etc/default/remotedesktop-server
+DEFAULT_DATABASE_DIRECTORY=/var/lib/remotedesktop-server
+DEFAULT_DATABASE_PATH=$DEFAULT_DATABASE_DIRECTORY/rendezvous.db
 
 case "$1" in
     configure)
-        # The servers run as their own account rather than as root. Nothing about them needs root: they listen on
-        # ports above 1024 and keep their state under /var/lib.
-        if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-            adduser --system --group --no-create-home \
-                --home /var/lib/remotedesktop-server \
-                --gecos "Remote Desktop server" \
-                "$SERVICE_USER" >/dev/null
+        # apt preconfigures the package before unpacking it and leaves this marker behind. The same questions asked
+        # again here would be the second prompt of one installation. Plain `dpkg -i` starts no preconfiguration, so
+        # this is also how the two paths are told apart.
+        questions_marker=/run/remotedesktop-server.questions-asked
+        asked_by_preconfigure=false
+        if [ -e "$questions_marker" ]; then
+            asked_by_preconfigure=true
+            rm -f "$questions_marker"
         fi
 
-        # The settings file is a conffile, so an operator's edits survive an upgrade; on a first install it is
-        # whatever the package shipped.
+        # `dpkg-reconfigure` has just asked the questions itself (`DEBCONF_RECONFIGURE=1` in the environment); the
+        # answers it collected are what this step has to apply.
+        if [ "${DEBCONF_RECONFIGURE+set}" = "set" ] || [ "$asked_by_preconfigure" = true ]; then
+            :
+        elif [ -x /var/lib/dpkg/info/remotedesktop-server.config ]; then
+            # The config script decides whether these are questions to ask (a fresh install or a reinstall) or
+            # answers to keep (a version upgrade). Passing the previous version is what lets it tell.
+            DEBCONF_RECONFIGURE= /var/lib/dpkg/info/remotedesktop-server.config configure "${2:-}" --post-install || exit 1
+        fi
+
+        db_get remotedesktop-server/database-provider || true
+        provider=${RET:-}
+        db_get remotedesktop-server/database-path || true
+        database_path=${RET:-}
+        db_get remotedesktop-server/postgres-connection || true
+        postgres=${RET:-}
+        db_get remotedesktop-server/tls-mode || true
+        tls_mode=${RET:-}
+        db_get remotedesktop-server/tls-certificate || true
+        tls_certificate=${RET:-}
+        db_get remotedesktop-server/tls-password || true
+        tls_password=${RET:-}
+        db_get remotedesktop-server/tls-hostname || true
+        tls_hostname=${RET:-}
+
+        RD_URLS=${RD_URLS:-http://0.0.0.0:5080}
+        RD_RELAY_ENDPOINT=${RD_RELAY_ENDPOINT:-auto}
+        RD_RELAY_KEY=${RD_RELAY_KEY:-auto}
+        RD_OPEN_FIREWALL=${RD_OPEN_FIREWALL:-0}
+
+        # The conffile supplies the values the questions do not cover (URLs, relay endpoint, key, firewall). The
+        # database and TLS answers come from debconf; the config script seeded them from this file when the
+        # questions were first asked, which is also how an installation made before those questions existed keeps
+        # its settings.
         if [ -r "$DEFAULTS" ]; then
             # shellcheck disable=SC1090
             . "$DEFAULTS"
         fi
 
-        RD_URLS=${RD_URLS:-http://0.0.0.0:5080}
-        RD_RELAY_ENDPOINT=${RD_RELAY_ENDPOINT:-auto}
-        RD_RELAY_KEY=${RD_RELAY_KEY:-auto}
-        RD_DATABASE=${RD_DATABASE:-auto}
-        RD_DATABASE_PATH=${RD_DATABASE_PATH:-}
-        RD_POSTGRES=${RD_POSTGRES:-}
-        RD_TLS=${RD_TLS:-generate}
-        RD_OPEN_FIREWALL=${RD_OPEN_FIREWALL:-0}
+        # The config script has already turned /etc/default into the answers above (it seeds unseen questions
+        # from it). If there is no answer at all, the questions did not run; guessing here used to be how an
+        # existing PostgreSQL installation could be silently moved to SQLite.
+        if [ -z "$provider" ]; then
+            echo "remotedesktop-server: no database answer from the installation questions; run dpkg-reconfigure remotedesktop-server." >&2
+            exit 1
+        fi
+        if [ -z "$tls_mode" ]; then
+            echo "remotedesktop-server: no TLS answer from the installation questions; run dpkg-reconfigure remotedesktop-server." >&2
+            exit 1
+        fi
+
+        [ -n "$database_path" ] || database_path=$DEFAULT_DATABASE_PATH
+
+        # The servers run as their own account rather than as root. Nothing about them needs root: they listen on
+        # ports above 1024 and keep their state under /var/lib.
+        if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+            adduser --system --group --no-create-home \
+                --home "$DEFAULT_DATABASE_DIRECTORY" \
+                --gecos "Remote Desktop server" \
+                "$SERVICE_USER" >/dev/null
+        fi
+        if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+            addgroup --system "$SERVICE_USER" >/dev/null
+        fi
+
+        # --- the database directory -------------------------------------------------
+        #
+        # The console cannot run without a database, so even an in-memory signaling server gets it a SQLite file.
+        # The console reads its provider from the same answers as the signaling server.
+        case "$provider" in
+            sqlite)
+                case "$database_path" in
+                    */)
+                        echo "remotedesktop-server: the SQLite database path must name a file, not a directory (got '$database_path')." >&2
+                        exit 1
+                        ;;
+                esac
+                database_directory=$(dirname "$database_path")
+                ops_database_path=$database_directory/ops.db
+                ;;
+            postgres)
+                database_directory=
+                ops_database_path=
+                database_path=
+                ;;
+            none)
+                database_directory=$DEFAULT_DATABASE_DIRECTORY
+                ops_database_path=$DEFAULT_DATABASE_DIRECTORY/ops.db
+                database_path=
+                ;;
+            *)
+                echo "Unknown database provider '$provider'." >&2
+                exit 1
+                ;;
+        esac
+
+        if [ -n "$database_directory" ]; then
+            # 0700 and owned by the service account: the files hold device ids and the console's password and TOTP
+            # secrets. The unit's StateDirectoryMode= keeps this mode on every start; this creates it for the first
+            # one, and for a directory the unit does not know about.
+            mkdir -p "$database_directory"
+            chown -R "$SERVICE_USER:$SERVICE_USER" "$database_directory"
+            chmod 0700 "$database_directory"
+        fi
+
+        if [ -n "$database_directory" ] && [ "$database_directory" != "$DEFAULT_DATABASE_DIRECTORY" ]; then
+            # ProtectSystem=strict makes everything but the unit's own ReadWritePaths read-only. A database the
+            # operator put somewhere else needs a drop-in; without it the unit starts and SQLite cannot open its file.
+            for unit in rendezvous ops; do
+                dropin=/etc/systemd/system/remotedesktop-$unit.service.d
+                mkdir -p "$dropin"
+                printf '%s\n' '[Service]' "ReadWritePaths=$database_directory" >"$dropin/database-directory.conf"
+                chmod 0644 "$dropin/database-directory.conf"
+            done
+        else
+            rm -f /etc/systemd/system/remotedesktop-rendezvous.service.d/database-directory.conf \
+                /etc/systemd/system/remotedesktop-ops.service.d/database-directory.conf
+        fi
+
+        # --- TLS --------------------------------------------------------------------
+        #
+        # A certificate the operator brought has to be readable by the account the service runs as. Copying it into
+        # the installation's own tls directory is what makes that true regardless of where it came from (a root-only
+        # /etc/ssl/private, a home directory the unit cannot see, a mounted secret).
+        case "$tls_mode" in
+            generate)
+                tls_argument=generate
+                ;;
+            none)
+                tls_argument=auto
+                ;;
+            existing)
+                if [ -z "$tls_certificate" ] || [ ! -f "$tls_certificate" ] || [ ! -r "$tls_certificate" ]; then
+                    echo "remotedesktop-server: the TLS certificate '$tls_certificate' cannot be read." >&2
+                    exit 1
+                fi
+
+                certificate_directory=$INSTALL_DIRECTORY/tls/custom
+                mkdir -p "$certificate_directory"
+                chmod 0750 "$certificate_directory"
+
+                certificate_name=$(basename "$tls_certificate")
+                certificate_destination=$certificate_directory/$certificate_name
+
+                # A reconfiguration whose answer points at the copy made by an earlier run must not copy the file
+                # onto itself: install truncates the destination before reading the source, which would leave an
+                # empty certificate and key, and a service that no longer starts.
+                if [ ! "$tls_certificate" -ef "$certificate_destination" ]; then
+                    install -m 0640 "$tls_certificate" "$certificate_destination"
+                fi
+
+                # A PEM certificate's key is a second file with the same base name and a .key extension. A PKCS#12
+                # file has no second half.
+                case "$certificate_name" in
+                    *.crt|*.pem|*.cer)
+                        key_file=${tls_certificate%.*}.key
+                        key_destination=$certificate_directory/${certificate_name%.*}.key
+                        if [ -f "$key_file" ] && [ ! "$key_file" -ef "$key_destination" ]; then
+                            install -m 0640 "$key_file" "$key_destination"
+                        fi
+                        ;;
+                esac
+
+                chown -R root:"$SERVICE_USER" "$certificate_directory"
+                tls_argument=$certificate_directory/$certificate_name
+                ;;
+            *)
+                echo "Unknown TLS mode '$tls_mode'." >&2
+                exit 1
+                ;;
+        esac
 
         mkdir -p "$INSTALL_DIRECTORY"
 
@@ -51,25 +212,123 @@ case "$1" in
             --urls "$RD_URLS" \
             --relay-endpoint "$RD_RELAY_ENDPOINT" \
             --relay-key "$RD_RELAY_KEY" \
-            --database "$RD_DATABASE" \
-            --database-path "$RD_DATABASE_PATH" \
-            --postgres "$RD_POSTGRES" \
-            --tls-certificate "$RD_TLS"
+            --database "$provider" \
+            --database-path "$database_path" \
+            --postgres "$postgres" \
+            --tls-certificate "$tls_argument" \
+            --tls-password "$tls_password" \
+            --tls-hostname "$tls_hostname" \
+            --ops-database-path "$ops_database_path" \
+            --ops-listen "http://127.0.0.1:5090" \
+            --metrics-enabled
 
-        # A certificate made by the step above was made by root and has its key readable only by its owner, which is
-        # root. The service runs as somebody else, so the key has to change hands — this is what the file permissions
-        # are protecting it from being readable by, and the account that has to read it is this one.
-        if [ -d "$INSTALL_DIRECTORY/tls" ]; then
-            chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIRECTORY/tls"
-            chmod 0755 "$INSTALL_DIRECTORY/tls"
+        mkdir -p "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server
+        chown -R "$SERVICE_USER:$SERVICE_USER" "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server
+
+        # The settings carry the relay shared key and, with PostgreSQL, its password. They are read by the service
+        # through its group; every other account is kept out. The mode is also what a manual --configure-system run
+        # leaves, so re-running the step never widens the files.
+        chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY"
+        chmod 0750 "$INSTALL_DIRECTORY"
+        for directory in Rendezvous Relay Ops; do
+            if [ -d "$INSTALL_DIRECTORY/$directory" ]; then
+                chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY/$directory"
+                chmod 0750 "$INSTALL_DIRECTORY/$directory"
+                if [ -f "$INSTALL_DIRECTORY/$directory/appsettings.json" ]; then
+                    chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY/$directory/appsettings.json"
+                    chmod 0640 "$INSTALL_DIRECTORY/$directory/appsettings.json"
+                fi
+            fi
+        done
+
+        if [ -f "$INSTALL_DIRECTORY/server-setup.log" ]; then
+            chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY/server-setup.log"
+            chmod 0640 "$INSTALL_DIRECTORY/server-setup.log"
         fi
 
-        mkdir -p /var/lib/remotedesktop-server /var/log/remotedesktop-server
-        chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/remotedesktop-server /var/log/remotedesktop-server
+        if [ -d "$INSTALL_DIRECTORY/tls" ]; then
+            chown -R root:"$SERVICE_USER" "$INSTALL_DIRECTORY/tls"
+            find "$INSTALL_DIRECTORY/tls" -type d -exec chmod 0750 {} +
+            find "$INSTALL_DIRECTORY/tls" -type f -name '*.key' -exec chmod 0640 {} +
+            find "$INSTALL_DIRECTORY/tls" -type f ! -name '*.key' -exec chmod 0644 {} +
+        fi
 
-        # Where the SQLite database lives, by default. 0700 and owned by the service account: the file holds the device
-        # ids, and SQLite creates it with the process umask rather than 0600, so the directory is what protects it.
-        chmod 0700 /var/lib/remotedesktop-server
+        if [ -f "$DEFAULTS" ]; then
+            # It can hold RD_RELAY_KEY and RD_POSTGRES; it is a root-edited file, not a public one.
+            chown root:"$SERVICE_USER" "$DEFAULTS"
+            chmod 0640 "$DEFAULTS"
+        fi
+
+        # The console reaches the signaling server through the address clients use, which for a generated certificate
+        # is this machine's own name. Importing the public half here is what lets the local Ops process verify it; the
+        # client and host packages do the same on the machines they are installed on. A certificate the operator
+        # supplied is their responsibility: a CA-issued one is already trusted, and a self-signed one is imported only
+        # when its subject and issuer say it is self-signed.
+        trust_certificate=
+        trust_relative=false
+        case "$tls_mode" in
+            generate)
+                trust_certificate=$INSTALL_DIRECTORY/tls/signing.crt
+
+                # Read the public half through a path relative to its directory. A purge deletes this file and the
+                # install recreates it a moment later; the stale negative directory entry left by that sequence made
+                # the absolute path look absent to test(1), install(1) and openssl on this machine, while a lookup
+                # relative to the directory reached the new file. The copy stays best-effort: without it the console
+                # shows the node as failed, but the servers themselves are fine, so the installation goes on.
+                trust_relative=true
+                ;;
+            existing)
+                case "$tls_certificate" in
+                    *.crt|*.pem|*.cer)
+                        if [ -f "$tls_certificate" ] && [ -r "$tls_certificate" ] && command -v openssl >/dev/null 2>&1; then
+                            subject=$(openssl x509 -in "$tls_certificate" -noout -subject 2>/dev/null || true)
+                            issuer=$(openssl x509 -in "$tls_certificate" -noout -issuer 2>/dev/null || true)
+                            subject=${subject#subject=}
+                            issuer=${issuer#issuer=}
+                            if [ -n "$subject" ] && [ "$subject" = "$issuer" ]; then
+                                trust_certificate=$tls_certificate
+                            fi
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+
+        trust_target=/usr/local/share/ca-certificates/remotedesktop-signaling-server.crt
+        rm -f "$trust_target"
+        if [ "$trust_relative" = true ] && [ -d "$INSTALL_DIRECTORY/tls" ]; then
+            ( cd "$INSTALL_DIRECTORY/tls" && cat signaling.crt ) >"$trust_target" 2>/dev/null || true
+        elif [ -n "$trust_certificate" ] && [ -f "$trust_certificate" ]; then
+            install -m 0644 "$trust_certificate" "$trust_target" 2>/dev/null || true
+        fi
+        if [ -s "$trust_target" ]; then
+            chmod 0644 "$trust_target"
+        else
+            rm -f "$trust_target"
+        fi
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
+        fi
+
+        # A new console has no nodes, and its whole device page reads through one. Register the two servers this
+        # installation just configured. The command adds nothing when the node table already has rows, so an
+        # operator's own list survives reinstalls and upgrades.
+        node_host=$(hostname 2>/dev/null || uname -n)
+        case "$tls_mode" in
+            none) rendezvous_node_url="http://127.0.0.1:5080" ;;
+            *) rendezvous_node_url="https://$node_host:5080" ;;
+        esac
+        if [ -f "$INSTALL_DIRECTORY/Ops/appsettings.json" ] \
+            && [ -x "$PROGRAM_DIRECTORY/Ops/RemoteDesktop.Server.Ops" ] \
+            && command -v runuser >/dev/null 2>&1; then
+            if ! runuser -u "$SERVICE_USER" -- "$PROGRAM_DIRECTORY/Ops/RemoteDesktop.Server.Ops" \
+                --seed-local-nodes \
+                --config-directory "$INSTALL_DIRECTORY/Ops" \
+                --rendezvous-base-url "$rendezvous_node_url" \
+                --relay-base-url "http://127.0.0.1:5083"; then
+                echo "remotedesktop-server: could not register the local nodes in the Ops console; add them on its 节点管理 page." >&2
+            fi
+        fi
 
         # Off by default. A package that changes a machine's firewall is deciding something that belongs to whoever
         # administers it, so this only happens when the settings file asks for it, and only through ufw — a machine
@@ -79,10 +338,32 @@ case "$1" in
                 ufw allow 5080/tcp >/dev/null 2>&1 || true
                 ufw allow 5081/udp >/dev/null 2>&1 || true
                 ufw allow 5082/udp >/dev/null 2>&1 || true
+
+                # Purge removes only what this package added. The marker survives the settings file, which dpkg may
+                # have already deleted by the time postrm purge runs.
+                : >"$DEFAULT_DATABASE_DIRECTORY/.firewall-opened"
+                chown "$SERVICE_USER:$SERVICE_USER" "$DEFAULT_DATABASE_DIRECTORY/.firewall-opened"
             fi
         fi
 
+        if command -v systemctl >/dev/null 2>&1; then
+            # The drop-in and the unit itself may be new; a restart would otherwise use the unit systemd loaded at
+            # boot, which knows neither.
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+        fi
+
         if command -v deb-systemd-helper >/dev/null 2>&1; then
+            # The helper enables a unit only once per installation: it records that it did so and skips every later
+            # enable. A state file left behind by an earlier package — one removed without being purged, or purged by
+            # a version whose postrm did not clean it up — therefore makes this enable do nothing, and the package
+            # installs with no links under multi-user.target.wants and no service at the next boot. A fresh
+            # installation starts from a clean slate, so drop that state first. An upgrade keeps it, which is what
+            # preserves an administrator's deliberate `systemctl disable`.
+            if [ -z "${2:-}" ]; then
+                deb-systemd-helper purge remotedesktop-rendezvous.service \
+                    remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            fi
+
             deb-systemd-helper enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper enable remotedesktop-relay.service >/dev/null 2>&1 || true
             deb-systemd-helper enable remotedesktop-ops.service >/dev/null 2>&1 || true
@@ -109,4 +390,5 @@ case "$1" in
         ;;
 esac
 
+db_stop
 exit 0

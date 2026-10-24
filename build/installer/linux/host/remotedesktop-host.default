@@ -1,0 +1,24 @@
+# Settings applied when the package is configured.
+#
+# The installation asks for both values. This file seeds those questions when the post-install step asks them
+# (plain dpkg -i), and the post-install step falls back to it. For a non-interactive install, preseed before
+# installing — apt asks before this file has been unpacked:
+#
+#     debconf-set-selections <<'EOF'
+#     remotedesktop-host server-address string wss://rd.example.com:5080/ws
+#     remotedesktop-host server-certificate string /root/signaling.crt
+#     EOF
+#
+# To change an installed host, answer the questions from
+#
+#     dpkg-reconfigure remotedesktop-host
+#
+# The answers live in debconf; editing this file afterwards does not apply them.
+
+# The signaling server, ws://host:port/ws or wss://host:port/ws. Empty means the address the package was built
+# with, which is ws://127.0.0.1:5080/ws unless the build set RD_RENDEZVOUS_URI.
+RD_RENDEZVOUS_URI=""
+
+# A PEM certificate for a wss:// server that uses a self-signed certificate. Empty means no import: the server's
+# certificate is either from a public authority or already in the system trust store.
+RD_SERVER_CERTIFICATE=""

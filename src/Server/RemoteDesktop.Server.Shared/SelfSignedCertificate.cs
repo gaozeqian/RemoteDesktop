@@ -55,10 +55,14 @@ public static class SelfSignedCertificate
     /// </summary>
     /// <param name="installDirectory">Where the public half is written for clients to be given.</param>
     /// <param name="notes">One line per thing that happened, for whoever is watching the installation.</param>
+    /// <param name="additionalDnsNames">
+    /// Names the certificate should answer to besides this machine's own. A deployment reached through a DNS name or a
+    /// NAT address has to name that address here, or clients reject a certificate that is otherwise trusted.
+    /// </param>
     /// <returns>The subject, which is what the settings file refers to the certificate by.</returns>
     /// <exception cref="CryptographicException">The certificate could not be created or stored.</exception>
     /// <exception cref="UnauthorizedAccessException">Not allowed to write to the machine's certificate store.</exception>
-    public static string Ensure(string installDirectory, List<string> notes)
+    public static string Ensure(string installDirectory, List<string> notes, IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installDirectory);
         ArgumentNullException.ThrowIfNull(notes);
@@ -83,7 +87,7 @@ public static class SelfSignedCertificate
             return subject;
         }
 
-        var created = CreateForThisMachine(subject);
+        var created = CreateForThisMachine(subject, additionalDnsNames);
         store.Add(created);
         WritePublicHalf(installDirectory, publicPath, created);
 
@@ -113,7 +117,10 @@ public static class SelfSignedCertificate
     /// </remarks>
     /// <exception cref="CryptographicException">The certificate could not be created.</exception>
     [UnsupportedOSPlatform("windows")]
-    public static (string Certificate, string Key) EnsurePem(string tlsDirectory, List<string> notes)
+    public static (string Certificate, string Key) EnsurePem(
+        string tlsDirectory,
+        List<string> notes,
+        IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tlsDirectory);
         ArgumentNullException.ThrowIfNull(notes);
@@ -132,7 +139,7 @@ public static class SelfSignedCertificate
         Directory.CreateDirectory(tlsDirectory);
         File.SetUnixFileMode(tlsDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-        using var created = CreateForThisMachine(SubjectForThisMachine);
+        using var created = CreateForThisMachine(SubjectForThisMachine, additionalDnsNames);
 
         // The key is written and tightened before anything else happens, so it is never on disk with permissions
         // wider than its owner even for a moment.
@@ -156,16 +163,38 @@ public static class SelfSignedCertificate
     }
 
     /// <summary>The names this machine answers to, which is what the certificate has to cover.</summary>
-    private static SubjectAlternativeNameBuilder AlternativeNames()
+    /// <param name="additionalDnsNames">
+    /// Names a deployment is reached through. An entry that parses as an IP address becomes an IP SAN; anything else
+    /// is a DNS name. Duplicates and blanks are dropped rather than handed to the certificate builder, which refuses
+    /// an empty name and would turn a harmless duplicate into a failed installation.
+    /// </param>
+    private static SubjectAlternativeNameBuilder AlternativeNames(IEnumerable<string>? additionalDnsNames)
     {
         var names = new SubjectAlternativeNameBuilder();
-        names.AddDnsName(Environment.MachineName);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddName(string? name)
+        {
+            name = name?.Trim();
+            if (string.IsNullOrEmpty(name) || !seen.Add(name))
+            {
+                return;
+            }
+
+            if (IPAddress.TryParse(name, out var address))
+            {
+                names.AddIpAddress(address);
+            }
+            else
+            {
+                names.AddDnsName(name);
+            }
+        }
+
+        AddName(Environment.MachineName);
 
         var host = Dns.GetHostName();
-        if (!string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-        {
-            names.AddDnsName(host);
-        }
+        AddName(host);
 
         try
         {
@@ -175,12 +204,18 @@ public static class SelfSignedCertificate
                 if (address.AddressFamily == AddressFamily.InterNetwork)
                 {
                     names.AddIpAddress(address);
+                    seen.Add(address.ToString());
                 }
             }
         }
         catch (SocketException)
         {
             // A machine whose own name does not resolve still gets a usable certificate; the name is in there.
+        }
+
+        foreach (var name in additionalDnsNames ?? [])
+        {
+            AddName(name);
         }
 
         return names;
@@ -195,7 +230,7 @@ public static class SelfSignedCertificate
     /// PKCS#12 — a certificate straight out of <c>CreateSelfSigned</c> has a key that lives only as long as the RSA
     /// object, and a store cannot keep that one.
     /// </remarks>
-    public static X509Certificate2 CreateForThisMachine(string subject)
+    public static X509Certificate2 CreateForThisMachine(string subject, IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
 
@@ -204,7 +239,7 @@ public static class SelfSignedCertificate
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(certificateAuthority: false, hasPathLengthConstraint: false, pathLengthConstraint: 0, critical: false));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, critical: false));
         request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], critical: false)); // serverAuth
-        request.CertificateExtensions.Add(AlternativeNames().Build());
+        request.CertificateExtensions.Add(AlternativeNames(additionalDnsNames).Build());
 
         using var selfSigned = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.Add(Validity));
 

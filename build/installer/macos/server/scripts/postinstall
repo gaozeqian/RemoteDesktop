@@ -49,6 +49,11 @@ fi
 echo "  writing the settings of both servers"
 # A failure here is reported, not fatal: the servers are installed and the settings can be fixed afterwards with
 # configure-server.sh. What went wrong is in server-setup.log either way, because the step writes it there.
+#
+# The console's settings are written too, with the same absolute database path and loopback address its launchd job
+# uses. Without them the shipped appsettings.json keeps a relative "ops.db", and `--create-admin` would open a
+# different database from the one the service serves.
+set -- "$@" --ops-database-path "$INSTALL_DIR/var/ops.db" --ops-listen "http://127.0.0.1:5090"
 if [ "$#" -gt 0 ]; then
     "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "$@" || echo "  warning: the settings step reported a problem; see $INSTALL_DIR/server-setup.log" >&2
 else

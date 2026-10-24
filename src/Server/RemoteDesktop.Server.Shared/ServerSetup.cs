@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -51,6 +52,13 @@ public sealed record ServerSetupOptions
     public string? DatabasePath { get; init; }
 
     /// <summary>
+    /// Mounts <c>/metrics</c> on the signaling server. The installer turns this on when it also installs the console:
+    /// the console scrapes that endpoint for its node page, and a node it cannot scrape is a row that reads "failed"
+    /// from the first second. The endpoint is still protected — loopback, or the shared node token.
+    /// </summary>
+    public bool MetricsEnabled { get; init; }
+
+    /// <summary>
     /// PostgreSQL connection string, as the installers spelled it before there was a provider setting. A value here
     /// still means PostgreSQL; an empty one means no database. Superseded by <see cref="DatabaseProvider"/> plus
     /// <see cref="DatabasePath"/>, and kept because every existing settings file and every installer property is
@@ -62,6 +70,18 @@ public sealed record ServerSetupOptions
     public string? TlsCertificatePath { get; init; }
 
     public string? TlsCertificatePassword { get; init; }
+
+    /// <summary>
+    /// A DNS name (or comma/semicolon-separated names) clients reach this server through. Only used when the
+    /// certificate is generated: a self-signed certificate only answers the names that were put in it.
+    /// </summary>
+    public string? TlsHostName { get; init; }
+
+    /// <summary>Where the monitoring console keeps its SQLite file. Empty means the platform's default.</summary>
+    public string? OpsDatabasePath { get; init; }
+
+    /// <summary>Where the monitoring console listens. Empty leaves whatever the settings already say.</summary>
+    public string? OpsListen { get; init; }
 }
 
 /// <summary>
@@ -79,6 +99,9 @@ public static class ServerSetup
     public const string RendezvousFolder = "Rendezvous";
 
     public const string RelayFolder = "Relay";
+
+    /// <summary>The monitoring console's folder, which has settings of its own.</summary>
+    public const string OpsFolder = "Ops";
 
     public const string SettingsFileName = "appsettings.json";
 
@@ -115,10 +138,12 @@ public static class ServerSetup
         var notes = new List<string>();
         var rendezvousPath = Path.Combine(installDirectory, RendezvousFolder, SettingsFileName);
         var relayPath = Path.Combine(installDirectory, RelayFolder, SettingsFileName);
+        var opsPath = Path.Combine(installDirectory, OpsFolder, SettingsFileName);
 
-        // Read both before writing either: a value that turns out to be unusable should leave the machine as it was.
+        // Read all three before writing any: a value that turns out to be unusable should leave the machine as it was.
         var rendezvous = Read(rendezvousPath);
         var relay = Read(relayPath);
+        var ops = Read(opsPath);
 
         var (endpoint, relayPort) = RelayEndpoint(options.RelayPublicEndpoint, notes);
         var key = SharedKey(options.RelaySharedKey, rendezvous, relay, notes);
@@ -128,7 +153,26 @@ public static class ServerSetup
         rendezvous["Urls"] = urls;
         rendezvousSection["RelayEndpoint"] = endpoint;
         rendezvousSection["RelaySharedKey"] = key;
-        ConfigureDatabase(rendezvousSection, options, notes);
+        if (options.MetricsEnabled)
+        {
+            // Only ever switched on here. Absent means "whatever this file already said", so a reconfigure that does
+            // not mention metrics cannot silently take monitoring away from a deployment that turned it on by hand.
+            rendezvousSection["MetricsEnabled"] = true;
+        }
+
+        var database = ConfigureDatabase(rendezvousSection, options, notes);
+        var opsConfigured = ConfigureOps(ops, database, options, notes);
+
+        // A certificate file that cannot actually be loaded has to fail here, while somebody is watching, rather than
+        // leave an installation whose service dies on its first start with a message about Kestrel.
+        if (!IsAuto(options.TlsCertificatePath)
+            && options.TlsCertificatePath != ServerSetupOptions.GenerateCertificate
+            && urls.StartsWith("https://", StringComparison.Ordinal))
+        {
+            ValidateCertificateFile(options.TlsCertificatePath!, options.TlsCertificatePassword);
+        }
+
+        var additionalNames = AdditionalNames(options.TlsHostName);
 
         if (!IsAuto(options.TlsCertificatePath) && urls.StartsWith("https://", StringComparison.Ordinal))
         {
@@ -151,7 +195,7 @@ public static class ServerSetup
                     // at a file. What Ensure returns is the subject with the CN= on the front, which is not what goes
                     // into the settings: Kestrel looks a certificate up by subject *name*, so the prefixed form finds
                     // nothing. See NameForThisMachine.
-                    SelfSignedCertificate.Ensure(installDirectory, notes);
+                    SelfSignedCertificate.Ensure(installDirectory, notes, additionalNames);
                     certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
                     certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
                     certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
@@ -171,7 +215,8 @@ public static class ServerSetup
                     // equivalent of AllowInvalid because a certificate given as a file is served as it stands.
                     var (certificatePath, keyPath) = SelfSignedCertificate.EnsurePem(
                         Path.Combine(installDirectory, SelfSignedCertificate.PublicFolder),
-                        notes);
+                        notes,
+                        additionalNames);
 
                     certificates["Path"] = certificatePath;
                     certificates["KeyPath"] = keyPath;
@@ -209,6 +254,14 @@ public static class ServerSetup
 
         Write(rendezvousPath, rendezvous);
         Write(relayPath, relay);
+
+        // The console's settings are only touched when somebody said something about the database or its address.
+        // The Windows installer writes this file itself and does not pass those options, so leaving it alone is what
+        // keeps its absolute %ProgramData% path intact.
+        if (opsConfigured)
+        {
+            Write(opsPath, ops);
+        }
 
         notes.Add($"Signaling listens on {urls}.");
         notes.Add($"Relay listens on port {relayPort}; clients are told to use {endpoint}.");
@@ -339,7 +392,7 @@ public static class ServerSetup
     /// Reading "not given" as "clear it" would drop the connection string — and with it every device code — on an
     /// installation that only meant to change something else.
     /// </remarks>
-    private static void ConfigureDatabase(JsonObject section, ServerSetupOptions options, List<string> notes)
+    private static DatabaseChoice? ConfigureDatabase(JsonObject section, ServerSetupOptions options, List<string> notes)
     {
         var provider = Given(options.DatabaseProvider);
         var path = Given(options.DatabasePath);
@@ -347,7 +400,7 @@ public static class ServerSetup
 
         if (provider is null && path is null && postgres is null)
         {
-            return;
+            return null;
         }
 
         var (chosen, connectionString, databasePath) = Decide(provider, path, postgres, ReadDatabase(section));
@@ -364,6 +417,14 @@ public static class ServerSetup
                 break;
 
             case ProviderPostgres:
+                if (string.IsNullOrWhiteSpace(connectionString))
+                {
+                    // Writing a provider with no string leaves a server that cannot start, and the installer would
+                    // report success because restarting a failed unit is not an error it looks at.
+                    throw new InvalidOperationException(
+                        "PostgreSQL was chosen but no connection string was given. Pass one (for example Host=127.0.0.1;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=...) or choose SQLite.");
+                }
+
                 database["ConnectionString"] = connectionString;
                 database.Remove("Path");
 
@@ -379,6 +440,69 @@ public static class ServerSetup
                 notes.Add($"Device codes are kept in SQLite at {databasePath}. Back that file up — losing it gives every device a new code.");
                 break;
         }
+
+        return new DatabaseChoice(chosen, connectionString, databasePath);
+    }
+
+    /// <summary>
+    /// Points the monitoring console at a database. It shares the provider with the signaling server, because an
+    /// operator who chose PostgreSQL meant the installation, not one of its processes.
+    /// </summary>
+    /// <returns><c>true</c> when the console's settings were changed and have to be written.</returns>
+    private static bool ConfigureOps(
+        JsonObject settings,
+        DatabaseChoice? database,
+        ServerSetupOptions options,
+        List<string> notes)
+    {
+        var listen = Given(options.OpsListen);
+        var databasePath = Given(options.OpsDatabasePath);
+        if (database is null && listen is null && databasePath is null)
+        {
+            return false;
+        }
+
+        var section = Section(settings, "Ops");
+        if (listen is not null)
+        {
+            section["Listen"] = listen;
+        }
+
+        if (database is not { } choice)
+        {
+            if (databasePath is null)
+            {
+                return true;
+            }
+
+            // Only a console path was given. That is still a SQLite console: it has no other provider to fall back to.
+            var sqlite = Section(section, DatabaseSectionName);
+            sqlite["Provider"] = ProviderSqlite;
+            sqlite["Path"] = databasePath;
+            sqlite.Remove("ConnectionString");
+            return true;
+        }
+
+        var console = Section(section, DatabaseSectionName);
+        if (choice.Provider == ProviderPostgres)
+        {
+            console["Provider"] = ProviderPostgres;
+            console["ConnectionString"] = choice.ConnectionString;
+            console.Remove("Path");
+            notes.Add("The monitoring console uses the same PostgreSQL database.");
+        }
+        else
+        {
+            // "none" is a legitimate choice for the signaling server (memory only) but not for the console: a console
+            // with nowhere to write cannot answer a single question, so it always gets a SQLite file.
+            var path = databasePath ?? DefaultOpsSqlitePath();
+            console["Provider"] = ProviderSqlite;
+            console["Path"] = path;
+            console.Remove("ConnectionString");
+            notes.Add($"The monitoring console keeps its data in SQLite at {path}.");
+        }
+
+        return true;
     }
 
     /// <summary>What the settings file already says about the database, which is what <c>auto</c> decides from.</summary>
@@ -482,6 +606,17 @@ public static class ServerSetup
                 ? "/usr/local/remotedesktop-server/var/rendezvous.db"
                 : "/var/lib/remotedesktop-server/rendezvous.db";
 
+    /// <summary>Where the console's SQLite file goes when the console was not given one.</summary>
+    private static string DefaultOpsSqlitePath() =>
+        OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Remote Desktop Server", "ops.db")
+            : OperatingSystem.IsMacOS()
+                ? "/usr/local/remotedesktop-server/var/ops.db"
+                : "/var/lib/remotedesktop-server/ops.db";
+
+    /// <summary>The provider and the values the provider needs, as they were written.</summary>
+    private readonly record struct DatabaseChoice(string Provider, string? ConnectionString, string? Path);
+
     /// <summary>A value the caller gave, with the difference between "not given" (null) and "given as empty" kept.</summary>
     private static string? Given(string? value) => value?.Trim();
 
@@ -543,6 +678,54 @@ public static class ServerSetup
 
         // Either a file that is there, or the certificate this step is about to make.
         return "https://" + urls["http://".Length..];
+    }
+
+    /// <summary>The extra names a generated certificate has to answer, split on the separators an operator is likely to type.</summary>
+    private static string[] AdditionalNames(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>
+    /// Loads the certificate the way Kestrel will, so a wrong password, a missing key or a file that is not a
+    /// certificate fails the installation instead of leaving a server that cannot start.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The file cannot be used as a server certificate.</exception>
+    private static void ValidateCertificateFile(string certificatePath, string? password)
+    {
+        var secret = IsAuto(password) ? string.Empty : password!;
+
+        try
+        {
+            if (Path.GetExtension(certificatePath) is ".pfx" or ".p12")
+            {
+                using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+                    certificatePath,
+                    secret,
+                    X509KeyStorageFlags.EphemeralKeySet);
+
+                if (!certificate.HasPrivateKey)
+                {
+                    throw new InvalidOperationException($"The certificate '{certificatePath}' has no private key, so the server cannot serve TLS with it.");
+                }
+
+                return;
+            }
+
+            var keyPath = KeyBeside(certificatePath)
+                ?? throw new InvalidOperationException(
+                    $"The certificate '{certificatePath}' is not a PKCS#12 file and has no key beside it. A PEM certificate needs its key in a file with the same name and a .key extension ({Path.ChangeExtension(certificatePath, ".key")}).");
+
+            using var pair = X509Certificate2.CreateFromPemFile(certificatePath, keyPath);
+            if (!pair.HasPrivateKey)
+            {
+                throw new InvalidOperationException($"The certificate '{certificatePath}' and '{keyPath}' do not form a key pair, so the server cannot serve TLS with them.");
+            }
+        }
+        catch (CryptographicException ex)
+        {
+            throw new InvalidOperationException($"The certificate '{certificatePath}' could not be read: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -629,6 +812,18 @@ public static class ServerSetup
             WriteIndented = true,
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }));
+
+        // These files carry the relay shared key and, when PostgreSQL is used, its password. The service reads them
+        // as its own account; nobody else on the machine has any business doing so. The package's post-install step
+        // gives the group the right name (the service account); the mode is set here so a manual run cannot leave a
+        // world-readable key behind even for the moment before that step.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                temporary,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+        }
+
         File.Move(temporary, path, overwrite: true);
     }
 

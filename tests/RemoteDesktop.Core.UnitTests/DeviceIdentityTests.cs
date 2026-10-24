@@ -33,6 +33,21 @@ public class DeviceIdentityTests
         Assert.Equal(first.Certificate.Thumbprint, second.Certificate.Thumbprint);
     }
 
+    [Fact]
+    public void A_controller_identity_is_separate_and_stable()
+    {
+        var store = new InMemorySecretStore();
+
+        using var device = DeviceIdentity.LoadOrCreate(store);
+        using var controller = DeviceIdentity.LoadOrCreate(store, DeviceIdentity.ControllerSecretName);
+        using var controllerAgain = DeviceIdentity.LoadOrCreate(store, DeviceIdentity.ControllerSecretName);
+
+        // A client beside the background service must not register with the service's device id: the signaling
+        // server keeps one session per id, so the two would abort each other's connection.
+        Assert.NotEqual(device.Fingerprint, controller.Fingerprint);
+        Assert.Equal(controller.Fingerprint, controllerAgain.Fingerprint);
+    }
+
     /// <summary>The smallest store that satisfies the port; the platform one is the subject of its own tests.</summary>
     private sealed class InMemorySecretStore : ISecretStore
     {

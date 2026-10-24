@@ -2,6 +2,60 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布]
+
+### Added — Linux 安装包按部署配置
+
+- **服务端 .deb 安装时选择数据库与 TLS**：debconf 询问 SQLite / PostgreSQL（含连接串）/ 仅内存，以及
+  自签证书 / 已有证书（PKCS#12 或 PEM + `.key`）/ 明文 HTTP；`generate` 还可以填写客户端将使用的 DNS
+  名，写进自签证书的 SAN。Ops 控制台跟随同一 provider；`none` 时仍保留自己的 SQLite 库。答案也可以
+  通过 `debconf-set-selections` 预置或 `dpkg-reconfigure remotedesktop-server` 修改。
+- **客户端与被控端 .deb 安装时填写服务器地址并导入证书**：`wss://` 且服务端使用自签证书时，安装过程
+  接受 PEM 证书路径并写入系统信任库；`ws://` 不需要证书。构包期的 `RD_RENDEZVOUS_URI` /
+  `RD_SERVER_CERTIFICATE` 仍可作为站点默认值。
+- **Ops 的设置改在 `/etc/remotedesktop-server/Ops/appsettings.json`**，单元不再用 `Environment=` 提供
+  数据库位置；`--create-admin` 新增 `--config-directory`，手工建管理员与服务工作在同一份配置上。
+- **重装会重新询问安装问题**：同一版本重装（`dpkg -i`/`apt install --reinstall`）重新显示数据库与
+  TLS / 地址与证书问题，并以上次答案为默认值；版本升级不重新询问；purge 时清除 debconf 答案并删除
+  preconfigure 标记，之后重装按全新安装处理。
+- **服务端安装包声明真实运行时依赖**（ICU、OpenSSL、zlib、libstdc++、adduser、debconf）；客户端补上
+  `libavformat62`（录制）、PipeWire 与 libei（无 host 包时的进程内被控端）以及 `ca-certificates`。
+- **Ops 安装即登记本地节点**：新增 `--seed-local-nodes`，服务端 postinst 以服务用户执行，只在节点表为空时
+  登记本机的 rendezvous/relay 地址；生成的证书同时导入系统信任库，安装还传 `--metrics-enabled`。新装环境
+  的设备管理页与节点状态不再需要手工添加节点或打开指标。
+
+### Fixed — Linux 安装包评审
+
+- **Ops 首次管理员命令在 .deb 布局下必然失败**（`Ops:Database:Path is required`）：现在读
+  `/etc/remotedesktop-server/Ops/appsettings.json`，并在文档中给出 `--config-directory`。
+- **`/etc/remotedesktop-server` 下的中继密钥与 PostgreSQL 密码全局可读**：生成的 `appsettings.json`
+  为 `0640 root:remotedesktop`，目录 `0750`；`/etc/default/remotedesktop-server` 同样收紧。
+- **systemd 把 `/var/lib/remotedesktop-server` 重置为 0755**：三个单元加 `StateDirectoryMode=0700`
+  与 `UMask=0077`，Ops 库（含口令散列与 TOTP 密钥）不再对本地用户可读。
+- **`StartLimitIntervalSec=0` 写在 `[Service]` 里被忽略**：移到 `[Unit]`。
+- **客户端包缺 `libavformat62`**：录制在干净机器上会以 `DllNotFoundException` 失败；已补依赖与安装检查。
+- **客户端“不会被控制”的描述与代码不符**：安装后的客户端在没有 host 服务时仍会在进程内充当被控端；
+  依赖已补齐，描述已改正。
+- **`Recommends: libmsquic` 与服务端无关**：服务端不使用 QUIC，已移除；描述中“缺少时 postinst 会提示”
+  的段落一并删除。
+- **自签证书只覆盖本机名/本地 IPv4**：新增 `RD_TLS_HOSTNAME`，并让 `--configure-system` 校验证书与口令
+  能否实际加载；已有证书会被复制到服务可读的位置。Linux 补上 `RD_TLS_PASSWORD`。
+- **`RD_DATABASE_PATH` 自定义目录在 `ProtectSystem=strict` 下不可写**：postinst 创建并授权目录，为
+  rendezvous/ops 写 `ReadWritePaths` drop-in；切回默认位置或 PostgreSQL 时移除。
+- **`RD_SERVER_CERTIFICATE` 不校验 PEM**：构包时用 `openssl x509` 验证，私钥不会被误打进客户端包；
+  安装时同样校验，`update-ca-certificates` 失败会中止安装而不是静默继续。
+- **host 包缺图标**、**ufw 规则不随 purge 移除**、**libmsquic 版本号硬编码**、**无 changelog/md5sums**
+  等发布卫生问题一并修复。
+- **Ops 在 `/etc` 工作目录下登录页 404**：静态资源改从 `AppContext.BaseDirectory/wwwroot` 提供，不再依赖
+  进程的当前目录。
+- **Linux 服务模式下 client 与 host 共用 `device-identity`**：两者以同一设备 ID 注册，信号令每设备只保留
+  一个会话，连接每秒互踢。客户端在 Linux 服务模式改用独立的 `controller-identity`；Windows 本来按数据目录
+  分开，macOS 没有独立服务。
+- **桌面启动器把产品名翻译成“远程桌面”**：移除 `.desktop` 的 `Name[zh_CN]`，与窗口标题、安装包名称统一为
+  `Remote Desktop`；描述和关键词仍保留中文。
+- **macOS 服务端 postinstall 未给 Ops 传数据库路径与监听地址**：`--create-admin` 与服务可能打开不同的
+  `ops.db`；现在与 Linux 一样写在同一份配置上。
+
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 
 首个正式版。自 0.3.0 起，产品从 Windows 单平台扩展到 Windows、macOS (Apple Silicon) 与 Linux，三个平台各出

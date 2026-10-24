@@ -14,6 +14,7 @@ set -eu
 
 root=$(cd "$(dirname "$0")/../../../.." && pwd)
 . "$root/build/installer/version.sh"
+. "$root/build/installer/linux/common.sh"
 version=$(read_product_version "$root")
 architecture=${DEB_ARCHITECTURE:-amd64}
 runtime=${DEB_RUNTIME:-linux-x64}
@@ -23,7 +24,7 @@ runtime=${DEB_RUNTIME:-linux-x64}
 out=${1:-$root/artifacts/installer/linux}
 work="$out/remotedesktop-server_${version}_${architecture}"
 
-for tool in dpkg-deb dotnet; do
+for tool in dpkg-deb dotnet gzip md5sum; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing required tool: $tool" >&2
         exit 1
@@ -53,12 +54,8 @@ rm -f "$work/usr/lib/remotedesktop-server/Ops/appsettings"*.json
 # Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
 find "$work/usr/lib/remotedesktop-server" -type f -name '*.pdb' -delete
 
-# The licence and the third-party notices travel with the binaries they cover. Debian expects the licence at
-# /usr/share/doc/<package>/copyright; the notices sit beside it under the name the generator gives them.
-doc="$work/usr/share/doc/remotedesktop-server"
-mkdir -p "$doc"
-install -m 0644 "$root/LICENSE" "$doc/copyright"
-install -m 0644 "$root/THIRD-PARTY-NOTICES.md" "$doc/third-party-notices.md"
+# The licence and the third-party notices travel with the binaries they cover.
+rd_install_docs "$root" "$work/usr/share/doc/remotedesktop-server"
 
 install -m 0644 "$root/build/service/linux/remotedesktop-rendezvous.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-relay.service" "$work/lib/systemd/system/"
@@ -67,6 +64,7 @@ install -m 0644 "$root/build/service/linux/remotedesktop-server.default" "$work/
 
 install -m 0755 "$root/build/installer/linux/server/postinst" "$work/DEBIAN/postinst"
 install -m 0755 "$root/build/installer/linux/server/postrm" "$work/DEBIAN/postrm"
+rd_install_debconf "$root/build/installer/linux/server" "$work"
 
 # The settings file is the package's to ship and the operator's to keep: dpkg preserves their edits across upgrades.
 printf '%s\n' /etc/default/remotedesktop-server >"$work/DEBIAN/conffiles"
@@ -74,15 +72,9 @@ printf '%s\n' /etc/default/remotedesktop-server >"$work/DEBIAN/conffiles"
 sed -e "s/@VERSION@/$version/" -e "s/@ARCHITECTURE@/$architecture/" \
     "$root/build/installer/linux/server/control" >"$work/DEBIAN/control"
 
-# The programs are self-contained and the package says nothing about libraries, so the sizes have to be right.
-# dpkg-deb does this itself for anything under /usr/bin, but not for a program under /usr/lib that is started by a
-# unit file. Installed size also has to be stated rather than guessed: du reports in KiB and dpkg wants the number.
-installed_size=$(du -sk "$work" | cut -f1)
-# awk and a move rather than `sed -i`: the in-place flag is GNU-only (BSD sed reads -i as a backup suffix),
-# and the \n in the replacement is not portable either.
-awk -v size="$installed_size" '/^Description:/ { print "Installed-Size: " size } { print }' \
-    "$work/DEBIAN/control" >"$work/DEBIAN/control.new"
-mv "$work/DEBIAN/control.new" "$work/DEBIAN/control"
+# The programs are self-contained and start from /usr/lib, so dpkg-deb works out neither their size nor their
+# dependencies. The dependencies are stated in control; the size and the file checksums are added here.
+rd_finalize_control "$work"
 
 echo "Building the package..."
 package="$out/RemoteDesktop-Server-Linux-${architecture}-${version}.deb"

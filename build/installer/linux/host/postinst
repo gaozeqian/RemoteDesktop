@@ -1,26 +1,120 @@
 #!/bin/sh
 #
-# Turns the host on for everybody who logs in, and says what is missing if anything is.
+# Applies the answers from the installation questions (the signaling address and, for wss://, a certificate), then
+# turns the host on for everybody who logs in and says what is missing if anything is.
 #
 # Nothing is started here. The host runs inside a graphical session, and at the moment a package is configured there
 # may be no session at all — no display, no session bus, nobody to answer the portal's dialog. It starts when the
 # session does, which is what WantedBy=graphical-session.target in the unit file arranges.
 set -e
 
+. /usr/share/debconf/confmodule
+
+SETTINGS=/usr/lib/remotedesktop-host/appsettings.json
+DEFAULTS=/etc/default/remotedesktop-host
+CERTIFICATE_NAME=remotedesktop-signaling-host.crt
+CERTIFICATE=/usr/local/share/ca-certificates/$CERTIFICATE_NAME
+
 case "$1" in
     configure)
-        # --global rather than a plain enable: this unit belongs to every user rather than to root. It writes a
-        # symlink under /etc/systemd/user, so each account picks it up the next time it logs in. That is also why
-        # deb-systemd-helper is not used here — it only knows about system units.
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --global enable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
-            systemctl --global daemon-reload >/dev/null 2>&1 || true
+        # apt preconfigures the package before unpacking it and leaves this marker behind. The same questions asked
+        # again here would be the second prompt of one installation. Plain `dpkg -i` starts no preconfiguration.
+        questions_marker=/run/remotedesktop-host.questions-asked
+        asked_by_preconfigure=false
+        if [ -e "$questions_marker" ]; then
+            asked_by_preconfigure=true
+            rm -f "$questions_marker"
         fi
 
-        # See the client's postinst: trust a signaling certificate this package was built with, if any.
-        if [ -f /usr/local/share/ca-certificates/remotedesktop-signaling-host.crt ] &&
-            command -v update-ca-certificates >/dev/null 2>&1; then
-            update-ca-certificates >/dev/null 2>&1 || true
+        if [ "${DEBCONF_RECONFIGURE+set}" = "set" ] || [ "$asked_by_preconfigure" = true ]; then
+            # dpkg-reconfigure (or apt's preconfiguration) has already asked; use those answers.
+            :
+        elif [ -x /var/lib/dpkg/info/remotedesktop-host.config ]; then
+            # The config script tells a fresh install and a reinstall (ask again) from an upgrade (keep answers).
+            DEBCONF_RECONFIGURE= /var/lib/dpkg/info/remotedesktop-host.config configure "${2:-}" --post-install || exit 1
+        fi
+
+        db_get remotedesktop-host/server-address || true
+        address=${RET:-}
+        db_get remotedesktop-host/server-certificate || true
+        server_certificate=${RET:-}
+
+        if [ -r "$DEFAULTS" ]; then
+            # shellcheck disable=SC1090
+            . "$DEFAULTS"
+        fi
+        [ -n "$address" ] || address=${RD_RENDEZVOUS_URI:-}
+        [ -n "$server_certificate" ] || server_certificate=${RD_SERVER_CERTIFICATE:-}
+
+        if [ -n "$address" ]; then
+            case "$address" in
+                ws://?*|wss://?*) ;;
+                *)
+                    echo "remotedesktop-host: the signaling address must start with ws:// or wss:// (got '$address')." >&2
+                    exit 1
+                    ;;
+            esac
+            case "$address" in
+                *'&'*|*'#'*|*'\\'*|*'"'*|*'|'*|*[[:space:]]*)
+                    echo "remotedesktop-host: the signaling address contains a character this script cannot safely substitute." >&2
+                    exit 1
+                    ;;
+            esac
+
+            sed "s#\"RendezvousUri\"[[:space:]]*:[[:space:]]*\"[^\"]*\"#\"RendezvousUri\": \"$address\"#" \
+                "$SETTINGS" >"$SETTINGS.new"
+            mv "$SETTINGS.new" "$SETTINGS"
+
+            grep -Fq "\"$address\"" "$SETTINGS" || {
+                echo "remotedesktop-host: could not set Transport:RendezvousUri in $SETTINGS." >&2
+                exit 1
+            }
+        fi
+
+        case "$address" in
+            wss://*)
+                if [ -n "$server_certificate" ]; then
+                    if [ ! -f "$server_certificate" ] || [ ! -r "$server_certificate" ]; then
+                        echo "remotedesktop-host: the certificate '$server_certificate' cannot be read." >&2
+                        exit 1
+                    fi
+
+                    if command -v openssl >/dev/null 2>&1; then
+                        openssl x509 -in "$server_certificate" -noout 2>/dev/null || {
+                            echo "remotedesktop-host: '$server_certificate' is not a PEM certificate. Pass the public half, not the key." >&2
+                            exit 1
+                        }
+                    else
+                        grep -q -- '-----BEGIN CERTIFICATE-----' "$server_certificate" || {
+                            echo "remotedesktop-host: '$server_certificate' is not a PEM certificate." >&2
+                            exit 1
+                        }
+                    fi
+
+                    # The same file can be named when a site build's embedded certificate is also the answer.
+                    if [ ! "$server_certificate" -ef "$CERTIFICATE" ]; then
+                        install -m 0644 "$server_certificate" "$CERTIFICATE"
+                    fi
+                fi
+                ;;
+        esac
+
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+        fi
+
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+        fi
+
+        # See the client's postinst: trust a certificate this package was built with, and the one supplied above.
+        # Run even when no certificate was supplied this time: an upgrade whose new package no longer carries one
+        # leaves the old file behind as a dangling trust entry until this command notices the source is gone.
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null || {
+                echo "remotedesktop-host: update-ca-certificates failed; the server certificate is not trusted." >&2
+                exit 1
+            }
         fi
 
         # The libraries this program loads by name at run time. dpkg has already refused the installation if any of
@@ -28,7 +122,7 @@ case "$1" in
         # --force-depends, and the encoder, which may exist but have been built without the codec that makes it
         # useful.
         missing=""
-        for library in libpipewire-0.3.so.0 libei.so.1 libpulse.so.0 libavcodec.so.62; do
+        for library in libpipewire-0.3.so.0 libei.so.1 libpulse.so.0 libavcodec.so.62 libavformat.so.62; do
             if ! ldconfig -p 2>/dev/null | grep -q "$library"; then
                 missing="$missing $library"
             fi
@@ -46,6 +140,20 @@ case "$1" in
             echo "remotedesktop-host: no desktop portal is installed. Sharing this machine's screen needs one;" >&2
             echo "  install xdg-desktop-portal-gnome (or the one for your desktop) and log in again." >&2
         fi
+
+        # --global rather than a plain enable: this unit belongs to every user rather than to root. It writes a
+        # symlink under /etc/systemd/user, so each account picks it up the next time it logs in. That is also why
+        # deb-systemd-helper is not used here — it only knows about system units.
+        if command -v systemctl >/dev/null 2>&1; then
+            # The 0.3.0 package installed a unit named remotedesktop-host.service. Its file is removed by the
+            # upgrade, but the enable symlink this package's predecessor wrote is not part of any package; without
+            # this it stays behind pointing at a unit that no longer exists.
+            systemctl --global disable remotedesktop-host.service >/dev/null 2>&1 || true
+            rm -f /etc/systemd/user/graphical-session.target.wants/remotedesktop-host.service
+
+            systemctl --global enable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
+            systemctl --global daemon-reload >/dev/null 2>&1 || true
+        fi
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
@@ -57,4 +165,5 @@ case "$1" in
         ;;
 esac
 
+db_stop
 exit 0

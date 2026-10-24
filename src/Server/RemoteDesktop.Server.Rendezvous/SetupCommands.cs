@@ -42,6 +42,10 @@ public static class SetupCommands
             PostgresConnectionString = Argument(args, "--postgres"),
             TlsCertificatePath = Argument(args, "--tls-certificate"),
             TlsCertificatePassword = Argument(args, "--tls-password"),
+            TlsHostName = Argument(args, "--tls-hostname"),
+            OpsDatabasePath = Argument(args, "--ops-database-path"),
+            OpsListen = Argument(args, "--ops-listen"),
+            MetricsEnabled = Array.Exists(args, argument => string.Equals(argument, "--metrics-enabled", StringComparison.Ordinal)),
         };
 
         var directory = Argument(args, "--install-directory") ?? defaultInstallDirectory;

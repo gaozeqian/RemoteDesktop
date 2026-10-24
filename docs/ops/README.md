@@ -29,10 +29,10 @@
 
 | 机器 | 需要什么 |
 |---|---|
-| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
+| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
 | 被控端（Windows） | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
-| 被控端（Linux） | 有 Wayland 会话与 portal 的桌面发行版（x64）；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
-| 控制端 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64） |
+| 被控端（Linux） | **Ubuntu 26.04+**（x64，FFmpeg 8 的 soname 固定）或有 Wayland 会话与 portal 的同等发行版；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
+| 控制端 | Windows 11 / Windows Server 2022+（x64），或 **Ubuntu 26.04+**（x64） |
 
 > **服务器可以混着来。** 信令和中继跟两端跑什么系统无关，一台 Linux 服务器可以同时服务 Windows 和 Linux 的
 > 客户端与被控端。只有「被控端装什么包」是跟系统绑的。
@@ -55,27 +55,54 @@
 
 ```sh
 build/installer/linux/server/build-deb.sh
-sudo dpkg -i artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<版本>.deb
+sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<版本>.deb
 ```
+
+`apt install ./...deb` 会一并解决包声明的依赖（ICU、OpenSSL、debconf、adduser 等）。用 `dpkg -i` 也可以，
+但目标机缺少其中任何一个依赖时包会停在未配置状态，需要再跑一次 `sudo apt-get -f install`。
 
 包把三个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops}`，三个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
 升级不会覆盖运维改过的东西。这是相对 Windows 的一处有意改进：MSI 只能把 `appsettings.json` 写在
 `Program Files` 里，然后想办法绕开同一件事。
 
-和 Windows 一样，设置由程序自己写（`--configure-system`），`postinst` 只负责说明位置——两个平台因此
-产出同样的文件，走同一段代码。控制台不需要这段设置：它的库路径与回环地址由单元里的环境变量给定。
-改完配置：
+安装过程会问两组问题（`dpkg -i` 也会问，不只是 `apt install`）：
+
+| 问题 | 取值 | 说明 |
+|---|---|---|
+| 数据库 | `sqlite` / `postgres` / `none` | 前两个是正式选择；`none` 只把设备码放内存，重启即失效。Ops 用同一个 provider，`none` 时仍保留自己的 SQLite 库 |
+| SQLite 文件 | 绝对路径 | 默认 `/var/lib/remotedesktop-server/rendezvous.db`；同目录下放 `ops.db`。目录会创建并交给服务账户 |
+| PostgreSQL 连接串 | Npgsql 连接串 | 选 postgres 时必填；数据库本身要先存在，表由服务创建 |
+| 信令 TLS | `generate` / `existing` / `none` | 自签证书 / 已有证书（PKCS#12 或 PEM + 同名 `.key`）/ 明文 HTTP |
+| 证书文件与口令 | 路径 / 口令 | `existing` 时询问；文件会被复制到 `/etc/remotedesktop-server/tls/custom/`，服务账户可读 |
+| 公网主机名 | 可逗号分隔 | 仅 `generate` 时询问；写进自签证书的 SAN，客户端用 DNS 名或 NAT 地址访问时必须填 |
+
+设置仍由程序自己写（`--configure-system`），`postinst` 只负责把答案变成参数——两个平台因此产出同样的
+文件，走同一段代码。控制台的设置也写在 `/etc/remotedesktop-server/Ops/appsettings.json`，和
+`--create-admin` 读的是同一份。
+
+> **同一版本重装会重新询问**（默认值保留上一次的答案）；**版本升级不会**重新询问；`apt purge` 会连同
+> debconf 答案一起清除，之后重装按全新安装询问。`dpkg-reconfigure` 则总是重新询问。
+
+改配置：
 
 ```sh
-sudo dpkg-reconfigure remotedesktop-server     # 或直接编辑 /etc/default/remotedesktop-server 后重跑 postinst
+sudo dpkg-reconfigure remotedesktop-server
+# 非交互安装可以预先写入答案：
+# printf '%s\n' 'remotedesktop-server database-provider select postgres' \
+#   'remotedesktop-server postgres-connection password Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...' \
+#   | debconf-set-selections
 systemctl status remotedesktop-rendezvous remotedesktop-relay remotedesktop-ops
-# 这个包的默认值是 RD_TLS=generate，即自签 HTTPS；-k 是因为证书不是公共 CA 签的
+# 这个包的默认答案是 generate，即自签 HTTPS；-k 是因为证书不是公共 CA 签的
 curl -k https://127.0.0.1:5080/health
 curl http://127.0.0.1:5090/health
 ```
 
-`postinst` **只在 ufw 处于 active 时**才加防火墙规则，不动 nftables/iptables。
+`/etc/default/remotedesktop-server` 仍是高级设置与非交互安装的入口（监听地址、中继地址、共享密钥、
+防火墙开关，以及数据库/TLS 问题的预置值）；交互式改数据库或 TLS 请用 `dpkg-reconfigure`。
+
+`postinst` **只在 ufw 处于 active 时**才加防火墙规则，不动 nftables/iptables；purge 时只删除安装时加过
+的那三条（用数据目录里的标记判断）。
 
 ### 1b. 服务端：安装包（Windows）
 
@@ -606,14 +633,16 @@ dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin
 dotnet run --project src/Server/RemoteDesktop.Server.Ops                          # http://127.0.0.1:5090
 ```
 
-随**服务端安装包**一起装，三个平台都是：Linux 的 `.deb` 带 `remotedesktop-ops.service`（库在
-`/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带 `com.remotedesktop.ops` LaunchDaemon（库在
+随**服务端安装包**一起装，三个平台都是：Linux 的 `.deb` 带 `remotedesktop-ops.service`（安装时选了
+PostgreSQL 就用同一个库，否则在 `/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带
+`com.remotedesktop.ops` LaunchDaemon（库在
 `/usr/local/remotedesktop-server/var/ops.db`），Windows 的 MSI 带 `RemoteDesktopOps` 服务（库在
 `%ProgramData%\Remote Desktop Server\ops.db`）。它不需要单独安装，也没有安装属性。
 
 ```bash
-# Linux
-sudo -u remotedesktop /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+# Linux — the console keeps its settings in /etc, not next to the program
+sudo -u remotedesktop /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops \
+  --create-admin admin --config-directory /etc/remotedesktop-server/Ops
 sudo systemctl restart remotedesktop-ops
 
 # macOS
@@ -908,33 +937,55 @@ build/installer/linux/host/build-deb.sh     # 允许被别人控制
 `build-deb.sh` 自包含发布，所以**目标机器不需要装 .NET**，也不需要 `LD_LIBRARY_PATH`——
 `libmsquic` 随包放在可执行文件旁边，那是自包含程序会找的地方、别的程序不会找的地方。
 
-### 2. 服务器地址
+### 2. 服务器地址与证书
 
-Windows 的 MSI 用 `-RendezvousUri` 把地址烤进包里；**Linux 的包只带一个默认值**（`ws://127.0.0.1:5080/ws`，
-即"连本机"，装到别的机器上等于没配）。改成自己的：在客户端的「修改服务器地址」里填，或者直接写
+**安装时会问**（`dpkg -i` 也会问）：信令服务器地址，形如 `ws://主机:5080/ws` 或 `wss://主机:5080/ws`；
+当地址是 `wss://` 且服务端用自签证书时，再问证书文件（PEM）。答案是：
+
+- `ws://`：不需要证书；服务端也没开 TLS。
+- `wss://` + 公共 CA 签的证书：证书问题留空。
+- `wss://` + 自签证书：把服务端 `/etc/remotedesktop-server/tls/signaling.crt` 拷到本机，安装时填写
+  它的路径；包把它装进 `/usr/local/share/ca-certificates/` 并运行 `update-ca-certificates`。
+
+构包时仍可用 `RD_RENDEZVOUS_URI` / `RD_SERVER_CERTIFICATE` 把站点默认值烤进包（见 §六），安装问题会
+以它为默认值。非交互安装可以预先写答案：
+
+```sh
+printf '%s\n' \
+  'remotedesktop-client server-address string wss://rd.example.com:5080/ws' \
+  'remotedesktop-client server-certificate string /root/signaling.crt' \
+  | debconf-set-selections
+```
+
+已安装的包用 `dpkg-reconfigure` 改答案（`/etc/default/remotedesktop-{client,host}` 只在首次安装前预置或
+非交互安装时生效，装完再改它不会覆盖 debconf 里的答案）。同一版本重装会重新询问并保留上次的答案；
+版本升级不重新询问；`apt purge` 会清除答案，重装按全新安装询问：
+
+```sh
+sudo dpkg-reconfigure remotedesktop-client     # 被控端同理：remotedesktop-host
+```
+
+**客户端和被控端读的最终值**来自随包的 `appsettings.json`（安装时写入），用户自己的那份可以覆盖它：
 
 ```text
 ~/.local/share/RemoteDesktop/appsettings.json     # { "Transport": { "RendezvousUri": "ws://主机:5080/ws" } }
 ```
 
-**客户端和被控端读的是同一个文件**，所以写一次两边都生效。
+**客户端和被控端读的是同一个用户文件**，所以写一次两边都生效。
 
-> 注意写的是**用户自己**那一份，不是包安装的那份。随包的 `appsettings.json` 在
-> `/usr/lib/remotedesktop-{client,host}/` 下、属于 root，普通用户改不了；程序会把自己的那份**叠在**
-> 随包的那份之上，只覆盖你写进去的键。升级替换包里的文件不影响你写的。
->
-> 这一节先前写错过两次：先是让 Linux 用户去点一个当时会拒绝的按钮，后来又把路径写成上面这个而当时它
-> 根本不存在。现在两条路都是实测可用的。
+> 随包的 `appsettings.json` 在 `/usr/lib/remotedesktop-{client,host}/` 下、属于 root，普通用户改不了；
+> 程序会把自己的那份**叠在**随包的那份之上，只覆盖你写进去的键。升级替换包里的文件不影响你写的。
 
-不内置是一个选择而不是遗漏：本软件公网和内网都要用，服务器地址往往部署时才定，一个装在用户机器上的包
-内置谁的地址都不对。客户端连不上时会在界面上直说"未连接服务器（地址）"，不会变成"看着正常、就是连不上"。
+客户端连不上时会在界面上直说"未连接服务器（地址）"，不会变成"看着正常、就是连不上"。
 
 ### 3. 安装
 
 ```sh
-sudo dpkg -i RemoteDesktop-Client-Linux-amd64-<版本>.deb
-sudo dpkg -i RemoteDesktop-Host-Linux-amd64-<版本>.deb
+sudo apt install ./RemoteDesktop-Client-Linux-amd64-<版本>.deb
+sudo apt install ./RemoteDesktop-Host-Linux-amd64-<版本>.deb
 ```
+
+（`apt install ./...deb` 同时装依赖；只用 `dpkg -i` 时，缺依赖会停在未配置状态。）
 
 装完之后：
 
@@ -1209,6 +1260,17 @@ build/installer/linux/server/build-deb.sh   # 信令与中继服务器
 ```
 
 `libmsquic` 随包放在可执行文件旁，所以装出来的包不需要设 `LD_LIBRARY_PATH`。安装与服务管理见 §五。
+
+客户端和被控端构包时可以给安装问题一个站点默认值：
+
+```bash
+RD_RENDEZVOUS_URI=wss://rd.example.com:5080/ws \
+RD_SERVER_CERTIFICATE=/secure/signaling.crt \
+build/installer/linux/client/build-deb.sh
+```
+
+`RD_SERVER_CERTIFICATE` 必须是 PEM **证书**（不是私钥）；它随包分发，安装时仍可换成另一份证书。
+服务端没有构包期属性：数据库与 TLS 在安装时询问，也可以用 `debconf-set-selections` 预置。
 
 ### 产物在哪
 

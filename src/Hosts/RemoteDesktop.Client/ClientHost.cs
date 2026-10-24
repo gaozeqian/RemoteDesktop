@@ -14,6 +14,7 @@ using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Transport;
+using RemoteDesktop.Transport.Identity;
 
 namespace RemoteDesktop.Client;
 
@@ -94,8 +95,16 @@ internal static class ClientHost
         {
             // The service is the device others connect to; this process only makes outgoing connections.
             transport.AcceptIncoming = false;
+
+            // This process needs its own device id. On Windows the two are already separate data directories; on Linux
+            // the service runs as the signed-in user, so both would load the same secret and, because the signaling
+            // server keeps one session per device, kick each other off once a second. The client's code is shown as
+            // 本机控制端代码 — a different code from the service's, which is what the settings page promises.
+            var identitySecretName = OperatingSystem.IsLinux()
+                ? DeviceIdentity.ControllerSecretName
+                : DeviceIdentity.SecretName;
             builder.Services
-                .AddQuicTransport(transport)
+                .AddQuicTransport(transport, identitySecretName)
                 .AddRemoteDesktopApplication(telemetry)
                 .AddSingleton<IHostControl>(new PipeHostControl(pipeName));
         }

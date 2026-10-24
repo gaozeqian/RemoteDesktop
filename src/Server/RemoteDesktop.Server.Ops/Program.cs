@@ -7,7 +7,14 @@ if (SetupCommands.TryRun(args, Console.Out, out var setupExitCode))
     return setupExitCode;
 }
 
-var builder = WebApplication.CreateBuilder(args);
+// The Linux package starts this program with /etc as its working directory so that appsettings.json is read from
+// /etc; the console's static assets stay next to the program. The web root is a separate setting, and without this
+// the sign-in page is a 404 on every packaged installation. In development the published directory is not there, and
+// the default (the project's own wwwroot) is the right one.
+var publishedWebRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+var builder = Directory.Exists(publishedWebRoot)
+    ? WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = publishedWebRoot })
+    : WebApplication.CreateBuilder(args);
 
 // Same three deployment shapes as the signaling server: console, systemd unit, Windows service.
 if (OperatingSystem.IsWindows())

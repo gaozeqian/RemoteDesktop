@@ -1,13 +1,106 @@
 #!/bin/sh
 #
-# Tells the desktop about the new launcher and icons.
+# Applies the answers from the installation questions: the signaling address goes into the settings next to the
+# program, and a server certificate the operator brought goes into the system trust store. Then tells the desktop
+# about the new launcher and icons.
 #
 # Nothing is started and nothing is enabled. This is a program somebody opens, not a service, and a package that
 # launched a window at install time would be opening a connection dialog at a moment the person did not ask for one.
 set -e
 
+. /usr/share/debconf/confmodule
+
+SETTINGS=/usr/lib/remotedesktop-client/appsettings.json
+DEFAULTS=/etc/default/remotedesktop-client
+CERTIFICATE_NAME=remotedesktop-signaling-client.crt
+CERTIFICATE=/usr/local/share/ca-certificates/$CERTIFICATE_NAME
+
 case "$1" in
     configure)
+        # apt preconfigures the package before unpacking it and leaves this marker behind. The same questions asked
+        # again here would be the second prompt of one installation. Plain `dpkg -i` starts no preconfiguration.
+        questions_marker=/run/remotedesktop-client.questions-asked
+        asked_by_preconfigure=false
+        if [ -e "$questions_marker" ]; then
+            asked_by_preconfigure=true
+            rm -f "$questions_marker"
+        fi
+
+        if [ "${DEBCONF_RECONFIGURE+set}" = "set" ] || [ "$asked_by_preconfigure" = true ]; then
+            # dpkg-reconfigure (or apt's preconfiguration) has already asked; use those answers.
+            :
+        elif [ -x /var/lib/dpkg/info/remotedesktop-client.config ]; then
+            # The config script tells a fresh install and a reinstall (ask again) from an upgrade (keep answers).
+            DEBCONF_RECONFIGURE= /var/lib/dpkg/info/remotedesktop-client.config configure "${2:-}" --post-install || exit 1
+        fi
+
+        db_get remotedesktop-client/server-address || true
+        address=${RET:-}
+        db_get remotedesktop-client/server-certificate || true
+        server_certificate=${RET:-}
+
+        if [ -r "$DEFAULTS" ]; then
+            # shellcheck disable=SC1090
+            . "$DEFAULTS"
+        fi
+        [ -n "$address" ] || address=${RD_RENDEZVOUS_URI:-}
+        [ -n "$server_certificate" ] || server_certificate=${RD_SERVER_CERTIFICATE:-}
+
+        if [ -n "$address" ]; then
+            case "$address" in
+                ws://?*|wss://?*) ;;
+                *)
+                    echo "remotedesktop-client: the signaling address must start with ws:// or wss:// (got '$address')." >&2
+                    exit 1
+                    ;;
+            esac
+            case "$address" in
+                *'&'*|*'#'*|*'\\'*|*'"'*|*'|'*|*[[:space:]]*)
+                    echo "remotedesktop-client: the signaling address contains a character this script cannot safely substitute." >&2
+                    exit 1
+                    ;;
+            esac
+
+            sed "s#\"RendezvousUri\"[[:space:]]*:[[:space:]]*\"[^\"]*\"#\"RendezvousUri\": \"$address\"#" \
+                "$SETTINGS" >"$SETTINGS.new"
+            mv "$SETTINGS.new" "$SETTINGS"
+
+            grep -Fq "\"$address\"" "$SETTINGS" || {
+                echo "remotedesktop-client: could not set Transport:RendezvousUri in $SETTINGS." >&2
+                exit 1
+            }
+        fi
+
+        # A certificate is only needed when the address asks for TLS, and only when it is not one a public authority
+        # signed. An empty answer therefore means "nothing to import", not "remove what is there".
+        case "$address" in
+            wss://*)
+                if [ -n "$server_certificate" ]; then
+                    if [ ! -f "$server_certificate" ] || [ ! -r "$server_certificate" ]; then
+                        echo "remotedesktop-client: the certificate '$server_certificate' cannot be read." >&2
+                        exit 1
+                    fi
+
+                    if command -v openssl >/dev/null 2>&1; then
+                        openssl x509 -in "$server_certificate" -noout 2>/dev/null || {
+                            echo "remotedesktop-client: '$server_certificate' is not a PEM certificate. Pass the public half, not the key." >&2
+                            exit 1
+                        }
+                    else
+                        grep -q -- '-----BEGIN CERTIFICATE-----' "$server_certificate" || {
+                            echo "remotedesktop-client: '$server_certificate' is not a PEM certificate." >&2
+                            exit 1
+                        }
+                    fi
+
+                    # The same file can be named when a site build's embedded certificate is also the answer.
+                    if [ ! "$server_certificate" -ef "$CERTIFICATE" ]; then
+                        install -m 0644 "$server_certificate" "$CERTIFICATE"
+                    fi
+                fi
+                ;;
+        esac
+
         # Both of these only update caches; a desktop that is not running, or one that cannot update them, is not a
         # reason for the installation to fail.
         if command -v update-desktop-database >/dev/null 2>&1; then
@@ -18,17 +111,24 @@ case "$1" in
             gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
         fi
 
-        # A site-specific build can carry the signaling server's self-signed certificate. Trust it as a root so
-        # wss:// works without the person importing it by hand. The update only touches the system CA bundle.
-        if [ -f /usr/local/share/ca-certificates/remotedesktop-signaling-client.crt ] &&
-            command -v update-ca-certificates >/dev/null 2>&1; then
-            update-ca-certificates >/dev/null 2>&1 || true
+        # Trust a certificate this package was built with, and the one the operator supplied above. The update only
+        # touches the system CA bundle. It is not optional: an installation that asked for wss:// and silently did
+        # not trust the certificate would fail at the first connection, long after anybody could connect the two.
+        # Run even when no certificate was supplied this time: an upgrade whose new package no longer carries one
+        # leaves the old file behind as a dangling trust entry until this command notices the source is gone.
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null || {
+                echo "remotedesktop-client: update-ca-certificates failed; the server certificate is not trusted." >&2
+                exit 1
+            }
         fi
 
-        # The same two libraries the host needs, for the same reason: the loader will not notice them missing until
-        # the picture is already supposed to be on screen.
+        # The libraries the program loads by name at run time. dpkg has already refused the installation if any of
+        # the declared ones were missing, so this is about the two cases dpkg cannot see: a package installed with
+        # --force-depends, and the libraries the in-process controlled end reaches for (PipeWire, libei) — a client
+        # without the host package still offers itself as a controlled end while it runs.
         missing=""
-        for library in libavcodec.so.62 libX11.so.6 libGL.so.1; do
+        for library in libavcodec.so.62 libavformat.so.62 libX11.so.6 libGL.so.1 libpipewire-0.3.so.0 libei.so.1; do
             if ! ldconfig -p 2>/dev/null | grep -q "$library"; then
                 missing="$missing $library"
             fi
@@ -49,4 +149,5 @@ case "$1" in
         ;;
 esac
 
+db_stop
 exit 0

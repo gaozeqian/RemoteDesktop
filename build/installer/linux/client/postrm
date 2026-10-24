@@ -7,8 +7,17 @@
 # next version installed finds them where it left them.
 set -e
 
+# Only a purge needs debconf. Removal has to work even when debconf is missing or the package is half-installed.
+have_debconf=false
+if [ "${1:-}" = "purge" ] && [ -f /usr/share/debconf/confmodule ]; then
+    . /usr/share/debconf/confmodule
+    have_debconf=true
+fi
+
 case "$1" in
     remove)
+        rm -f /run/remotedesktop-client.questions-asked
+
         if command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
         fi
@@ -25,7 +34,16 @@ case "$1" in
         fi
         ;;
 
-    purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    purge)
+        # A purge followed by an install is a new installation: ask the questions again.
+        if [ "$have_debconf" = true ]; then
+            db_purge || true
+            db_stop
+        fi
+        rm -f /run/remotedesktop-client.questions-asked
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;
 
     *)

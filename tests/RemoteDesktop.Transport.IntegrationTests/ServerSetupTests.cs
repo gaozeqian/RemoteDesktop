@@ -92,6 +92,21 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal(key, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).SharedKey);
     }
 
+    [Fact]
+    public void Metrics_are_mounted_only_when_the_installer_asks()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        Assert.False(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { MetricsEnabled = true });
+        Assert.True(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
+
+        // A later run that says nothing about metrics must not switch them off: an operator who turned them on by
+        // hand keeps them.
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        Assert.True(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
+    }
+
     [Theory]
     [InlineData("not base64 at all")]
     [InlineData("c2hvcnQ=")] // "short", five bytes
@@ -549,10 +564,141 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Contains("self-signed", string.Join(' ', notes), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void The_console_follows_the_database_provider()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            DatabaseProvider = "sqlite",
+            DatabasePath = Path.Combine(_folder, "data", "rendezvous.db"),
+            OpsDatabasePath = Path.Combine(_folder, "data", "ops.db"),
+            OpsListen = "http://127.0.0.1:5090",
+        });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Sqlite, ops["Ops:Database:Provider"]);
+        Assert.Equal(Path.Combine(_folder, "data", "ops.db"), ops["Ops:Database:Path"]);
+        Assert.Equal("http://127.0.0.1:5090", ops["Ops:Listen"]);
+        Assert.Contains(notes, note => note.Contains("monitoring console", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void The_console_shares_the_postgres_database()
+    {
+        const string ConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x";
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            DatabaseProvider = "postgres",
+            PostgresConnectionString = ConnectionString,
+        });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Postgres, ops["Ops:Database:Provider"]);
+        Assert.Equal(ConnectionString, ops["Ops:Database:ConnectionString"]);
+        Assert.Null(ops["Ops:Database:Path"]);
+    }
+
+    /// <summary>
+    /// A console cannot keep its data in memory, so "none" for the signaling server still gives it a SQLite file.
+    /// </summary>
+    [Fact]
+    public void The_console_still_gets_a_database_when_the_signaling_server_has_none()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "none" });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Sqlite, ops["Ops:Database:Provider"]);
+        Assert.False(string.IsNullOrWhiteSpace(ops["Ops:Database:Path"]));
+    }
+
+    [Fact]
+    public void Postgres_without_a_connection_string_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "postgres" }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    /// <summary>
+    /// A file that exists is not a certificate. Loading it the way Kestrel will is what turns a typo into a failed
+    /// installation rather than a service that dies on its first start.
+    /// </summary>
+    [Fact]
+    public void An_invalid_certificate_is_refused_before_anything_is_written()
+    {
+        var path = Path.Combine(_folder, "not-a-certificate.pfx");
+        File.WriteAllText(path, "not a certificate");
+
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = path,
+        }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    [Fact]
+    public void A_pfx_with_the_wrong_password_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "not-the-password",
+        }));
+    }
+
+    [Fact]
+    public void A_generated_certificate_carries_the_names_it_was_given()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The PEM form.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            TlsCertificatePath = ServerSetupOptions.GenerateCertificate,
+            TlsHostName = "rd.example.com, 203.0.113.10",
+        });
+
+        var certificatePath = Configuration(ServerSetup.RendezvousFolder)["Kestrel:Certificates:Default:Path"]!;
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+
+        Assert.Contains("rd.example.com", names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("203.0.113.10", names.EnumerateIPAddresses().Select(address => address.ToString()));
+    }
+
+    /// <summary>
+    /// The settings carry the relay key and, in the PostgreSQL case, a password. The service account reads them
+    /// through its group; every other account is kept out.
+    /// </summary>
+    [Fact]
+    public void On_unix_the_settings_are_readable_by_the_service_group_only()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        var mode = new FileInfo(path).UnixFileMode;
+
+        Assert.True(mode.HasFlag(UnixFileMode.UserRead));
+        Assert.True(mode.HasFlag(UnixFileMode.UserWrite));
+        Assert.True(mode.HasFlag(UnixFileMode.GroupRead));
+        Assert.False(mode.HasFlag(UnixFileMode.GroupWrite));
+        Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
+    }
+
     private string WriteCertificate()
     {
+        // A real PFX, because the step now loads it the way Kestrel will: a file that merely exists is not enough to
+        // promise the server will start, which is exactly what the check is for.
         var path = Path.Combine(_folder, "signaling.pfx");
-        File.WriteAllBytes(path, [1, 2, 3]); // only its presence matters here; the TLS test covers a real one
+        using var certificate = SelfSignedCertificate.CreateForThisMachine(SelfSignedCertificate.SubjectForThisMachine);
+        File.WriteAllBytes(path, certificate.Export(X509ContentType.Pfx, "pfx-password"));
         return path;
     }
 

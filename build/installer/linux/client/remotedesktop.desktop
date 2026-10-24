@@ -1,7 +1,9 @@
 [Desktop Entry]
 Type=Application
+# The product name is not translated. A localized Name here made the launcher call the program 远程桌面 while the
+# window, the installer and the store listing all say Remote Desktop — the same product under two names. The
+# description and keywords stay translated, because those are read by search rather than shown as the name.
 Name=Remote Desktop
-Name[zh_CN]=远程桌面
 Comment=Control another computer
 Comment[zh_CN]=远程控制另一台电脑
 Exec=/usr/bin/remotedesktop

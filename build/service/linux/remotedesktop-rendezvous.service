@@ -7,6 +7,9 @@ Wants=network-online.target
 # The two halves of the server share a key and an address, so the relay is started alongside this one rather than
 # whenever the boot happens to get to it.
 Before=remotedesktop-relay.service
+# A server being reconfigured should keep coming back, and the default of giving up after five failures in ten
+# seconds is the opposite of what a daemon wants. This is a [Unit] setting; in [Service] systemd ignores it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
@@ -22,14 +25,13 @@ ExecStart=/usr/lib/remotedesktop-server/Rendezvous/RemoteDesktop.Server.Rendezvo
 
 Restart=always
 RestartSec=5
-# No start limit: a server being reconfigured should keep coming back, and the default of giving up after five
-# failures in ten seconds is the opposite of what a daemon wants.
-StartLimitIntervalSec=0
 
 StandardOutput=journal
 StandardError=journal
 StateDirectory=remotedesktop-server
+StateDirectoryMode=0700
 LogsDirectory=remotedesktop-server
+UMask=0077
 
 # Nothing outside its own state, configuration and logs is writable; the program itself is read-only.
 NoNewPrivileges=yes

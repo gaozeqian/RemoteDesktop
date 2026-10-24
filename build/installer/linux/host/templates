@@ -1,0 +1,21 @@
+Template: remotedesktop-host/server-address
+Type: string
+Default: @DEFAULT_RENDEZVOUS_URI@
+Description: Signaling server address:
+ The WebSocket address of the server this machine registers with, for
+ example ws://rd.example.com:5080/ws (no TLS) or
+ wss://rd.example.com:5080/ws (TLS).
+ .
+ 127.0.0.1 only reaches a server on this machine. Both machines in a
+ session must be pointed at the same server.
+
+Template: remotedesktop-host/server-certificate
+Type: string
+Default:
+Description: Server certificate:
+ Only used for a wss:// address. The PEM certificate of a server that
+ uses a self-signed certificate; it is installed into this machine's
+ trust store.
+ .
+ Leave empty if the server's certificate comes from a public authority,
+ or if the address is ws://.
