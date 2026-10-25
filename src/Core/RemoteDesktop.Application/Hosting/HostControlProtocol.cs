@@ -14,6 +14,13 @@ public sealed record HostControlRequest(string Command, string? Argument = null)
 public static class HostControlProtocol
 {
     public const string PipeName = "RemoteDesktop.HostControl";
+
+    /// <summary>
+    /// The unit the Linux host package installs. A live control socket without this file is a process whose package
+    /// has been removed; treating it as the background service leaves the client delegating to a controlled end the
+    /// person can no longer see or remove from the package manager.
+    /// </summary>
+    public const string LinuxHostServiceUnit = "/usr/lib/systemd/user/app-RemoteDesktopHost.service";
     public const string StatusCommand = "status";
     public const string RotateCommand = "rotate";
     public const string DowngradeCommand = "downgrade";

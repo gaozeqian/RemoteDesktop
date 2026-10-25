@@ -40,6 +40,9 @@ namespace RemoteDesktop.Client;
 [SupportedOSPlatform("linux")]
 internal static class ClientHost
 {
+    /// <summary>How long a client launched by the same login waits for that service's control socket.</summary>
+    private static readonly TimeSpan HostServiceStartupWait = TimeSpan.FromSeconds(3);
+
     public static IHost Build(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -76,12 +79,15 @@ internal static class ClientHost
 
         var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
         var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
-                         PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
+                         DetectHostService(pipeName);
 
         builder.Services
             .AddClientPlatform(dataDirectory)
             .AddRemoteDesktopMedia()
-            .AddSingleton(new ClientEnvironment(dataDirectory, ControlledEndInThisProcess: !useService))
+            .AddSingleton(new ClientEnvironment(
+                dataDirectory,
+                ControlledEndInThisProcess: !useService,
+                HostControlPipeName: pipeName))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and
             // gets its own list and remembered passwords) — see docs/ops/README.md.
             .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
@@ -121,5 +127,30 @@ internal static class ClientHost
         }
 
         return builder.Build();
+    }
+
+    /// <summary>
+    /// Finds the background service, waiting for it when the host package says one is expected. A client started by
+    /// the same login can otherwise run before the service creates its socket: it then hosts incoming sessions itself
+    /// and registers under the device identity the service is about to claim, so the two abort each other every time
+    /// either one reconnects.
+    /// </summary>
+    private static bool DetectHostService(string pipeName)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            // The control socket outlives a removed package: the user service keeps running until its session ends.
+            // Without the unit a live socket is not the installed controlled end, so this window hosts in-process
+            // rather than delegating to a process the package manager can no longer show.
+            if (!File.Exists(HostControlProtocol.LinuxHostServiceUnit))
+            {
+                return false;
+            }
+
+            return PipeHostControl.WaitUntilAvailableAsync(pipeName, HostServiceStartupWait, CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+
+        return PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
     }
 }

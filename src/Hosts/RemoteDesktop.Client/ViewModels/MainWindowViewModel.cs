@@ -47,6 +47,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Ids per query, so a long list stays one or two messages rather than one big one.</summary>
     private const int PresenceChunkSize = 32;
 
+    /// <summary>How often a standalone client checks whether a host service has appeared since it started.</summary>
+    private const long HostServiceProbeInterval = 5000;
+
+    private const string HostServiceAppearedHint = "后台服务已启动；重启客户端后由它托管被控端（当前仍在本进程内）";
+
     private readonly IHostControl _hostControl;
     private readonly ControllerSessionService _controller;
     private readonly VideoCodecSelector _codecs;
@@ -62,7 +67,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ILoginItem? _loginItem;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _presenceTimer;
+    private readonly string _hostControlPipeName;
+    private readonly bool _probeForHostService;
     private int _presenceInFlight;
+    private long _nextHostServiceProbeAt;
+    private bool _hostServiceAppeared;
     private RemoteSession? _session;
 
     public MainWindowViewModel(
@@ -83,6 +92,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
+        _hostControlPipeName = environment.HostControlPipeName;
+        _probeForHostService = environment.ControlledEndInThisProcess && OperatingSystem.IsLinux();
         _controller = controller;
         _codecs = codecs;
         _time = time;
@@ -213,6 +224,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Where the host side runs and what its session agent is doing, when a background service hosts it.</summary>
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
+
+    /// <summary>
+    /// A page-independent banner for the one case that needs the person to act: a background service appeared while
+    /// this window was already hosting. <see cref="HostDetail"/> carries the same sentence on the home and settings
+    /// pages, but the window may be on any tab when the service starts.
+    /// </summary>
+    [ObservableProperty]
+    public partial string? HostServiceHint { get; set; }
 
     /// <summary>Whether the controlled end runs in the installed background service (as opposed to this process).</summary>
     [ObservableProperty]
@@ -1198,7 +1217,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             TemporaryPassword = string.Empty;
             ServerStatus = $"○ {HostUnreachable}";
             SetIncoming([]);
-            HostDetail = null;
+            HostDetail = _hostServiceAppeared ? HostServiceAppearedHint : null;
+            HostServiceHint = _hostServiceAppeared ? HostServiceAppearedHint : null;
             ServerHint = null;
             HostRendezvousUri = null;
             CanEditHostServerAddress = false;
@@ -1265,6 +1285,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RefreshLoginItemState();
         }
         SetIncoming(status.Sessions);
+
+        // The host package can be installed or its service started while this window is open. The composition was
+        // chosen at start-up and cannot switch without restarting, so probe occasionally and say so rather than
+        // leave two controlled ends registering under the same device id.
+        if (_probeForHostService && !_hostServiceAppeared && Environment.TickCount64 >= _nextHostServiceProbeAt)
+        {
+            _nextHostServiceProbeAt = Environment.TickCount64 + HostServiceProbeInterval;
+
+            // A socket from a package that has since been removed is not a service to hand over to. The unit file is
+            // what tells an installed controlled end from a process the package manager no longer shows.
+            if (File.Exists(HostControlProtocol.LinuxHostServiceUnit))
+            {
+                using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                try
+                {
+                    _hostServiceAppeared = await PipeHostControl.IsAvailableAsync(_hostControlPipeName, probeTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Still starting; the next probe tries again.
+                }
+            }
+        }
+
+        HostServiceHint = _hostServiceAppeared ? HostServiceAppearedHint : null;
+        if (_hostServiceAppeared)
+        {
+            HostDetail = HostServiceAppearedHint;
+        }
     }
 
     private void UpdateClientDeviceId() =>

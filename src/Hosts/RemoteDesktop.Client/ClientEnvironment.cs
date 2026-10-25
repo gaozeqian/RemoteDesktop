@@ -8,4 +8,8 @@ namespace RemoteDesktop.Client;
 /// True when this window is also the controlled end (standalone/portable, or macOS). The settings page's sentences
 /// depend on it: they must not describe a background service on a machine that has none.
 /// </param>
-public sealed record ClientEnvironment(string DataDirectory, bool ControlledEndInThisProcess);
+/// <param name="HostControlPipeName">
+/// The control address this process checked at start-up, so the status poll can notice a service that appears later
+/// (the host package installed or started while the window is open) and tell the person to restart into it.
+/// </param>
+public sealed record ClientEnvironment(string DataDirectory, bool ControlledEndInThisProcess, string HostControlPipeName);

@@ -51,6 +51,20 @@
 - **Linux 服务模式下 client 与 host 共用 `device-identity`**：两者以同一设备 ID 注册，信号令每设备只保留
   一个会话，连接每秒互踢。客户端在 Linux 服务模式改用独立的 `controller-identity`；Windows 本来按数据目录
   分开，macOS 没有独立服务。
+- **purge 后立即重装 client/host 时证书被判为不可读**：`/etc/remotedesktop-server/tls/signing.crt`
+  在卸载重建后会被 `test`/`cat`/`openssl` 间歇性报告为不存在。client/host 的 config 与 postinst 改为
+  进入证书目录按相对路径读取，先复制到临时文件再校验；server 的信任库导入同样处理。证书确实不存在或
+  不是 PEM 时仍会明确失败。
+- **Linux 上 client 先于 host 服务启动时退化为独立被控端**：随后 host 服务启动，两者再次争用同一设备身份。
+  host 包已安装时 client 最多等待服务控制 socket 3 秒；服务在窗口打开后才出现时，界面提示重启客户端以交给
+  它托管。
+- **Linux 上卸载 host 包后进程仍在运行**：客户端继续把残留的控制 socket 当作后台服务，显示“由后台服务托管”。
+  现在 postrm 会停止每个已登录用户的 `app-RemoteDesktopHost.service`；客户端也只在 host 包（unit 文件）
+  仍然安装时才使用该 socket，否则按 standalone 运行。
+- **Linux 安装 host 包后要等下次登录才生效**：已登录用户的客户端一直看不到新服务。postinst 现在会为已有
+  图形会话的用户立即启动 `app-RemoteDesktopHost.service`；没有会话时仍随下次登录启动。
+- **远端会话窗口在主机未上报光标形状时把本地光标也隐藏**：窗口里没有任何指针。现在本地光标保留到第一张
+  远端光标图到达为止；会话窗口关闭时重置光标，主窗口显式使用普通箭头光标，避免空白光标残留。
 - **桌面启动器把产品名翻译成“远程桌面”**：移除 `.desktop` 的 `Name[zh_CN]`，与窗口标题、安装包名称统一为
   `Remote Desktop`；描述和关键词仍保留中文。
 - **macOS 服务端 postinstall 未给 Ops 传数据库路径与监听地址**：`--create-admin` 与服务可能打开不同的

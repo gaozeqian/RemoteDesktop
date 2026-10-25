@@ -297,9 +297,11 @@ case "$1" in
         trust_target=/usr/local/share/ca-certificates/remotedesktop-signaling-server.crt
         rm -f "$trust_target"
         if [ "$trust_relative" = true ] && [ -d "$INSTALL_DIRECTORY/tls" ]; then
-            ( cd "$INSTALL_DIRECTORY/tls" && cat signaling.crt ) >"$trust_target" 2>/dev/null || true
-        elif [ -n "$trust_certificate" ] && [ -f "$trust_certificate" ]; then
-            install -m 0644 "$trust_certificate" "$trust_target" 2>/dev/null || true
+            ( cd "$INSTALL_DIRECTORY/tls" && cat < signaling.crt ) >"$trust_target" 2>/dev/null || true
+        elif [ -n "$trust_certificate" ]; then
+            certificate_directory=$(dirname -- "$trust_certificate")
+            certificate_name=$(basename -- "$trust_certificate")
+            ( cd "$certificate_directory" 2>/dev/null && cat < "$certificate_name" ) >"$trust_target" 2>/dev/null || true
         fi
         if [ -s "$trust_target" ]; then
             chmod 0644 "$trust_target"

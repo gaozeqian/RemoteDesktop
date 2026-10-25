@@ -74,27 +74,45 @@ case "$1" in
         case "$address" in
             wss://*)
                 if [ -n "$server_certificate" ]; then
-                    if [ ! -f "$server_certificate" ] || [ ! -r "$server_certificate" ]; then
+                    # Read through the certificate's own directory rather than by absolute path. A purge deletes the
+                    # file and the next install recreates it; that sequence can leave a stale negative directory
+                    # entry, so test(1), install(1) and openssl report the absolute path missing while a lookup
+                    # relative to the directory reaches the new file. The temporary copy also makes naming the
+                    # destination itself harmless.
+                    certificate_directory=$(dirname -- "$server_certificate")
+                    certificate_name=$(basename -- "$server_certificate")
+                    certificate_copy=$(mktemp) || {
+                        echo "remotedesktop-host: cannot create a temporary file for the certificate." >&2
+                        exit 1
+                    }
+
+                    if ! ( cd "$certificate_directory" 2>/dev/null && cat < "$certificate_name" ) >"$certificate_copy" \
+                        || [ ! -s "$certificate_copy" ]; then
+                        rm -f "$certificate_copy"
                         echo "remotedesktop-host: the certificate '$server_certificate' cannot be read." >&2
                         exit 1
                     fi
 
                     if command -v openssl >/dev/null 2>&1; then
-                        openssl x509 -in "$server_certificate" -noout 2>/dev/null || {
+                        openssl x509 -in "$certificate_copy" -noout 2>/dev/null || {
+                            rm -f "$certificate_copy"
                             echo "remotedesktop-host: '$server_certificate' is not a PEM certificate. Pass the public half, not the key." >&2
                             exit 1
                         }
                     else
-                        grep -q -- '-----BEGIN CERTIFICATE-----' "$server_certificate" || {
+                        grep -q -- '-----BEGIN CERTIFICATE-----' "$certificate_copy" || {
+                            rm -f "$certificate_copy"
                             echo "remotedesktop-host: '$server_certificate' is not a PEM certificate." >&2
                             exit 1
                         }
                     fi
 
-                    # The same file can be named when a site build's embedded certificate is also the answer.
-                    if [ ! "$server_certificate" -ef "$CERTIFICATE" ]; then
-                        install -m 0644 "$server_certificate" "$CERTIFICATE"
+                    if ! install -m 0644 "$certificate_copy" "$CERTIFICATE"; then
+                        rm -f "$certificate_copy"
+                        echo "remotedesktop-host: cannot install the certificate into $CERTIFICATE." >&2
+                        exit 1
                     fi
+                    rm -f "$certificate_copy"
                 fi
                 ;;
         esac
@@ -153,6 +171,21 @@ case "$1" in
 
             systemctl --global enable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
             systemctl --global daemon-reload >/dev/null 2>&1 || true
+
+            # Enabling a user unit only affects the next login. If somebody is already signed in, start it now: the
+            # client can then see the control socket and hand over, instead of waiting for a logout the package has
+            # no other reason to ask for. Best-effort — a machine with no session keeps the next-login behaviour.
+            if command -v loginctl >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+                loginctl list-users --no-legend 2>/dev/null | while read -r uid user _; do
+                    [ -n "$uid" ] || continue
+                    runtime=/run/user/$uid
+                    [ -S "$runtime/bus" ] || continue
+                    runuser -u "$user" -- env \
+                        XDG_RUNTIME_DIR="$runtime" \
+                        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+                        systemctl --user start app-RemoteDesktopHost.service >/dev/null 2>&1 || true
+                done
+            fi
         fi
         ;;
 

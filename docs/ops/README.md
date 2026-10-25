@@ -990,8 +990,17 @@ sudo apt install ./RemoteDesktop-Host-Linux-amd64-<版本>.deb
 装完之后：
 
 - 客户端出现在应用菜单里（`remotedesktop`）。
-- 被控端是一条 `systemd --user` 服务，安装时对**所有用户**启用，用户下次登录时随图形会话启动。
-  **它不在安装时启动**——装包时可能根本没有图形会话，没有人能点 portal 的对话框。
+- 被控端是一条 `systemd --user` 服务，安装时对**所有用户**启用。安装时已有图形会话的用户会**立即启动**
+  该服务；没有会话（容器、无头镜像、还没有人登录）时，随用户下次登录启动。
+  启动本身不会弹 portal 对话框——对话框在第一次有人连接并请求控制权限时才出现。
+
+> **两个包可以同时安装。** host 服务常驻负责“被控制”，client 检测到它的控制 socket 后只做控制端
+> （`AcceptIncoming=false`），两者使用不同的设备身份。客户端的模式在启动时决定：host 包已安装时，
+> client 最多等 3 秒让服务创建 socket；如果服务在窗口打开后才启动，界面会提示重启客户端。
+> `--HostMode standalone` 会强制忽略服务，和 host 服务同时运行是不受支持的状态。
+>
+> 卸载或 purge host 包会停止所有已登录用户的 host 服务。client 只有在 host 包仍安装（unit 文件存在）
+> 时才把控制 socket 当作后台服务；否则按 standalone 运行，不会继续委托给一个包里已经没有的进程。
 
 > **Linux 的“无人值守”只能到“可观看”为止。**
 > Wayland portal 不允许持久化远程桌面会话（请求会被拒绝：`Remote desktop sessions cannot persist`）：

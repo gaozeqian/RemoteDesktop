@@ -26,6 +26,56 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
         }
     }
 
+    /// <summary>
+    /// Waits for a service that is still starting. A client launched from the same login can reach its mode decision
+    /// before the service has created its control socket; one probe then says "no service" and the client hosts
+    /// incoming sessions itself, under the device identity the service is about to claim.
+    /// </summary>
+    public static async Task<bool> WaitUntilAvailableAsync(
+        string pipeName,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
+        if (timeout <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        overall.CancelAfter(timeout);
+
+        while (!overall.IsCancellationRequested)
+        {
+            // The socket may exist before the service can answer; cap one attempt so a wedged instance does not use
+            // the whole budget and hide a healthy one that comes up a moment later.
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(overall.Token);
+            attempt.CancelAfter(TimeSpan.FromSeconds(1));
+            try
+            {
+                if (await IsAvailableAsync(pipeName, attempt.Token).ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // This attempt timed out (or the overall budget did); the loop condition decides which.
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), overall.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
+
     public async Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
         await RequestAsync<HostStatus>(HostControlProtocol.StatusCommand, argument: null, cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidDataException("The host service sent no status.");
