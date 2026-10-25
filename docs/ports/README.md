@@ -61,7 +61,7 @@
 |---|---|
 | 原生互操作方式 | **混合方案 C**：`net10.0` + C 框架 P/Invoke + 小型 ObjC 辅助库 |
 | 交付范围 | 全功能一次到位（P1–P10） |
-| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（未做公证） |
+| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；尚未用真实证书跑过一次公证） |
 | 无人值守 | `SMAppService`（client）或 LaunchAgent（host 包）；新增 `ILoginItem` 端口 |
 | 最低系统版本 | **macOS 26 (Tahoe)** |
 
@@ -261,7 +261,7 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | Linux 硬件编码 | NVENC 已在 NVIDIA RTX A4000（驱动 595）上端到端验证（摄像头与桌面流）；软件 x264 已验证；VA-API 仍未在真硬件上跑过 |
 | Linux X11 会话 | 只在 Wayland 上验证过，portal 路径在 X11 下大概率能用，但不作承诺 |
 | Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见 §4 |
-| macOS 公证（notarization） | 只做到开发签名，发布链未做 |
+| macOS 公证（notarization） | 打包脚本已补：`.app`、Installer 面板与 server 载荷的 Mach-O 逐个 Developer ID 签名，`--notarize` 提交并 staple；尚未用真实证书与公证凭据实跑 |
 | 长时间对抗性测试 | 握手洪泛上限、限流窗口这些数字按常见情况选的，没在真实攻击流量下压过 |
 
 ## 6. 风险与缓解

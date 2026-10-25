@@ -93,7 +93,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _rendezvous = rendezvous;
         _hostControl = hostControl;
         _hostControlPipeName = environment.HostControlPipeName;
-        _probeForHostService = environment.ControlledEndInThisProcess && OperatingSystem.IsLinux();
+        _probeForHostService = environment.ControlledEndInThisProcess
+            && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS());
         _controller = controller;
         _codecs = codecs;
         _time = time;
@@ -1293,9 +1294,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _nextHostServiceProbeAt = Environment.TickCount64 + HostServiceProbeInterval;
 
-            // A socket from a package that has since been removed is not a service to hand over to. The unit file is
-            // what tells an installed controlled end from a process the package manager no longer shows.
-            if (File.Exists(HostControlProtocol.LinuxHostServiceUnit))
+            // A socket from a package that has since been removed is not a service to hand over to. The unit file
+            // (Linux) or app/launchd plist (macOS) is what tells an installed controlled end from a process the
+            // package manager no longer shows.
+            var hostPackageInstalled = OperatingSystem.IsMacOS()
+                ? File.Exists(HostControlProtocol.MacOSHostApp) || File.Exists(HostControlProtocol.MacOSHostAgentPlist)
+                : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
+            if (hostPackageInstalled)
             {
                 using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                 try

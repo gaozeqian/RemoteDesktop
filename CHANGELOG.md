@@ -70,6 +70,84 @@
 - **macOS 服务端 postinstall 未给 Ops 传数据库路径与监听地址**：`--create-admin` 与服务可能打开不同的
   `ops.db`；现在与 Linux 一样写在同一份配置上。
 
+### Added — macOS 安装包安装期配置
+
+- **自定义 Installer 面板**：新增 `native/macos/rd_installer_plugin.m`（代码构建视图，无 nib）与
+  `native/macos/build-installer-plugin.sh`，三个 `.pkg` 用 `productbuild --plugins` 内置一页配置面板。
+  服务端在安装时选择 SQLite / PostgreSQL（含连接串）与 TLS（不用 / 生成自签名 / 已有证书），
+  客户端与被控端在安装时填写信令地址并导入自签名服务器证书——与 Linux 的 debconf 问题对齐。
+- **安装期答案文件**：无人值守安装可把同样的键写到
+  `/Library/Application Support/RemoteDesktop/install-answers.plist`（root:wheel，0600）；答案先由
+  `preinstall` 从用户可写的 `/var/tmp` 移到 root 副本，`postinstall` 用完即删。
+- **整机级配置层**：macOS 的安装器把 `Transport:RendezvousUri` 写到
+  `/Library/Application Support/RemoteDesktop/appsettings.json`（签名过的 `.app` 内文件不能改），
+  client 与 host 按"随包默认 → 整机 → 用户 → 环境/命令行"的顺序读取；host 同时补上
+  `ContentRootPath = AppContext.BaseDirectory`，bundle 内的 appsettings 现在真的会被读到。
+- **服务端证书导出与证书固定**：自签名证书生成后复制到
+  `/usr/local/share/doc/remotedesktop-server/signaling.crt`；Ops 控制台通过 `Ops:NodeCertificatePath`
+  **只信任这一张证书**，客户端/被控端安装器选择同一份 PEM/DER 后也写入
+  `Transport:RendezvousCertificatePath` 做证书固定。安装脚本不修改系统钥匙串——macOS 会以
+  "no user interaction was possible" 拒绝 postinstall 的信任设置。Ops 的 pin 始终指向导出的公开 PEM：
+  选"已有证书"时 Kestrel 路径常是带口令的 `.pfx`，控制台无法直接加载，写进去会让它启动失败。
+- **host 安装时设置无人值守密码**：被控端配置页新增密码与确认栏（至少 8 位），postinstall 以当前登录
+  用户的身份把密码写进该用户的登录钥匙串并启动 host；留空表示不设置，升级时留空保留现有密码。密码通过
+  一个 0600 的临时文件交给 `--set-fixed-password-file`，不出现在 argv、日志或进程列表里，结束即删除。
+  没有图形会话时无法确定写入哪个用户的钥匙串，postinstall 会提示登录后手工执行 `--set-fixed-password`。
+- **host 卸载脚本**：安装到 `/Library/Application Support/RemoteDesktop/uninstall-host.sh`，
+  停登录项、删 plist、`.app` 与安装回执。
+
+### Fixed — macOS 安装包评审
+
+- **客户端 `.pkg` 构建在最后一步以 141 退出**：`pkgutil --payload-files | head` 在 `pipefail` 下触发
+  SIGPIPE；改为一次性读取列表。发版不再"包已生成、构建却失败"。
+- **三个脚本都找不到 `Developer ID Installer`**：`-p codesigning` 不包含 Installer 证书（无 Code Signing
+  EKU），改用不过滤的 `find-identity -v`。带证书的 `--distribution` 现在能真正走通。
+- **server `.pkg` 无法公证**：`--distribution` 现在逐个签载荷里的 Mach-O（apphost 带 JIT entitlements），
+  `--notarize` 要求 Developer ID Application；只签外层 `.pkg` 的旧路径被移除。
+- **host 包装完不启动**：新增 preinstall/postinstall，安装时 `bootout`/`bootstrap` 当前图形会话的
+  LaunchAgent，升级会重启旧进程，首次启动的 TCC 提示不再要等下次登录。
+- **新装 Ops 没有节点、信令没有 `/metrics`**：postinstall 补 `--seed-local-nodes` 与 `--metrics-enabled`，
+  与 Linux 安装包一致；切换 http/https 后新增 `--sync-local-nodes` 更新安装器建的两条节点，避免控制台
+  继续抓取旧协议而一直失败。
+- **`.pkg` 安装报告成功却没有装进 `/Applications`**：Installer 默认按 bundle id 重定位，找到本机构建目录里的
+  同名 `.app` 就"升级"那一份（实测 macOS 26：安装成功、`/Applications` 为空、构建目录被 root 改写，
+  登录项指向的路径不存在）。client/host 的应用组件现在标记为不可重定位，并用 `ditto` 暂存以保留
+  逐文件签名所需的扩展属性。
+- **重装 client/host 会丢掉自签名服务器证书的固定**：读取整机配置时用了 PlistBuddy 的 `:` 键路径，
+  `plutil -extract` 需要 `Transport.RendezvousCertificatePath`，于是地址不变、证书栏留空时误判为没有
+  pin 并把它删掉。已改正，并实测第二次安装后 pin 仍在。
+- **安装器介绍页出现乱码**（`Rendezvous â€” signaling`）：欢迎/完成页的 HTML 没有声明字符集，Installer 的
+  WebView 按 Latin-1 解码 UTF-8。三个包的六个 HTML 资源都补上 `Content-Type: text/html; charset=utf-8`。
+- **服务器配置页的数据库和 TLS 无法选择**：两个独立原因叠加。其一，Installer 26 取走 `contentView` 后立刻
+  释放了 `firstPane` 返回的 pane，而 `NSControl.target` 与 `NSTextField.delegate` 都是弱引用，所有
+  action/delegate 都发给已释放对象，下拉框只会改标题、不会更新字段；section 现在强持有 pane。其二，
+  菜单项被 `NSMenu` 交给 InstallerPane 做自动校验而全部变灰；下拉菜单关闭 `autoenablesItems`，由控件自身
+  的启用状态决定能否选择。两者都在真实 Installer 里逐项点过验证。
+- **配置页超出 Installer 给的 421×329 内容区**：旧视图是 640×430，标题、字段右端和底部说明都被裁掉；
+  三个角色的面板按该尺寸重排，升级时的“保留现有设置”说明、数据库/TLS 说明均完整可见。
+- **PostgreSQL 占位符和 TLS 生成说明被截断**：完整连接串示例约 450 pt，塞不进 272 pt 的输入框；改为完整但
+  精简的 `Host=db;Database=rd;Username=rd`，鼠标悬停显示带端口/口令的完整示例。TLS“生成自签名证书”的说明
+  含两个长路径，11 pt 下要三行、放不进两行高的说明区；说明字号改为 10.5 pt 并精简措辞，两条路径完整可见。
+- **macOS client 与 host 同时安装后 client 反复连接/断开**：客户端的控制端连接在委托 Host 服务时仍加载
+  `device-identity`，和 Host 使用同一设备代码，信令服务器每个设备只保留一个会话，两个进程互相踢下线。
+  现在与 Linux 一致：检测到 Host 服务时客户端改用 `controller-identity`，两者设备代码不同、可以同时在线；
+  Host 包已安装但控制 socket 尚未就绪时，客户端最多等 3 秒，并在服务稍后出现时提示重启客户端。安装器不再
+  互斥，两个包可以同时安装。
+- **升级会重写 Ops 设置、把 `none` 改成 SQLite**：`--configure-system` 现在区分"没给"与"给默认值"，
+  没给的地址/中继地址保持不变；`--database=auto` 与 `--ops-*` 只在首装应用，升级默认保留。
+  安装器还会写一份不含秘密的 `install-summary.plist`，供下次升级的面板预填。
+- **TLS 已有证书在 macOS 上必然失败**：`X509CertificateLoader` 的 `EphemeralKeySet` 在 macOS 上不支持，
+  改用 `DefaultKeySet`；`configure-server.sh --tls-certificate` 现在能工作。
+- **client/host 缺 `NSLocalNetworkUsageDescription`**：补上；局域网部署首次连接会正确请求本地网络权限。
+- **host 开发签名身份不固定**：复用 client 的 `development-identity` 与多证书警告；两个包都检查
+  `libmsquic.dylib` / `libRemoteDesktopMacNative.dylib`，分发构建缺库直接失败。
+- **构建期秘密随 `.pkg` 分发**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`；
+  安装期答案或 `configure-server.sh` 是唯一推荐路径。
+- **server publish 不清理旧文件**：发布前 `rm -rf` 每个程序的输出目录。
+- **其他**：`configure-server.sh` 改数据库后同时重启 Ops；卸载器删除文档目录与回执；服务端日志目录 0700；
+  `.pkg` 加 `allowed-os-versions`；服务端包不再带 `appsettings.Development.json`；client/host 的
+  `--arch` 明确只支持 arm64；`pkgutil`/`lsbom` 的 `grep -q` 与 `pipefail` 组合改为读完整输入。
+
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 
 首个正式版。自 0.3.0 起，产品从 Windows 单平台扩展到 Windows、macOS (Apple Silicon) 与 Linux，三个平台各出
@@ -92,7 +170,7 @@
   `MaxSessions` 也挡不住。现在容量检查与 id 预留放在同一把锁里，id 冲突改用新 id，会话结束按
   （id, 实例）成对移除。
 - **Ops 登录锁定可以靠用户名拼写绕过**：账户查找会 trim + 转大写，锁定键却用原始字符串，
-  `admin` / `Admin` / `admin ` 各自有一份失败预算。现在两边用同一个规范化键。
+  `admin` / `Admin` / `admin`（末尾带空格）各自有一份失败预算。现在两边用同一个规范化键。
 - **Ops 二次验证没有失败预算**：知道密码的人可以无限次 `/login` 换新 challenge，每个 challenge 再试 5 次
   六位码。新增一个与密码预算分离、跨 challenge 与成功密码都不清零的 TOTP 失败预算。
 - **信令默认信任本机回环代理的 `X-Forwarded-For`**：同机 nginx/Caddy 转发的请求可以自带任意来源地址，

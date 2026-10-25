@@ -1,0 +1,11 @@
+#!/bin/bash
+#
+# Runs before the client payload is unpacked, as root. Moves the Installer pane's answers to a root-owned file so
+# the postinstall reads one file nobody else can replace.
+#
+set -e
+
+. "$(dirname "$0")/apply-answers.sh"
+rd_prepare_answers client
+
+exit 0

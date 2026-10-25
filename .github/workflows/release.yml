@@ -184,6 +184,9 @@ jobs:
 
           echo "==> Signing identities available:"
           security find-identity -v -p codesigning "$KC"
+          # The Installer certificate has no Code Signing EKU and is absent from the filtered list above; the
+          # packagers search for it without the filter. Print both so a missing identity is visible here.
+          security find-identity -v "$KC"
 
       # 三个 .pkg：客户端（Remote Desktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
       # （信令、中继与监控台 + 三个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
@@ -305,7 +308,7 @@ jobs:
           if ($address) {
               Write-Host "The client installer will point at $address."
               "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
-              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装后需在客户端里填写（它们不参与这里的变量）。"
+              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装时会询问（macOS 的 Installer 配置页 / Linux 的 debconf）；没有无人值守答案时按默认值安装。"
           } else {
               Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
 

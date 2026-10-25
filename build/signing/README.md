@@ -234,11 +234,22 @@ macOS 的签名不走本目录的脚本，而在打包流程里：`make-app.sh` 
 
 | 证书 | 签什么 | 没有它会怎样 |
 |---|---|---|
-| **Developer ID Application** | `.app` 及其内的二进制（硬化运行时 + 安全时间戳） | 无法公证；Gatekeeper 提示"身份不明的开发者" |
+| **Developer ID Application** | client/host 的 `.app` 及其内的二进制；三个包共用的 Installer 面板；server `.pkg` 载荷里的每个 Mach-O（apphost 与 dylib） | 无法公证；Gatekeeper 提示"身份不明的开发者" |
 | **Developer ID Installer** | `.pkg` 本身 | 同上 |
 
 两者都要**付费 Apple Developer Program 账号**（$99/年）才能签发。开发用的 "Apple Development" 证书**不能**用于
 分发——`make-app.sh --distribution` 会直接拒绝它（只对本地开发有意义）。
+
+**Installer 证书不是 code-signing 身份。** 它没有 Code Signing EKU，`security find-identity -p codesigning`
+不会列出它——早期脚本就是用这个过滤器找 Installer 证书，结果在真正配了证书的机器上必然失败。
+现在 `make-pkg.sh` 用 `security find-identity -v`（不过滤）找 Installer，用 `-p codesigning` 找 Application；
+Apple DTS 的原话见
+[论坛 822661](https://developer.apple.com/forums/thread/822661)。
+
+**server 包的载荷必须逐个签名。** 公证要求提交物里的每个可执行文件都用 Developer ID Application 签名、
+带安全时间戳并启用硬化运行时；只签外层 `.pkg` 不够。`server/make-pkg.sh --distribution` 会遍历 payload 里
+所有 Mach-O，apphost 带 `server/entitlements.plist` 的 JIT 权限，dylib 不带；签名后逐个
+`codesign --verify --strict`。`--notarize` 在没有 Application 证书时直接拒绝。
 
 ### GitHub Secrets
 
@@ -267,6 +278,9 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 ```bash
 # 签名（证书在钥匙串里，自动找；多于一张时用 --app-identity / --identity 指定）
 build/installer/macos/client/make-pkg.sh --distribution
+build/installer/macos/host/make-pkg.sh   --distribution
+# server 同时需要 Application（签载荷）与 Installer（签 .pkg）；--notarize 前两者缺一不可
+build/installer/macos/server/make-pkg.sh --distribution
 
 # 签名 + 公证（公证会把 .pkg 上传到 Apple，通常几分钟）
 NOTARY_KEY_PATH=AuthKey.p8 NOTARY_KEY_ID=XXXXXXXXXX NOTARY_ISSUER_ID=<uuid> \

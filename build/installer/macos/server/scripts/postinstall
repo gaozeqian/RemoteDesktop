@@ -2,27 +2,43 @@
 #
 # Runs at the end of the server package's installation, as root.
 #
-# Two jobs: write the servers' settings, and hand the launchd jobs to the system so they start now and at every boot.
-# There are three jobs — signaling, relay and the monitoring console. Only the first two have settings written here;
-# the console's database path and loopback address come from its own plist.
+# Three jobs:
+#   1. apply the answers collected by the Installer pane (database, TLS, certificate) or preserve what an earlier
+#      installation already had;
+#   2. make the monitoring console usable on a fresh installation: seed the two local nodes and mount /metrics;
+#   3. hand the three launchd jobs to the system so they start now and at every boot.
 #
-# The settings are written by the server's own `--configure-system` step — the same code the Windows package runs
-# through its installer — so both platforms produce identical appsettings.json files and generate the relay key the
-# same way. The package's build put the operator's answers in setup-options; they are passed through as-is.
+# macOS has no debconf and no MSI properties. The pane is the interactive path; the same answer keys are accepted from
+# /Library/Application Support/RemoteDesktop/install-answers.plist for unattended installs, and the old build-time
+# setup-options file remains as the last fallback for a first install.
 #
-set -e
+set -euo pipefail
 
 INSTALL_DIR="/usr/local/remotedesktop-server"
 RENDEZVOUS="$INSTALL_DIR/Rendezvous/RemoteDesktop.Server.Rendezvous"
+OPS="$INSTALL_DIR/Ops/RemoteDesktop.Server.Ops"
 OPTIONS="$INSTALL_DIR/setup-options"
+ROOT_ANSWERS="/var/tmp/com.remotedesktop.install.server.root.plist"
+FALLBACK_ANSWERS="/Library/Application Support/RemoteDesktop/install-answers.plist"
+SUMMARY="$INSTALL_DIR/install-summary.plist"
+DOC_DIR="/usr/local/share/doc/remotedesktop-server"
 
 echo "Remote Desktop Server: finishing the installation"
-
-mkdir -p "$INSTALL_DIR/logs"
 
 # Where the SQLite database goes. 0700 and root-owned: the file inside holds the device ids, and a directory nobody
 # else can enter is what protects it, because SQLite creates the file with the process umask rather than 0600.
 install -d -m 700 "$INSTALL_DIR/var"
+# The logs contain device ids and connection addresses; the daemons run as root, so keep the directory out of reach of
+# ordinary local users instead of relying on the files' own mode.
+mkdir -p "$INSTALL_DIR/logs" "$DOC_DIR"
+chmod 700 "$INSTALL_DIR/logs" 2>/dev/null || true
+
+# Whether this is a fresh installation or an upgrade. Decided before the defaults are copied: on an upgrade the live
+# file already exists and everything in it belongs to the operator.
+first_install=1
+if [ -f "$INSTALL_DIR/Rendezvous/appsettings.json" ]; then
+    first_install=0
+fi
 
 # The live settings file, from the template the package ships. Only when it is not there: an upgrade must not put the
 # build's defaults back over what the operator configured, and for the signaling server that file holds the relay key
@@ -34,34 +50,434 @@ for server in Rendezvous Relay Ops; do
     fi
 done
 
+# --- answers -----------------------------------------------------------------------------------
+
+ANSWERS=""
+CLEANUP=""
+if [ -f "$ROOT_ANSWERS" ]; then
+    ANSWERS="$ROOT_ANSWERS"
+    CLEANUP="$ROOT_ANSWERS"
+elif [ -f "$FALLBACK_ANSWERS" ]; then
+    ANSWERS="$FALLBACK_ANSWERS"
+fi
+
+answer() {
+    [ -n "$ANSWERS" ] || return 0
+    /usr/libexec/PlistBuddy -c "Print :$1" "$ANSWERS" 2>/dev/null || true
+}
+
+# Even a failed installation must not leave the answer files behind: they can contain a PostgreSQL password or a
+# certificate password. The trap also covers the build-time setup-options file on a local (non-distribution) build.
+cleanup_answers() {
+    rm -f "$OPTIONS"
+    if [ -n "${CLEANUP:-}" ]; then
+        rm -f "$CLEANUP"
+    fi
+}
+trap cleanup_answers EXIT
+
+apply=1
+if [ -n "$ANSWERS" ]; then
+    if [ "$(answer PreserveExisting)" = "true" ]; then
+        apply=0
+    fi
+elif [ "$first_install" -eq 0 ]; then
+    # An upgrade with no answers at all (installer -pkg, MDM): keep the operator's settings. Changing one of them is
+    # configure-server.sh's job, and that path does not depend on the build machine.
+    apply=0
+fi
+
+# "Preserve" on a fresh installation would leave the template's empty RelayEndpoint in place and the signaling server
+# would refuse to start. A hand-written answers file can say it; treat that as "use the defaults" instead.
+if [ "$apply" -eq 0 ] && [ "$first_install" -eq 1 ]; then
+    apply=1
+fi
+
 # --- settings ----------------------------------------------------------------------------------
 
-# setup-options is one "name=value" per line, split on the *first* = so a value may contain more of them (a Postgres
-# connection string does). Comments and blank lines are ignored.
-set --
-if [ -f "$OPTIONS" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in ''|'#'*) continue ;; esac
-        set -- "$@" "${line%%=*}" "${line#*=}"
-    done < "$OPTIONS"
-fi
+args=()
+if [ "$apply" -eq 1 ]; then
+    if [ -n "$ANSWERS" ]; then
+        provider="$(answer DatabaseProvider)"
+        case "$provider" in
+            postgres)
+                args+=(--database postgres)
+                postgres="$(answer PostgresConnectionString)"
+                if [ -n "$postgres" ]; then
+                    args+=(--postgres "$postgres")
+                fi
+                ;;
+            sqlite|"")
+                args+=(--database sqlite)
+                database_path="$(answer DatabasePath)"
+                if [ -n "$database_path" ]; then
+                    case "$database_path" in
+                        /*) ;;
+                        *)
+                            echo "Remote Desktop Server: the SQLite path must be absolute (got '$database_path')." >&2
+                            exit 1
+                            ;;
+                    esac
+                    args+=(--database-path "$database_path")
+                fi
+                ;;
+            none)
+                args+=(--database none)
+                ;;
+            *)
+                echo "Remote Desktop Server: unknown database choice '$provider'." >&2
+                exit 1
+                ;;
+        esac
 
-echo "  writing the settings of both servers"
-# A failure here is reported, not fatal: the servers are installed and the settings can be fixed afterwards with
-# configure-server.sh. What went wrong is in server-setup.log either way, because the step writes it there.
-#
-# The console's settings are written too, with the same absolute database path and loopback address its launchd job
-# uses. Without them the shipped appsettings.json keeps a relative "ops.db", and `--create-admin` would open a
-# different database from the one the service serves.
-set -- "$@" --ops-database-path "$INSTALL_DIR/var/ops.db" --ops-listen "http://127.0.0.1:5090"
-if [ "$#" -gt 0 ]; then
-    "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "$@" || echo "  warning: the settings step reported a problem; see $INSTALL_DIR/server-setup.log" >&2
+        tls="$(answer TlsMode)"
+        case "$tls" in
+            none|"") tls=none ;;
+            generate|existing) ;;
+            *)
+                echo "Remote Desktop Server: unknown TLS choice '$tls'." >&2
+                exit 1
+                ;;
+        esac
+
+        # The pane does not ask for the bind address. On an upgrade it keeps the address the previous installation
+        # chose (including a custom port) as long as the TLS mode did not change; a mode change gets the default,
+        # because http and https are different listeners.
+        urls=""
+        if [ "$first_install" -eq 0 ] && [ -f "$SUMMARY" ]; then
+            previous_tls="$(plutil -extract TlsMode raw "$SUMMARY" 2>/dev/null || true)"
+            if [ "$tls" = "$previous_tls" ]; then
+                urls="$(plutil -extract Urls raw "$SUMMARY" 2>/dev/null || true)"
+            fi
+        fi
+        if [ -z "$urls" ]; then
+            if [ "$tls" = "none" ]; then
+                urls="http://0.0.0.0:5080"
+            else
+                urls="https://0.0.0.0:5080"
+            fi
+        fi
+
+        case "$tls" in
+            none)
+                args+=(--urls "$urls")
+                ;;
+            generate)
+                args+=(--urls "$urls" --tls-certificate generate)
+                tls_hostname="$(answer TlsHostName)"
+                if [ -n "$tls_hostname" ]; then
+                    args+=(--tls-hostname "$tls_hostname")
+                fi
+                ;;
+            existing)
+                certificate="$(answer TlsCertificatePath)"
+                if [ -z "$certificate" ]; then
+                    echo "Remote Desktop Server: TLS was set to an existing certificate but no path was given." >&2
+                    exit 1
+                fi
+                case "$certificate" in
+                    /*) ;;
+                    *)
+                        echo "Remote Desktop Server: the certificate path must be absolute (got '$certificate')." >&2
+                        exit 1
+                        ;;
+                esac
+                args+=(--urls "$urls" --tls-certificate "$certificate")
+                password="$(answer TlsPassword)"
+                if [ -n "$password" ]; then
+                    args+=(--tls-password "$password")
+                fi
+                ;;
+        esac
+
+        # The pane does not ask about the relay address. A fresh install has to decide it (the template's value is
+        # empty and the signaling server refuses to start); an upgrade keeps the existing one unless it has none.
+        if [ "$first_install" -eq 1 ]; then
+            args+=(--relay-endpoint auto)
+        else
+            existing_relay="$(plutil -extract Rendezvous.RelayEndpoint raw "$INSTALL_DIR/Rendezvous/appsettings.json" 2>/dev/null || true)"
+            if [ -z "$existing_relay" ]; then
+                args+=(--relay-endpoint auto)
+            fi
+        fi
+    elif [ -f "$OPTIONS" ]; then
+        # The build-time answers, kept for CI and for a machine that has no GUI session. Legacy shape: one
+        # --name=value per line, split on the first = so a Postgres connection string survives.
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in ''|'#'*) continue ;; esac
+            args+=("${line%%=*}" "${line#*=}")
+        done < "$OPTIONS"
+
+        has_urls=0
+        has_relay=0
+        for ((i = 0; i < ${#args[@]}; i++)); do
+            case "${args[$i]}" in
+                --urls) has_urls=1 ;;
+                --relay-endpoint) has_relay=1 ;;
+            esac
+        done
+        # A first install has to say "decide for this machine" explicitly now that an omitted address means "leave it
+        # alone". Without these the fresh file would keep the empty RelayEndpoint from its template, which the server
+        # refuses to start with.
+        if [ "$has_urls" -eq 0 ]; then
+            args+=(--urls auto)
+        fi
+        if [ "$has_relay" -eq 0 ]; then
+            args+=(--relay-endpoint auto)
+        fi
+    else
+        args+=(--database auto --urls auto --relay-endpoint auto)
+    fi
+
+    # The console shares the database provider. On a fresh install it gets the same absolute database path and
+    # loopback address its launchd job uses; on a reconfiguration of an existing installation, only the two
+    # migrations below are applied, so an operator's own Ops path or address is not reset just because the signaling
+    # database was changed. --metrics-enabled is what makes the node page able to read the signaling server at all.
+    ops_args=()
+    if [ "$first_install" -eq 1 ]; then
+        ops_args+=(--ops-database-path "$INSTALL_DIR/var/ops.db" --ops-listen "http://127.0.0.1:5090")
+    else
+        ops_path="$(plutil -extract Ops.Database.Path raw "$INSTALL_DIR/Ops/appsettings.json" 2>/dev/null || true)"
+        case "$ops_path" in
+            /*) ;;
+            *) ops_args+=(--ops-database-path "$INSTALL_DIR/var/ops.db") ;;
+        esac
+        ops_listen="$(plutil -extract Ops.Listen raw "$INSTALL_DIR/Ops/appsettings.json" 2>/dev/null || true)"
+        if [ -z "$ops_listen" ]; then
+            ops_args+=(--ops-listen "http://127.0.0.1:5090")
+        fi
+    fi
+    args+=(--metrics-enabled)
+    if [ "${#ops_args[@]}" -gt 0 ]; then
+        args+=("${ops_args[@]}")
+    fi
+
+    echo "  writing the settings of both servers"
+    # A failure here is fatal: the Installer shows the failure while somebody is watching, instead of leaving three
+    # jobs that restart every five seconds against a settings file nobody can explain.
+    if ! "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "${args[@]}"; then
+        echo "Remote Desktop Server: the settings step failed; see $INSTALL_DIR/server-setup.log." >&2
+        exit 1
+    fi
 else
-    "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" || echo "  warning: the settings step reported a problem; see $INSTALL_DIR/server-setup.log" >&2
+    echo "  keeping the existing database and TLS settings"
+
+    # Two migrations an upgrade has to make without touching anything the operator chose:
+    #   * metrics were absent from older macOS packages (the console needs them);
+    #   * an older Ops appsettings.json may still carry the relative "ops.db" from the template, which makes
+    #     --create-admin open a different file from the one the launchd job serves (its environment pins var/ops.db).
+    # Both are keyed off the live file, so an operator's own absolute path or explicit false is left alone.
+    preserve_args=()
+    metrics="$(plutil -extract Rendezvous.MetricsEnabled raw "$INSTALL_DIR/Rendezvous/appsettings.json" 2>/dev/null || true)"
+    if [ "$metrics" != "true" ]; then
+        preserve_args+=(--metrics-enabled)
+    fi
+    ops_path="$(plutil -extract Ops.Database.Path raw "$INSTALL_DIR/Ops/appsettings.json" 2>/dev/null || true)"
+    case "$ops_path" in
+        /*) ;;
+        *) preserve_args+=(--ops-database-path "$INSTALL_DIR/var/ops.db") ;;
+    esac
+    ops_listen="$(plutil -extract Ops.Listen raw "$INSTALL_DIR/Ops/appsettings.json" 2>/dev/null || true)"
+    if [ -z "$ops_listen" ]; then
+        preserve_args+=(--ops-listen "http://127.0.0.1:5090")
+    fi
+
+    if [ "${#preserve_args[@]}" -gt 0 ]; then
+        if ! "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "${preserve_args[@]}"; then
+            echo "  warning: could not apply the upgrade migrations; see $INSTALL_DIR/server-setup.log" >&2
+        fi
+    fi
 fi
 
-# It may hold a certificate password, and it has now been used.
+# It may hold a certificate password; it has now been used.
 rm -f "$OPTIONS"
+if [ -n "$CLEANUP" ]; then
+    rm -f "$CLEANUP"
+fi
+
+# --- summary for the next upgrade's pane -------------------------------------------------------
+
+# The pane cannot read appsettings.json (0640 root:wheel) as the installing user. A non-secret summary lets it prefill
+# the database and TLS choices and default to "preserve" on the next upgrade. It deliberately contains no connection
+# string and no password.
+write_summary() {
+    local settings="$INSTALL_DIR/Rendezvous/appsettings.json"
+    local temporary
+    temporary="$(mktemp)"
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict/></plist>' > "$temporary"
+
+    local provider path connection urls certificate tls
+    provider="$(plutil -extract Rendezvous.Database.Provider raw "$settings" 2>/dev/null || true)"
+    path="$(plutil -extract Rendezvous.Database.Path raw "$settings" 2>/dev/null || true)"
+    connection="$(plutil -extract Rendezvous.Database.ConnectionString raw "$settings" 2>/dev/null || true)"
+    urls="$(plutil -extract Urls raw "$settings" 2>/dev/null || true)"
+    certificate="$(plutil -extract Kestrel.Certificates.Default.Path raw "$settings" 2>/dev/null || true)"
+
+    if [ -z "$provider" ]; then
+        if [ -n "$connection" ]; then provider=postgres; else provider=sqlite; fi
+    fi
+    /usr/libexec/PlistBuddy -c "Add :DatabaseProvider string $provider" "$temporary" >/dev/null
+    if [ -n "$path" ]; then
+        /usr/libexec/PlistBuddy -c "Add :DatabasePath string $path" "$temporary" >/dev/null
+    fi
+    if [ -n "$connection" ]; then
+        /usr/libexec/PlistBuddy -c "Add :HasPostgresConnectionString bool true" "$temporary" >/dev/null
+    fi
+    if [ -n "$urls" ]; then
+        /usr/libexec/PlistBuddy -c "Add :Urls string $urls" "$temporary" >/dev/null
+    fi
+
+    # The scheme, not the mere presence of a Kestrel path, decides whether signaling is on TLS. Turning TLS off does
+    # not have to delete the old Kestrel block, and a summary that read the block would then claim https forever.
+    case "$urls" in
+        https://*)
+            if [ -n "$certificate" ]; then
+                case "$certificate" in
+                    "$INSTALL_DIR"/tls/signaling.crt) tls=generate ;;
+                    *) tls=existing ;;
+                esac
+                /usr/libexec/PlistBuddy -c "Add :TlsMode string $tls" "$temporary" >/dev/null
+                /usr/libexec/PlistBuddy -c "Add :TlsCertificatePath string $certificate" "$temporary" >/dev/null
+            else
+                /usr/libexec/PlistBuddy -c "Add :TlsMode string existing" "$temporary" >/dev/null
+            fi
+            ;;
+        *)
+            /usr/libexec/PlistBuddy -c "Add :TlsMode string none" "$temporary" >/dev/null
+            ;;
+    esac
+
+    chmod 0644 "$temporary"
+    chown root:wheel "$temporary"
+    mv "$temporary" "$SUMMARY"
+}
+
+write_summary || echo "  warning: could not write $SUMMARY; the next upgrade will default to preserving the settings." >&2
+
+# --- export the server certificate for clients -------------------------------------------------
+
+# The public half of the signaling certificate is copied next to the documentation so it can be given to the client
+# and host installers. It is NOT added to the System keychain: a .pkg postinstall runs without a user session and
+# macOS refuses the trust change ("authorization was denied since no user interaction was possible"). The console
+# pins this same public file in its own settings (configure_ops_pin), and the client/host installers pin it in theirs.
+export_server_certificate() {
+    local settings="$INSTALL_DIR/Rendezvous/appsettings.json"
+    local urls path password certificate temporary
+    urls="$(plutil -extract Urls raw "$settings" 2>/dev/null || true)"
+
+    # Whatever an earlier installation exported describes the old listener once TLS is turned off or replaced.
+    rm -f "$DOC_DIR/signaling.crt"
+    case "$urls" in
+        https://*) ;;
+        *) return 0 ;;
+    esac
+
+    path="$(plutil -extract Kestrel.Certificates.Default.Path raw "$settings" 2>/dev/null || true)"
+    [ -n "$path" ] || return 0
+    password="$(plutil -extract Kestrel.Certificates.Default.Password raw "$settings" 2>/dev/null || true)"
+
+    temporary=""
+    certificate=""
+    case "$path" in
+        "$INSTALL_DIR"/tls/signaling.crt)
+            certificate="$path"
+            ;;
+        *.pfx|*.p12)
+            temporary="$(mktemp)"
+            chmod 600 "$temporary"
+            if openssl pkcs12 -in "$path" -clcerts -nokeys -passin "pass:${password}" -out "$temporary" 2>/dev/null \
+                && [ -s "$temporary" ]; then
+                certificate="$temporary"
+            fi
+            ;;
+        *)
+            if [ -f "$path" ]; then
+                certificate="$path"
+            fi
+            ;;
+    esac
+
+    if [ -n "$certificate" ] && openssl x509 -in "$certificate" -out "$DOC_DIR/signaling.crt" 2>/dev/null; then
+        chmod 0644 "$DOC_DIR/signaling.crt"
+        chown root:wheel "$DOC_DIR/signaling.crt"
+        echo "  server certificate exported to $DOC_DIR/signaling.crt; give it to the client and host installers."
+    else
+        # A failed openssl run can leave an empty file behind; the pin below must not use it.
+        rm -f "$DOC_DIR/signaling.crt"
+        echo "  warning: could not export the server certificate; clients will need it from the server administrator." >&2
+    fi
+
+    if [ -n "$temporary" ]; then
+        rm -f "$temporary"
+    fi
+}
+
+export_server_certificate
+
+# --- let the console pin the server certificate ------------------------------------------------
+
+# A package postinstall cannot add a certificate to the macOS System keychain: security add-trusted-cert fails with
+# "The authorization was denied since no user interaction was possible". The console trusts the signaling server's
+# certificate by pinning it instead, so the path goes into its settings. On plain http, or when the export above
+# failed, the pin is cleared: Ops:NodeCertificatePath must name a readable PEM/DER certificate. Pointing it at the
+# Kestrel file would break the "existing certificate" choice, which is usually a password-protected .pfx that the
+# console cannot load.
+configure_ops_pin() {
+    local settings="$INSTALL_DIR/Rendezvous/appsettings.json"
+    local urls certificate
+    urls="$(plutil -extract Urls raw "$settings" 2>/dev/null || true)"
+    certificate=""
+    case "$urls" in
+        https://*)
+            if [ -f "$DOC_DIR/signaling.crt" ]; then
+                certificate="$DOC_DIR/signaling.crt"
+            else
+                echo "  warning: no exported certificate to pin; the console will use the system trust store for its nodes." >&2
+            fi
+            ;;
+    esac
+
+    if ! "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" \
+        --ops-node-certificate-path "$certificate"; then
+        echo "  warning: could not record the console's certificate pin; see $INSTALL_DIR/server-setup.log" >&2
+    fi
+}
+
+configure_ops_pin
+
+# --- local nodes in the console ---------------------------------------------------------------
+
+# A fresh console has no nodes, and its device and node pages read through them. The command adds nothing when the
+# node table already has rows, so an operator's own list survives reinstalls and upgrades. Linux has done this since
+# its 1.0.0 installer; macOS was leaving an empty console behind.
+seed_local_nodes() {
+    local settings="$INSTALL_DIR/Rendezvous/appsettings.json"
+    local urls rendezvous_url
+    urls="$(plutil -extract Urls raw "$settings" 2>/dev/null || true)"
+    case "$urls" in
+        https://*) rendezvous_url="https://$(hostname):5080" ;;
+        *)         rendezvous_url="http://127.0.0.1:5080" ;;
+    esac
+
+    if [ -x "$OPS" ]; then
+        if ! "$OPS" --seed-local-nodes --config-directory "$INSTALL_DIR/Ops" \
+            --rendezvous-base-url "$rendezvous_url" \
+            --relay-base-url "http://127.0.0.1:5083"; then
+            echo "  warning: could not register the local nodes; add them on the console's 节点管理 page." >&2
+        fi
+
+        # Seeding only fills an empty table, so an upgrade that switched http/https would otherwise leave the console
+        # scraping the old scheme. Sync updates the two rows the installer created; an operator's own nodes and a
+        # local row they deleted are left alone.
+        if ! "$OPS" --sync-local-nodes --config-directory "$INSTALL_DIR/Ops" \
+            --rendezvous-base-url "$rendezvous_url" \
+            --relay-base-url "http://127.0.0.1:5083"; then
+            echo "  warning: could not update the local node addresses; check them on the console's 节点管理 page." >&2
+        fi
+    fi
+}
+
+seed_local_nodes
 
 # --- launchd -----------------------------------------------------------------------------------
 
@@ -73,17 +489,17 @@ for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesk
     chown root:wheel "$plist"
     chmod 644 "$plist"
 
-    # Installing over an existing copy: the old job is still loaded and bootstrap would fail with "already loaded".
+    # Installing over an existing copy: the old job may still be loaded (the preinstall usually stopped it, but an
+    # interrupted earlier run can leave one behind) and bootstrap would fail with "already loaded".
     launchctl bootout system "$plist" 2>/dev/null || true
+
+    # enable before bootstrap: a job an administrator disabled would otherwise be loaded but never started.
+    launchctl enable "system/$label" 2>/dev/null || true
 
     if ! launchctl bootstrap system "$plist"; then
         echo "  warning: could not start $label; run 'sudo launchctl bootstrap system $plist' to see why" >&2
         continue
     fi
-
-    # bootstrap loads it, enable makes that survive a reboot. Both are needed: a job that was disabled earlier stays
-    # disabled otherwise, and it would look like the package had not installed anything.
-    launchctl enable "system/$label" 2>/dev/null || true
 done
 
 echo "Remote Desktop Server: installed in $INSTALL_DIR"

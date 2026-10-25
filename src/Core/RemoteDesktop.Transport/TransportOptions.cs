@@ -1,9 +1,24 @@
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
 namespace RemoteDesktop.Transport;
 
 public sealed class TransportOptions
 {
     /// <summary>Signaling WebSocket, e.g. <c>wss://rd.example.com/ws</c>.</summary>
     public Uri RendezvousUri { get; set; } = new("ws://127.0.0.1:5080/ws");
+
+    /// <summary>
+    /// A server certificate to pin for a <c>wss://</c> signaling connection, as a PEM or DER file. Empty means the
+    /// platform trust store decides, which is right for a certificate from a public authority.
+    /// </summary>
+    /// <remarks>
+    /// Why a pin instead of adding the self-signed certificate to the System keychain: the macOS installer scripts run
+    /// as root without a user session, and <c>security add-trusted-cert</c> then fails with "The authorization was
+    /// denied since no user interaction was possible". Pinning is also narrower than a trust anchor — only this one
+    /// certificate is accepted — and it is what the installer writes when the person selects the server's public half.
+    /// </remarks>
+    public string? RendezvousCertificatePath { get; set; }
 
     /// <summary>Skip direct candidates and always use the relay (diagnostics, tests).</summary>
     public bool ForceRelay { get; set; }
@@ -43,6 +58,20 @@ public sealed class TransportOptions
         if (RendezvousUri.Scheme is not ("ws" or "wss"))
         {
             throw new InvalidOperationException($"Transport:RendezvousUri must be ws:// or wss:// (got '{RendezvousUri}').");
+        }
+
+        // A pin left behind after the address is changed to ws:// is harmless: there is no TLS to validate. It is only
+        // read when the address is wss://, and a missing/broken file there is a startup error, not a silent fallback.
+        if (!string.IsNullOrWhiteSpace(RendezvousCertificatePath) && RendezvousUri.Scheme == "wss")
+        {
+            try
+            {
+                using var certificate = X509CertificateLoader.LoadCertificateFromFile(RendezvousCertificatePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+            {
+                throw new InvalidOperationException($"Transport:RendezvousCertificatePath '{RendezvousCertificatePath}' could not be read: {ex.Message}", ex);
+            }
         }
 
         Positive(DirectAttemptTimeout, nameof(DirectAttemptTimeout));

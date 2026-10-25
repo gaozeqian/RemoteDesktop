@@ -62,6 +62,23 @@ public sealed partial class OpsStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Changes a node's address by name. Returns false when no node has that name, so a row an operator deleted is not
+    /// re-created by an upgrade.
+    /// </summary>
+    public async Task<bool> UpdateNodeBaseUrlAsync(string name, string baseUrl, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(baseUrl);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE ops_node SET base_url = @baseUrl WHERE name = @name;";
+        Bind(command, ("@name", name), ("@baseUrl", baseUrl));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
     /// <summary>Enables or disables a node. Returns false when the id is unknown.</summary>
     public async Task<bool> SetNodeEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default)
     {

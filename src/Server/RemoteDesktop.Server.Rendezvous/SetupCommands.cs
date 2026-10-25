@@ -45,6 +45,7 @@ public static class SetupCommands
             TlsHostName = Argument(args, "--tls-hostname"),
             OpsDatabasePath = Argument(args, "--ops-database-path"),
             OpsListen = Argument(args, "--ops-listen"),
+            OpsNodeCertificatePath = Argument(args, "--ops-node-certificate-path"),
             MetricsEnabled = Array.Exists(args, argument => string.Equals(argument, "--metrics-enabled", StringComparison.Ordinal)),
         };
 

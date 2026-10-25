@@ -23,7 +23,8 @@ internal static class HostCredentialCommands
     public static bool TryRun(string[] args, string dataDirectory, TextWriter output, out int exitCode)
     {
         exitCode = 0;
-        if (args.Length == 0 || args[0] is not ("--set-fixed-password" or "--clear-fixed-password"))
+        if (args.Length == 0
+            || args[0] is not ("--set-fixed-password" or "--set-fixed-password-file" or "--clear-fixed-password"))
         {
             return false;
         }
@@ -39,7 +40,25 @@ internal static class HostCredentialCommands
                 return true;
             }
 
-            var password = args.Length > 1 ? args[1] : null;
+            // The installer reads the password from its root-only answers file, writes it to a 0600 temporary file
+            // owned by the console user, and passes that path here. Keeping the secret out of argv matters: a process
+            // list is readable by every local user, and a command line can also end up in a crash report. Operators
+            // still have --set-fixed-password for a password typed on a terminal.
+            string? password;
+            if (args[0] == "--set-fixed-password-file")
+            {
+                if (args.Length < 2)
+                {
+                    output.WriteLine("--set-fixed-password-file needs the path to the password file.");
+                    exitCode = 2;
+                    return true;
+                }
+                password = File.ReadAllText(args[1]);
+            }
+            else
+            {
+                password = args.Length > 1 ? args[1] : null;
+            }
             if (string.IsNullOrWhiteSpace(password))
             {
                 // The installer's page starts with a space so the edit box is usable; sending that through must not

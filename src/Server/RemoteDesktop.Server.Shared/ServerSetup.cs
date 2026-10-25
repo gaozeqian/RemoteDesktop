@@ -82,6 +82,12 @@ public sealed record ServerSetupOptions
 
     /// <summary>Where the monitoring console listens. Empty leaves whatever the settings already say.</summary>
     public string? OpsListen { get; init; }
+
+    /// <summary>
+    /// A certificate the console pins when it calls its nodes (scrapes and the device proxy). Empty means the system
+    /// trust store; a self-signed signaling certificate cannot be trusted that way from an installer script.
+    /// </summary>
+    public string? OpsNodeCertificatePath { get; init; }
 }
 
 /// <summary>
@@ -145,13 +151,24 @@ public static class ServerSetup
         var relay = Read(relayPath);
         var ops = Read(opsPath);
 
+        var rendezvousSection = Section(rendezvous, "Rendezvous");
         var (endpoint, relayPort) = RelayEndpoint(options.RelayPublicEndpoint, notes);
         var key = SharedKey(options.RelaySharedKey, rendezvous, relay, notes);
-        var urls = SignalingUrl(options.Urls, options.TlsCertificatePath, notes);
+        var urls = SignalingUrl(options.Urls, Text(rendezvous, "Urls"), options.TlsCertificatePath, notes);
 
-        var rendezvousSection = Section(rendezvous, "Rendezvous");
-        rendezvous["Urls"] = urls;
-        rendezvousSection["RelayEndpoint"] = endpoint;
+        // "Not given" is not "set to the default": configure-server.sh and an upgrade pass only what changed, and
+        // rewriting the address or the relay endpoint here would silently undo what an operator configured months
+        // earlier. A fresh installation gets the defaults because the installers pass auto explicitly.
+        if (urls is not null)
+        {
+            rendezvous["Urls"] = urls;
+        }
+
+        if (endpoint is not null)
+        {
+            rendezvousSection["RelayEndpoint"] = endpoint;
+        }
+
         rendezvousSection["RelaySharedKey"] = key;
         if (options.MetricsEnabled)
         {
@@ -163,18 +180,37 @@ public static class ServerSetup
         var database = ConfigureDatabase(rendezvousSection, options, notes);
         var opsConfigured = ConfigureOps(ops, database, options, notes);
 
+        // A password that was not given is not "the certificate has no password": configure-server.sh and the
+        // installer's upgrade pane leave the password field empty because they do not store it. If the path did not
+        // change, the password already on the machine is the one to use — otherwise a reconfiguration would clear it
+        // and the server would fail to start on its own PFX.
+        var existingCertificates = rendezvous["Kestrel"]?["Certificates"]?["Default"] as JsonObject;
+        var existingPath = existingCertificates?["Path"]?.GetValue<string>();
+        var existingPassword = existingCertificates?["Password"]?.GetValue<string>();
+        var certificatePassword = options.TlsCertificatePassword;
+        if (IsAuto(certificatePassword)
+            && !IsAuto(options.TlsCertificatePath)
+            && options.TlsCertificatePath != ServerSetupOptions.GenerateCertificate
+            && string.Equals(existingPath, options.TlsCertificatePath, StringComparison.Ordinal))
+        {
+            certificatePassword = existingPassword;
+        }
+
         // A certificate file that cannot actually be loaded has to fail here, while somebody is watching, rather than
         // leave an installation whose service dies on its first start with a message about Kestrel.
         if (!IsAuto(options.TlsCertificatePath)
             && options.TlsCertificatePath != ServerSetupOptions.GenerateCertificate
+            && urls is not null
             && urls.StartsWith("https://", StringComparison.Ordinal))
         {
-            ValidateCertificateFile(options.TlsCertificatePath!, options.TlsCertificatePassword);
+            ValidateCertificateFile(options.TlsCertificatePath!, certificatePassword);
         }
 
         var additionalNames = AdditionalNames(options.TlsHostName);
 
-        if (!IsAuto(options.TlsCertificatePath) && urls.StartsWith("https://", StringComparison.Ordinal))
+        if (!IsAuto(options.TlsCertificatePath)
+            && urls is not null
+            && urls.StartsWith("https://", StringComparison.Ordinal))
         {
             var certificates = Section(rendezvous, "Kestrel");
             certificates = Section(certificates, "Certificates");
@@ -229,7 +265,7 @@ public static class ServerSetup
                 // Not "auto" here, but the compiler cannot know it across the IsAuto call above.
                 var certificatePath = options.TlsCertificatePath!;
                 certificates["Path"] = certificatePath;
-                certificates["Password"] = IsAuto(options.TlsCertificatePassword) ? string.Empty : options.TlsCertificatePassword!;
+                certificates["Password"] = IsAuto(certificatePassword) ? string.Empty : certificatePassword!;
 
                 // A PEM certificate carries no password: its key is a second file, and Kestrel is pointed at it
                 // separately. Looking for the key beside the certificate under the same name is the convention
@@ -249,7 +285,11 @@ public static class ServerSetup
         }
 
         var relaySection = Section(relay, "Relay");
-        relaySection["Port"] = relayPort;
+        if (relayPort is not null)
+        {
+            relaySection["Port"] = relayPort.Value;
+        }
+
         relaySection["SharedKey"] = key;
 
         Write(rendezvousPath, rendezvous);
@@ -263,8 +303,12 @@ public static class ServerSetup
             Write(opsPath, ops);
         }
 
-        notes.Add($"Signaling listens on {urls}.");
-        notes.Add($"Relay listens on port {relayPort}; clients are told to use {endpoint}.");
+        notes.Add(urls is null
+            ? "The signaling address was left unchanged."
+            : $"Signaling listens on {urls}.");
+        notes.Add(endpoint is null
+            ? "The relay address was left unchanged."
+            : $"Relay listens on port {relayPort}; clients are told to use {endpoint}.");
         return notes;
     }
 
@@ -276,8 +320,16 @@ public static class ServerSetup
     /// fail on the client's side with nothing useful to say. A name is therefore resolved here, once, at install
     /// time — the trade is that the address is then fixed, so a machine whose address changes needs this run again.
     /// </remarks>
-    private static (string Endpoint, int Port) RelayEndpoint(string? configured, List<string> notes)
+    private static (string? Endpoint, int? Port) RelayEndpoint(string? configured, List<string> notes)
     {
+        // Null means the caller said nothing about the relay address; an empty or "auto" value means
+        // "decide for this machine". Keeping those apart is what lets an upgrade or configure-server.sh change one
+        // setting without silently moving every client to the build machine's first non-loopback address.
+        if (configured is null)
+        {
+            return (null, null);
+        }
+
         var endpoint = Expand(configured);
         if (IsAuto(endpoint))
         {
@@ -457,7 +509,8 @@ public static class ServerSetup
     {
         var listen = Given(options.OpsListen);
         var databasePath = Given(options.OpsDatabasePath);
-        if (database is null && listen is null && databasePath is null)
+        var nodeCertificatePath = Given(options.OpsNodeCertificatePath);
+        if (database is null && listen is null && databasePath is null && nodeCertificatePath is null)
         {
             return false;
         }
@@ -466,6 +519,20 @@ public static class ServerSetup
         if (listen is not null)
         {
             section["Listen"] = listen;
+        }
+
+        if (nodeCertificatePath is not null)
+        {
+            // The console pins this certificate when it calls its nodes. Empty clears a pin left by a previous TLS
+            // deployment.
+            if (nodeCertificatePath.Length > 0)
+            {
+                section["NodeCertificatePath"] = nodeCertificatePath;
+            }
+            else
+            {
+                section.Remove("NodeCertificatePath");
+            }
         }
 
         if (database is not { } choice)
@@ -576,6 +643,14 @@ public static class ServerSetup
     /// </summary>
     private static (string Provider, string? ConnectionString, string? Path) Automatic(ExistingDatabase existing)
     {
+        // "auto" means "keep what this machine already uses". "none" is a choice too — the memory-only mode an
+        // operator picked on purpose — and turning it into a SQLite file on an upgrade silently changes the behaviour
+        // the operator asked for.
+        if (string.Equals(existing.Provider, ProviderNone, StringComparison.OrdinalIgnoreCase))
+        {
+            return (ProviderNone, null, null);
+        }
+
         if (string.Equals(existing.Provider, ProviderSqlite, StringComparison.OrdinalIgnoreCase))
         {
             return (ProviderSqlite, null, existing.Path ?? DefaultSqlitePath());
@@ -640,14 +715,55 @@ public static class ServerSetup
     /// What the signaling server listens on. A certificate switches it to https on its own: an installer that was
     /// given one was asked for TLS, and asking for TLS and serving http is not something to do quietly.
     /// </summary>
-    private static string SignalingUrl(string? configured, string? certificatePath, List<string> notes)
+    private static string? SignalingUrl(
+        string? configured,
+        string? existingUrls,
+        string? certificatePath,
+        List<string> notes)
     {
+        // Null means "leave the address alone". A certificate may still change the scheme: configure-server.sh
+        // documents --tls-certificate as "serve TLS with this certificate", and nobody should have to repeat the
+        // address to turn https on. Anything else (including an explicit "auto" or "") is a value for this run.
+        if (configured is null)
+        {
+            if (IsAuto(certificatePath))
+            {
+                return null;
+            }
+
+            var current = string.IsNullOrWhiteSpace(existingUrls)
+                ? $"http://0.0.0.0:{DefaultSignalingPort}"
+                : existingUrls;
+            if (!current.StartsWith("http://", StringComparison.Ordinal)
+                && !current.StartsWith("https://", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"The existing signaling address must start with http:// or https:// (got '{current}').");
+            }
+
+            return WithCertificate(current, certificatePath, notes);
+        }
+
         var urls = Expand(configured);
         if (IsAuto(urls))
         {
             urls = $"http://0.0.0.0:{DefaultSignalingPort}";
         }
 
+        if (!urls.StartsWith("http://", StringComparison.Ordinal)
+            && !urls.StartsWith("https://", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"The signaling address must start with http:// or https:// (got '{urls}').");
+        }
+
+        return WithCertificate(urls, certificatePath, notes);
+    }
+
+    /// <summary>
+    /// Applies the certificate choice to an address. A certificate turns an http address into https; without one the
+    /// address is left on http and the consequence is said out loud.
+    /// </summary>
+    private static string WithCertificate(string urls, string? certificatePath, List<string> notes)
+    {
         if (urls.StartsWith("https://", StringComparison.Ordinal))
         {
             if (IsAuto(certificatePath))
@@ -656,11 +772,6 @@ public static class ServerSetup
             }
 
             return urls;
-        }
-
-        if (!urls.StartsWith("http://", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"The signaling address must start with http:// or https:// (got '{urls}').");
         }
 
         // "auto" is the installer's default property value, and it means the same as an empty one here: no certificate.
@@ -699,10 +810,17 @@ public static class ServerSetup
         {
             if (Path.GetExtension(certificatePath) is ".pfx" or ".p12")
             {
+                // macOS has no ephemeral key set; asking for one throws PlatformNotSupportedException before the
+                // certificate is even read. DefaultKeySet is what Kestrel itself does on this platform, so the
+                // validation stays "the same load the server will perform" rather than a weaker check.
+                var flags = OperatingSystem.IsMacOS()
+                    ? X509KeyStorageFlags.DefaultKeySet
+                    : X509KeyStorageFlags.EphemeralKeySet;
+
                 using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
                     certificatePath,
                     secret,
-                    X509KeyStorageFlags.EphemeralKeySet);
+                    flags);
 
                 if (!certificate.HasPrivateKey)
                 {

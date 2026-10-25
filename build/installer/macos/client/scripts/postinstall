@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+# Applies the install-time answers to the client, as root: the machine-wide signaling address and, for a wss://
+# server with a self-signed certificate, the certificate the app pins.
+#
+# The work is shared with the host package (build/installer/macos/client/scripts/apply-answers.sh) so the two cannot
+# disagree about where the address goes or how the certificate is trusted.
+#
+set -e
+
+. "$(dirname "$0")/apply-answers.sh"
+apply_rendezvous_answers client
+
+exit 0

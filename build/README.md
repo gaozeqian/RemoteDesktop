@@ -41,6 +41,13 @@ macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote 
 `RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。不能复用客户端
 bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被单独授予屏幕录制/辅助功能，且不能带着控制端 UI。
 
+macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd_installer_plugin.m`（Objective-C，
+`InstallerSection`/`InstallerPane` 代码构建视图，无 nib），由 `native/macos/build-installer-plugin.sh` 按角色
+编出 `.bundle`，三个 `make-pkg.sh` 用 `productbuild --plugins` 放进产品归档。它属于 `native/` 而不是
+`installer/`，因为它是**要编译的原生代码**，与 `rd_*.m` 放在一起；`installer/macos/<角色>/` 里只留该角色的
+打包脚本与脚本目录。client 与 host 的答案应用逻辑只有一份：
+`installer/macos/client/scripts/apply-answers.sh`，host 的 `make-pkg.sh` 在组装脚本目录时把它拷过去。
+
 `docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有三个
 （信令、中继、监控台），`docker-compose.yml` 只启动前两个；监控台与 TLS 是显式加载的 overlay：
 `docker-compose.ops.yml` 与 `docker-compose.tls.yml`（后者带一个 Caddyfile）。上面那张树里其余四项都服从

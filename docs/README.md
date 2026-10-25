@@ -43,6 +43,8 @@
 **不是现行约定**，是某一次评审在当时看到的东西，冻结不改。查"当时为什么这么定"时看这里；
 写新代码时**不要**以它为准。归档说明见 [`reviews/README.md`](reviews/README.md)。
 
+* [**macOS 安装包评审（2026-10-25）**](reviews/macos-installer-review-2026-10-25.md) —— client / host / server
+  三个 `.pkg` 的打包、签名、公证与安装后生命周期；P0 三项阻断与 host/Ops 的首装、升级缺陷。
 * [**客户端 UI 与产品图标评审（2026-10-18，两轮）**](reviews/ui-and-icon-review-2026-10-18.md) —— macOS 26
   与 Windows 11 两轮实机逐屏与图标资产/打包核对；R1/R2/R4/R7/R10、W1–W8 已修复，亮色外观（R8）已补做；
   图标栅格（R3）与 R5/R6/R9、W9–W10 待决定。

@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Runs before the host payload is unpacked, as root.
+#
+# Two jobs: take the Installer pane's answers out of /var/tmp, and stop the host that is running the old bundle. The
+# old process would otherwise keep running the previous binary until the next login, and the new launchd job would
+# fail to bootstrap with "already loaded".
+#
+set -e
+
+. "$(dirname "$0")/apply-answers.sh"
+rd_prepare_answers host
+
+console_user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" != "loginwindow" ]; then
+    uid="$(id -u "$console_user" 2>/dev/null || true)"
+    if [ -n "$uid" ]; then
+        launchctl bootout "gui/$uid" /Library/LaunchAgents/com.remotedesktop.host.plist 2>/dev/null || true
+    fi
+fi
+
+exit 0

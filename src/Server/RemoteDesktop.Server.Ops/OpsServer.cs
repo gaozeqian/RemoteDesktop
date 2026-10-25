@@ -57,9 +57,11 @@ public static class OpsServer
 
         // The scraper is a singleton as well as a hosted service so a test can drive one pass directly.
         builder.Services.AddHttpClient(MetricScraper.ClientName, client =>
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)));
+                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)))
+            .ConfigurePrimaryHttpMessageHandler(() => NodeCertificatePin.Handler(options.NodeCertificatePath));
         builder.Services.AddHttpClient(DeviceEndpoints.ClientName, client =>
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)));
+                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)))
+            .ConfigurePrimaryHttpMessageHandler(() => NodeCertificatePin.Handler(options.NodeCertificatePath));
         builder.Services.AddHttpClient(AlertService.ClientName, client => client.Timeout = TimeSpan.FromSeconds(5));
         builder.Services.AddSingleton<MetricScraper>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricScraper>());

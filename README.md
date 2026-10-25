@@ -72,6 +72,10 @@ build/installer/linux/server/build-deb.sh
 无窗口 app**（`Remote Desktop Host.app`），不是把客户端换个名字，TCC 授权也与客户端分开。三个角色的边界见
 [`docs/usage/README.md`](docs/usage/README.md)。
 
+macOS 的三个 `.pkg` 在安装器里各有一页配置面板：服务端选 SQLite / PostgreSQL 与 TLS（生成自签名或使用已有
+证书），客户端与被控端填写信令服务器地址并在需要时导入自签名服务器证书。无人值守安装的答案文件见
+[`docs/ops/README.md`](docs/ops/README.md) 的 macOS 一节。
+
 细节（含打包脚本的坑）见 [`docs/ops/README.md`](docs/ops/README.md)。
 
 ## 快速开始

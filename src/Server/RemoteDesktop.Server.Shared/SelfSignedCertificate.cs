@@ -157,7 +157,9 @@ public static class SelfSignedCertificate
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
         notes.Add($"A self-signed certificate '{SubjectForThisMachine}' was created (valid until {created.NotAfter:yyyy-MM-dd}); the private key is at {keyPath} and readable only by its owner.");
-        notes.Add($"Clients must trust it, or they will refuse the connection: give them {certificatePath} (on a client, copy it into /usr/local/share/ca-certificates and run update-ca-certificates), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
+        notes.Add(OperatingSystem.IsMacOS()
+            ? $"Clients must trust it, or they will refuse the connection: give them {certificatePath}. The macOS client and host installers accept that file and pin exactly that certificate (no system trust change), or put a certificate from a real authority in Kestrel:Certificates:Default instead."
+            : $"Clients must trust it, or they will refuse the connection: give them {certificatePath} (on a client, copy it into /usr/local/share/ca-certificates and run update-ca-certificates), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
 
         return (certificatePath, keyPath);
     }

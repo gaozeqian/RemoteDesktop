@@ -101,7 +101,50 @@ else
     echo "    WARNING: could not build AppIcon.icns — Finder will show the generic application icon." >&2
 fi
 
+# The same two checks the client bundle does. A host without them builds, packages and verifies as "present", then
+# fails at the first connection (QUIC) or the first frame (screen capture) — the worst place to find out.
+for native in libmsquic.dylib libRemoteDesktopMacNative.dylib; do
+    if [[ ! -f "$MACOS_DIR/$native" ]]; then
+        if [[ "$DISTRIBUTION" == "1" ]]; then
+            echo "Refusing to build a distribution bundle without $native in Contents/MacOS." >&2
+            echo "Run native/macos/fetch-libmsquic.sh (for libmsquic) and native/macos/build-native.sh, then repackage." >&2
+            exit 1
+        fi
+        echo "    WARNING: $native is missing — QUIC or screen capture will not work." >&2
+    fi
+done
+
 # --- signing --------------------------------------------------------------------------------------------------
+
+# A machine-local pin, shared with the client bundle (build/installer/macos/client/development-identity). TCC keys the
+# screen-recording and accessibility grants to the signing identity, and the host is the bundle that lives or dies by
+# those grants: picking "the first certificate in the keychain" means a machine with two certificates silently changes
+# identity between builds and loses both grants. The file is gitignored because it names a personal certificate.
+DEVELOPMENT_IDENTITY_FILE="$REPO_ROOT/build/installer/macos/client/development-identity"
+if [[ -z "$IDENTITY" && -f "$DEVELOPMENT_IDENTITY_FILE" ]]; then
+    IDENTITY="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        "$DEVELOPMENT_IDENTITY_FILE" | sed -n '1p')"
+    if [[ -n "$IDENTITY" ]]; then
+        echo "    identity pinned by development-identity: $IDENTITY"
+    fi
+fi
+
+if [[ -z "$IDENTITY" ]]; then
+    APPLE_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | sort)"
+    IDENTITY="$(printf '%s' "$APPLE_IDENTITIES" | sed -n '1p')"
+    APPLE_IDENTITY_COUNT="$(printf '%s\n' "$APPLE_IDENTITIES" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [[ "$APPLE_IDENTITY_COUNT" -gt 1 ]]; then
+        cat >&2 <<MULTIPLE
+
+    warning: $APPLE_IDENTITY_COUNT Apple Development identities are installed; picked "$IDENTITY".
+             Pin the one you want in build/installer/macos/client/development-identity or set
+             APPLE_DEVELOPMENT_IDENTITY. Screen-recording and accessibility grants are keyed to the
+             signing identity, so building with a different one invalidates them and macOS prompts again.
+
+MULTIPLE
+    fi
+fi
 
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \

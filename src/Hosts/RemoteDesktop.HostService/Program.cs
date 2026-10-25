@@ -111,20 +111,26 @@ if (OperatingSystem.IsWindows() &&
     return setupExitCode;
 }
 
-var builder = Host.CreateApplicationBuilder(args);
+// The content root matters when launchd starts this executable straight out of the bundle: the working directory is
+// not Contents/MacOS, so without it the appsettings.json next to the program is never read. The same setting is what
+// the client uses. It has to be given at construction, before the file sources are layered on top.
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
 
 var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForMachine();
 
 // The same layering the client does, and the same file: off Windows the controlled end runs as the person whose
-// desktop it serves, so there is one settings file between them rather than the two accounts Windows has. What the
-// package shipped beside the program stays the defaults; this is what the person can change.
+// desktop it serves, so there is one settings file between them rather than the two accounts Windows has. On macOS
+// the installer's machine-wide file sits between the shipped defaults and the person's own file, because the shipped
+// file is inside the signed bundle and cannot be edited in place.
 if (!OperatingSystem.IsWindows())
 {
-    builder.Configuration.AddJsonFile(
-        Path.Combine(dataDirectory, "appsettings.json"),
-        optional: true,
-        reloadOnChange: false);
+    MachineSettings.AddConfigurationSource(builder.Configuration);
+    UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
 }
 
 // A service has no console and no window: if the settings cannot be read, the reason goes to a file in the log folder

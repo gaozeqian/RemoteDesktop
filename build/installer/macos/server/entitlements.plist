@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the three server apphosts, used only when the package is built with a Developer ID Application
+  identity (--distribution / --notarize).
+
+  The servers are self-contained .NET programs. Under the hardened runtime the runtime's JIT is refused unless the
+  main executable carries these two entitlements; a dylib does not need them, which is why the signing loop applies
+  this file only to RemoteDesktop.Server.* and not to the native libraries beside it.
+
+  There is deliberately no camera, microphone or keychain entitlement here: the servers are root daemons that serve
+  HTTP and UDP, and the notary service is right to ask why a signaling server wants a camera.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

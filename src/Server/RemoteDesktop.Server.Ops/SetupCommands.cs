@@ -44,6 +44,12 @@ public static class SetupCommands
             return true;
         }
 
+        if (string.Equals(args[0], "--sync-local-nodes", StringComparison.Ordinal))
+        {
+            exitCode = SyncLocalNodesAsync(args, output).GetAwaiter().GetResult();
+            return true;
+        }
+
         return false;
     }
 
@@ -130,33 +136,10 @@ public static class SetupCommands
     /// </summary>
     private static async Task<int> SeedLocalNodesAsync(string[] args, TextWriter output)
     {
-        var rendezvous = Argument(args, "--rendezvous-base-url");
-        var relay = Argument(args, "--relay-base-url");
-        if (string.IsNullOrWhiteSpace(rendezvous) && string.IsNullOrWhiteSpace(relay))
+        var candidates = LocalNodeCandidates(args, "--seed-local-nodes", output);
+        if (candidates is null)
         {
-            output.WriteLine("用法: RemoteDesktop.Server.Ops --seed-local-nodes --config-directory <目录> [--rendezvous-base-url <URL>] [--relay-base-url <URL>]");
             return 2;
-        }
-
-        var candidates = new List<(string Name, string Role, string Url)>(2);
-        if (!string.IsNullOrWhiteSpace(rendezvous))
-        {
-            candidates.Add(("rendezvous-local", "rendezvous", rendezvous.Trim()));
-        }
-
-        if (!string.IsNullOrWhiteSpace(relay))
-        {
-            candidates.Add(("relay-local", "relay", relay.Trim()));
-        }
-
-        foreach (var (_, _, url) in candidates)
-        {
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)
-                || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
-            {
-                output.WriteLine($"地址 '{url}' 必须是 http:// 或 https:// 开头的绝对地址。");
-                return 2;
-            }
         }
 
         var (options, error) = ReadOptions(args);
@@ -194,6 +177,85 @@ public static class SetupCommands
 
         output.WriteLine("控制台启动后约 10 秒出现第一份节点数据；设备管理页从信令节点读取设备列表。");
         return 0;
+    }
+
+    /// <summary>
+    /// Updates the addresses of the two local nodes that are already registered. An upgrade that changes signaling
+    /// from http to https must do this: the rows are seeded only once, so without a sync the console keeps scraping the
+    /// old scheme against the new listener and every scrape fails.
+    /// </summary>
+    /// <remarks>
+    /// Only rows that exist are updated. A local node an operator deleted stays deleted — this is a migration of the
+    /// installer's own rows, not a re-seed.
+    /// </remarks>
+    private static async Task<int> SyncLocalNodesAsync(string[] args, TextWriter output)
+    {
+        var candidates = LocalNodeCandidates(args, "--sync-local-nodes", output);
+        if (candidates is null)
+        {
+            return 2;
+        }
+
+        var (options, error) = ReadOptions(args);
+        if (error is not null)
+        {
+            output.WriteLine(error);
+            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
+            return 2;
+        }
+
+        using var store = OpsStore.Open(options.Database);
+        await store.EnsureSchemaAsync().ConfigureAwait(false);
+        foreach (var (name, _, url) in candidates)
+        {
+            if (await store.UpdateNodeBaseUrlAsync(name, url).ConfigureAwait(false))
+            {
+                output.WriteLine($"已更新节点地址: {name} → {url}");
+            }
+            else
+            {
+                output.WriteLine($"节点 {name} 不在控制台里，未创建。");
+            }
+        }
+
+        return 0;
+    }
+
+    private static List<(string Name, string Role, string Url)>? LocalNodeCandidates(
+        string[] args,
+        string command,
+        TextWriter output)
+    {
+        var rendezvous = Argument(args, "--rendezvous-base-url");
+        var relay = Argument(args, "--relay-base-url");
+        if (string.IsNullOrWhiteSpace(rendezvous) && string.IsNullOrWhiteSpace(relay))
+        {
+            output.WriteLine($"用法: RemoteDesktop.Server.Ops {command} --config-directory <目录> [--rendezvous-base-url <URL>] [--relay-base-url <URL>]");
+            return null;
+        }
+
+        var candidates = new List<(string Name, string Role, string Url)>(2);
+        if (!string.IsNullOrWhiteSpace(rendezvous))
+        {
+            candidates.Add(("rendezvous-local", "rendezvous", rendezvous.Trim()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(relay))
+        {
+            candidates.Add(("relay-local", "relay", relay.Trim()));
+        }
+
+        foreach (var (_, _, url) in candidates)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+                || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+            {
+                output.WriteLine($"地址 '{url}' 必须是 http:// 或 https:// 开头的绝对地址。");
+                return null;
+            }
+        }
+
+        return candidates;
     }
 
     /// <summary>

@@ -271,6 +271,10 @@ if [[ -f "$MACOS_DIR/libmsquic.dylib" ]]; then
     echo "    libmsquic.dylib present; its dependencies:"
     otool -L "$MACOS_DIR/libmsquic.dylib" | tail -n +2 | sed 's/^/      /'
 else
+    if [[ "$DISTRIBUTION" == "1" ]]; then
+        echo "    ERROR: libmsquic.dylib is missing — QUIC will not start. Run native/macos/fetch-libmsquic.sh." >&2
+        exit 1
+    fi
     echo "    WARNING: libmsquic.dylib is missing — QUIC will not start. Run native/macos/fetch-libmsquic.sh." >&2
 fi
 
@@ -281,6 +285,11 @@ if [[ -f "$MACOS_DIR/libRemoteDesktopMacNative.dylib" ]]; then
     echo "    libRemoteDesktopMacNative.dylib present; exported entry points:"
     nm -gU "$MACOS_DIR/libRemoteDesktopMacNative.dylib" | grep ' _rd_' | sed 's/^/      /' || echo "      (none!)"
 else
+    if [[ "$DISTRIBUTION" == "1" ]]; then
+        echo "    ERROR: libRemoteDesktopMacNative.dylib is missing — screen capture will not work." >&2
+        echo "           Run native/macos/build-native.sh, then rebuild and repackage." >&2
+        exit 1
+    fi
     echo "    WARNING: libRemoteDesktopMacNative.dylib is missing — screen capture will not work." >&2
     echo "             Run native/macos/build-native.sh, then rebuild and repackage." >&2
 fi

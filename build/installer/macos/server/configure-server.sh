@@ -25,6 +25,8 @@
 #   --relay-key <base64>             the key relay tickets are signed with (must match a relay on another machine)
 #   --tls-certificate <file.pfx>     serve TLS with this certificate
 #   --tls-password <password>        its password
+#   --ops-listen <url>               the monitoring console's address (default http://127.0.0.1:5090)
+#   --ops-database-path <file>       the console's SQLite file (default .../var/ops.db)
 #   --no-restart                     write the settings but leave the jobs running on the old ones
 #
 # Examples:
@@ -62,6 +64,8 @@ while [ "$#" -gt 0 ]; do
         --relay-key)       shift; args[${#args[@]}]="--relay-key";       args[${#args[@]}]="$1" ;;
         --tls-certificate) shift; args[${#args[@]}]="--tls-certificate"; args[${#args[@]}]="$1" ;;
         --tls-password)    shift; args[${#args[@]}]="--tls-password";    args[${#args[@]}]="$1" ;;
+        --ops-listen)      shift; args[${#args[@]}]="--ops-listen";      args[${#args[@]}]="$1" ;;
+        --ops-database-path) shift; args[${#args[@]}]="--ops-database-path"; args[${#args[@]}]="$1" ;;
         --no-restart)      restart=0 ;;
         -h|--help)         sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -82,7 +86,10 @@ if [ "$restart" -eq 0 ]; then
 fi
 
 echo "==> Restarting the servers"
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay; do
+# The console restarts too: the database provider is shared with the signaling server, so a --database or --postgres
+# change rewrites the console's settings as well. Leaving it running would keep the old database (and make history
+# look as if it had disappeared) until somebody restarted it by hand.
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops; do
     # kickstart -k restarts a running job and starts a stopped one, which is what "restart the service" means on
     # Windows. `launchctl stop` alone would only stop it, and KeepAlive would bring it back on the old settings.
     launchctl kickstart -k "system/$label" || echo "  warning: could not restart $label" >&2

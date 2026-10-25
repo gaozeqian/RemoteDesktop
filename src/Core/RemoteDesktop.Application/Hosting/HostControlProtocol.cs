@@ -21,6 +21,14 @@ public static class HostControlProtocol
     /// person can no longer see or remove from the package manager.
     /// </summary>
     public const string LinuxHostServiceUnit = "/usr/lib/systemd/user/app-RemoteDesktopHost.service";
+
+    /// <summary>
+    /// The macOS host package's application and login item. The client uses them for the same question the Linux
+    /// unit answers: is a background controlled end installed, or is this a socket left by a removed package?
+    /// </summary>
+    public const string MacOSHostApp = "/Applications/Remote Desktop Host.app";
+    public const string MacOSHostAgentPlist = "/Library/LaunchAgents/com.remotedesktop.host.plist";
+
     public const string StatusCommand = "status";
     public const string RotateCommand = "rotate";
     public const string DowngradeCommand = "downgrade";

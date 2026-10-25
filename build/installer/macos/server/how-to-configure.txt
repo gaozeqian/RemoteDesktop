@@ -4,6 +4,12 @@ Remote Desktop 服务器（macOS）—— 装好之后怎么改配置
 这个目录里放着三个服务器程序（Rendezvous/ 信令、Relay/ 中继、Ops/ 运维监控台）、它们的配置
 （各自目录下的 appsettings.json），以及这个说明。
 
+安装时，安装器里有一页"服务器配置"，可以选择数据库（SQLite / PostgreSQL）与 TLS（不用 / 生成自签名 /
+使用已有证书）。**升级时同一页默认勾选"保留现有设置"**，不会把运维改过的值覆盖掉。
+无人值守安装（sudo installer、MDM）可以把同样的答案写在
+/Library/Application Support/RemoteDesktop/install-answers.plist（root:wheel，0600），
+键名见安装器页面；没有这个文件时，升级只更新程序、保留配置。
+
 它们由 launchd 以系统守护进程（LaunchDaemon）的方式运行，开机自启、崩溃自动重启：
     /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
     /Library/LaunchDaemons/com.remotedesktop.relay.plist
@@ -19,17 +25,20 @@ Remote Desktop 服务器（macOS）—— 装好之后怎么改配置
     sudo ./configure-server.sh --database sqlite
     sudo ./configure-server.sh --postgres 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
 
-它会做两件事：把设置写进两个 appsettings.json，然后重启两个守护进程让它们生效。
-只给想改的项就行，没给的保持不动。可用的项（`sudo ./configure-server.sh --help` 也列了）：
+它会做两件事：把设置写进 appsettings.json，然后重启三个守护进程让它们生效（监控台也重启，
+因为数据库 provider 是两边共享的）。只给想改的项就行，没给的保持不动。可用的项
+（`sudo ./configure-server.sh --help` 也列了）：
 
     --database            设备代码存在哪：auto / none / postgres / sqlite。
-                          auto（安装包的默认值）= 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库
+                          auto = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库
     --database-path       SQLite 文件；不给就用 /usr/local/remotedesktop-server/var/rendezvous.db
     --postgres            PostgreSQL 连接串；传 '' 表示不再用 PostgreSQL
     --relay-endpoint      让客户端去哪里找中继，IP:端口
     --urls                信令自己绑定的地址，如 https://0.0.0.0:5080
     --relay-key           中继票据的签名密钥（中继在另一台机器上时两边必须一致）
-    --tls-certificate/--tls-password   用已有的证书文件（.pfx）启用 https
+    --tls-certificate/--tls-password   用已有的证书文件启用 https；--tls-certificate generate 则生成自签名证书
+    --ops-listen          监控台的监听地址（默认 http://127.0.0.1:5090）
+    --ops-database-path   监控台的 SQLite 文件（默认 .../var/ops.db）
     --no-restart          写完不重启（下次重启才生效）
 
 执行过什么，都追加记录在同目录的 server-setup.log 里。
@@ -50,8 +59,14 @@ Remote Desktop 服务器（macOS）—— 装好之后怎么改配置
        sudo ./configure-server.sh --urls https://0.0.0.0:5080 \
             --tls-certificate /path/to/rd.lan.pfx --tls-password <口令>
 
-   客户端必须信任这张证书（否则会拒绝连接）：把证书的公开部分装进客户端机器的钥匙串。
+   客户端必须信任这张证书（否则会拒绝连接）。在客户端/被控端的安装器里选择这张证书的公钥文件即可：
+   安装器会把它复制到 /Library/Application Support/RemoteDesktop/certificates/，客户端/被控端**只信任这一张
+   证书**（证书固定），不会修改系统钥匙串或系统信任设置。
    注意**证书里的名字或地址要和客户端填的地址一致**。
+
+   用 `--tls-certificate generate` 生成时，公开部分在
+   /usr/local/remotedesktop-server/tls/signaling.crt，安装器还会复制一份到
+   /usr/local/share/doc/remotedesktop-server/signaling.crt，方便拷给客户端机器。
 
 
 三、也可以直接改 appsettings.json
@@ -82,7 +97,8 @@ appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留�
     cd /usr/local/remotedesktop-server
     sudo ./uninstall-server.sh
 
-它会停掉三个守护进程、删掉 plist 和这个目录。加 --keep-settings 只删程序、留下配置和日志。
+它会停掉三个守护进程、删掉 plist、这个目录、/usr/local/share/doc/remotedesktop-server 以及安装回执。
+加 --keep-settings 只删程序、留下配置、日志和导出的证书。
 
 注意：中继密钥在配置里。如果中继装在另一台机器上，那台机器用的是**这台机器**的密钥；
 在这里删掉它，就等于下次安装时那台机器要重新配置一遍。
@@ -100,6 +116,10 @@ appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留�
 
 监控台默认只监听 127.0.0.1:5090，用浏览器在服务器本机上打开即可；要给它 TLS 或对外访问，
 在前面放反向代理，不要直接把 5090 暴露到公网——它自己的登录面没有为公网设计限额。
+
+安装器会把本机的信令（127.0.0.1:5080 或 https://<主机名>:5080）和中继（127.0.0.1:5083）
+登记为监控台的本地节点，并给信令打开 /metrics；所以新装的节点页从第一次抓取起就有数据。
+如果这一步被跳过了（例如数据库当时连不上），在监控台的"节点管理"页手工添加同样两个地址即可。
 
 它的数据库在 var/ops.db（与设备码的 var/rendezvous.db 同一个 0700 目录）。删掉它等于丢掉监控历史、
 告警和审计记录，但**不影响**远程桌面连接本身。

@@ -143,9 +143,11 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_name_in_the_relay_address_is_resolved_to_an_address()
     {
-        // This machine's own name, spelled portably — "%COMPUTERNAME%" only expands on Windows, because .NET reads
-        // %NAME% there and $NAME everywhere else.
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = $"{Environment.MachineName}:5083" });
+        // "localhost" rather than Environment.MachineName: on a Mac whose own name does not resolve (which is a normal
+        // configuration, and was the machine this suite ran on), the machine-name form fails for a reason that has
+        // nothing to do with the code under test. The point here is "a name is resolved once and written as an
+        // address", and localhost is a name every platform resolves.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = "localhost:5083" });
 
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
         rendezvous.Validate();
@@ -175,6 +177,51 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal(DatabaseSettings.Postgres, rendezvous.Database.Provider);
         Assert.Equal(ConnectionString, rendezvous.Database.ConnectionString);
         Assert.Equal(ConnectionString, rendezvous.PostgresConnectionString); // what an older server reads
+    }
+
+    /// <summary>
+    /// An upgrade or configure-server.sh passes only what changed. An address that was not mentioned has to stay
+    /// exactly where the operator put it — including TLS: rewriting it to the build's http default silently downgrades
+    /// a server that was configured for https.
+    /// </summary>
+    [Fact]
+    public void Nothing_said_about_the_addresses_leaves_them_alone()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            RelayPublicEndpoint = "203.0.113.10:5082",
+            DatabaseProvider = "sqlite",
+        });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        Assert.Equal("https://0.0.0.0:5443", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Equal("203.0.113.10:5082", Read<RendezvousOptions>(
+            ServerSetup.RendezvousFolder,
+            RendezvousOptions.SectionName).RelayEndpoint);
+        Assert.Equal(5082, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).Port);
+    }
+
+    /// <summary>
+    /// A certificate is a TLS request on its own. configure-server.sh documents --tls-certificate as "serve TLS with
+    /// this certificate"; requiring the operator to repeat --urls https://… is a trap that leaves the new certificate
+    /// unused.
+    /// </summary>
+    [Fact]
+    public void A_certificate_without_an_address_upgrades_the_existing_http_address()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        var root = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("https://0.0.0.0:5080", root["Urls"]);
+        Assert.NotNull(root["Kestrel:Certificates:Default:Path"]);
     }
 
     /// <summary>
@@ -219,6 +266,21 @@ public sealed class ServerSetupTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(rendezvous.Database.Path));
         Assert.EndsWith(".db", rendezvous.Database.Path, StringComparison.Ordinal);
         Assert.Contains(notes, note => note.Contains("SQLite", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// "auto" keeps what the machine already chose. A memory-only installation is a choice, not a missing value: an
+    /// upgrade that passes the package's auto default must not turn it into a SQLite file behind the operator's back.
+    /// </summary>
+    [Fact]
+    public void Auto_keeps_the_memory_only_choice()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "none" });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "auto" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.None, rendezvous.Database.Provider);
     }
 
     [Fact]
@@ -296,6 +358,60 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal("https://0.0.0.0:5080", root["Urls"]);
         Assert.NotNull(root["Kestrel:Certificates:Default:Path"]);
         Assert.Equal("pfx-password", root["Kestrel:Certificates:Default:Password"]);
+    }
+
+    /// <summary>
+    /// The console cannot trust a self-signed signaling certificate through the System keychain (macOS refuses the
+    /// trust change from a package postinstall), so it pins the certificate file instead.
+    /// </summary>
+    [Fact]
+    public void A_node_certificate_can_be_pinned_in_the_console_settings()
+    {
+        var certificate = WriteCertificate();
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = certificate });
+
+        Assert.Equal(certificate, Configuration(ServerSetup.OpsFolder)["Ops:NodeCertificatePath"]);
+    }
+
+    /// <summary>
+    /// Turning TLS off has to remove the pin as well. A stale path would leave the console validating every node
+    /// call against a certificate the signaling server no longer presents.
+    /// </summary>
+    [Fact]
+    public void An_empty_node_certificate_path_removes_the_pin()
+    {
+        var certificate = WriteCertificate();
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = certificate });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = string.Empty });
+
+        Assert.Null(Configuration(ServerSetup.OpsFolder)["Ops:NodeCertificatePath"]);
+    }
+
+    /// <summary>
+    /// The password is never stored in the installer's summary, so an upgrade pane sends the certificate path with an
+    /// empty password field. Reusing the same PFX must keep the password that is already on the machine, or the
+    /// reconfiguration clears it and the server refuses to start.
+    /// </summary>
+    [Fact]
+    public void A_certificate_password_is_kept_when_the_certificate_did_not_change()
+    {
+        var certificate = WriteCertificate();
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = certificate,
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = certificate,
+        });
+
+        Assert.Equal("pfx-password", Configuration(ServerSetup.RendezvousFolder)["Kestrel:Certificates:Default:Password"]);
     }
 
     /// <summary>An operator's own settings are not the installer's to throw away.</summary>
@@ -387,8 +503,14 @@ public sealed class ServerSetupTests : IDisposable
     public void A_certificate_value_of_auto_is_the_same_as_none_and_says_so()
     {
         // "auto" is what the installer's property defaults to. It used to fall through to the file check and come back
-        // as "the certificate 'auto' is not there", which reads like the operator did something wrong.
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { TlsCertificatePath = ServerSetupOptions.Auto });
+        // as "the certificate 'auto' is not there", which reads like the operator did something wrong. The address is
+        // passed as auto too: a run that says nothing about the address now leaves it alone, and this test is about
+        // the certificate value, not about that distinction.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = ServerSetupOptions.Auto,
+            TlsCertificatePath = ServerSetupOptions.Auto,
+        });
 
         Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(notes, note => note.Contains("'auto' is not there", StringComparison.Ordinal));

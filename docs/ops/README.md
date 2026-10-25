@@ -179,7 +179,7 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 —— 这就是 Windows 那三个服务的对应物。
 
 > **已知边界**：这三个守护进程目前以 **root** 运行（plist 没有 `UserName`，安装脚本也没有创建专用账户）。
-> Linux 包会创建 `remotedesktop` 账户并以它运行；macOS 包在 1.0.0 里还没有做到这一点。把服务端放在公网前，
+> Linux 包会创建 `remotedesktop` 账户并以它运行；macOS 包目前还没有做到这一点。把服务端放在公网前，
 > 请按最小权限原则自行评估，或用一个普通账户手工加载 plist。
 
 ```bash
@@ -190,32 +190,52 @@ sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin
 sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
 
-要在**构建时**就定下配置（等于 Windows 安装时传属性），给打包脚本传对应的选项：
+**安装时选择配置（与 Linux 的 debconf 对应）。** `.pkg` 由安装器里的自定义面板收集答案，和 Linux 安装时
+问的是同一组问题：
 
-| Windows 安装属性 | macOS 打包选项 |
+- **数据库**：SQLite（默认，文件在 `var/rendezvous.db`）或 PostgreSQL（填写连接串）。监控台跟随同一个
+  provider。
+- **TLS**：不使用（`http`）、生成自签名证书（可填客户端将使用的域名/IP），或使用已有证书
+  （PKCS#12，或与 `.key` 同目录同名的 PEM）。
+- 证书口令与连接串写进 `appsettings.json`（`root:wheel`，0644）——安装目录本机其他用户可读，敏感部署
+  要另行收紧目录权限。安装器面板的答案在 `/var/tmp` 里只存在到 postinstall 读取为止。
+- 升级时同一页默认勾选 **保留现有设置**，不会把运维改过的数据库、TLS 或地址覆盖掉。
+
+**无人值守安装**（`sudo installer`、MDM）把同样的答案写到
+`/Library/Application Support/RemoteDesktop/install-answers.plist`（`root:wheel`，0600）。这个文件在用完后
+**不会删除**：下次没有面板答案的 `installer -pkg` 或 MDM 安装会再次应用它（`PreserveExisting=true` 除外）。
+不再需要这套预设时请删掉它，否则它会覆盖现场运维后来的修改。
+
+| 键 | 值 |
 |---|---|
-| `RENDEZVOUSURL` | `--rendezvous-url` |
-| `RELAYPUBLICENDPOINT` | `--relay-endpoint` |
-| `RELAYSHAREDKEY` | `--relay-key` |
-| `DATABASEPROVIDER` | `--database` |
-| `DATABASEPATH` | `--database-path` |
-| `POSTGRESCONNECTIONSTRING` | `--postgres` |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `--tls-certificate` / `--tls-password` |
-| `NOFIREWALL` | 无对应项 —— macOS 没有"按端口加规则"这回事（见下） |
+| `DatabaseProvider` | `sqlite` / `postgres` / `none` |
+| `DatabasePath` | SQLite 文件（绝对路径） |
+| `PostgresConnectionString` | PostgreSQL 连接串 |
+| `TlsMode` | `none` / `generate` / `existing` |
+| `TlsCertificatePath` / `TlsPassword` | 已有证书的绝对路径与口令 |
+| `TlsHostName` | `generate` 时写进证书 SAN 的域名/IP，逗号分隔 |
+| `PreserveExisting` | `true` 表示只更新程序、保留现有设置（升级） |
+
+打包脚本上的 `--database` / `--postgres` / `--tls-certificate` 等选项仍然保留，作为**首装且没有答案文件**
+时的回退（CI 就靠它）。**分发构建（`--distribution`）会拒绝 `--postgres`、`--relay-key`、`--tls-password`**：
+`.pkg` 是一个可以被拷走的文件，把数据库口令放进去等于把它交给了每个拿到安装包的人。
 
 **三件与 Windows 不同的事**：
 
 - **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
   别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
-- **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist 与目录，
-  `--keep-settings` 可只删程序）。
+- **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist、安装目录、
+  文档目录与安装回执；`--keep-settings` 可只删程序）。
 - **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.ps1` 一一对应 ——
-  同样的选项，跑的是同一个 `--configure-system` 步骤。
+  同样的选项，跑的是同一个 `--configure-system` 步骤；它现在会重启**三个**守护进程（数据库 provider 与
+  监控台共享）。
 
 > 两个平台的服务器是**同一份可执行文件**、同一个 `--configure-system` 步骤，所以写出来的
 > `appsettings.json` 与生成的中继密钥完全一致：换平台不需要换配置方式。
-> macOS 上要开 TLS，用 `build/signing/New-ServerCertificate.ps1` 生成证书（纯 .NET，macOS 上同样能跑），
-> 把 `.pfx` 交给 `configure-server.sh --tls-certificate`。
+> 自签名证书既可以让安装器生成，也可以用 `build/signing/New-ServerCertificate.ps1` 生成后把 `.pfx`
+> 交给 `configure-server.sh --tls-certificate`。公开部分总会导出到
+> `/usr/local/share/doc/remotedesktop-server/signaling.crt`——生成的证书、PEM 或 `.pfx` 都一样，
+> 客户端/被控端安装器可以直接选它；Ops 控制台也用这份 PEM 固定信令证书（`.pfx` 带口令，不能直接当 pin）。
 
 ### 装完之后改配置
 
@@ -1001,7 +1021,7 @@ sudo apt install ./RemoteDesktop-Host-Linux-amd64-<版本>.deb
 >
 > 卸载或 purge host 包会停止所有已登录用户的 host 服务。client 只有在 host 包仍安装（unit 文件存在）
 > 时才把控制 socket 当作后台服务；否则按 standalone 运行，不会继续委托给一个包里已经没有的进程。
-
+>
 > **Linux 的“无人值守”只能到“可观看”为止。**
 > Wayland portal 不允许持久化远程桌面会话（请求会被拒绝：`Remote desktop sessions cannot persist`）：
 > 共享屏幕可以记住，**控制权限每次连接都要有人当场同意**。所以本机无人时，别人可以看到屏幕，
@@ -1080,8 +1100,11 @@ macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有
   “登录时自动启动”（SMAppService）。
 - **host**：`/Applications/Remote Desktop Host.app`，`LSUIElement` 的后台应用，**没有窗口**；里面是
   `RemoteDesktop.HostService`，只负责被控，不能控制别人；由 LaunchAgent 在每次图形登录时启动。
-- 两者 bundle id 不同（`com.remotedesktop.client` / `com.remotedesktop.host`），TCC 授权也分开。可以并装，
-  但会变成两个被控端（两个设备码、两个监听），**不建议**。
+- 两者 bundle id 不同（`com.remotedesktop.client` / `com.remotedesktop.host`），TCC 授权也分开。
+  **可以同时安装**：client 检测到 Host 的控制服务后只做控制端（`AcceptIncoming=false`），Host 常驻负责被控；
+  两者使用不同的设备身份（client 用 `controller-identity`，Host 用 `device-identity`），不会再出现同一设备
+  代码互相踢下线。client 启动时如果 Host 包已安装，最多等 3 秒让服务创建控制 socket；如果服务在窗口打开后
+  才启动，界面会提示重启客户端以交给 Host 托管。卸载 Host 后也要重启 client 才会在当前进程内重新承担被控端。
 
 ```bash
 # 控制端
@@ -1097,9 +1120,11 @@ build/installer/macos/host/make-pkg.sh --configuration Release
 |---|---|---|---|
 | 只装 client | `Remote Desktop.app` | 不自动启动；应用内可选开 SMAppService 登录项 | 打开后既能控制别人，也能被别人控制 |
 | 只装 host | `Remote Desktop Host.app` + LaunchAgent | 每次图形登录自动启动；退出后不强行拉起 | **无窗口、只能被控**，不能控制别人；没有登录前访问 |
-| 两个都装 | 两个 app 各一份 | host 的登录项照常启动 | 两个独立的被控端，两个设备码；不建议 |
+| 两个都装 | 两个 app 各一份 | host 的登录项照常启动 | client 只做控制端，host 负责后台被控；两者设备代码不同，可同时在线 |
 
-host 没有界面，临时密码只在进程内存里，所以**无人值守必须设固定密码**（至少 8 位；用登录用户在终端执行）：
+host 没有界面，临时密码只在进程内存里，所以**无人值守必须设固定密码**（至少 8 位）。安装器的“被控端配置”页
+直接提供**无人值守密码**和确认栏，安装时以当前登录用户的身份写进该用户的钥匙串；留空表示不设置，升级时留空
+则保留现有密码。安装时没有用户登录（例如纯命令行/MDM）时无法写入某个用户的钥匙串，需要在该用户登录后执行：
 
 ```bash
 "/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'
@@ -1107,10 +1132,32 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 ```
 
 设备码在 `~/Library/Application Support/RemoteDesktop/logs/` 的日志里，搜索
-`Registered with the rendezvous server as`。服务器地址在
-`~/Library/Application Support/RemoteDesktop/appsettings.json` 的 `Transport:RendezvousUri`。
+`Registered with the rendezvous server as`。服务器地址由安装器写在
+`/Library/Application Support/RemoteDesktop/appsettings.json` 的 `Transport:RendezvousUri`，
+每用户的 `~/Library/Application Support/RemoteDesktop/appsettings.json` 可以覆盖它。
 
 **安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。
+
+安装器的下一页会要求填写**信令服务器地址**（`ws://` 或 `wss://`）。如果服务器用 `wss://` 和自签名证书，
+在那里选择证书的公钥文件（PEM/DER）；安装器会把它复制到
+`/Library/Application Support/RemoteDesktop/certificates/signaling.crt`，客户端/被控端**只信任这一张证书**
+（证书固定），不会修改系统钥匙串或系统信任设置。公开可信证书或 `ws://` 不需要文件。
+无人值守安装可以把同样的答案写到
+`/Library/Application Support/RemoteDesktop/install-answers.plist`：
+
+| 键 | 值 |
+|---|---|
+| `RendezvousUri` | `ws://主机:5080/ws` 或 `wss://主机:5080/ws` |
+| `ServerCertificatePath` | 自签名服务器证书的绝对路径（PEM/DER），仅在 `wss://` 时需要 |
+| `UnattendedPassword` | 仅 host 包：写入当前登录用户钥匙串的无人值守密码（至少 8 位）；不填则保持现有密码不变 |
+
+和服务器包一样，这个答案文件在用完后不会删除；下次没有面板答案的安装会再次应用它。不需要预设时请删除。
+host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600）；只做一次无人值守安装时，安装完成后
+应删除该文件，避免密码长期留在磁盘上。
+
+地址写在 **`/Library/Application Support/RemoteDesktop/appsettings.json`**（root:wheel，0644）——它不在
+签名过的 `.app` 里，因为改 bundle 内的文件会让签名失效、连带丢掉 TCC 授权。当前用户自己的
+`~/Library/Application Support/RemoteDesktop/appsettings.json` 优先级更高（client 的设置页写的就是这份）。
 
 三件必须知道的事：
 
@@ -1119,12 +1166,24 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
   有证书时加 `--distribution` 与 `--notarize` 做签名 + 公证，下载即开；证书与凭据的配置见
   [build/signing/README.md](../../build/signing/README.md) 的 macOS 一节。
 - **被控端需要手动授权两项权限**：在「系统设置 → 隐私与安全性」里把 **Remote Desktop Host** 勾进
-  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。host 没有窗口；首次登录时系统会弹提示，
-  也可以在系统设置里手动添加 `/Applications/Remote Desktop Host.app`。授权后执行
-  `launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host` 重启（屏幕录制只在新进程启动时读取）。
+  **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。host 没有窗口；安装器已经在当前图形
+  会话里启动它，首次启动时系统会弹提示，也可以在系统设置里手动添加 `/Applications/Remote Desktop Host.app`。
+  授权后执行 `launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host` 重启（屏幕录制只在新进程启动时读取）。
+  如果安装时没有用户登录，先
+  `launchctl bootstrap gui/$(id -u) /Library/LaunchAgents/com.remotedesktop.host.plist` 再 kickstart。
+- **局域网权限**：macOS 15 起，访问同一局域网内的服务器或对端需要「本地网络」权限（client 与 host 的
+  `Info.plist` 已声明用途）。首次连接时系统会提示，或到「系统设置 → 隐私与安全性 → 本地网络」里允许；
+  缺少这一步时连接会失败，而不是回退到公网地址。
 - **无人值守**：host 包用 LaunchAgent 自启，并提供固定密码命令（见上）；client 包可以在应用里手动开
   `SMAppService` 登录项。授权按**已签名并位于 `/Applications` 的应用**记账，别把 `.app` 拷到别处运行。
-- **卸载 host**（pkg 没有卸载器）：
+- **卸载 host**（pkg 没有卸载器，但包内带了脚本）：
+
+  ```bash
+  sudo "/Library/Application Support/RemoteDesktop/uninstall-host.sh"
+  ```
+
+  它停掉登录项、删 plist、`.app` 与安装回执；每用户数据和已固定的服务器证书保留。
+  手工卸载等价于：
 
   ```bash
   launchctl bootout gui/$(id -u)/com.remotedesktop.host 2>/dev/null || true
@@ -1137,8 +1196,10 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
   卸载 client 只需删 `/Applications/Remote Desktop.app` 并
   `sudo pkgutil --forget com.remotedesktop.client`；若在应用里开过登录项，先在应用里关掉。
 
-服务器地址：host 读 `~/Library/Application Support/RemoteDesktop/appsettings.json` 的
-`Transport:RendezvousUri`（默认 `ws://127.0.0.1:5080/ws`），改完 kickstart；client 也可以在界面里改。
+服务器地址：安装器写入 `/Library/Application Support/RemoteDesktop/appsettings.json` 的
+`Transport:RendezvousUri`（默认 `ws://127.0.0.1:5080/ws`）；host 的每用户文件
+`~/Library/Application Support/RemoteDesktop/appsettings.json` 可以覆盖它，改完 kickstart。
+client 也可以直接在界面里改。
 
 > **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
 > （见 [平台移植总览](../ports/README.md) 的"最低系统版本"）。`.pkg` 只面向 Apple Silicon（arm64）。
@@ -1254,9 +1315,20 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 ```
 
 `.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
-"unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID 签名 + 硬化运行时）
-和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开——证书与公证凭据的配置见
-[`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
+"unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID Installer 签 `.pkg`，
+Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开
+——证书与公证凭据的配置见 [`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
+
+三处与旧版不同的构建细节：
+
+- **安装面板是编出来的**：`native/macos/build-installer-plugin.sh` 用 `clang` 编译
+  `native/macos/rd_installer_plugin.m`，三个 make-pkg 都会调用它，并用 `productbuild --plugins` 放进产品归档。
+  它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
+- **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（三个 apphost 与原生库）
+  执行 `codesign --options runtime --timestamp`，apphost 带
+  `build/installer/macos/server/entitlements.plist` 的 JIT 权限。只签外层 `.pkg` 无法通过公证。
+- **一次性密码不进包**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`。安装期答案由
+  面板或 `install-answers.plist` 提供，见 §六 的 macOS 服务端一节。
 
 ### Linux（`.deb`）
 

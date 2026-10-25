@@ -61,6 +61,10 @@ internal static class ClientHost
         // story. No file, no watcher: a reloading source costs an inotify instance, and desktops run out of them.
         if (!OperatingSystem.IsWindows())
         {
+            // macOS has one extra layer: the installer cannot write into the signed bundle, so it writes the
+            // machine-wide defaults under /Library/Application Support. UserSettings goes on top, and the command
+            // line stays above both.
+            MachineSettings.AddConfigurationSource(builder.Configuration);
             UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
         }
 
@@ -103,10 +107,10 @@ internal static class ClientHost
             transport.AcceptIncoming = false;
 
             // This process needs its own device id. On Windows the two are already separate data directories; on Linux
-            // the service runs as the signed-in user, so both would load the same secret and, because the signaling
-            // server keeps one session per device, kick each other off once a second. The client's code is shown as
-            // 本机控制端代码 — a different code from the service's, which is what the settings page promises.
-            var identitySecretName = OperatingSystem.IsLinux()
+            // and macOS the service runs as the signed-in user, so both would load the same secret and, because the
+            // signaling server keeps one session per device, kick each other off once a second. The client's code is
+            // shown as 本机控制端代码 — a different code from the service's, which is what the settings page promises.
+            var identitySecretName = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()
                 ? DeviceIdentity.ControllerSecretName
                 : DeviceIdentity.SecretName;
             builder.Services
@@ -137,16 +141,21 @@ internal static class ClientHost
     /// </summary>
     private static bool DetectHostService(string pipeName)
     {
-        if (OperatingSystem.IsLinux())
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
-            // The control socket outlives a removed package: the user service keeps running until its session ends.
-            // Without the unit a live socket is not the installed controlled end, so this window hosts in-process
-            // rather than delegating to a process the package manager can no longer show.
-            if (!File.Exists(HostControlProtocol.LinuxHostServiceUnit))
+            // The control socket outlives a removed package: the user service/LaunchAgent may keep running until its
+            // session ends. Without the installed unit/plist a live socket is not the controlled end the package
+            // manager still shows, so this window hosts in-process rather than delegating to a removed process.
+            var installed = OperatingSystem.IsMacOS()
+                ? File.Exists(HostControlProtocol.MacOSHostApp) || File.Exists(HostControlProtocol.MacOSHostAgentPlist)
+                : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
+            if (!installed)
             {
                 return false;
             }
 
+            // The host starts at login in the same session as the client; wait for its socket instead of racing it
+            // and creating a second controlled end under the same device identity.
             return PipeHostControl.WaitUntilAvailableAsync(pipeName, HostServiceStartupWait, CancellationToken.None)
                 .GetAwaiter().GetResult();
         }

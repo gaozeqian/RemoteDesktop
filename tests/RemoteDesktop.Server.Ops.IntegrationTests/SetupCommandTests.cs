@@ -57,6 +57,51 @@ public class SetupCommandTests : IDisposable
         Assert.Equal(2, (await store.ListNodesAsync(Ct)).Count);
     }
 
+    /// <summary>
+    /// A TLS upgrade changes the scheme of the local nodes' addresses. The rows exist, so seeding does nothing; the
+    /// sync command has to update the two local rows without touching an operator's own node or re-creating a local
+    /// row that was deleted.
+    /// </summary>
+    [Fact]
+    public async Task Syncing_updates_only_the_local_nodes_that_exist()
+    {
+        await WriteSettingsAsync();
+        Assert.True(SetupCommands.TryRun(
+            [
+                "--seed-local-nodes",
+                "--config-directory", _directory,
+                "--rendezvous-base-url", "http://127.0.0.1:5080",
+                "--relay-base-url", "http://127.0.0.1:5083",
+            ],
+            new StringWriter(),
+            out _));
+
+        using var store = OpsStore.Open(Settings());
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await store.CreateNodeAsync(
+            new OpsNode("custom-id", "custom", "rendezvous", "http://custom.example:5080", null, true, null, null, now),
+            Ct);
+        var seeded = await store.ListNodesAsync(Ct);
+        await store.DeleteNodeAsync(seeded.Single(node => node.Name == "relay-local").Id, Ct);
+
+        var output = new StringWriter();
+        Assert.True(SetupCommands.TryRun(
+            [
+                "--sync-local-nodes",
+                "--config-directory", _directory,
+                "--rendezvous-base-url", "https://127.0.1.1:5443",
+                "--relay-base-url", "https://127.0.0.1:5083",
+            ],
+            output,
+            out var exitCode));
+
+        Assert.Equal(0, exitCode);
+        var nodes = await store.ListNodesAsync(Ct);
+        Assert.Contains(nodes, node => node is { Name: "rendezvous-local", BaseUrl: "https://127.0.1.1:5443" });
+        Assert.DoesNotContain(nodes, node => node.Name == "relay-local"); // deleted by the operator, not re-created
+        Assert.Contains(nodes, node => node is { Name: "custom", BaseUrl: "http://custom.example:5080" });
+    }
+
     [Fact]
     public async Task A_node_address_that_is_not_http_is_refused_before_the_database_is_opened()
     {

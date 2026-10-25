@@ -4,7 +4,7 @@
 
 | 目录 | 是什么 |
 |---|---|
-| [`macos/`](macos/) | macOS 的 Objective-C 辅助库源码（`rd_*.m` / `rd_*.h`，由 `build-native.sh` 编译成 `libRemoteDesktopMacNative.dylib`），以及 `fetch-libmsquic.sh` |
+| [`macos/`](macos/) | macOS 的 Objective-C 辅助库源码（`rd_*.m` / `rd_*.h`，由 `build-native.sh` 编译成 `libRemoteDesktopMacNative.dylib`）、`fetch-libmsquic.sh`，以及安装器配置面板 `rd_installer_plugin.m` / `build-installer-plugin.sh` |
 | [`linux/`](linux/) | `fetch-libmsquic.sh`：从发行版包里取出 `libmsquic.so` |
 
 `rd_*.h` 是**手写的契约头**，不是生成物：`rd_native.h` 声明扁平 C ABI，托管侧在
@@ -42,7 +42,11 @@ Windows 没有对应脚本——`msquic.dll` 由运行时包提供。
 
 ## 产物落在哪里
 
-不在这里。两个脚本的输出都写到仓库根的 `artifacts/lib/<平台>/`（已 gitignore），
-`build-native.sh` 的结果也在那儿。这是它**曾经叫 `artifacts/native/` 的原因，也是它不再叫这个名字的原因**：
+不在这里。两个 `fetch` 脚本与 `build-native.sh` 的输出都写到仓库根的 `artifacts/lib/<平台>/`
+（已 gitignore）。这是它**曾经叫 `artifacts/native/` 的原因，也是它不再叫这个名字的原因**：
 与这棵源码树同名会让"删了就没了的源码"和"删了可以再生的产物"看起来像一回事。约定见
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) §构建产物布局。
+
+安装器面板是例外：它不是随应用运行的原生库，而是打包时才编、装进 `.pkg` 的 Installer 插件。
+`build-installer-plugin.sh --role … --output …` 把它写到调用方给的目录（三个 `make-pkg.sh` 用的是
+`mktemp -d` 里的临时目录）；手动构建时默认落在 `artifacts/installer/macos/plugins/<角色>/`。

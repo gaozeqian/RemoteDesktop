@@ -74,6 +74,16 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
             {
                 using var socket = new ClientWebSocket();
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+
+                // A self-signed server certificate is pinned rather than installed into the System keychain: the
+                // installer cannot set macOS trust settings without a user session. Empty means "use the platform
+                // trust store", which is the right answer for a certificate from a public authority.
+                if (options.RendezvousUri.Scheme == "wss"
+                    && PinnedCertificate.TryCreate(options.RendezvousCertificatePath) is { } pinned)
+                {
+                    socket.Options.RemoteCertificateValidationCallback = pinned;
+                }
+
                 await socket.ConnectAsync(options.RendezvousUri, cancellationToken).ConfigureAwait(false);
                 await RegisterAsync(socket, cancellationToken).ConfigureAwait(false);
 
