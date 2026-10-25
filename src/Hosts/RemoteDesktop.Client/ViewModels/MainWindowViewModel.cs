@@ -1298,7 +1298,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // (Linux) or app/launchd plist (macOS) is what tells an installed controlled end from a process the
             // package manager no longer shows.
             var hostPackageInstalled = OperatingSystem.IsMacOS()
-                ? File.Exists(HostControlProtocol.MacOSHostApp) || File.Exists(HostControlProtocol.MacOSHostAgentPlist)
+                ? HostControlProtocol.MacOSHostInstalled
                 : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
             if (hostPackageInstalled)
             {

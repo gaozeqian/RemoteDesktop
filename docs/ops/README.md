@@ -750,7 +750,7 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 | `RemoteDesktop-Host-Windows-x64-<tag>.msi` | Windows | 被控端：只有服务与会话 Agent，没有客户端窗口 |
 | `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（Rendezvous + Relay + Ops） |
 | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | macOS | 控制端（同一个 `.app` 也能被控，但不会自动启动） |
-| `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | macOS | 被控端：独立的 `Remote Desktop Host.app`（无窗口）+ 登录项 |
+| `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | macOS | 被控端：独立的 `Remote Desktop Host.app`（无窗口，装在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”）+ 登录项 |
 | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端（Rendezvous + Relay + Ops） |
 | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | Linux | 控制端 |
 | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | Linux | 被控端 |
@@ -1098,8 +1098,10 @@ macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有
 
 - **client**：`/Applications/Remote Desktop.app`，Avalonia 客户端，完整功能；不自动启动；可在应用内手动开
   “登录时自动启动”（SMAppService）。
-- **host**：`/Applications/Remote Desktop Host.app`，`LSUIElement` 的后台应用，**没有窗口**；里面是
-  `RemoteDesktop.HostService`，只负责被控，不能控制别人；由 LaunchAgent 在每次图形登录时启动。
+- **host**：`/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app`，`LSUIElement` 的后台
+  应用，**没有窗口**；里面是 `RemoteDesktop.HostService`，只负责被控，不能控制别人；由 LaunchAgent 在每次
+  图形登录时启动。它不装进“应用程序”或启动台，避免被误认为一个可以打开的 app，也避免与 client 混淆。
+  从旧包升级时，安装器会先停掉旧 LaunchAgent，再删除 `/Applications` 里的旧副本。
 - 两者 bundle id 不同（`com.remotedesktop.client` / `com.remotedesktop.host`），TCC 授权也分开。
   **可以同时安装**：client 检测到 Host 的控制服务后只做控制端（`AcceptIncoming=false`），Host 常驻负责被控；
   两者使用不同的设备身份（client 用 `controller-identity`，Host 用 `device-identity`），不会再出现同一设备
@@ -1111,7 +1113,7 @@ macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有
 build/installer/macos/client/make-pkg.sh --configuration Release
 # 产物：artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-<版本>.pkg
 
-# 被控端：独立的 Remote Desktop Host.app + /Library/LaunchAgents/com.remotedesktop.host.plist
+# 被控端：独立的 Remote Desktop Host.app（隐藏在 Library/Application Support）+ 登录项
 build/installer/macos/host/make-pkg.sh --configuration Release
 # 产物：artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-<版本>.pkg
 ```
@@ -1119,7 +1121,7 @@ build/installer/macos/host/make-pkg.sh --configuration Release
 | 装的包 | 文件 | 登录行为 | 能做什么 |
 |---|---|---|---|
 | 只装 client | `Remote Desktop.app` | 不自动启动；应用内可选开 SMAppService 登录项 | 打开后既能控制别人，也能被别人控制 |
-| 只装 host | `Remote Desktop Host.app` + LaunchAgent | 每次图形登录自动启动；退出后不强行拉起 | **无窗口、只能被控**，不能控制别人；没有登录前访问 |
+| 只装 host | `Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app` + LaunchAgent | 每次图形登录自动启动；退出后不强行拉起 | **无窗口、只能被控**，不能控制别人；没有登录前访问；不显示在“应用程序” |
 | 两个都装 | 两个 app 各一份 | host 的登录项照常启动 | client 只做控制端，host 负责后台被控；两者设备代码不同，可同时在线 |
 
 host 没有界面，临时密码只在进程内存里，所以**无人值守必须设固定密码**（至少 8 位）。安装器的“被控端配置”页
@@ -1127,7 +1129,7 @@ host 没有界面，临时密码只在进程内存里，所以**无人值守必�
 则保留现有密码。安装时没有用户登录（例如纯命令行/MDM）时无法写入某个用户的钥匙串，需要在该用户登录后执行：
 
 ```bash
-"/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'
+"/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'
 launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 ```
 
@@ -1167,7 +1169,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
   [build/signing/README.md](../../build/signing/README.md) 的 macOS 一节。
 - **被控端需要手动授权两项权限**：在「系统设置 → 隐私与安全性」里把 **Remote Desktop Host** 勾进
   **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。host 没有窗口；安装器已经在当前图形
-  会话里启动它，首次启动时系统会弹提示，也可以在系统设置里手动添加 `/Applications/Remote Desktop Host.app`。
+  会话里启动它，首次启动时系统会弹提示，也可以在系统设置里手动添加
+  `/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app`。
   授权后执行 `launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host` 重启（屏幕录制只在新进程启动时读取）。
   如果安装时没有用户登录，先
   `launchctl bootstrap gui/$(id -u) /Library/LaunchAgents/com.remotedesktop.host.plist` 再 kickstart。
@@ -1175,7 +1178,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
   `Info.plist` 已声明用途）。首次连接时系统会提示，或到「系统设置 → 隐私与安全性 → 本地网络」里允许；
   缺少这一步时连接会失败，而不是回退到公网地址。
 - **无人值守**：host 包用 LaunchAgent 自启，并提供固定密码命令（见上）；client 包可以在应用里手动开
-  `SMAppService` 登录项。授权按**已签名并位于 `/Applications` 的应用**记账，别把 `.app` 拷到别处运行。
+  `SMAppService` 登录项。授权按**已签名且路径稳定的应用**记账：host 固定在
+  `/Library/Application Support/RemoteDesktop/Host`，不要移动或拷贝它；client 固定在 `/Applications`。
 - **卸载 host**（pkg 没有卸载器，但包内带了脚本）：
 
   ```bash
@@ -1188,7 +1192,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
   ```bash
   launchctl bootout gui/$(id -u)/com.remotedesktop.host 2>/dev/null || true
   sudo rm -f /Library/LaunchAgents/com.remotedesktop.host.plist
-  sudo rm -rf "/Applications/Remote Desktop Host.app"
+  sudo rm -rf "/Library/Application Support/RemoteDesktop/Host" \
+              "/Applications/Remote Desktop Host.app"
   sudo pkgutil --forget com.remotedesktop.host.app
   sudo pkgutil --forget com.remotedesktop.host.agent
   ```

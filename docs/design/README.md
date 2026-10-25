@@ -86,7 +86,8 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 * **`RemoteDesktop.HostService`**: （被控端核心）守护进程：注册设备、鉴权、分发通道、对接信令服务器。
   **形态按平台不同**——Windows 上它是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上它是一个跑在
   图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方；macOS 上它是 host 包里的
-  `Remote Desktop Host.app`（`LSUIElement`，无窗口），同样自己采集和注入。
+  `Remote Desktop Host.app`（`LSUIElement`，无窗口，装在 `Library/Application Support` 而不是“应用程序”），
+  同样自己采集和注入。
 * **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）
   创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有
   Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
@@ -95,8 +96,9 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的一个
-> **已签名 `.app`**：client 包是自带托管能力的 `Remote Desktop.app`，host 包是无窗口的
-> `Remote Desktop Host.app`（开机自启用 `/Library/LaunchAgents` 的 LaunchAgent，而非系统服务）。
+> **已签名 `.app`**：client 包是自带托管能力的 `Remote Desktop.app`，host 包是无窗口、
+> 安装在 `Library/Application Support` 的 `Remote Desktop Host.app`（开机自启用 `/Library/LaunchAgents`
+> 的 LaunchAgent，而非系统服务）。
 > 三个平台的宿主形态对照表见 [使用说明](../usage/README.md)。
 
 ### 防御性编程与权限设计

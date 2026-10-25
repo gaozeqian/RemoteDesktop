@@ -17,7 +17,8 @@
 set -e
 
 PLIST="/Library/LaunchAgents/com.remotedesktop.host.plist"
-APP="/Applications/Remote Desktop Host.app"
+APP="/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app"
+LEGACY_APP="/Applications/Remote Desktop Host.app"
 
 assume_yes=0
 while [ "$#" -gt 0 ]; do
@@ -30,7 +31,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "This needs root: it stops a login item and removes files under /Applications and /Library." >&2
+    echo "This needs root: it stops a login item and removes files under /Library." >&2
     echo "Try: sudo $0 $*" >&2
     exit 1
 fi
@@ -54,7 +55,7 @@ if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" 
 fi
 
 rm -f "$PLIST"
-rm -rf "$APP"
+rm -rf "$APP" "$LEGACY_APP"
 
 /usr/sbin/pkgutil --forget com.remotedesktop.host.app >/dev/null 2>&1 || true
 /usr/sbin/pkgutil --forget com.remotedesktop.host.agent >/dev/null 2>&1 || true

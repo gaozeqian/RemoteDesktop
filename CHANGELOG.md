@@ -133,6 +133,12 @@
   现在与 Linux 一致：检测到 Host 服务时客户端改用 `controller-identity`，两者设备代码不同、可以同时在线；
   Host 包已安装但控制 socket 尚未就绪时，客户端最多等 3 秒，并在服务稍后出现时提示重启客户端。安装器不再
   互斥，两个包可以同时安装。
+- **没有 UI 的 host 在“应用程序”里像一个可以打开的 app**：它和 client 并排、图标相同，用户会双击后
+  以为坏了，也容易与 client 混淆。host 现在安装到
+  `/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app`，不出现在“应用程序”或启动台；
+  LaunchAgent、client 的 host 检测路径、卸载器和文档同步更新。升级时会停止旧登录项并删除
+  `/Applications/Remote Desktop Host.app`；TCC 授权窗口仍显示 **Remote Desktop Host**，如有旧路径的授权
+  残留，在系统设置里移除旧项后按新路径重新勾选。
 - **升级会重写 Ops 设置、把 `none` 改成 SQLite**：`--configure-system` 现在区分"没给"与"给默认值"，
   没给的地址/中继地址保持不变；`--database=auto` 与 `--ops-*` 只在首装应用，升级默认保留。
   安装器还会写一份不含秘密的 `install-summary.plist`，供下次升级的面板预填。

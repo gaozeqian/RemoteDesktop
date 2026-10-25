@@ -26,8 +26,19 @@ public static class HostControlProtocol
     /// The macOS host package's application and login item. The client uses them for the same question the Linux
     /// unit answers: is a background controlled end installed, or is this a socket left by a removed package?
     /// </summary>
-    public const string MacOSHostApp = "/Applications/Remote Desktop Host.app";
+    /// <remarks>
+    /// The host lives under Library/Application Support, not /Applications: it has no window, and an app-looking
+    /// bundle beside Remote Desktop.app invited people to double-click it and wonder why nothing happened. The legacy
+    /// path is checked as well so a client running against an older host package still finds its service.
+    /// </remarks>
+    public const string MacOSHostApp =
+        "/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app";
+    public const string MacOSHostLegacyApp = "/Applications/Remote Desktop Host.app";
     public const string MacOSHostAgentPlist = "/Library/LaunchAgents/com.remotedesktop.host.plist";
+
+    /// <summary>Whether any form of the macOS host package is installed.</summary>
+    public static bool MacOSHostInstalled =>
+        File.Exists(MacOSHostApp) || File.Exists(MacOSHostLegacyApp) || File.Exists(MacOSHostAgentPlist);
 
     public const string StatusCommand = "status";
     public const string RotateCommand = "rotate";

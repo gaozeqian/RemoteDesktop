@@ -13,8 +13,9 @@
   would otherwise leave an unattended machine unreachable until the next login. A deliberate exit is left alone.
 
   This is the only auto-start mechanism on macOS. There is no in-app "start at login" toggle in the host bundle: the
-  host has no UI at all. Do not install the client package as well and expect one to be the controller — they are two
-  separate hosts with separate device identities.
+  host has no UI at all. The application lives under Library/Application Support rather than /Applications precisely
+  because it is not something a person opens; Remote Desktop.app is the window, and it delegates to this service when
+  both packages are installed.
 -->
 <plist version="1.0">
 <dict>
@@ -23,7 +24,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService</string>
+        <string>/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService</string>
     </array>
 
     <key>RunAtLoad</key>

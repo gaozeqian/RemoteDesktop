@@ -33,13 +33,15 @@ build/
 |---|---|---|
 | Linux | `client`、`host`、`server` | 两个独立的程序与包：`RemoteDesktop.Client` 与 `RemoteDesktop.HostService` |
 | Windows | `client`、`host`、`server` | 客户端 MSI 也带着被控端服务与 Agent；`host` 那个只装这两样，没有客户端窗口 |
-| macOS | `client`、`host`、`server` | 两个独立的 app：`Remote Desktop.app`（完整客户端）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控）；host 包另装登录项 |
+| macOS | `client`、`host`、`server` | 两个独立组件：`Remote Desktop.app`（完整客户端，在 `/Applications`）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控，藏在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”）；host 包另装登录项 |
 
 Windows 的 `host` 走的是 `client/Build-ClientInstaller.ps1 -HostOnly`：服务定义、崩溃重启、防火墙规则与机器清理
 步骤只有一份，两个包不会各改一半。两个包共用服务名，所以一台机器只能装一个（安装程序会拒绝第二个）。
 macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote Desktop Host.app`：里面是同一个
-`RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。不能复用客户端
-bundle —— TCC 授权按 bundle 的签名身份记账，而 host 必须能被单独授予屏幕录制/辅助功能，且不能带着控制端 UI。
+`RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。它安装到
+`/Library/Application Support/RemoteDesktop/Host`，而不是 `/Applications`：没有窗口的组件不应看起来像一个
+可以打开的 app，也不应与 client 混淆。不能复用客户端 bundle —— TCC 授权按 bundle 的签名身份记账，而 host
+必须能被单独授予屏幕录制/辅助功能，且不能带着控制端 UI。
 
 macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd_installer_plugin.m`（Objective-C，
 `InstallerSection`/`InstallerPane` 代码构建视图，无 nib），由 `native/macos/build-installer-plugin.sh` 按角色

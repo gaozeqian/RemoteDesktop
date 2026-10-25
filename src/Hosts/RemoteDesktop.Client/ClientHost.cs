@@ -147,7 +147,7 @@ internal static class ClientHost
             // session ends. Without the installed unit/plist a live socket is not the controlled end the package
             // manager still shows, so this window hosts in-process rather than delegating to a removed process.
             var installed = OperatingSystem.IsMacOS()
-                ? File.Exists(HostControlProtocol.MacOSHostApp) || File.Exists(HostControlProtocol.MacOSHostAgentPlist)
+                ? HostControlProtocol.MacOSHostInstalled
                 : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
             if (!installed)
             {

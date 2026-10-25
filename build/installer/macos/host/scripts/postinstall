@@ -42,7 +42,7 @@ fi
 apply_rendezvous_answers host
 
 PLIST="/Library/LaunchAgents/com.remotedesktop.host.plist"
-APP="/Applications/Remote Desktop Host.app"
+APP="/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app"
 HOST_BINARY="$APP/Contents/MacOS/RemoteDesktop.HostService"
 console_user="$(stat -f%Su /dev/console 2>/dev/null || true)"
 uid=""

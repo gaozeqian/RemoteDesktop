@@ -19,4 +19,9 @@ if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" 
     fi
 fi
 
+# Older packages put the host in /Applications, where it looked like an app and could be clicked even though it has no
+# window. It now lives under Library/Application Support; remove the old copy after its job has been stopped. The new
+# app component has already been unpacked by the time this agent component runs, so this cannot delete the new one.
+rm -rf "/Applications/Remote Desktop Host.app"
+
 exit 0

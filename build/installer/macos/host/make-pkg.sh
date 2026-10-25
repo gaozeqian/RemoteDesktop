@@ -5,11 +5,13 @@
 # This package installs "Remote Desktop Host.app" — a separate bundle from the client, with its own bundle identifier
 # (com.remotedesktop.host), no window and no controller UI. It is the same HostService binary that runs on Linux,
 # wrapped in a bundle because macOS grants screen recording and accessibility only to a signed app in a user's
-# graphical session, and adds a LaunchAgent that starts it at every graphical login.
+# graphical session, and adds a LaunchAgent that starts it at every graphical login. The bundle goes under
+# /Library/Application Support, not /Applications: it is a background component, and an openable-looking app next to
+# the client was both misleading and easy to confuse with it.
 #
-# It is not the client bundle under another name: the client still contains the controller, this one does not. The two
-# can be installed side by side, but they would then be two hosts with two device identities and two listeners; a
-# machine should normally have one or the other.
+# It is not the client bundle under another name: the client still contains the controller, this one does not. When
+# both packages are installed, the client detects this background service and only acts as the controller; the two use
+# separate device identities (controller-identity and device-identity).
 #
 # The .pkg is UNSIGNED by default, exactly like the client's: without an Apple "Developer ID Installer" certificate
 # Gatekeeper reports "unidentified developer" and the user has to right-click → Open. --distribution signs and
@@ -168,8 +170,8 @@ chmod +x "$HOST_SCRIPTS/preinstall" "$HOST_SCRIPTS/postinstall"
 #
 # That flag matters: by default Installer looks for a copy of the same bundle identifier anywhere on the machine —
 # LaunchServices knows about the build output this package was just made from — and upgrades that copy instead of
-# writing to /Applications. Verified on macOS 26: the install reported success, /Applications stayed empty and the
-# build tree was rewritten root-owned, so the login agent's absolute path had nothing to start.
+# writing to the install location. Verified on macOS 26: the install reported success, the destination stayed empty
+# and the build tree was rewritten root-owned, so the login agent's absolute path had nothing to start.
 echo "==> Building the application component"
 APP_STAGE="$WORK_DIR/app-root"
 mkdir -p "$APP_STAGE"
@@ -194,7 +196,7 @@ fi
 pkgbuild \
     --root "$APP_STAGE" \
     --component-plist "$component_plist" \
-    --install-location "/Applications" \
+    --install-location "/Library/Application Support/RemoteDesktop/Host" \
     --identifier "$BUNDLE_ID.app" \
     --version "$VERSION" \
     --ownership recommended \
@@ -231,8 +233,10 @@ fi
 cat > "$RES_DIR/welcome.html" <<HTML
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Remote Desktop — 被控端（Host）</h2>
-<p>安装 <b>Remote Desktop Host.app</b> 到 <b>/Applications</b>，并安装一个登录项，让它在每次图形登录时自动启动。
-这个应用<b>没有窗口</b>，只负责被控，不能控制别人。</p>
+<p>安装 <b>Remote Desktop Host.app</b> 到
+<b>/Library/Application Support/RemoteDesktop/Host</b>，并安装一个登录项，让它在每次图形登录时自动启动。
+它<b>没有窗口</b>，只负责被控，不能控制别人；因此<b>不会出现在“应用程序”或启动台里</b>，避免被误当成一个可以
+打开的 app。Remote Desktop.app 是面向人的窗口。</p>
 <p>它与控制端是两个独立的 app（bundle id 不同，TCC 授权也分开），<b>可以同时安装</b>：客户端检测到 Host 的
 控制服务后只做控制端，Host 常驻负责被控；两者使用不同的设备身份，客户端显示自己的控制端代码，Host 的设备代码
 在它的日志里。如果 Host 服务比客户端晚就绪，客户端会提示重启以交给 Host 托管。</p>
@@ -248,7 +252,8 @@ HTML
 cat > "$RES_DIR/conclusion.html" <<HTML
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>还需要两步</h2>
-<p><b>1. 授权。</b>打开「系统设置 → 隐私与安全性」，在下面两项里勾选 <b>Remote Desktop Host</b>：</p>
+<p><b>1. 授权。</b>打开「系统设置 → 隐私与安全性」，在下面两项里勾选 <b>Remote Desktop Host</b>（它位于
+<b>/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app</b>，不需要从“应用程序”打开）：</p>
 <ul>
   <li><b>屏幕与系统音频录制</b> —— 采集屏幕（和系统声音）。</li>
   <li><b>辅助功能</b> —— 接收远程键鼠。</li>
@@ -263,7 +268,7 @@ cat > "$RES_DIR/conclusion.html" <<HTML
 <p><b>2. 无人值守密码。</b>host 没有界面，临时密码只在进程内存里，不在任何窗口或日志里显示；无人值守必须用
 固定密码。安装器已经把你填写的密码保存到当前登录用户的钥匙串并重启了 host；如果安装时留空，或当时没有用户登录，
 请用当前登录用户在终端执行（至少 8 位，不能包含双引号）：</p>
-<pre>"/Applications/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'</pre>
+<pre>"/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService" --set-fixed-password '至少8位'</pre>
 <p>然后同样 kickstart 重启。Keychain 可能弹一次访问确认。</p>
 
 <p>服务器地址：安装器已把它写入 <b>/Library/Application Support/RemoteDesktop/appsettings.json</b> 的
