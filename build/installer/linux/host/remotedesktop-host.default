@@ -1,13 +1,19 @@
 # Settings applied when the package is configured.
 #
-# The installation asks for both values. This file seeds those questions when the post-install step asks them
-# (plain dpkg -i), and the post-install step falls back to it. For a non-interactive install, preseed before
-# installing — apt asks before this file has been unpacked:
+# The installation asks for these values. This file seeds the address and certificate questions when the post-install
+# step asks them (plain dpkg -i), and the post-install step falls back to it. For a non-interactive install, preseed
+# before installing — apt asks before this file has been unpacked:
 #
 #     debconf-set-selections <<'EOF'
-#     remotedesktop-host server-address string wss://rd.example.com:5080/ws
-#     remotedesktop-host server-certificate string /root/signaling.crt
+#     remotedesktop-host remotedesktop-host/server-address string wss://rd.example.com:5080/ws
+#     remotedesktop-host remotedesktop-host/server-certificate string /root/signaling.crt
+#     remotedesktop-host remotedesktop-host/unattended-password password a-long-enough-secret
 #     EOF
+#
+# The unattended password has no entry in this file on purpose: this file is world-readable, and a password baked
+# into a package would be shared by every installation. Preseed it through debconf as above, or answer the question.
+# Debconf keeps it in /var/cache/debconf/passwords.dat (root only); the post-install step removes it after storing the
+# password with each signed-in user.
 #
 # To change an installed host, answer the questions from
 #

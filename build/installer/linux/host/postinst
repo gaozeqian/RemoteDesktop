@@ -1,19 +1,52 @@
 #!/bin/sh
 #
-# Applies the answers from the installation questions (the signaling address and, for wss://, a certificate), then
-# turns the host on for everybody who logs in and says what is missing if anything is.
+# Applies the answers from the installation questions (the signaling address, a certificate for wss://, and the
+# optional unattended password), then turns the host on for everybody who logs in and says what is missing if
+# anything is.
 #
-# Nothing is started here. The host runs inside a graphical session, and at the moment a package is configured there
-# may be no session at all — no display, no session bus, nobody to answer the portal's dialog. It starts when the
-# session does, which is what WantedBy=graphical-session.target in the unit file arranges.
+# The password goes into the secret store of the user the host runs as, so it is written as that user rather than as
+# root, and before the service starts: the service reads the fixed password once, when it starts.
+#
+# The host itself belongs to the graphical session, and at the moment a package is configured there may be no session
+# at all — no display, no session bus, nobody to answer the portal's dialog. WantedBy=graphical-session.target in the
+# unit file is what starts it then; this script only starts it for users who are already signed in.
 set -e
 
 . /usr/share/debconf/confmodule
 
 SETTINGS=/usr/lib/remotedesktop-host/appsettings.json
 DEFAULTS=/etc/default/remotedesktop-host
+PROGRAM=/usr/lib/remotedesktop-host/RemoteDesktop.HostService
 CERTIFICATE_NAME=remotedesktop-signaling-host.crt
 CERTIFICATE=/usr/local/share/ca-certificates/$CERTIFICATE_NAME
+
+# The password exists only between writing it and the host command reading it. A secret must not be left behind when
+# a later step fails, which is why the removal is a trap rather than a line the failure path has to remember.
+PASSWORD_FILE=
+cleanup_install_secrets() {
+    if [ -n "$PASSWORD_FILE" ]; then
+        rm -f "$PASSWORD_FILE"
+        PASSWORD_FILE=
+    fi
+}
+trap cleanup_install_secrets EXIT
+
+# Runs a command as the signed-in user, in the environment that user's session has. HOME is how the host finds its
+# data directory — run as root it would write a secret store the service never reads — and the runtime directory and
+# session bus are how `systemctl --user` reaches that user's manager. XDG_DATA_HOME is cleared so the default the
+# service uses ($HOME/.local/share) is the one the password is written to.
+run_as_user() {
+    ru_user=$1
+    ru_uid=$2
+    ru_home=$3
+    shift 3
+    runuser -u "$ru_user" -- env \
+        HOME="$ru_home" \
+        XDG_DATA_HOME= \
+        XDG_RUNTIME_DIR="/run/user/$ru_uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$ru_uid/bus" \
+        "$@"
+}
 
 case "$1" in
     configure)
@@ -38,6 +71,12 @@ case "$1" in
         address=${RET:-}
         db_get remotedesktop-host/server-certificate || true
         server_certificate=${RET:-}
+        # Read the status rather than assigning RET blindly: a question that does not exist answers with a status
+        # code and puts an error message in RET, and storing that as the password would be worse than storing none.
+        unattended_password=
+        if db_get remotedesktop-host/unattended-password; then
+            unattended_password=$RET
+        fi
 
         if [ -r "$DEFAULTS" ]; then
             # shellcheck disable=SC1090
@@ -175,17 +214,78 @@ case "$1" in
             # Enabling a user unit only affects the next login. If somebody is already signed in, start it now: the
             # client can then see the control socket and hand over, instead of waiting for a logout the package has
             # no other reason to ask for. Best-effort — a machine with no session keeps the next-login behaviour.
+            #
+            # The unattended password is stored on the way through, because this is the only moment the package
+            # knows which users are here: the host is a user service, so each of them has a store of their own, and
+            # a user who signs in later has no fixed password until one is set for them.
             if command -v loginctl >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
-                loginctl list-users --no-legend 2>/dev/null | while read -r uid user _; do
+                password_users=0
+                # A here-document rather than a pipe: a failure to store a password the operator asked for has to
+                # fail the installation, and an `exit` inside a pipeline only leaves the subshell.
+                while read -r uid user _; do
                     [ -n "$uid" ] || continue
                     runtime=/run/user/$uid
                     [ -S "$runtime/bus" ] || continue
-                    runuser -u "$user" -- env \
-                        XDG_RUNTIME_DIR="$runtime" \
-                        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+
+                    user_home=$(getent passwd "$user" | cut -d: -f6)
+                    [ -n "$user_home" ] || continue
+
+                    if [ -n "$unattended_password" ]; then
+                        PASSWORD_FILE=$(mktemp) || {
+                            echo "remotedesktop-host: cannot create a temporary file for the unattended password." >&2
+                            exit 1
+                        }
+                        chmod 600 "$PASSWORD_FILE"
+                        printf '%s' "$unattended_password" >"$PASSWORD_FILE"
+                        if ! chown -- "$user" "$PASSWORD_FILE"; then
+                            echo "remotedesktop-host: cannot hand the unattended password file to $user." >&2
+                            exit 1
+                        fi
+
+                        if run_as_user "$user" "$uid" "$user_home" \
+                            "$PROGRAM" --set-fixed-password-file "$PASSWORD_FILE" >/dev/null; then
+                            password_users=$((password_users + 1))
+                            echo "remotedesktop-host: unattended password saved for $user."
+                        else
+                            echo "remotedesktop-host: could not save the unattended password for $user." >&2
+                            echo "  Run as that user: $PROGRAM --set-fixed-password '<password>'" >&2
+                            exit 1
+                        fi
+                        rm -f "$PASSWORD_FILE"
+                        PASSWORD_FILE=
+
+                        # A copy that is already running read the old password at start-up. try-restart leaves an
+                        # inactive unit alone — the start below brings that one up with the new password.
+                        run_as_user "$user" "$uid" "$user_home" \
+                            systemctl --user try-restart app-RemoteDesktopHost.service >/dev/null 2>&1 || true
+                    fi
+
+                    run_as_user "$user" "$uid" "$user_home" \
                         systemctl --user start app-RemoteDesktopHost.service >/dev/null 2>&1 || true
-                done
+                done <<EOF
+$(loginctl list-users --no-legend 2>/dev/null || true)
+EOF
+
+                if [ -n "$unattended_password" ] && [ "$password_users" -eq 0 ]; then
+                    echo "remotedesktop-host: nobody is signed in with a session, so the unattended password was not stored." >&2
+                    echo "  Sign in as the user the host will run as, then run:" >&2
+                    echo "  $PROGRAM --set-fixed-password '<password>'" >&2
+                fi
+            elif [ -n "$unattended_password" ]; then
+                echo "remotedesktop-host: loginctl and runuser are needed to store the unattended password; it was not stored." >&2
+                echo "  Run as the user the host will run as: $PROGRAM --set-fixed-password '<password>'" >&2
             fi
+        elif [ -n "$unattended_password" ]; then
+            echo "remotedesktop-host: systemd is not available, so the unattended password was not stored." >&2
+            echo "  Run as the user the host will run as: $PROGRAM --set-fixed-password '<password>'" >&2
+        fi
+
+        # Do not leave a second copy of the password in debconf's database (/var/cache/debconf/passwords.dat). The
+        # answer is emptied rather than reset so that a later upgrade treats it as "keep what is stored" instead of
+        # asking again; the user's own store is now the one that matters.
+        if [ -n "$unattended_password" ]; then
+            db_set remotedesktop-host/unattended-password "" || true
+            db_fset remotedesktop-host/unattended-password seen true || true
         fi
         ;;
 

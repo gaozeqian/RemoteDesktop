@@ -16,6 +16,10 @@ Description: Remote Desktop host (lets this machine be controlled)
  certificate to trust. No certificate is needed for a ws:// address or for one
  signed by a public authority.
  .
+ It can also set the fixed password used for unattended access. The password
+ must be at least 8 characters and is stored for each user who is signed in
+ when the package is configured; leave it empty to keep the current one.
+ .
  It runs as a user service inside the graphical session, because that is the
  only place a Wayland desktop will let it in. Screen sharing and control are
  asked for through the desktop's own portal, so the answer is a dialog your

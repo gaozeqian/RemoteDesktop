@@ -13,6 +13,11 @@
 - **客户端与被控端 .deb 安装时填写服务器地址并导入证书**：`wss://` 且服务端使用自签证书时，安装过程
   接受 PEM 证书路径并写入系统信任库；`ws://` 不需要证书。构包期的 `RD_RENDEZVOUS_URI` /
   `RD_SERVER_CERTIFICATE` 仍可作为站点默认值。
+- **host .deb 安装时设置无人值守密码**：debconf 新增 `remotedesktop-host/unattended-password`（至少 8 位）。
+  postinst 以安装时每个已登录用户的身份写进各自的 `~/.local/share/RemoteDesktop/secrets`，并在服务已运行时
+  重启它；密码经 0600 临时文件交给 `--set-fixed-password-file`，不进 argv 或日志。留空表示不设置，升级/重装
+  时留空保留现有密码；没有用户登录时提示登录后手工设置。可以用 `debconf-set-selections` 预置，
+  `dpkg-reconfigure remotedesktop-host` 修改。与 macOS 一致，写入成功后 debconf 中的那份口令会被清空。
 - **Ops 的设置改在 `/etc/remotedesktop-server/Ops/appsettings.json`**，单元不再用 `Environment=` 提供
   数据库位置；`--create-admin` 新增 `--config-directory`，手工建管理员与服务工作在同一份配置上。
 - **重装会重新询问安装问题**：同一版本重装（`dpkg -i`/`apt install --reinstall`）重新显示数据库与

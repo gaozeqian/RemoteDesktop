@@ -972,8 +972,8 @@ build/installer/linux/host/build-deb.sh     # 允许被别人控制
 
 ```sh
 printf '%s\n' \
-  'remotedesktop-client server-address string wss://rd.example.com:5080/ws' \
-  'remotedesktop-client server-certificate string /root/signaling.crt' \
+  'remotedesktop-client remotedesktop-client/server-address string wss://rd.example.com:5080/ws' \
+  'remotedesktop-client remotedesktop-client/server-certificate string /root/signaling.crt' \
   | debconf-set-selections
 ```
 
@@ -1028,12 +1028,30 @@ sudo apt install ./RemoteDesktop-Host-Linux-amd64-<版本>.deb
 > 但**不能操作键鼠**。固定密码也不能改变这一点——它不是本软件的取舍，是 portal 的规定。
 > 要在无人值守的机器上被操作，只能用 Windows 的被控端。
 
-host 包没有界面，固定密码用命令行设置（以运行 host 的那个登录用户执行；密钥写进 `~/.local/share/RemoteDesktop/secrets`）：
+host 包没有界面，临时密码只存在进程内存里，所以**无人值守必须设固定密码**（至少 8 位）。安装过程会询问
+**无人值守密码**，装完以安装时每个已登录用户的身份写进各自的
+`~/.local/share/RemoteDesktop/secrets`（目录 0700、文件 0600）。留空表示不设置；升级或重装时留空则保留现有
+密码，不会把它清掉。安装时一个登录会话都没有（无人在图形界面或 SSH 登录）就无法确定写进谁的密钥库，
+安装脚本会提示登录后以运行 host 的用户手工执行：
 
 ```sh
 /usr/lib/remotedesktop-host/RemoteDesktop.HostService --set-fixed-password '至少8位'
 systemctl --user restart app-RemoteDesktopHost.service
 ```
+
+修改已安装的固定密码用 `sudo dpkg-reconfigure remotedesktop-host`（留空保留现有密码）；清除或设置也可以用
+运行 host 的用户执行 `--set-fixed-password` / `--clear-fixed-password` 后重启服务。无人值守安装
+（`debconf-set-selections` 预置）可以写：
+
+```sh
+debconf-set-selections <<'EOF'
+remotedesktop-host remotedesktop-host/unattended-password password a-long-enough-secret
+EOF
+```
+
+安装时填写的密码由 debconf 暂存在 `/var/cache/debconf/passwords.dat`（仅 root 可读）；安装脚本写入用户密钥库后
+会把它从 debconf 中清空，升级时按“保留现有密码”处理。`/etc/default/remotedesktop-host` 是全局可读的，
+所以**不**支持在其中设置密码。
 
 ```sh
 systemctl --user status app-RemoteDesktopHost.service

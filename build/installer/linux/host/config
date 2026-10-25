@@ -42,6 +42,7 @@ fi
 
 uri=$DEFAULT_URI
 certificate=
+unattended_password=
 
 if [ -r "$SETTINGS" ]; then
     value=$(sed -n 's/.*"RendezvousUri"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS" | head -n 1)
@@ -100,6 +101,9 @@ certificate_readable() {
 
 ask_question remotedesktop-host/server-address "$uri"
 ask_question remotedesktop-host/server-certificate "$certificate"
+# No value seeds this one. /etc/default/remotedesktop-host is world-readable, and a password baked into a package is
+# a password every installation shares; the unattended answer is debconf preseed or the question itself.
+ask_question remotedesktop-host/unattended-password "$unattended_password"
 
 attempt=0
 while :; do
@@ -150,6 +154,41 @@ case "$uri" in
     *)
         ;;
 esac
+
+# The unattended password is optional, but one the host program will reject must be caught here, while the question
+# can still be asked again — the post-install step can only fail an installation that would otherwise be complete.
+# Empty means "no password" or "keep the one already stored"; the post-install step reads it the same way.
+attempt=0
+while :; do
+    if [ "$attempt" -eq 0 ]; then
+        db_input high remotedesktop-host/unattended-password || true
+    else
+        db_input critical remotedesktop-host/unattended-password || true
+    fi
+    db_go || true
+    # A question that failed to load answers with a status code and an error message in RET; treating that as the
+    # password would store a sentence. An unreadable answer means "none", which the post-install step handles.
+    if db_get remotedesktop-host/unattended-password; then
+        unattended_password=$RET
+    else
+        unattended_password=
+    fi
+
+    [ -n "$unattended_password" ] || break
+
+    # The host trims the password before it measures and stores it. Measure the same value here, or one that is long
+    # only because of surrounding spaces passes this check and fails the one that matters.
+    trimmed_password=$(printf '%s' "$unattended_password" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ "${#trimmed_password}" -ge 8 ]; then
+        break
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 3 ]; then
+        echo "The unattended password must be at least 8 characters (spaces at either end do not count)." >&2
+        exit 1
+    fi
+done
 
 # Leave a marker when this was apt's preconfiguration. The post-install step runs in the same transaction and must
 # not ask the same questions a second time.
