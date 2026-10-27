@@ -7,9 +7,9 @@ namespace RemoteDesktop.HostService;
 
 /// <summary>
 /// The installer's hooks into the service executable, run instead of the service when the command line asks for them:
-/// <c>--configure-system [--rendezvous URI] [--restart-service]</c> after the files are copied and
-/// <c>--cleanup-system [--keep-data]</c> before they are removed. They run elevated, so they do only what is listed
-/// here and report failure through the exit code.
+/// <c>--configure-system [--rendezvous URI] [--rendezvous-certificate PATH] [--restart-service]</c> after the files are
+/// copied and <c>--cleanup-system [--keep-data]</c> before they are removed. They run elevated, so they do only what
+/// is listed here and report failure through the exit code.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class SetupCommands
@@ -21,7 +21,7 @@ internal static class SetupCommands
     public const string ServiceName = "RemoteDesktopHost";
 
     /// <returns><c>true</c> when the command line was a setup command (then <paramref name="exitCode"/> is the result and the service must not start).</returns>
-    public static bool TryRun(string[] args, string installDirectory, string dataDirectory, TextWriter output, out int exitCode)
+    public static bool TryRun(string[] args, string dataDirectory, TextWriter output, out int exitCode)
     {
         ArgumentNullException.ThrowIfNull(args);
         exitCode = Success;
@@ -33,7 +33,7 @@ internal static class SetupCommands
         var setup = new SystemSetup(SystemSetupLocations.Machine);
         if (args[0] == "--configure-system")
         {
-            exitCode = Configure(args, setup, installDirectory, output);
+            exitCode = Configure(args, setup, dataDirectory, output);
         }
         else
         {
@@ -43,7 +43,7 @@ internal static class SetupCommands
         return true;
     }
 
-    private static int Configure(string[] args, SystemSetup setup, string installDirectory, TextWriter output)
+    private static int Configure(string[] args, SystemSetup setup, string dataDirectory, TextWriter output)
     {
         // The server address is the one thing an installation cannot do without; a wrong one fails the install.
         var index = Array.IndexOf(args, "--rendezvous");
@@ -54,7 +54,7 @@ internal static class SetupCommands
             {
                 try
                 {
-                    SystemSetup.SetRendezvousUri(installDirectory, uri);
+                    SystemSetup.SetRendezvousUri(dataDirectory, uri);
                     output.WriteLine($"Rendezvous server set to {uri}.");
                 }
                 catch (ArgumentException ex)
@@ -66,9 +66,34 @@ internal static class SetupCommands
                 {
                     // The installer runs this as the system and does not care about the exit code, but somebody running
                     // it by hand should get a sentence rather than a stack trace.
-                    output.WriteLine($"Could not write the server address into {installDirectory}: {ex.Message}");
+                    output.WriteLine($"Could not write the server address into {dataDirectory}: {ex.Message}");
                     return InvalidArguments;
                 }
+            }
+        }
+
+        // The certificate pin is separate from the address because a public authority's certificate needs no pin and a
+        // ws:// address needs none at all. An empty value removes a pin left by an earlier installation.
+        var certificateIndex = Array.IndexOf(args, "--rendezvous-certificate");
+        if (certificateIndex >= 0)
+        {
+            var certificate = certificateIndex + 1 < args.Length ? args[certificateIndex + 1] : string.Empty;
+            try
+            {
+                SystemSetup.SetRendezvousCertificate(dataDirectory, certificate);
+                output.WriteLine(string.IsNullOrWhiteSpace(certificate)
+                    ? "The rendezvous certificate pin was cleared."
+                    : $"Rendezvous certificate pinned at {certificate.Trim()}.");
+            }
+            catch (ArgumentException ex)
+            {
+                output.WriteLine(ex.Message);
+                return InvalidArguments;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                output.WriteLine($"Could not write the server certificate pin into {dataDirectory}: {ex.Message}");
+                return InvalidArguments;
             }
         }
 

@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 
 namespace RemoteDesktop.Server.Shared;
 
@@ -101,7 +102,19 @@ public sealed record ServerSetupOptions
 /// </remarks>
 public static class ServerSetup
 {
-    /// <summary>The folder each server keeps its settings next to, under the install directory.</summary>
+    /// <summary>Where the Windows installer keeps the live settings: <c>%ProgramData%\Remote Desktop Server</c>.</summary>
+    /// <remarks>
+    /// The program folders stay under Program Files; the settings do not. A major upgrade removes the old product's
+    /// files before installing the new ones, so anything the MSI owns under Program Files is deleted on every upgrade.
+    /// The live settings have to live where the MSI does not manage them. Linux uses <c>/etc/remotedesktop-server</c>
+    /// and macOS keeps them next to the programs because its <c>.pkg</c> does not remove files it did not install;
+    /// ProgramData is the Windows equivalent.
+    /// </remarks>
+    public static string WindowsConfigDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "Remote Desktop Server");
+
+    /// <summary>The folder each server keeps its settings in, under the configuration directory.</summary>
     public const string RendezvousFolder = "Rendezvous";
 
     public const string RelayFolder = "Relay";
@@ -132,24 +145,38 @@ public static class ServerSetup
     private const string ProviderSqlite = "sqlite";
 
     /// <summary>
-    /// Writes both settings files under <paramref name="installDirectory"/>.
+    /// Writes the live settings under <paramref name="configDirectory"/>.
     /// </summary>
+    /// <param name="configDirectory">
+    /// The directory holding <c>Rendezvous</c>, <c>Relay</c> and <c>Ops</c>. On Linux and macOS this is also the
+    /// directory the servers run from; on Windows it is <see cref="WindowsConfigDirectory"/>.
+    /// </param>
+    /// <param name="options">What the installer or the operator asked for.</param>
+    /// <param name="defaultsDirectory">
+    /// Where to read the shipped <c>appsettings.json</c> from when a live file does not exist yet — the program
+    /// directory on Windows. Null means the live directory itself (the Linux and macOS layout).
+    /// </param>
     /// <returns>What happened, one line at a time, for whoever is watching the installation.</returns>
     /// <exception cref="InvalidOperationException">A value cannot be used; nothing is written in that case.</exception>
-    public static IReadOnlyList<string> Configure(string installDirectory, ServerSetupOptions options)
+    public static IReadOnlyList<string> Configure(
+        string configDirectory,
+        ServerSetupOptions options,
+        string? defaultsDirectory = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(installDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(configDirectory);
         ArgumentNullException.ThrowIfNull(options);
 
         var notes = new List<string>();
-        var rendezvousPath = Path.Combine(installDirectory, RendezvousFolder, SettingsFileName);
-        var relayPath = Path.Combine(installDirectory, RelayFolder, SettingsFileName);
-        var opsPath = Path.Combine(installDirectory, OpsFolder, SettingsFileName);
+        var rendezvousPath = Path.Combine(configDirectory, RendezvousFolder, SettingsFileName);
+        var relayPath = Path.Combine(configDirectory, RelayFolder, SettingsFileName);
+        var opsPath = Path.Combine(configDirectory, OpsFolder, SettingsFileName);
 
         // Read all three before writing any: a value that turns out to be unusable should leave the machine as it was.
-        var rendezvous = Read(rendezvousPath);
-        var relay = Read(relayPath);
-        var ops = Read(opsPath);
+        // A live file wins; otherwise the shipped file is the base, so a fresh Windows install keeps the template's
+        // Urls/ReflectorPort rather than starting from an empty object.
+        var rendezvous = ReadOrDefault(rendezvousPath, DefaultsPath(defaultsDirectory, RendezvousFolder));
+        var relay = ReadOrDefault(relayPath, DefaultsPath(defaultsDirectory, RelayFolder));
+        var ops = ReadOrDefault(opsPath, DefaultsPath(defaultsDirectory, OpsFolder));
 
         var rendezvousSection = Section(rendezvous, "Rendezvous");
         var (endpoint, relayPort) = RelayEndpoint(options.RelayPublicEndpoint, notes);
@@ -231,7 +258,7 @@ public static class ServerSetup
                     // at a file. What Ensure returns is the subject with the CN= on the front, which is not what goes
                     // into the settings: Kestrel looks a certificate up by subject *name*, so the prefixed form finds
                     // nothing. See NameForThisMachine.
-                    SelfSignedCertificate.Ensure(installDirectory, notes, additionalNames);
+                    SelfSignedCertificate.Ensure(configDirectory, notes, additionalNames);
                     certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
                     certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
                     certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
@@ -250,7 +277,7 @@ public static class ServerSetup
                     // them. Kestrel reads a PEM certificate from Path and its key from KeyPath; there is no
                     // equivalent of AllowInvalid because a certificate given as a file is served as it stands.
                     var (certificatePath, keyPath) = SelfSignedCertificate.EnsurePem(
-                        Path.Combine(installDirectory, SelfSignedCertificate.PublicFolder),
+                        Path.Combine(configDirectory, SelfSignedCertificate.PublicFolder),
                         notes,
                         additionalNames);
 
@@ -295,9 +322,9 @@ public static class ServerSetup
         Write(rendezvousPath, rendezvous);
         Write(relayPath, relay);
 
-        // The console's settings are only touched when somebody said something about the database or its address.
-        // The Windows installer writes this file itself and does not pass those options, so leaving it alone is what
-        // keeps its absolute %ProgramData% path intact.
+        // The console's settings are touched when the database changed (the Windows installer passes --database auto,
+        // so a first install writes them) or when one of the Ops options was given. A reconfigure that only changes
+        // the URL leaves them alone.
         if (opsConfigured)
         {
             Write(opsPath, ops);
@@ -447,7 +474,16 @@ public static class ServerSetup
     private static DatabaseChoice? ConfigureDatabase(JsonObject section, ServerSetupOptions options, List<string> notes)
     {
         var provider = Given(options.DatabaseProvider);
+
+        // %ProgramData% is expanded here, the same way RelayPublicEndpoint and the certificate paths are. The server
+        // reads Rendezvous:Database:Path as written, so an unexpanded value would create a folder literally named
+        // %ProgramData% under the service's working directory.
         var path = Given(options.DatabasePath);
+        if (path is not null)
+        {
+            path = Environment.ExpandEnvironmentVariables(path);
+        }
+
         var postgres = Given(options.PostgresConnectionString);
 
         if (provider is null && path is null && postgres is null)
@@ -509,6 +545,11 @@ public static class ServerSetup
     {
         var listen = Given(options.OpsListen);
         var databasePath = Given(options.OpsDatabasePath);
+        if (databasePath is not null)
+        {
+            databasePath = Environment.ExpandEnvironmentVariables(databasePath);
+        }
+
         var nodeCertificatePath = Given(options.OpsNodeCertificatePath);
         if (database is null && listen is null && databasePath is null && nodeCertificatePath is null)
         {
@@ -764,6 +805,14 @@ public static class ServerSetup
     /// </summary>
     private static string WithCertificate(string urls, string? certificatePath, List<string> notes)
     {
+        if (!Uri.TryCreate(urls, UriKind.Absolute, out var parsed)
+            || parsed.Scheme is not ("http" or "https")
+            || parsed.Host.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"The signaling address must be an http:// or https:// address with a host (got '{urls}').");
+        }
+
         if (urls.StartsWith("https://", StringComparison.Ordinal))
         {
             if (IsAuto(certificatePath))
@@ -878,6 +927,63 @@ public static class ServerSetup
         var section = new JsonObject();
         settings[name] = section;
         return section;
+    }
+
+    /// <summary>
+    /// Layers the live settings file over the shipped one, beneath the environment and the command line.
+    /// </summary>
+    /// <remarks>
+    /// Windows only, and only when the file exists: there the program runs from Program Files and would otherwise read
+    /// only the shipped defaults. On Linux and macOS the service's working directory (or the package's install
+    /// directory) already contains the live file, so adding the same source again would only be a second read of it.
+    /// The source is inserted after the shipped <c>appsettings.json</c> on purpose: appending it would put the live
+    /// file above the environment and the command line, so <c>--Rendezvous:RelayEndpoint</c> would silently lose.
+    /// </remarks>
+    public static void AddConfigurationSource(ConfigurationManager configuration, string roleFolder)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentException.ThrowIfNullOrWhiteSpace(roleFolder);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var path = Path.Combine(WindowsConfigDirectory, roleFolder, SettingsFileName);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        configuration.AddJsonFile(path, optional: true, reloadOnChange: false);
+        var sources = configuration.Sources;
+        var saved = sources[^1];
+        sources.RemoveAt(sources.Count - 1);
+
+        var afterAppSettings = 0;
+        for (var i = 0; i < sources.Count; i++)
+        {
+            if (sources[i] is FileConfigurationSource file
+                && string.Equals(Path.GetFileName(file.Path), SettingsFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                afterAppSettings = i + 1;
+            }
+        }
+
+        sources.Insert(afterAppSettings, saved);
+    }
+
+    private static string? DefaultsPath(string? defaultsDirectory, string roleFolder) =>
+        defaultsDirectory is null ? null : Path.Combine(defaultsDirectory, roleFolder, SettingsFileName);
+
+    private static JsonObject ReadOrDefault(string livePath, string? defaultsPath)
+    {
+        if (File.Exists(livePath))
+        {
+            return Read(livePath);
+        }
+
+        return defaultsPath is not null && File.Exists(defaultsPath) ? Read(defaultsPath) : Read(livePath);
     }
 
     private static JsonObject Read(string path)

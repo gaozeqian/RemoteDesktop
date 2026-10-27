@@ -545,7 +545,11 @@ $settingsPath = Join-Path $PublishDirectory 'Rendezvous\appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 
 if ($RendezvousUrl) {
-    if ($RendezvousUrl -notmatch '^https?://') { throw "RendezvousUrl must look like http://0.0.0.0:5080 (got '$RendezvousUrl')." }
+    $parsed = $null
+    $valid = [Uri]::TryCreate($RendezvousUrl, [UriKind]::Absolute, [ref]$parsed)
+    if (-not $valid -or $parsed.Scheme -notin @('http', 'https') -or $parsed.Host.Length -eq 0) {
+        throw "RendezvousUrl must look like http://0.0.0.0:5080 (got '$RendezvousUrl')."
+    }
 
     # A published settings file that has no Urls at all is a server that listens where its own default says; adding the
     # property here is what keeps this step from depending on that file's shape.
@@ -594,10 +598,11 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD-PARTY-NOTICES.md') -Destinati
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
-# The two files that make an installation maintainable rather than only installable: a script that writes the settings
-# the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
-# servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
-foreach ($extra in 'Set-ServerConfiguration.ps1', 'how-to-configure.txt') {
+# The files that make an installation maintainable rather than only installable: a script that writes the settings the
+# same way the installer does, a .cmd wrapper that survives the Windows 11 client execution policy, and a short page
+# for whoever has to do it. They go into the package root, where the servers' folders and server-setup.log already
+# are — an operator looking for "how do I change this" starts there.
+foreach ($extra in 'Set-ServerConfiguration.ps1', 'Set-ServerConfiguration.cmd', 'how-to-configure.txt') {
     Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
 }
 
@@ -607,7 +612,10 @@ $handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Re
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
-    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | Remove-Item -Force
+    # Remove-Item through the pipeline with -Recurse throws InputObjectNotBound on Windows PowerShell 5.1; passing the
+    # path explicitly works on both 5.1 and 7. The scripts support both because a release build often runs in the
+    # PowerShell that ships with Windows.
+    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
 
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and
@@ -633,10 +641,10 @@ if ($signer) {
 New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten `
     -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder' }
 
-# The hand-written components own those files; a second component for one of them would install it twice, and for the
-# settings files it would fight the NeverOverwrite an upgrade depends on. The exclusion is by file name, so it is
-# checked here rather than assumed: a renamed binary would quietly come back into the generated list, and WiX would
-# accept it.
+# The hand-written components own those files; a second component for one of them would install it twice. The
+# settings files here are the shipped defaults; the live files are in %ProgramData% and are not in the MSI's file
+# table. The exclusion is by file name, so it is checked here rather than assumed: a renamed binary would quietly
+# come back into the generated list, and WiX would accept it.
 foreach ($name in $handWritten) {
     if (Select-String -LiteralPath $fileList -SimpleMatch $name -Quiet) {
         throw "$name is in the generated file list as well as in the hand-written components in Components.wxs."

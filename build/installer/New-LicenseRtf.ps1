@@ -72,5 +72,7 @@ foreach ($line in $lines) {
 # RTF has to be written as ANSI for the escape sequences to mean what they mean; every non-ASCII byte is escaped.
 [System.IO.File]::WriteAllText($Rtf, $builder.ToString(), [System.Text.Encoding]::ASCII)
 
-$nonAscii = (Get-Content -LiteralPath $Rtf -Raw | Where-Object { $_ -match '[^\x00-\x7F]' }) -ne $null
+# A raw string piped to Where-Object is one object, so the old check was always true; Select-String looks at the
+# file's contents and answers whether any non-ASCII byte survived the \uN? escaping.
+$nonAscii = Select-String -LiteralPath $Rtf -Pattern '[^\x00-\x7F]' -Quiet
 Write-Host "License RTF written to $Rtf ($((Get-Item $Rtf).Length) bytes, non-ASCII passthrough: $nonAscii)"

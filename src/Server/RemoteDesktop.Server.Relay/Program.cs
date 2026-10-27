@@ -7,6 +7,9 @@ using RemoteDesktop.Server.Shared;
 // exists only for monitoring — a relay that could not be scraped was the one blind spot in the console's first plan.
 var builder = WebApplication.CreateBuilder(args);
 
+// See the note in the rendezvous entry point: ProgramData carries the live settings on Windows.
+ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.RelayFolder);
+
 if (OperatingSystem.IsWindows())
 {
     builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopRelay");

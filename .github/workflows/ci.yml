@@ -70,6 +70,13 @@ jobs:
       # call: one place answers "does this package hold what it is supposed to" for all three.
       - uses: ./.github/actions/verify-packages
 
+      # Opening the database cannot see what a major upgrade does to files on disk. This installs the three MSIs,
+      # moves the live settings into the old Program Files layout, reinstalls, and checks that the migration and the
+      # normal upgrade both keep the operator's values. The runner is disposable; the script is only safe there.
+      - name: Install, upgrade and uninstall the MSIs
+        shell: pwsh
+        run: ./build/installer/windows/Test-InstallerUpgrade.ps1
+
   build-linux:
     # The distro this port targets, and the one its tests were written against: FFmpeg 8 (libavcodec.so.62) and the
     # portal stack are what Ubuntu 26.04 ships. Pinned rather than ubuntu-latest, which still meant 24.04 when this

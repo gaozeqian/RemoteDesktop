@@ -651,8 +651,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // UserSettings for the whole story.
             if (OperatingSystem.IsWindows())
             {
-                // Windows keeps the two halves under different accounts, so the installed service owns the address
-                // in its own appsettings.json and only an elevated run can write it.
+                // Windows keeps the two halves under different accounts, so the installed service owns the machine
+                // file under %ProgramData%\RemoteDesktop and only an elevated run can write it.
                 if (!await ApplyOnWindowsAsync(rendezvous))
                 {
                     return;

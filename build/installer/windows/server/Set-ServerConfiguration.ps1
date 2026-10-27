@@ -54,6 +54,14 @@ param(
     [string]$TlsCertificatePath,
     [string]$TlsCertificatePassword,
 
+    # DNS names (comma/semicolon separated) clients dial. Only used with -TlsGenerate: a self-signed certificate only
+    # answers the names put in it. Empty uses the machine name.
+    [string]$TlsHostName,
+
+    # The console's own settings. Omit to leave them as they are.
+    [string]$OpsListen,
+    [string]$OpsDatabasePath,
+
     # Or let this machine make its own certificate and switch to https. The public half is written to
     # tls\signaling.cer, which clients have to trust or they will refuse the connection.
     [switch]$TlsGenerate,
@@ -66,8 +74,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $installDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+# The programs live under Program Files; the live settings live in ProgramData, where an MSI major upgrade does not
+# remove them. This is the same split the server programs themselves use.
+$configDirectory = Join-Path $env:ProgramData 'Remote Desktop Server'
 $rendezvous = Join-Path $installDirectory 'Rendezvous\RemoteDesktop.Server.Rendezvous.exe'
-$services = @('RemoteDesktopRendezvous', 'RemoteDesktopRelay')
+$ops = Join-Path $installDirectory 'Ops\RemoteDesktop.Server.Ops.exe'
+$services = @('RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps')
 
 if (-not (Test-Path -LiteralPath $rendezvous)) {
     throw "This script belongs next to the servers it configures; $rendezvous is not there."
@@ -77,25 +89,41 @@ if ($TlsGenerate -and $TlsCertificatePath) {
     throw 'Give either -TlsGenerate or -TlsCertificatePath, not both.'
 }
 
+if ($PSBoundParameters.ContainsKey('TlsCertificatePassword') -and -not $PSBoundParameters.ContainsKey('TlsCertificatePath') -and -not $TlsGenerate) {
+    throw '-TlsCertificatePassword is only used together with -TlsCertificatePath (or -TlsGenerate).'
+}
+
 # The executable takes a flag per setting; only the ones that were actually given are passed on, so the rest stay as
 # they are. -TlsGenerate is the executable's "make one" value rather than a flag of its own.
-$arguments = @('--configure-system', '--install-directory', $installDirectory)
+$arguments = @('--configure-system', '--install-directory', $installDirectory, '--config-directory', $configDirectory)
 if ($PSBoundParameters.ContainsKey('RendezvousUrl')) { $arguments += @('--urls', $RendezvousUrl) }
 if ($PSBoundParameters.ContainsKey('RelayPublicEndpoint')) { $arguments += @('--relay-endpoint', $RelayPublicEndpoint) }
 if ($PSBoundParameters.ContainsKey('DatabaseProvider')) { $arguments += @('--database', $DatabaseProvider) }
 if ($PSBoundParameters.ContainsKey('DatabasePath')) { $arguments += @('--database-path', $DatabasePath) }
 if ($PSBoundParameters.ContainsKey('PostgresConnectionString')) { $arguments += @('--postgres', $PostgresConnectionString) }
 if ($PSBoundParameters.ContainsKey('RelaySharedKey')) { $arguments += @('--relay-key', $RelaySharedKey) }
-if ($TlsGenerate) { $arguments += @('--tls-certificate', 'generate') }
+if ($PSBoundParameters.ContainsKey('TlsHostName')) { $arguments += @('--tls-hostname', $TlsHostName) }
+if ($PSBoundParameters.ContainsKey('OpsListen')) { $arguments += @('--ops-listen', $OpsListen) }
+if ($PSBoundParameters.ContainsKey('OpsDatabasePath')) { $arguments += @('--ops-database-path', $OpsDatabasePath) }
+if ($TlsGenerate) {
+    $arguments += @('--tls-certificate', 'generate')
+    # The console must pin the public half the server just generated: it is in LocalMachine\My, not in the system
+    # trust store, so Ops would reject its own node's certificate without this.
+    $arguments += @('--ops-node-certificate-path', (Join-Path $configDirectory 'tls\signaling.cer'))
+}
 if ($PSBoundParameters.ContainsKey('TlsCertificatePath')) { $arguments += @('--tls-certificate', $TlsCertificatePath) }
 if ($PSBoundParameters.ContainsKey('TlsCertificatePassword')) { $arguments += @('--tls-password', $TlsCertificatePassword) }
 
-if ($arguments.Count -le 3) {
-    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -DatabaseProvider, -DatabasePath, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsGenerate.'
+if ($arguments.Count -le 5) {
+    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -DatabaseProvider, -DatabasePath, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsHostName, -TlsGenerate, -OpsListen, -OpsDatabasePath.'
 }
 
-$target = $arguments -join ' '
-if (-not $PSCmdlet.ShouldProcess($installDirectory, $target)) {
+# The WhatIf target names the settings, never their values: a connection string or relay key printed here would end up
+# in a transcript. ShouldProcess still says what will be done and to which directory.
+$given = $PSBoundParameters.Keys |
+    Where-Object { $_ -notin @('Verbose', 'Debug', 'WhatIf', 'Confirm') } |
+    Sort-Object
+if (-not $PSCmdlet.ShouldProcess($configDirectory, "apply: $($given -join ', ')")) {
     return
 }
 
@@ -111,7 +139,47 @@ if ($LASTEXITCODE -ne 0) {
     throw "The configuration step failed with exit code $LASTEXITCODE. Nothing was changed if it said so; server-setup.log in $installDirectory has the details."
 }
 
-Write-Host "Settings written. What it did is appended to $(Join-Path $installDirectory 'server-setup.log')."
+Write-Host "Settings written. What it did is appended to $(Join-Path $configDirectory 'server-setup.log')."
+
+# The console is part of this package, so the two local nodes should follow whatever scheme/port just took effect.
+# Seed adds them only when the node table is empty; sync updates the two rows the installer created, without touching
+# an operator's own nodes or a row they deleted. Both are safe to repeat.
+if (Test-Path -LiteralPath $ops) {
+    $rendezvousSettings = Join-Path $configDirectory 'Rendezvous\appsettings.json'
+    $urls = $null
+    if (Test-Path -LiteralPath $rendezvousSettings) {
+        try { $urls = (Get-Content -LiteralPath $rendezvousSettings -Raw | ConvertFrom-Json).Urls } catch { }
+    }
+
+    $rendezvousNodeUrl = 'http://127.0.0.1:5080'
+    if ($urls -and $urls -match '^https://') {
+        $port = 5080
+        try { $port = ([Uri]$urls).Port } catch { }
+        if ($port -le 0) { $port = 5080 }
+        $rendezvousNodeUrl = "https://$($env:COMPUTERNAME):$port"
+    }
+    elseif ($urls) {
+        try {
+            $port = ([Uri]$urls).Port
+            if ($port -gt 0) { $rendezvousNodeUrl = "http://127.0.0.1:$port" }
+        }
+        catch { }
+    }
+
+    $opsArguments = @(
+        '--config-directory', (Join-Path $configDirectory 'Ops'),
+        '--rendezvous-base-url', $rendezvousNodeUrl,
+        '--relay-base-url', 'http://127.0.0.1:5083'
+    )
+    & $ops --seed-local-nodes @opsArguments | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'The local nodes could not be registered; add them on the console''s 节点管理 page.'
+    }
+    & $ops --sync-local-nodes @opsArguments | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'The local node addresses could not be updated; check them on the console''s 节点管理 page.'
+    }
+}
 
 if ($NoRestart) {
     Write-Host 'The services were not restarted (-NoRestart), so the new settings are not in effect yet.'

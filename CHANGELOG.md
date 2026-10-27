@@ -159,6 +159,88 @@
   `.pkg` 加 `allowed-os-versions`；服务端包不再带 `appsettings.Development.json`；client/host 的
   `--arch` 明确只支持 arm64；`pkgutil`/`lsbom` 的 `grep -q` 与 `pipefail` 组合改为读完整输入。
 
+### Fixed — Windows 安装包评审
+
+- **server MSI 升级会丢掉 live settings，Relay 起不来**：三份 `appsettings.json` 从 `Program Files` 移到
+  `%ProgramData%\Remote Desktop Server\`，不再在 MSI 的文件表里；第一次从旧布局升级时，迁移动作在
+  `RemoveExistingProducts` 之前把旧文件复制到新位置。升级不再把空密钥/空数据库模板写回，Relay 不会再因
+  `Relay:SharedKey` 为空而启动失败，Rendezvous 也不会退回内存数据库。
+- **真实 major upgrade 会以 MSI error 2613 失败**：`RemoveExistingProducts` 必须是 `InstallInitialize` 之后的
+  第一个动作；原先迁移动作排在它前面，REP 被推到 1503，Windows Installer 直接拒绝升级。client/host 的
+  `MigrateClientSettings`、server 的 `SecureConfigDirectory`/`MigrateLiveSettings` 改为 immediate 并在
+  `InstallInitialize` 之前执行；`RemoveExistingProducts` 回到 1501。包内容测试现在核对这个顺序。
+- **deferred 自定义动作读不到普通 MSI 属性**：host 的 `.fixed-password` 删除、server 的 `ConfigureServer`/
+  `SyncLocalNodes`/`CleanupServer` 在 deferred 阶段访问 `session[...]` 会抛 “Cannot access session details
+  from a non-immediate custom action”。host 改为按固定路径删除；server 新增 immediate 的
+  `PrepareServerData`，把值以 base64 的 `name=value` 放进 `SERVERCONFIGDATA`，再由三个 `Set...Data` 动作
+  交给 deferred 动作；`HideTarget` 与 `Hidden` 保证密钥不进 MSI 日志。
+- **server 安装的自定义动作把带空格的安装目录拼成非法参数**：`ProcessStartInfo.Arguments` 里
+  `"C:\Program Files\Remote Desktop Server\"` 的尾部反斜杠转义了闭合引号，子进程把后面的命令当成路径的
+  一部分，`--configure-system` 因此失败并回滚。现在 `Quote` 按 CommandLineToArgvW 规则加倍尾部反斜杠，
+  `SERVERINSTALLDIR`/`SERVERCONFIGDIR` 去掉尾分隔符后再传给子进程。
+- **client/host MSI 升级会把服务器地址恢复成构建默认值**：live 地址改到
+  `%ProgramData%\RemoteDesktop\appsettings.json`（`MachineSettings` 的 Windows 层），安装目录里的
+  `appsettings.json` 只是随包默认值；首次升级同样有迁移动作。安装期 `RENDEZVOUSURI` 只在首装生效，
+  升级保留操作员改过的地址。
+- **安装期属性在升级时被静默忽略**：文档明确“首装生效，升级保留”，与 Linux/macOS 的升级行为一致；
+  server 的 `Set-ServerConfiguration.cmd`、client 的「修改服务器地址」是升级后的入口。
+- **Ops 控制台装上了却没有节点、信令没有 `/metrics`**：server MSI 的配置动作现在传 `--metrics-enabled`、
+  在首装后执行 `--seed-local-nodes`、在 TLS 生成时 pin `tls\signaling.cer`，升级时 `--sync-local-nodes`；
+  与 Linux/macOS 的 postinstall 对齐。
+- **部署秘密进 MSI 日志与进程命令行**：server 的 relay key、PostgreSQL 连接串、TLS 口令改由自定义动作通过
+  子进程环境变量传递，动作加 `HideTarget`、属性加 `Hidden`；host 固定密码改用
+  `--set-fixed-password-file` 和 SYSTEM/Administrators 可读的临时文件（与 Linux 包一致），不再出现在
+  `RemoteDesktop.HostService.exe` 的命令行里。
+- **自动生成的自签证书没有部署用的 DNS/NAT 名**：新增 `TLSCERTIFICATEHOSTNAME` 属性与安装页字段，
+  `Set-ServerConfiguration.cmd -TlsHostName` 同样支持；名字写进证书 SAN，Ops 的本地节点 URL 也用它。
+- **server 卸载残留数据库/证书/日志**：新增 `REMOVEDATA=1`，删除 `%ProgramData%\Remote Desktop Server`
+  与证书存储里生成的证书；默认保留（重装后设备码不变）。文档列全三类残留。
+- **`Set-ServerConfiguration.ps1` 改数据库不重启 Ops**：现在重启三个服务，并在写完后登记/同步本机节点；
+  `-WhatIf` 不再打印口令。
+- **server 配置目录对本机用户可读**：`%ProgramData%\Remote Desktop Server` 在写入前由自定义动作收紧为
+  SYSTEM/Administrators 完全控制，relay key、PostgreSQL 口令、TLS 口令与 Ops 库不再对普通用户可读。
+- **server 包在图形界面安装时提前失败**：立即自定义动作以安装用户身份运行；把配置目录的 ACL 收紧到
+  SYSTEM/Administrators 后，同一进程紧接着的枚举（以及首次升级的迁移）失去访问，安装回滚，只留下一个空目录。
+  现在立即动作先创建目录并保留安装用户的临时访问，迁移完成后由 deferred、以 SYSTEM 运行的
+  `SecureConfigDirectoryFinal` 收紧 ACL；静默安装与从资源管理器双击的图形安装走同一条路径。
+- **Ops 本机信令节点被登记成机器名，节点抓取和设备管理返回 401**：没有 `NodeToken` 时，信令服务端的
+  `/metrics` 和 `/internal/*` 只授权回环访问；安装器在 TLS 下把 `rendezvous-local` 写成
+  `https://<机器名>:5080`，Ops 从局域网地址调用得到 401，控制台显示“抓取失败”、设备页为空。现在两个本机节点
+  固定登记为 `127.0.0.1`；证书仍通过 `NodeCertificatePath` 固定，不依赖主机名。已有安装可在 Ops 节点页把
+  地址改为 `https://127.0.0.1:5080`，或安装新的 server 包让升级动作同步。
+- **Ops 管理员命令与重启服务未在文档中强调管理员 PowerShell**：普通窗口执行 `--create-admin` 读不到受限的
+  配置/数据库，`Restart-Service` 会报“无法打开...服务”；文档已注明。
+- **升级后 Relay 的 `SharedKey` 为空，中继票据被拒**：升级跳过 `ConfigureServer`，旧包留下的
+  `Relay\appsettings.json` 不会补写 `SharedKey`，而 `Rendezvous` 已经有 `RelaySharedKey`。现在升级动作
+  `SyncLocalNodes` 会用不带地址/TLS/数据库/metrics 选项的 `--configure-system` 同步两个密钥，既不改动
+  操作员配置，也让中继能校验票据；升级冒烟测试会先清空 Relay 密钥再断言恢复。
+- **证书确认页显示 `auto` 而不是刚选的文件**：确认页改显示 `TLSCERTIFICATEFILE`；选择“已有证书文件”却没选
+  文件时会弹出提示，不再静默安装成明文 http。
+- **Ops CLI 不展开 `%ProgramData%`**：`--create-admin` / `--seed-local-nodes` 现在展开环境变量，并按
+  `%ProgramData%\Remote Desktop Server\Ops` 读取与安装版相同的配置。
+- **WebSocket 地址不带 `/ws` 时连到 `/`**：`RendezvousAddress` 把空路径补成 `/ws`，反向代理使用的
+  `wss://host/rd/ws` 之类路径原样保留；构包、安装期与启动期使用同一条规则。
+- **Windows 安装包在默认 PowerShell 5.1 下构建失败**：PDB 删除改为按路径删除（5.1 的管道 `Remove-Item`
+  会抛 `InputObjectNotBound`）；`Set-ServerConfiguration.cmd` 用 `-ExecutionPolicy Bypass` 绕开 Windows 11
+  客户端默认的 Restricted 策略。
+- **文档与行为不一致**：修正“升级不会覆盖 appsettings”“服务器地址以安装包里的为准/手改会保留”、
+  ReadyToRun、构建产物命名、残留进程关闭顺序等句子。
+
+### Added — Windows 安装包评审
+
+- **client/host 安装程序的服务器连接页**：安装时询问 `RENDEZVOUSURI`；地址为 `wss://` 时可选服务器证书（PEM/DER 公钥），
+  静默安装用 `SERVERCERTIFICATEPATH`。安装器只把公钥导出到
+  `%ProgramData%\RemoteDesktop\certificates\signaling.cer` 并写 `Transport:RendezvousCertificatePath` 固定它；`ws://`
+  或公开 CA 证书时留空。与 macOS 的 pin 行为一致，不修改系统信任库；host 的连接页后面仍是无人值守密码页。
+- **图形界面升级会带出当前地址/证书**：修改后随安装应用；静默升级不运行界面，因此保留现有地址、证书和设备身份。
+  连接页只在全新安装和 major upgrade 出现；修复/维护安装不显示它，也不会重写 live 设置。
+- **安装/升级/卸载冒烟测试**：`build/installer/windows/Test-InstallerUpgrade.ps1` 在 CI 与 release 的 Windows
+  job 上安装三个 MSI、修改 live 设置、模拟旧布局，再用带新 ProductCode/PackageCode 的同版本副本触发真实
+  major upgrade，验证迁移、设置保留与 `REMOVEDATA=1` 卸载清理；另外安装一次带自签名证书的 `wss://` client/host，
+  检查公钥被导出并固定到设置、卸载时随 `REMOVEDATA=1` 删除。
+- **client/host 安装包的自定义动作 DLL**：net48、x64，负责首次升级迁移与固定密码文件；与 server 包一样由
+  包内容测试检查 SfxCA 位数和 `CustomAction.config`。
+
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 
 首个正式版。自 0.3.0 起，产品从 Windows 单平台扩展到 Windows、macOS (Apple Silicon) 与 Linux，三个平台各出

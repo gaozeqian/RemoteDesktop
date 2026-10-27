@@ -18,12 +18,13 @@
            Scope="perMachine" Compressed="yes" InstallerVersion="500"
            Codepage="936">
 
-    <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
-         somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
+    <!-- The custom pages and the licence are Chinese; the standard WixUI buttons (Back/Next/Cancel) come from the
+         extension's default English localization. Say that rather than "Chinese UI", which would be wrong in a
+         procurement checklist. Add a WixUI .wxl and the languages here when the standard pages are localized. -->
     <?ifdef var.HostOnly ?>
-    <SummaryInformation Description="Remote desktop, controlled end: the background service and the session agent. Chinese UI." />
+    <SummaryInformation Description="Remote desktop, controlled end: the background service and the session agent. Chinese pages." />
     <?else?>
-    <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese UI." />
+    <SummaryInformation Description="Remote desktop: control, file transfer, terminal and camera. Chinese pages." />
     <?endif?>
 
     <!-- The product icon in Settings > Apps and on the Start menu shortcut. The same source icon as the exe and the
@@ -62,12 +63,31 @@
     <MediaTemplate EmbedCab="yes" />
 
     <!-- The server this installation talks to. The default is the address baked in when the installer was built
-         (Build-ClientInstaller.ps1 -RendezvousUri); it can be given at install time instead:
-         msiexec /i <msi> RENDEZVOUSURI=ws://rd.example.com:5080/ws
+         (Build-ClientInstaller.ps1 -RendezvousUri); the connection page shows it and lets the operator change it, and
+         a silent install can give it as:
+         msiexec /i <msi> RENDEZVOUSURI=ws://rd.example.com:5080/ws SERVERCERTIFICATEPATH=C:\certs\signaling.cer
          It has a value (rather than none) on purpose: a property without one is left out of the property table
          altogether, and the deferred custom action that writes it into appsettings.json would find nothing.
          Secure so that the deferred action receives it. -->
     <Property Id="RENDEZVOUSURI" Value="$(var.DefaultRendezvousUri)" Secure="yes" />
+
+    <!-- The build/command-line default is kept separately so the connection page's prefill can tell "still the package
+         default" from "the operator passed an address on the command line". On an upgrade the live address is the
+         default shown in the page; an explicit command-line address still wins. -->
+    <Property Id="DEFAULT_RENDEZVOUSURI" Value="$(var.DefaultRendezvousUri)" />
+
+    <!-- The certificate source chosen/typed on the connection page. A space keeps the edit control editable; the
+         execute action exports only its public half to ProgramData, so a PEM/PFX that also carries a private key never
+         puts that key on the machine. -->
+    <Property Id="SERVERCERTIFICATEPATH" Value=" " Secure="yes" />
+    <!-- The public certificate file the configure-system step pins in the machine settings. -->
+    <Property Id="RENDEZVOUSCERTIFICATEPATH" Value=" " Secure="yes" />
+    <!-- Set when the connection page is left with Next. On an upgrade the execute sequence applies the page's values
+         only then; a silent upgrade leaves the live address and certificate pin untouched. -->
+    <Property Id="CONNECTIONEDITED" Value="0" />
+    <!-- A space means "no error"; validation puts its message here and the page shows it instead of moving on. -->
+    <Property Id="CONNECTIONERROR" Value=" " />
+    <Property Id="SERVERCERTIFICATECHOSEN" Value="0" />
 
     <!-- Uninstalling keeps the device identity and logs (a reinstall then keeps the same device code) unless the person
          asks for them to go: msiexec /x ... REMOVEDATA=1 -->
@@ -87,7 +107,16 @@
     -->
     <Property Id="FIXEDPASSWORD" Value=" " Secure="yes" Hidden="yes" />
     <Property Id="CLEARFIXEDPASSWORD" Value="0" Secure="yes" />
+    <!-- Written by WriteFixedPasswordFile (immediate) and read by the deferred SetFixedPassword/Delete actions. The
+         password itself travels in this file, not in the host process's command line. No Value: the action sets it,
+         and the empty Property row is what puts it in the secure list. -->
+    <Property Id="FIXEDPASSWORDFILE" Value=" " Secure="yes" />
     <?endif?>
+
+    <!-- A deferred action cannot read a directory property unless it is secure or carried in CustomActionData; the
+         migration needs the install folder after the elevation boundary. SetClientInstallDir copies it in the
+         immediate pass. It is outside the HostOnly block because the client package migrates too. -->
+    <Property Id="CLIENTINSTALLFOLDER" Value=" " Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RemoteDesktop" />

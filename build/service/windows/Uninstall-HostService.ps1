@@ -30,6 +30,15 @@ if ($service) {
 # The agent may still be shutting down.
 Get-Process -Name 'RemoteDesktop.SessionAgent' -ErrorAction SilentlyContinue | Stop-Process -Force
 
+# The manual installer adds this rule; removing the program without it leaves an inbound UDP exception aimed at a
+# program that no longer exists. The MSI removes its own rule through its component.
+$ruleName = 'Remote Desktop peer connections (UDP)'
+$rules = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+if ($rules) {
+    $rules | Remove-NetFirewallRule
+    Write-Host "Firewall rule '$ruleName' removed."
+}
+
 if (Test-Path $InstallDirectory) {
     Remove-Item -Recurse -Force $InstallDirectory
     Write-Host "Removed $InstallDirectory"

@@ -12,11 +12,12 @@ namespace RemoteDesktop.Application.Hosting;
 /// <remarks>
 /// <para>
 /// On Windows this file is not used: there the two halves of the product run as different accounts, so the installed
-/// service owns the address in its own <c>appsettings.json</c> and an elevated step (<c>SystemSetup</c>) writes it.
-/// Everywhere else both halves run as the same person in the same session, so one file in the data directory drives
-/// them both. On macOS the installer cannot write the file next to the program — it sits inside the signed <c>.app</c>
-/// bundle, and editing a signed bundle invalidates its signature (and with it the screen-recording and accessibility
-/// grants) — so that layer is <see cref="MachineSettings"/> instead, and this file stays the person's override.
+/// service owns the machine-wide file (<see cref="MachineSettings.WindowsPath"/>) and an elevated step
+/// (<c>SystemSetup</c>) writes it. Everywhere else both halves run as the same person in the same session, so one
+/// file in the data directory drives them both. On macOS the installer cannot write the file next to the program —
+/// it sits inside the signed <c>.app</c> bundle, and editing a signed bundle invalidates its signature (and with it
+/// the screen-recording and accessibility grants) — so that layer is <see cref="MachineSettings"/> instead, and this
+/// file stays the person's override.
 /// </para>
 /// <para>
 /// The data-directory file is what the person can change. The shipped one stays the defaults — under <c>/usr/lib</c>

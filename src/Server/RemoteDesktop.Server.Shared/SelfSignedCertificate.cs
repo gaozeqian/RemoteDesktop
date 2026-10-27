@@ -50,6 +50,9 @@ public static class SelfSignedCertificate
 
     private static readonly TimeSpan Validity = TimeSpan.FromDays(3 * 365);
 
+    /// <summary>An existing certificate this close to expiry is replaced instead of being served until it fails.</summary>
+    private static readonly TimeSpan RenewBefore = TimeSpan.FromDays(30);
+
     /// <summary>
     /// The subject of this machine's certificate, creating it when it is not there yet.
     /// </summary>
@@ -74,7 +77,9 @@ public static class SelfSignedCertificate
         store.Open(OpenFlags.ReadWrite);
 
         var existing = store.Certificates
-            .Where(certificate => certificate.Subject == subject && certificate.HasPrivateKey)
+            .Where(certificate => certificate.Subject == subject
+                && certificate.HasPrivateKey
+                && certificate.NotAfter > DateTime.Now.Add(RenewBefore))
             .OrderByDescending(certificate => certificate.NotAfter)
             .FirstOrDefault();
 
@@ -85,6 +90,16 @@ public static class SelfSignedCertificate
             WritePublicHalf(installDirectory, publicPath, existing);
             notes.Add($"Signaling TLS uses the existing certificate '{subject}' from {CertificateStoreLocation}\\{CertificateStoreName}; its public half is at {publicPath}.");
             return subject;
+        }
+
+        // An expired (or nearly expired) certificate would be served until clients started rejecting it. It is this
+        // product's own subject, so removing it cannot remove somebody else's certificate.
+        foreach (var stale in store.Certificates
+                     .Where(certificate => certificate.Subject == subject && certificate.NotAfter <= DateTime.Now.Add(RenewBefore))
+                     .ToArray())
+        {
+            store.Remove(stale);
+            notes.Add($"Removed the expired certificate '{subject}' from {CertificateStoreLocation}\\{CertificateStoreName}.");
         }
 
         var created = CreateForThisMachine(subject, additionalDnsNames);
@@ -130,10 +145,23 @@ public static class SelfSignedCertificate
 
         if (File.Exists(certificatePath) && File.Exists(keyPath))
         {
-            // Kept, not replaced: a client that trusted this certificate yesterday must still trust it today, and
-            // reinstalling or upgrading the server runs this step again.
-            notes.Add($"Signaling TLS uses the existing certificate at {certificatePath}.");
-            return (certificatePath, keyPath);
+            // Kept, not replaced unless it is about to expire: a client that trusted this certificate yesterday must
+            // still trust it today, and reinstalling or upgrading the server runs this step again.
+            try
+            {
+                using var existing = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+                if (existing.NotAfter > DateTime.Now.Add(RenewBefore))
+                {
+                    notes.Add($"Signaling TLS uses the existing certificate at {certificatePath}.");
+                    return (certificatePath, keyPath);
+                }
+
+                notes.Add($"The certificate at {certificatePath} expires on {existing.NotAfter:yyyy-MM-dd}; it is being replaced.");
+            }
+            catch (CryptographicException)
+            {
+                notes.Add($"The certificate at {certificatePath} could not be read; it is being replaced.");
+            }
         }
 
         Directory.CreateDirectory(tlsDirectory);

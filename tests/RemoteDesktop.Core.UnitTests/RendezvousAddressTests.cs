@@ -58,6 +58,26 @@ public sealed class RendezvousAddressTests
         Assert.Equal(parsed.AbsoluteUri, parsed.ToString());
     }
 
+    /// <summary>
+    /// The signaling server maps /ws, and an address typed without a path must not connect to "/". A non-empty path
+    /// stays as typed: a reverse proxy is allowed to expose the server under a prefix.
+    /// </summary>
+    [Theory]
+    [InlineData("ws://rd.example.com", "ws://rd.example.com/ws")]
+    [InlineData("wss://rd.example.com:5080/", "wss://rd.example.com:5080/ws")]
+    public void A_path_that_is_missing_is_filled_in(string address, string expected)
+    {
+        Assert.True(RendezvousAddress.TryParse(address, out var parsed));
+        Assert.Equal(expected, parsed.AbsoluteUri);
+    }
+
+    [Fact]
+    public void A_path_a_reverse_proxy_keeps_is_preserved()
+    {
+        Assert.True(RendezvousAddress.TryParse("wss://rd.example.com/rd/ws", out var parsed));
+        Assert.Equal("wss://rd.example.com/rd/ws", parsed.AbsoluteUri);
+    }
+
     [Fact]
     public void Parse_says_what_was_wrong_rather_than_returning_an_empty_one()
     {

@@ -122,6 +122,41 @@ public class SetupCommandTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_directory, "ops.db")));
     }
 
+    /// <summary>
+    /// The packaged Windows file says %ProgramData%, and the service expands it. The command has to expand it the
+    /// same way; treating it as a relative path creates the first administrator in
+    /// "...\Ops\%ProgramData%\..." while the service uses the real database.
+    /// </summary>
+    [Fact]
+    public async Task A_percent_variable_in_the_database_path_is_expanded_like_the_service_does()
+    {
+        var expanded = Path.Combine(_directory, "expanded");
+        Environment.SetEnvironmentVariable("RD_TEST_OPS_DATA", expanded);
+        try
+        {
+            await WriteSettingsAsync("%RD_TEST_OPS_DATA%/ops.db");
+
+            var output = new StringWriter();
+            Assert.True(SetupCommands.TryRun(
+                [
+                    "--seed-local-nodes",
+                    "--config-directory", _directory,
+                    "--rendezvous-base-url", "http://127.0.0.1:5080",
+                    "--relay-base-url", "http://127.0.0.1:5083",
+                ],
+                output,
+                out var exitCode));
+
+            Assert.Equal(0, exitCode);
+            Assert.True(File.Exists(Path.Combine(expanded, "ops.db")), output.ToString());
+            Assert.False(Directory.Exists(Path.Combine(_directory, "%RD_TEST_OPS_DATA%")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RD_TEST_OPS_DATA", null);
+        }
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
@@ -135,13 +170,13 @@ public class SetupCommandTests : IDisposable
         }
     }
 
-    private Task WriteSettingsAsync() =>
+    private Task WriteSettingsAsync(string databasePath = "ops.db") =>
         File.WriteAllTextAsync(
             Path.Combine(_directory, "appsettings.json"),
-            """
+            $$"""
             {
               "Ops": {
-                "Database": { "Provider": "sqlite", "Path": "ops.db" }
+                "Database": { "Provider": "sqlite", "Path": "{{databasePath}}" }
               }
             }
             """,

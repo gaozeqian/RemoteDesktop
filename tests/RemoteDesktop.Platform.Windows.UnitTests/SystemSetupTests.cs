@@ -151,6 +151,36 @@ public sealed class SystemSetupTests : IDisposable
     public void An_address_that_is_not_a_websocket_url_is_refused(string uri) =>
         Assert.Throws<ArgumentException>(() => SystemSetup.SetRendezvousUri(_folder, uri));
 
+    [Fact]
+    public void A_certificate_pin_is_written_next_to_the_address_and_can_be_removed_again()
+    {
+        var certificate = Path.Combine(_folder, "server.cer");
+        File.WriteAllText(certificate, "the installer only records the path; the app loads the file");
+        var settings = Path.Combine(_folder, "appsettings.json");
+
+        SystemSetup.SetRendezvousUri(_folder, "wss://rd.example.com/ws");
+        SystemSetup.SetRendezvousCertificate(_folder, certificate);
+
+        var transport = JsonNode.Parse(File.ReadAllText(settings))!["Transport"]!;
+        Assert.Equal("wss://rd.example.com/ws", transport["RendezvousUri"]!.GetValue<string>());
+        Assert.Equal(certificate, transport["RendezvousCertificatePath"]!.GetValue<string>());
+
+        SystemSetup.SetRendezvousCertificate(_folder, " ");
+
+        transport = JsonNode.Parse(File.ReadAllText(settings))!["Transport"]!;
+        Assert.Equal("wss://rd.example.com/ws", transport["RendezvousUri"]!.GetValue<string>());
+        Assert.Null(transport["RendezvousCertificatePath"]);
+        Assert.False(File.Exists(settings + ".tmp"));
+    }
+
+    [Fact]
+    public void A_certificate_path_that_is_not_absolute_or_does_not_exist_is_refused()
+    {
+        Assert.Throws<ArgumentException>(() => SystemSetup.SetRendezvousCertificate(_folder, "server.cer"));
+        Assert.Throws<ArgumentException>(() =>
+            SystemSetup.SetRendezvousCertificate(_folder, Path.Combine(_folder, "missing.cer")));
+    }
+
     [Theory]
     [InlineData("ws://rd.example.com:5080/ws")]
     [InlineData("wss://rd.example.com/ws")]

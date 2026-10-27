@@ -3,7 +3,8 @@ using Microsoft.Extensions.Configuration;
 namespace RemoteDesktop.Application.Hosting;
 
 /// <summary>
-/// The settings the installer owns for the whole machine, on macOS: <c>/Library/Application Support/RemoteDesktop/</c>.
+/// The settings the installer owns for the whole machine, outside the program's own directory:
+/// <c>/Library/Application Support/RemoteDesktop/</c> on macOS and <c>%ProgramData%\RemoteDesktop</c> on Windows.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,21 +14,31 @@ namespace RemoteDesktop.Application.Hosting;
 /// client and the host read it as the layer between the shipped defaults and the person's own file.
 /// </para>
 /// <para>
-/// On Windows there is already a machine-level file: the service's own <c>appsettings.json</c> next to the program.
-/// On Linux the installed <c>appsettings.json</c> next to the executable is writable by the package and is edited by
-/// its postinst. This layer exists only where the program file belongs to a signed bundle.
+/// Windows has the same problem for a different reason: the MSI's major upgrade removes the old product's files
+/// before installing the new ones, so a live <c>appsettings.json</c> under Program Files is deleted on every upgrade.
+/// The installer writes here instead, and the MSI does not own this directory. The shipped file next to the program
+/// stays the set of defaults; this one carries the address the deployment chose.
+/// </para>
+/// <para>
+/// On Linux the installed <c>appsettings.json</c> in <c>/etc/remotedesktop-server</c> is already outside the program
+/// directory and is not replaced by an upgrade, so this layer is not needed there.
 /// </para>
 /// </remarks>
 public static class MachineSettings
 {
-    /// <summary>Where the macOS installer writes the machine-wide defaults.</summary>
+    /// <summary>Where the macOS installer writes the machine-wide settings.</summary>
     public const string MacOSDirectory = "/Library/Application Support/RemoteDesktop";
 
     /// <summary>The file itself.</summary>
     public static string MacOSPath => Path.Combine(MacOSDirectory, "appsettings.json");
 
+    /// <summary>Where the Windows installer writes the machine-wide settings: <c>%ProgramData%\RemoteDesktop</c>.</summary>
+    public static string WindowsPath => Path.Combine(DataDirectory.ForMachine(), "appsettings.json");
+
     /// <summary>The path on this machine, or <c>null</c> where the platform has no such layer.</summary>
-    public static string? PathForThisMachine() => OperatingSystem.IsMacOS() ? MacOSPath : null;
+    public static string? PathForThisMachine() => OperatingSystem.IsMacOS()
+        ? MacOSPath
+        : OperatingSystem.IsWindows() ? WindowsPath : null;
 
     /// <summary>
     /// Layers the machine settings under the person's own file. Call this before

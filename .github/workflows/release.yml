@@ -409,6 +409,12 @@ jobs:
       # 与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
 
+      # 数据库检查看不到大版本升级对磁盘上文件做了什么。这里真正安装三个 MSI、把 live 设置放回旧的
+      # Program Files 布局、重装，检查迁移与普通升级都保留运维的值。runner 是一次性的，脚本只适合在这种机器上跑。
+      - name: Install, upgrade and uninstall the MSIs
+        shell: pwsh
+        run: ./build/installer/windows/Test-InstallerUpgrade.ps1
+
       # 将打好的三个 MSI 提取出来
       - name: Rename Artifacts for Release
         shell: pwsh

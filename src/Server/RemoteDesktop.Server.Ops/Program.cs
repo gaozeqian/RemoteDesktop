@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops;
+using RemoteDesktop.Server.Shared;
 
 // The installer, or an operator on a fresh box, runs this executable for its setup step; the server itself is not
 // started then.
@@ -15,6 +16,10 @@ var publishedWebRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var builder = Directory.Exists(publishedWebRoot)
     ? WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = publishedWebRoot })
     : WebApplication.CreateBuilder(args);
+
+// The console's live settings are next to the program on Linux and macOS, and in ProgramData on Windows (where the
+// MSI's major upgrade would otherwise delete them). Add the Windows layer before AddOps binds the options.
+ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.OpsFolder);
 
 // Same three deployment shapes as the signaling server: console, systemd unit, Windows service.
 if (OperatingSystem.IsWindows())

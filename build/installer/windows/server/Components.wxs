@@ -40,11 +40,10 @@
                             ResetPeriodInDays="1" />
       </Component>
 
-      <!-- Read at every start-up, and written by the configuration step below. Never overwritten: it carries what this
-           deployment was told (the address clients relay through, an operator's PostgreSQL connection string) and the
-           generated relay key, none of which an upgrade may put back to the built-in defaults. Removing the product
-           removes it; a repair does not put the packaged copy back over an edited one. -->
-      <Component Id="RendezvousSettings" Guid="be5f6a7b-8c9d-4e0f-9a1b-4c5d6e7f8091" NeverOverwrite="yes">
+      <!-- The shipped defaults. The live file is %ProgramData%\Remote Desktop Server\Rendezvous\appsettings.json,
+           which the MSI does not own and therefore a major upgrade does not delete. This one is a normal component:
+           an upgrade replaces it with the new defaults, which is exactly what it is for. -->
+      <Component Id="RendezvousSettings" Guid="be5f6a7b-8c9d-4e0f-9a1b-4c5d6e7f8091">
         <File Id="RendezvousAppSettingsFile" Source="$(var.SourceRoot)\Rendezvous\appsettings.json" KeyPath="yes" />
       </Component>
 
@@ -72,7 +71,7 @@
       </Component>
 
       <!-- The other half of the shared key; see the comment on the signaling server's settings above. -->
-      <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102" NeverOverwrite="yes">
+      <Component Id="RelaySettings" Guid="cf6a7b8c-9d0e-4f1a-8b2c-5d6e7f809102">
         <File Id="RelayAppSettingsFile" Source="$(var.SourceRoot)\Relay\appsettings.json" KeyPath="yes" />
       </Component>
 
@@ -102,9 +101,8 @@
                             ResetPeriodInDays="1" />
       </Component>
 
-      <!-- The console's own settings: where its database lives, what it listens on. Never overwritten, for the same
-           reason as the other two — an operator's changes and the console's history belong to the deployment. -->
-      <Component Id="OpsSettings" Guid="6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c" NeverOverwrite="yes">
+      <!-- The console's own shipped defaults. The live file is under ProgramData, next to its database. -->
+      <Component Id="OpsSettings" Guid="6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c">
         <File Id="OpsAppSettingsFile" Source="$(var.SourceRoot)\Ops\appsettings.json" KeyPath="yes" />
       </Component>
 
@@ -140,7 +138,7 @@
                                     Name="Remote Desktop Rendezvous (TCP 5080)"
                                     Description="Incoming signaling connections from Remote Desktop clients and devices."
                                     Program="[#RendezvousExeFile]" Port="5080"
-                                    Protocol="tcp" Profile="all" Scope="any" IgnoreFailure="yes" />
+                                    Protocol="tcp" Profile="all" InterfaceType="all" Scope="any" IgnoreFailure="yes" />
 
         <!-- Address reflection: the UDP exchange that tells each peer how the other one appears from the outside, which
              is what lets them try a direct connection first. -->
@@ -148,118 +146,162 @@
                                     Name="Remote Desktop Rendezvous address reflection (UDP 5081)"
                                     Description="Incoming address-reflection packets, used to find each peer's address as seen from the internet."
                                     Program="[#RendezvousExeFile]" Port="5081"
-                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+                                    Protocol="udp" Profile="all" InterfaceType="all" Scope="any" IgnoreFailure="yes" />
 
         <!-- The relay's UDP port: the traffic that could not go directly goes through here instead. -->
         <firewall:FirewallException Id="RelayUdp"
                                     Name="Remote Desktop Relay (UDP 5082)"
                                     Description="Relayed Remote Desktop traffic from devices that cannot reach each other directly."
                                     Program="[#RelayExeFile]" Port="5082"
-                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+                                    Protocol="udp" Profile="all" InterfaceType="all" Scope="any" IgnoreFailure="yes" />
       </Component>
 
     </DirectoryRef>
 
     <!--
-      The steps that need elevated rights go through the rendezvous executable, which the installer has just put in
-      place. All are deferred, run as the system, and are safe to repeat. It is the rendezvous executable that carries
-      the step (and not the relay's) because it is the one the installer has a path to and because what it writes
-      belongs to both servers: they share the key that signs the relay tickets.
+      The machine-side steps are custom actions in this package's net48 DLL rather than command lines. There are four
+      reasons, and each one is a defect the command-line version had:
 
-      They live in this fragment, next to the components, on purpose: WiX 5.0.2 drops a fragment that holds no
-      component when linking (silently), which would quietly leave the installer without its custom actions.
+        * The secrets (relay key, PostgreSQL connection string, TLS password) would otherwise be spelled out in the
+          CustomAction target, which the MSI log records, and in the child's command line, which every local user can
+          read. The DLL passes them to the child in its environment instead.
+        * The installer database's string columns are 255 characters, and the configuration line had already run out of
+          room before TLS, metrics, the configuration directory and the TLS host name were added.
+        * The step needs to do more than one thing: run the configure-system step, then register the console's nodes,
+          then leave a log that survives a rolled-back install.
+        * A child process can be run with a real argument list and its output captured, so a failure is a sentence in
+          the log rather than a 1722 from cmd.exe.
+
+      The DLL still calls the server's own configure-system step; it does not reimplement what a setting means.
     -->
-    <!--
-      These run through System32\cmd.exe instead of using the server executable as the action's own target, and they
-      ignore the exit code. Both details come from a real failed upgrade of the client installer:
+    <CustomAction Id="SetServerInstallDir"
+                  Property="SERVERINSTALLDIR" Value="[INSTALLFOLDER]" Execute="immediate" />
+    <CustomAction Id="SetServerConfigDir"
+                  Property="SERVERCONFIGDIR" Value="[CONFIGFOLDER]" Execute="immediate" />
+    <!-- Immediate, because both have to run before InstallInitialize: RemoveExistingProducts must be the very first
+         action after InstallInitialize (MSI error 2613 otherwise), and the old files must still exist when the
+         migration reads them. See the sequence comments. -->
+    <CustomAction Id="SecureConfigDirectory"
+                  BinaryRef="PageActions" DllEntry="SecureConfigDirectory"
+                  Execute="immediate" Return="check" />
+    <!-- The final half of the ACL change. Immediate actions are impersonated as the person installing, and a GUI
+         install from a double-click can run them with a filtered token; restricting the directory there would stop the
+         migration and the enumeration that used to follow. This deferred action runs as SYSTEM after the files exist,
+         so the installer user's temporary access is removed once nobody needs it. -->
+    <CustomAction Id="SetSecureConfigDirectoryFinalData"
+                  Property="SecureConfigDirectoryFinal" Value="[SERVERCONFIGDATA]"
+                  Execute="immediate" HideTarget="yes" />
+    <CustomAction Id="SecureConfigDirectoryFinal"
+                  BinaryRef="PageActions" DllEntry="SecureConfigDirectoryFinal"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="MigrateLiveSettings"
+                  BinaryRef="PageActions" DllEntry="MigrateLiveSettings"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="SetDefaultTlsHostName"
+                  BinaryRef="PageActions" DllEntry="SetDefaultTlsHostName"
+                  Execute="immediate" Return="check" />
 
-        * A type 18 action (the packaged file as the target) fails the whole installation with error 1721 when Windows
-          cannot start that file, which is what happens when an earlier version's file is waiting for a reboot because
-          a process still held it. "ignore" covers a non-zero exit code, not a failure to launch. Going through
-          cmd.exe turns every failure, including "the file is not there", into an exit code that is ignored.
-        * The work is best-effort by design: the addresses are already baked into the two appsettings.json files when
-          the installer is built, and the same step can be repeated by hand at any time, by running the rendezvous
-          executable with its configure-system command and the same arguments.
+    <!-- A deferred managed action cannot read ordinary session properties; PrepareServerData (immediate) packs them into
+         SERVERCONFIGDATA, and the three setters copy it into the property whose name is each deferred action's
+         CustomActionData. HideTarget keeps the data out of the MSI log: it contains the relay key, the PostgreSQL
+         connection string and the TLS password. -->
+    <CustomAction Id="PrepareServerData"
+                  BinaryRef="PageActions" DllEntry="PrepareServerData"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="SetConfigureServerData"
+                  Property="ConfigureServer" Value="[SERVERCONFIGDATA]"
+                  Execute="immediate" HideTarget="yes" />
+    <CustomAction Id="SetSyncLocalNodesData"
+                  Property="SyncLocalNodes" Value="[SERVERCONFIGDATA]"
+                  Execute="immediate" HideTarget="yes" />
+    <CustomAction Id="SetCleanupServerData"
+                  Property="CleanupServer" Value="[SERVERCONFIGDATA]"
+                  Execute="immediate" HideTarget="yes" />
 
-      A configuration step must never leave a half-installed product behind.
-    -->
-    <CustomAction Id="ConfigureSystem"
+    <CustomAction Id="ConfigureServer"
+                  BinaryRef="PageActions" DllEntry="ConfigureServer"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="SyncLocalNodes"
+                  BinaryRef="PageActions" DllEntry="SyncLocalNodes"
+                  Execute="deferred" Impersonate="no" Return="ignore" HideTarget="yes" />
+    <CustomAction Id="CleanupServer"
+                  BinaryRef="PageActions" DllEntry="CleanupServer"
+                  Execute="deferred" Impersonate="no" Return="ignore" HideTarget="yes" />
+
+    <!-- The services are stopped by their ServiceControl rows, but an operator who started one of the servers from a
+         console (or a deployment that runs them from a script) holds the executable open. Restart Manager refuses
+         another user's session; taskkill does not. Reports an error when there is nothing to kill, which is ignored. -->
+    <CustomAction Id="StopLeftoverProcesses"
                   Directory="SystemFolder"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system --urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --database &quot;[DATABASEPROVIDER]&quot; --database-path &quot;[DATABASEPATH]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;&quot;"
-                  Execute="deferred" Impersonate="no" Return="check" />
-
-    <!--
-      The four arguments the two command lines here have in common - the address, the relay endpoint, the key and the
-      database - set once into a property, because the certificate's line cannot afford to spell them out a second
-      time (the note under it has the numbers). The line above keeps its own copy written out in full, because it fits.
-
-      The property is declared in Package.wxs with Secure="yes", and that is what makes it readable here: a deferred
-      action is run from the installation script, past the elevation boundary, and only the properties in the secure
-      list have their values copied into that script. Without it this line and the one above would disagree - the
-      certificate's installation would configure the four values to their defaults rather than to what was passed.
-
-      What it holds is the text above, with the property values as they stand when the setter is reached; the setter
-      runs in the immediate pass, before either command line is written into the script, which is also how the
-      properties in the line above reach it.
-    -->
-    <CustomAction Id="SetConfigureArguments"
-                  Property="CONFIGUREARGUMENTS"
-                  Value="--urls &quot;[RENDEZVOUSURL]&quot; --relay-endpoint &quot;[RELAYPUBLICENDPOINT]&quot; --relay-key &quot;[RELAYSHAREDKEY]&quot; --database &quot;[DATABASEPROVIDER]&quot; --database-path &quot;[DATABASEPATH]&quot; --postgres &quot;[POSTGRESCONNECTIONSTRING]&quot;"
-                  Execute="immediate" />
-
-    <!--
-      The same command line plus the certificate, for an installation that was given one. A second action rather than
-      one command line that always carries the two arguments: the server reads an empty password as "no password", but
-      an empty string in the place of a path is a value it would have to guess about, so the certificate's arguments
-      are only put on a command line that has a path to put there. Which of the two runs is decided by
-      TLSCERTIFICATEPATH: "auto" (what the package defaults to) is this installer's "there is no certificate", and
-      anything else that is not empty is a path.
-
-      The four arguments the two lines share are read out of [CONFIGUREARGUMENTS] here, set by the action just above -
-      see the note there for why that property has to be secure for this line to receive anything at all.
-
-      They are read from a property because of a limit rather than for brevity: a column of the installer database
-      holds 265 characters (ICE03 calls anything longer a string overflow), this line with all six arguments written
-      out is 332, and even with the installed file's own key standing in for the path - [#RendezvousExeFile] instead
-      of [INSTALLFOLDER]Rendezvous\... - it is 291, which does not fit either. With the property standing in for the
-      four shared ones it is 216, and the certificate's own two stay spelled out here, where a reader comes looking
-      for them.
-    -->
-    <CustomAction Id="ConfigureSystemWithTls"
-                  Directory="SystemFolder"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]Rendezvous\RemoteDesktop.Server.Rendezvous.exe&quot; --configure-system [CONFIGUREARGUMENTS] --tls-certificate &quot;[TLSCERTIFICATEPATH]&quot; --tls-password &quot;[TLSCERTIFICATEPASSWORD]&quot;&quot;"
-                  Execute="deferred" Impersonate="no" Return="check" />
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c taskkill /f /im RemoteDesktop.Server.Rendezvous.exe /im RemoteDesktop.Server.Relay.exe /im RemoteDesktop.Server.Ops.exe"
+                  Execute="immediate" Return="ignore" />
 
     <InstallExecuteSequence>
+      <!-- Before validation, because that is when Windows decides whether a restart will be needed. -->
+      <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
       <!--
-        Fresh installs only: "NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed".
+        The live settings are kept in %ProgramData%\Remote Desktop Server, outside the MSI's file table. The first
+        upgrade from a package that kept them under Program Files copies them across *before* RemoveExistingProducts
+        deletes the old product's files; every later upgrade finds the destination there and leaves it alone.
+        SecureConfigDirectory runs first so the migrated files land in a directory only SYSTEM, Administrators and the
+        installing user can read (they contain the relay key and, with PostgreSQL, its password). The installing user is
+        there because a GUI install's immediate actions can run with a filtered token; SecureConfigDirectoryFinal,
+        scheduled after the files are installed and running as SYSTEM, removes that access again.
 
-        The three settings files are NeverOverwrite, so an upgrade keeps what the operator configured. Running these
-        actions on top would put the package's built-in defaults back - plain http on 0.0.0.0, and the relay endpoint
-        guessed from the machine's first non-loopback address - silently downgrading an upgraded server's TLS and
-        possibly redirecting its relay address. "Not a removal" and "not an upgrade" are different questions:
-        UPGRADINGPRODUCTCODE is set while the *old* product is being removed, which is why an earlier condition using
-        it ran the action after the old files were gone and failed the upgrade with 1603. WIX_UPGRADE_DETECTED is set
-        on the new product's install, which is the side this action runs on.
-
-        The last part of each condition is not about upgrades at all: it picks which of the two command lines runs.
-        The first is for TLSCERTIFICATEPATH saying "auto" (what the package defaults to) or holding nothing at all,
-        the second for it naming a file; between them every value it can have is covered, so a fresh install neither
-        configures twice nor leaves the four shared values at their defaults. It reads only properties this installer
-        always sets, never one the installer engine sets by itself, which is what UPGRADINGPRODUCTCODE was.
+        Both run in the immediate sequence, before InstallInitialize, because RemoveExistingProducts has to be the
+        first action after InstallInitialize (otherwise Windows Installer fails with error 2613) and the old files are
+        gone by the time a deferred action could run. The package is per-machine and elevated, so writing ProgramData
+        here is allowed.
       -->
-      <!-- The property the second line reads is put in place immediately before it, and this is the only ordering that
-           matters among the three: the setter runs in the immediate pass, the two command lines are deferred and are
-           built (with the property as it stands then) as their turn comes. -->
-      <Custom Action="SetConfigureArguments"
-              Before="ConfigureSystem"
-              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
-      <Custom Action="ConfigureSystem"
+      <!-- SetServerConfigDir also runs on uninstall: CleanupServer needs the configuration directory, and a deferred
+           action cannot read it from the session. The other values only matter when the machine is being configured,
+           but PrepareServerData packs them in every case (empty ones stay empty). -->
+      <Custom Action="SetServerInstallDir"
+              Before="PrepareServerData"
+              Condition="NOT REMOVE" />
+      <Custom Action="SetServerConfigDir"
+              Before="PrepareServerData" />
+      <Custom Action="PrepareServerData"
+              Before="SetConfigureServerData" />
+      <Custom Action="SetConfigureServerData"
+              Before="SetSyncLocalNodesData" />
+      <Custom Action="SetSyncLocalNodesData"
+              Before="SetCleanupServerData" />
+      <Custom Action="SetCleanupServerData"
+              Before="SecureConfigDirectory" />
+      <Custom Action="SecureConfigDirectory"
+              Before="MigrateLiveSettings"
+              Condition="NOT REMOVE" />
+      <Custom Action="MigrateLiveSettings"
+              Before="InstallInitialize"
+              Condition="WIX_UPGRADE_DETECTED" />
+      <Custom Action="SetSecureConfigDirectoryFinalData"
+              Before="SecureConfigDirectoryFinal"
+              Condition="NOT REMOVE" />
+      <Custom Action="SecureConfigDirectoryFinal"
               After="InstallFiles"
-              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed AND (TLSCERTIFICATEPATH=&quot;auto&quot; OR TLSCERTIFICATEPATH=&quot;&quot;)" />
-      <Custom Action="ConfigureSystemWithTls"
-              After="ConfigureSystem"
-              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed AND TLSCERTIFICATEPATH&lt;&gt;&quot;auto&quot; AND TLSCERTIFICATEPATH&lt;&gt;&quot;&quot;" />
+              Condition="NOT REMOVE" />
+
+      <!-- First install only. The properties are first-install inputs; an upgrade preserves the live files, matching
+           how the Linux and macOS packages ask for their settings only on a first install. -->
+      <Custom Action="SetDefaultTlsHostName"
+              Before="ConfigureServer"
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
+      <Custom Action="ConfigureServer"
+              After="InstallFiles"
+              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
+
+      <!-- An upgrade keeps the console's node table but may change the scheme (http <-> https); the two rows the
+           installer created are updated, an operator's own rows and deleted rows are left alone. -->
+      <Custom Action="SyncLocalNodes"
+              After="InstallFiles"
+              Condition="NOT REMOVE AND WIX_UPGRADE_DETECTED" />
+
+      <!-- Uninstall: the services are already stopped by their ServiceControl rows. Data and the generated certificate
+           go only when the operator asked for it. -->
+      <Custom Action="CleanupServer"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEDATA=&quot;1&quot;" />
     </InstallExecuteSequence>
 
     <!-- ==========================================================================================================
@@ -302,11 +344,11 @@
 
     <UI>
 
-    <Dialog Id="ServerSettingsDlg" Width="370" Height="364" Title="[ProductName] 安装向导">
+    <Dialog Id="ServerSettingsDlg" Width="370" Height="400" Title="[ProductName] 安装向导">
       <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器设置" />
-      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下三项都可以留空，装完也能改（见安装目录下的 Set-ServerConfiguration.ps1）。" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下都可以留空，装完也能改（见安装目录下的 Set-ServerConfiguration.cmd）。" />
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
-      <Control Id="BottomLine" Type="Line" X="0" Y="328" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="368" Width="370" Height="0" />
 
       <!-- The database. This box is for the advanced case — a PostgreSQL server that already exists — and it arrives
            empty on purpose: an empty box means "decide for this machine", which now starts a SQLite database in
@@ -334,9 +376,14 @@
         </RadioButtonGroup>
       </Control>
 
+      <!-- The names the certificate has to answer. It only matters when the certificate is generated; a file the
+           operator supplies already has its own SANs. Empty means the machine name. -->
+      <Control Id="TlsHostLabel" Type="Text" X="34" Y="230" Width="312" Height="12" NoPrefix="yes" Text="证书域名（客户端拨的 DNS 名或 IP，逗号分隔；留空用本机名）" />
+      <Control Id="TlsHostEdit" Type="Edit" X="34" Y="242" Width="316" Height="16" Property="TLSCERTIFICATEHOSTNAME" Text="[TLSCERTIFICATEHOSTNAME]" />
+
       <!-- Two lines, one field each: on one line the password box came out about thirty pixels wide, which is not a
            field anybody can type a password into. -->
-      <Control Id="TlsPathLabel" Type="Text" X="34" Y="230" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
+      <Control Id="TlsPathLabel" Type="Text" X="34" Y="264" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
       <!-- Bound to its own property, and not to the one the install reads, so that nothing the install needs can show
            up in a box labelled "path". TLSCERTIFICATEPATH holds a word rather than a path whenever TLS is off or the
            certificate is to be generated, and this box used to display it: choosing "generate" and pressing Next left
@@ -346,7 +393,7 @@
            is bound to is defined, and a property with no value never reaches the property table, so an empty one
            would leave this box greyed. A space is invisible in a text box, and the server reads a value of nothing but
            spaces as "no certificate" - it already did, for the properties it reads. -->
-      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="242" Width="240" Height="16" Property="TLSCERTIFICATEFILE" />
+      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="276" Width="240" Height="16" Property="TLSCERTIFICATEFILE" />
       <!-- Windows Installer's own browse dialog picks folders, not files, so this button runs our own action, which
            puts the chosen path into the property the page shows.
 
@@ -366,29 +413,36 @@
            was tried: the installer refuses with "Error 2856: Creating a second copy of the dialog ServerSettingsDlg"
            and the wizard dies on the spot, so the step is not a shortcoming of this button but the shortest way round
            a rule. It is also why none of the dialogs in WiX's own interface ever names itself. -->
-      <Control Id="TlsBrowseButton" Type="PushButton" X="278" Y="242" Width="72" Height="16" Text="浏览…">
+      <Control Id="TlsBrowseButton" Type="PushButton" X="278" Y="276" Width="72" Height="16" Text="浏览…">
         <Publish Event="DoAction" Value="BrowseForCertificate" Order="1" />
         <!-- Only when a file was actually chosen: nothing changed if the file dialog was cancelled, so there is nothing
              to show and no reason to interrupt. -->
         <Publish Event="NewDialog" Value="CertificateChosenDlg" Order="2" Condition="TLSCERTIFICATECHOSEN = &quot;1&quot;" />
       </Control>
-      <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="264" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
+      <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="298" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
       <!-- A plain box, showing what is typed. It was a password box, which draws a dot per character, and that made the
            field impossible to leave looking empty: the property has to hold something for the box to be usable at all,
            so it held a word, so it showed four dots, and the page appeared to have been filled in already. Now it holds
            a space, which reads as nothing, and the value is trimmed on the way out so that typing a real password after
            it still works. The cost is that the password is on screen, and in the installer's log like any other
            command-line value — which is why a certificate protected by where the file lives is still the better one. -->
-      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="276" Width="316" Height="16" Property="TLSCERTIFICATEPASSWORD" />
-      <Control Id="TlsNote" Type="Text" X="20" Y="298" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接。" />
+      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="310" Width="316" Height="16" Property="TLSCERTIFICATEPASSWORD" />
+      <Control Id="TlsNote" Type="Text" X="20" Y="332" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接；证书里的域名要覆盖客户端拨的名字。" />
 
-      <Control Id="Back" Type="PushButton" X="180" Y="337" Width="56" Height="17" Text="!(loc.WixUIBack)">
+      <Control Id="Back" Type="PushButton" X="180" Y="377" Width="56" Height="17" Text="!(loc.WixUIBack)">
         <Publish Event="NewDialog" Value="InstallDirDlg" />
       </Control>
-      <Control Id="Next" Type="PushButton" X="236" Y="337" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+      <Control Id="Next" Type="PushButton" X="236" Y="377" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
         <!-- What is in the boxes is tidied up on the way out — the password trimmed, and any box left empty put back
              to the space the page needs in order to be able to show it. See NormalizeSettings. -->
         <Publish Event="DoAction" Value="NormalizeSettings" Order="1" Condition="1" />
+
+        <!-- "Use an existing certificate file" with no file must not silently fall through to plain http. The dialog
+             is shown instead of the mapping/transition below, whose conditions then stay false and keep the wizard on
+             this page until the user picks a file or chooses another TLS option. -->
+        <Publish Event="SpawnDialog" Value="CertificateMissingDlg" Order="2"
+                 Condition="TLSCHOICE = &quot;file&quot; AND TLSCERTIFICATEFILE = &quot; &quot;" />
+
         <!-- The radio group and what the install acts on are two different properties: the page collects a choice in
              TLSCHOICE and the file in TLSCERTIFICATEFILE, and the deferred action reads TLSCERTIFICATEPATH, which is
              either a file or the word the server reads as "no certificate" or "make one". These lines are the
@@ -396,12 +450,14 @@
              named, and there is no event called SetProperty. Written that way the installer reports "Error 2812: The
              event SetProperty is not recognized" and dies on this button, but only when one of these conditions is
              met, so it stayed hidden while the page was being used with a certificate file chosen. -->
-        <Publish Event="[TLSCERTIFICATEPATH]" Value="auto" Order="2" Condition="TLSCHOICE = &quot;none&quot;" />
-        <Publish Event="[TLSCERTIFICATEPATH]" Value="generate" Order="3" Condition="TLSCHOICE = &quot;generate&quot;" />
-        <Publish Event="[TLSCERTIFICATEPATH]" Value="[TLSCERTIFICATEFILE]" Order="4" Condition="TLSCHOICE = &quot;file&quot;" />
-        <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="5" Condition="1" />
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="auto" Order="3" Condition="TLSCHOICE = &quot;none&quot;" />
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="generate" Order="4" Condition="TLSCHOICE = &quot;generate&quot;" />
+        <Publish Event="[TLSCERTIFICATEPATH]" Value="[TLSCERTIFICATEFILE]" Order="5"
+                 Condition="TLSCHOICE = &quot;file&quot; AND TLSCERTIFICATEFILE &lt;&gt; &quot; &quot;" />
+        <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="6"
+                 Condition="TLSCHOICE &lt;&gt; &quot;file&quot; OR TLSCERTIFICATEFILE &lt;&gt; &quot; &quot;" />
       </Control>
-      <Control Id="Cancel" Type="PushButton" X="304" Y="337" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+      <Control Id="Cancel" Type="PushButton" X="304" Y="377" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
         <Publish Event="SpawnDialog" Value="CancelDlg" />
       </Control>
     </Dialog>
@@ -422,8 +478,22 @@
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
       <Control Id="BottomLine" Type="Line" X="0" Y="84" Width="370" Height="0" />
       <!-- Two lines tall: a path is easily longer than the dialog is wide, and a path cut off mid-way is worse than
-           no confirmation at all, because it looks like a different file. -->
-      <Control Id="ChosenPath" Type="Text" X="25" Y="52" Width="330" Height="26" Transparent="yes" NoPrefix="yes" Text="[TLSCERTIFICATEPATH]" />
+           no confirmation at all, because it looks like a different file. It shows TLSCERTIFICATEFILE, which Browse
+           has just set; TLSCERTIFICATEPATH is only mapped from it when Next is pressed. -->
+      <Control Id="ChosenPath" Type="Text" X="25" Y="52" Width="330" Height="26" Transparent="yes" NoPrefix="yes" Text="[TLSCERTIFICATEFILE]" />
+      <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+        <Publish Event="NewDialog" Value="ServerSettingsDlg" />
+      </Control>
+    </Dialog>
+
+    <!-- Shown when "use an existing certificate file" was chosen and no file was. Without it the mapping would send
+         the space the box holds as the path, the server would read it as "no certificate", and the installation
+         would quietly serve plain http. -->
+    <Dialog Id="CertificateMissingDlg" Width="370" Height="120" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}还没有选择证书" />
+      <Control Id="Description" Type="Text" X="25" Y="26" Width="330" Height="30" Transparent="yes" NoPrefix="yes" Text="已选择“使用已有的证书文件”，但没有指定文件。请用“浏览…”选择，或改回其他 TLS 选项。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="84" Width="370" Height="0" />
       <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
         <Publish Event="NewDialog" Value="ServerSettingsDlg" />
       </Control>

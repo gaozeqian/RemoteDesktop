@@ -9,7 +9,10 @@
          shape release.yml and verify-packages look for. -->
     <OutputName>RemoteDesktop-Server-Windows-x64-$(ProductVersion)</OutputName>
     <OutputType>Package</OutputType>
-    <SuppressIces>ICE61</SuppressIces>
+    <!-- ICE61: same-version upgrades are deliberate. ICE63: the config-directory and settings-migration actions run
+         between InstallInitialize and RemoveExistingProducts on purpose - they have to secure/copy the old product's
+         settings before that action deletes them. Both are deferred; a failure stops the upgrade. -->
+    <SuppressIces>ICE61;ICE63</SuppressIces>
   </PropertyGroup>
 
   <PropertyGroup>

@@ -103,7 +103,6 @@ const string ServiceName = "RemoteDesktopHost";
 if (OperatingSystem.IsWindows() &&
     SetupCommands.TryRun(
         args,
-        AppContext.BaseDirectory,
         DataDirectory.ForMachine(),
         Console.Out,
         out var setupExitCode))
@@ -123,13 +122,15 @@ builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProvider
 
 var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForMachine();
 
-// The same layering the client does, and the same file: off Windows the controlled end runs as the person whose
-// desktop it serves, so there is one settings file between them rather than the two accounts Windows has. On macOS
-// the installer's machine-wide file sits between the shipped defaults and the person's own file, because the shipped
-// file is inside the signed bundle and cannot be edited in place.
+// The machine-wide file the installer writes sits between the shipped defaults and the person's own file. On macOS it
+// is /Library/Application Support/RemoteDesktop because the shipped file is inside the signed bundle; on Windows it is
+// %ProgramData%\RemoteDesktop because the MSI's major upgrade removes the old product's files from Program Files.
+MachineSettings.AddConfigurationSource(builder.Configuration);
+
+// Off Windows the controlled end runs as the person whose desktop it serves, so there is one settings file between
+// them rather than the two accounts Windows has.
 if (!OperatingSystem.IsWindows())
 {
-    MachineSettings.AddConfigurationSource(builder.Configuration);
     UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
 }
 

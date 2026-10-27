@@ -63,8 +63,8 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 
 包把三个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops}`，三个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
-升级不会覆盖运维改过的东西。这是相对 Windows 的一处有意改进：MSI 只能把 `appsettings.json` 写在
-`Program Files` 里，然后想办法绕开同一件事。
+升级不会覆盖运维改过的东西。Windows 现在也把 live settings 放在 `%ProgramData%\Remote Desktop Server`，
+三平台在这一点上一致。
 
 安装过程会问两组问题（`dpkg -i` 也会问，不只是 `apt install`）：
 
@@ -129,17 +129,29 @@ msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
 
 它做的事：把三个服务器（信令、中继与监控台，各自自包含）装进 `%ProgramFiles%\Remote Desktop Server`，
 注册三个自动启动、崩溃后自动重启的服务（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`），
-加三条**只针对两个网络服务器**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好信令与中继的两份
-`appsettings.json`。设置是由信令服务器自己写进去的（`--configure-system`），它把做过什么记在安装目录的
-`server-setup.log` 里——安装程序不会给任何人看这一步的输出。
+加三条**只针对两个网络服务器**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好信令与中继的设置。
+**真正生效的设置、数据库、TLS 公钥和 `server-setup.log` 在 `%ProgramData%\Remote Desktop Server\`**，
+不在 Program Files：MSI 的大版本升级会先删除旧产品在 Program Files 里的文件，放在那里的
+`appsettings.json` 会在每次升级时丢失。ProgramData 下的目录只有 SYSTEM 和 Administrators 能读。
+设置由信令服务器自己写入（`--configure-system`），它把做过什么记在
+`%ProgramData%\Remote Desktop Server\server-setup.log` 里——安装程序不会给任何人看这一步的输出。
 
 监控台（Ops）没有安装属性：它默认只监听 `127.0.0.1:5090`，数据库在
-`%ProgramData%\Remote Desktop Server\ops.db`。**它没有默认账号**，装完要自己建第一个管理员（见 §二 10）：
+`%ProgramData%\Remote Desktop Server\ops.db`。安装时会自动把本机信令/中继登记为两个节点并打开信令的
+`/metrics`，新装环境不需要手工添加节点。本机节点固定使用回环地址（`https://127.0.0.1:5080` /
+`http://127.0.0.1:5083`）；没有配置 `Ops:NodeToken` 时，服务端的 `/metrics` 和 `/internal/*` 只接受回环调用，
+用机器名或局域网地址访问会返回 401。**它没有默认账号**，装完要自己建第一个管理员（见 §二 10）：
 
 ```powershell
 & "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
 Restart-Service RemoteDesktopOps
 ```
+
+**以上命令要在“管理员 PowerShell”里执行。** 第一条管理员命令要读写 `%ProgramData%` 下只有
+SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需要管理员令牌；普通窗口会报
+“无法打开计算机“.”上的 RemoteDesktopOps 服务”。第一条默认读写
+`%ProgramData%\Remote Desktop Server\Ops\appsettings.json`，和服务是同一份配置；需要指到别处时加
+`--config-directory`。
 
 | 属性 | 默认 | 说明 |
 |---|---|---|
@@ -149,8 +161,13 @@ Restart-Service RemoteDesktopOps
 | `DATABASEPROVIDER` | `auto` | 设备代码存在哪：`auto` / `none` / `postgres` / `sqlite`。`auto` = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库 |
 | `DATABASEPATH` | 空 | SQLite 文件。空 = `%ProgramData%\Remote Desktop Server\rendezvous.db` |
 | `POSTGRESCONNECTIONSTRING` | `auto` | PostgreSQL 连接串。`auto` 或空 = 不用 PostgreSQL，由 `DATABASEPROVIDER` 决定 |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到安装目录 `tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.ps1 -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到 `%ProgramData%\Remote Desktop Server\tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.cmd -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `TLSCERTIFICATEHOSTNAME` | 机器名 | 生成证书时写进 SAN 的 DNS 名/IP，逗号分隔。客户端用域名或 NAT 地址访问时必须填，否则即使信任了证书也会名称不匹配 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
+| `REMOVEDATA` | `0` | 卸载时设成 `1` 才删除 `%ProgramData%\Remote Desktop Server` 下的数据库、设置与生成的证书 |
+
+**这些属性只在第一次安装时生效。** 升级/同版本重装会保留 ProgramData 下的现有设置（与 Linux/macOS 的
+“升级不重新询问”一致）；要改请用 `Set-ServerConfiguration.cmd`（见“装完之后改配置”）。
 
 四件必须知道的事：
 
@@ -163,9 +180,10 @@ Restart-Service RemoteDesktopOps
 - **改了端口就要自己改防火墙规则**：三条规则是按 5080/5081/5082 开的，`RENDEZVOUSURL` 或中继端口改了
   它们就对不上。
 
-升级：同版本号重装即可，**`appsettings.json` 不会被覆盖**，手改过的值和已经生成的密钥都保留。
-卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；`server-setup.log` 不在安装清单里，
-会留在目录里，删不删随你。
+升级：同版本号重装即可，**`%ProgramData%\Remote Desktop Server` 下的设置、数据库和证书都保留**，
+手改过的值和已经生成的密钥不会被包内默认值覆盖。
+卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；默认保留 ProgramData 下的数据与生成的证书
+（重装后设备码不变）。要连同数据与证书一起删除：`msiexec /x ... /qn REMOVEDATA=1`。
 
 #### macOS
 
@@ -226,7 +244,7 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
   别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
 - **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist、安装目录、
   文档目录与安装回执；`--keep-settings` 可只删程序）。
-- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.ps1` 一一对应 ——
+- **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.cmd` 一一对应 ——
   同样的选项，跑的是同一个 `--configure-system` 步骤；它现在会重启**三个**守护进程（数据库 provider 与
   监控台共享）。
 
@@ -241,24 +259,27 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 
 安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
 
-- **`Set-ServerConfiguration.ps1`** —— 推荐的路子。在**管理员** PowerShell 里给它想改的项即可，没给的保持不动；
-  它写完之后会重启两个服务让设置生效：
+- **`Set-ServerConfiguration.cmd`** —— 推荐的路子。在**管理员**命令提示符或 PowerShell 里给它想改的项即可，
+  没给的保持不动；它写完之后会登记/更新监控台的本机节点，然后重启三个服务让设置生效：
 
   ```powershell
   cd "C:\Program Files\Remote Desktop Server"
-  .\Set-ServerConfiguration.ps1 -DatabaseProvider sqlite
-  .\Set-ServerConfiguration.ps1 -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
-  .\Set-ServerConfiguration.ps1 -TlsGenerate            # 本机生成自签名证书并切 https
-  .\Set-ServerConfiguration.ps1 -RelayPublicEndpoint 203.0.113.10:5082
-  .\Set-ServerConfiguration.ps1 -DatabaseProvider none -NoRestart   # 回到不用数据库，先不重启
+  .\Set-ServerConfiguration.cmd -DatabaseProvider sqlite
+  .\Set-ServerConfiguration.cmd -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
+  .\Set-ServerConfiguration.cmd -TlsGenerate -TlsHostName rd.example.com   # 生成自签证书并切 https
+  .\Set-ServerConfiguration.cmd -RelayPublicEndpoint 203.0.113.10:5082
+  .\Set-ServerConfiguration.cmd -DatabaseProvider none -NoRestart   # 回到不用数据库，先不重启
   ```
 
-  它会调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
-  所以两者的行为不会分叉；做过什么会追加到 `server-setup.log`。拿不准就先加 `-WhatIf` 看一眼。
+  `.cmd` 只是用 `-ExecutionPolicy Bypass` 启动旁边的 `.ps1`，所以 Windows 11 客户端默认的 Restricted 策略
+  不会挡住它；也可以直接 `powershell -ExecutionPolicy Bypass -File .\Set-ServerConfiguration.ps1 ...`。
+  它调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
+  所以两者的行为不会分叉；做过什么会追加到 `%ProgramData%\Remote Desktop Server\server-setup.log`。
+  拿不准就先加 `-WhatIf` 看一眼（不打印口令）。
 - **`how-to-configure.txt`** —— 同一件事的短说明，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。
-- 两个 `appsettings.json`（`Rendezvous\` 与 `Relay\`）—— 也可以直接改，改完重启对应服务。
-  它们在升级时不会被覆盖，所以手改的值会保留。**注意它们在安装目录里，本机任何用户都能读**：
-  带口令的连接串放这儿，等于本机所有用户都能看到。
+- 三份 `appsettings.json`（`Rendezvous\`、`Relay\`、`Ops\`）在
+  `%ProgramData%\Remote Desktop Server\` 下 —— 也可以直接改，改完重启对应服务。
+  它们在升级时不会被覆盖，所以手改的值会保留；目录只有 SYSTEM 与 Administrators 能读。
 
 ### 数据库怎么选
 
@@ -302,7 +323,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 
 
 三个服务端各自一个子目录，因为它们是三个程序，装在同一台机器上时目录不能混。
 `build/installer/windows/server/Build-ServerInstaller.ps1` 用的就是这个布局（见它的 `$PublishDirectory` 与
-`-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.ps1`、`how-to-configure.txt`
+`-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.cmd`/`.ps1`、`how-to-configure.txt`
 与信令/中继的两份 `appsettings.json` 也在这一层；控制台自己那份在 `Ops\appsettings.json`。
 
 （Linux/macOS 把 `-r win-x64` 换成 `linux-x64` / `osx-arm64` 等，并把 `artifacts/app/windows/` 里的 `windows`
@@ -435,6 +456,10 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 
 > 把一张自签证书装进受信任根，等于**持有它私钥的人可以在那些机器上冒充任何服务器**。私钥（.pfx）只放在
 > 服务器上，别外传；证书换新时，客户端机器要跟着换。
+
+也可以在安装时选择服务器证书（见 §四）：那条路不会修改系统受信任根，而是把公钥固定到
+`%ProgramData%\RemoteDesktop\certificates\signaling.cer`，只信任这一个服务器证书，范围比装进根证书更窄。
+两种方式可以并存；`-ServerCertificate` 仍然适合希望整台机器信任该自签 CA 的部署。
 
 ### 5. 公网上的限额
 
@@ -835,38 +860,60 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 都会在打包前失败。之后 GitHub Actions 拉三个平台各跑测试、打包，几分钟后您的 Releases 页面会出现**九个**包，
 名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如 `RemoteDesktop-Client-Windows-x64-v1.0.0.msi`）。
 
-服务器地址是**编进包里的**，所以同一个 Tag 用不同地址出包没有意义：要换地址就出新的 Tag。
+服务器地址现在可以在安装时填写；构建时给的 `-RendezvousUri` 只是安装页和静默安装的默认值。
 
 ## 四、部署客户端 / 被控端（MSI）
 
-### 1. 构建安装包时带上你的服务器地址
+### 1. 构建安装包时给出默认服务器地址
 
-先按 §八 把包装出来。**构建时务必给 `-RendezvousUri`**：不加时用的是开发默认值
-`ws://127.0.0.1:5080/ws`，脚本会给出警告——**这样装出来的机器只能被服务器所在的机器连**。
+先按 §八 把包装出来。**构建时最好给 `-RendezvousUri`**：不加时默认是
+`ws://127.0.0.1:5080/ws`，脚本会给出警告。安装时可以在图形界面第一页改，或者给静默安装传
+`RENDEZVOUSURI`。
 
 ### 2. 安装
 
-下面的 `<版本>` 同样是四段版本（`Directory.Build.props` 的三段加 `.0`，例如 `1.0.0.0`），以实际产物文件名为准：
+下面的 `<版本>` 同样是四段版本（`Directory.Build.props` 的三段加 `.0`，例如 `1.0.0.0`），以实际产物文件名为准。
+图形界面会先问服务器地址；地址是 `wss://` 且服务器使用自签名证书时，再选择它的公钥证书。host 包随后还会问无人值守密码。
 
 ```powershell
 # 图形界面（推荐给一般用户）
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi
 
-# 静默安装，指定服务器地址
+# 静默安装，明文 ws://
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+
+# 静默安装，wss:// + 自签名服务器证书（PEM/DER 公钥）
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws" SERVERCERTIFICATEPATH="C:\certs\signaling.cer"
+
+# wss:// 使用公开 CA 签发的证书：不要传 SERVERCERTIFICATEPATH
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws"
 
 # 静默安装到别的目录
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
 ```
 
+`SERVERCERTIFICATEPATH` 只在地址是 `wss://` 时使用，且应指向**公钥**（`.cer`/`.crt`/`.pem`/`.der`，PEM 或 DER）。
+安装器只把公钥导出到 `%ProgramData%\RemoteDesktop\certificates\signaling.cer`，在
+`%ProgramData%\RemoteDesktop\appsettings.json` 里写 `Transport:RendezvousCertificatePath`，**不会修改系统信任库**，
+也不会把源文件里的私钥复制过去。地址是 `ws://` 时即使传了证书也不会导入；路径不是绝对路径、文件不存在或不是可读的
+PEM/DER 证书时安装会失败。使用公开 CA 证书时留空即可，客户端走系统信任链。
+
 只做被控端、不需要客户端窗口的机器，装 `RemoteDesktop-Host-Windows-x64-<版本>.msi`：同样的服务与会话 Agent、同样的
-`RENDEZVOUSURI` 属性，只是没有客户端与开始菜单项。它和客户端包装在同一个目录、用同一个 `RemoteDesktopHost`
-服务与 `%ProgramData%\RemoteDesktop` 设备身份，所以**一台机器只装其中一个**：想同时具备"控制别人"与"被别人
-控制"两种角色，只装**客户端**包就够了（它本来就带被控端）；Host 包是给"只能被控、不允许控制别人"的机器用的。
-装第二个时安装程序会明确拒绝，先卸掉已有的那个再装。
+`RENDEZVOUSURI`/`SERVERCERTIFICATEPATH` 属性，只是没有客户端与开始菜单项。它和客户端包装在同一个目录、用同一个
+`RemoteDesktopHost` 服务与 `%ProgramData%\RemoteDesktop` 设备身份，所以**一台机器只装其中一个**：想同时具备
+"控制别人"与"被别人控制"两种角色，只装**客户端**包就够了（它本来就带被控端）；Host 包是给"只能被控、不允许控制
+别人"的机器用的。装第二个时安装程序会明确拒绝，先卸掉已有的那个再装。
+
+host 没有安装后的窗口，所以**服务器地址、TLS 证书和无人值守密码都在安装程序里设置**：连接页问地址和证书，下一页问
+密码。安装期设置对 **host** 尤其重要；之后改地址可以再运行安装程序（图形界面会在连接页带出当前值），或手工运行
+`RemoteDesktop.HostService.exe --configure-system --rendezvous ...`，再重启服务。
 
 ```powershell
+# host，明文
 msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+
+# host，wss + 自签名服务器证书 + 无人值守密码
+msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws" SERVERCERTIFICATEPATH="C:\certs\signaling.cer" FIXEDPASSWORD="<至少 8 位>"
 ```
 
 安装完成后：
@@ -880,8 +927,9 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://1
 
 按顺序查：
 
-1. **服务器地址对不对**：`C:\Program Files\RemoteDesktop\appsettings.json` 里的 `Transport:RendezvousUri`。
-   客户端界面在连不上时也会把它显示出来，并给出提示。
+1. **服务器地址对不对**：`C:\ProgramData\RemoteDesktop\appsettings.json` 里的 `Transport:RendezvousUri`。
+   客户端界面在连不上时也会把它显示出来，并给出提示。自签名证书固定的路径是
+   `Transport:RendezvousCertificatePath`，指向 `%ProgramData%\RemoteDesktop\certificates\signaling.cer`。
 2. **服务器在不在**：在服务器上 `curl http://127.0.0.1:5080/health`，在客户端这台机器上
    `curl http://<服务器>:5080/health`（把地址换成 5080 端口的 http 形式）。连不上就是网络或防火墙问题。
 3. **改了配置要重启服务**：`Restart-Service RemoteDesktopHost`（配置只在启动时读一次）。
@@ -896,7 +944,7 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://1
 ### 4. 升级与卸载
 
 ```powershell
-# 升级（保留设备身份、日志和服务器地址；服务器地址以安装包里的为准）
+# 升级（保留设备身份、日志和 ProgramData 下的服务器地址）
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 
 # 卸载（保留设备身份和日志，重装后设备代码不变）
@@ -906,9 +954,15 @@ msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn REMOVEDATA=1
 ```
 
-**升级前最好先退出客户端**。安装包会把残留的 `RemoteDesktop.Client.exe` 和 `RemoteDesktop.SessionAgent.exe` 关掉，
-但这一步排在"删除旧版本文件"之后（WiX 的顺序），所以如果客户端正在运行时升级，旧文件可能被动等待重启替换，
-个别文件要重启后才生效。退出客户端再升级就没有这个问题：
+- **图形界面升级**：连接页会带出当前地址和已固定的证书，可以改；离开这一页后安装程序才会应用新值。
+- **静默升级**：不运行界面，现有地址、证书和设备身份都保留；`RENDEZVOUSURI`/`SERVERCERTIFICATEPATH` 只在全新安装时
+  或图形界面升级时生效。要换自签名证书（例如服务器证书续期后），用**新的安装包**（新版本或至少一次新的构建，具有新的
+  ProductCode）的图形界面重新运行，在连接页选择新的公钥；同一个 MSI 的修复安装不会重新走连接页。也可以先卸载再用新参数安装。
+- 卸载默认保留 `%ProgramData%\RemoteDesktop`（地址、证书固定和设备身份）；`REMOVEDATA=1` 会一并删除。
+
+**升级前最好先退出客户端**。安装包会在 `InstallValidate` 之前把残留的 `RemoteDesktop.Client.exe` 和
+`RemoteDesktop.SessionAgent.exe` 关掉，所以正常升级是普通的文件替换；但客户端正在运行时，个别文件仍可能
+被动等待重启替换。退出客户端再升级就没有这个问题：
 
 ```powershell
 Get-Process RemoteDesktop.Client -ErrorAction SilentlyContinue | Stop-Process
@@ -1293,7 +1347,8 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 # 产出 artifacts/installer/windows/RemoteDesktop-Server-Windows-x64-<版本>.msi
 ```
 
-打包脚本做四件事：发布可执行文件（自包含、ReadyToRun）→ 生成 WiX 文件清单 → 编译 MSI → 自动签名，
+打包脚本做四件事：发布可执行文件（自包含；client/host 用 ReadyToRun，server 不用）→ 生成 WiX 文件清单 →
+编译 MSI → 自动签名，
 最后**不安装就直接检查包内容**：`InstallerPackageTests` / `HostInstallerPackageTests` /
 `ServerInstallerPackageTests` 打开 MSI 数据库核对载荷、服务、防火墙规则、开始菜单、自定义操作和属性，
 缺什么就报错。
@@ -1307,17 +1362,19 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
   不是待办事项（当前内容是完整的）。
 - `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
 - **签名是自动的**，细节见 [`build/signing/README.md`](../../build/signing/README.md)。
-- 安装时把服务器地址写进 `appsettings.json`；这个文件在升级时**不会被覆盖**，所以就地改过的地址会保留。
-  静默安装可以覆盖：`msiexec /i ... /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
+- 安装时把服务器地址写进 `%ProgramData%\RemoteDesktop\appsettings.json`；这个文件不在 MSI 的文件表里，
+  升级时**不会被覆盖**，所以就地改过的地址会保留。安装命令行的 `RENDEZVOUSURI` 只在**第一次安装**时生效；
+  要改已装好的机器，用客户端的「修改服务器地址」（host 包用命令行 `--configure-system`）。
+  静默首装可以给：`msiexec /i ... /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
 
 > **WiX 版本陷阱。** 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持）。
 > 改动 `build/installer/windows/client` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
 > 自定义操作和安装序列要放在有组件的那一段里，否则打出来的包看着正常却什么都没做——
 > 上面那个包内容检查就是为了这个。
 
-**打包脚本必须用 pwsh 7 跑。** 用 Windows PowerShell 5.1 调 `Build-ClientInstaller.ps1` 会在
-`Get-ChildItem ... -Filter *.pdb -Recurse | Remove-Item` 处抛 `InputObjectNotBound` 而中断；同样的命令在
-pwsh 7 下正常。CI 用的也是 pwsh。
+**打包脚本在 Windows PowerShell 5.1 与 PowerShell 7 下都能跑。** 以前 5.1 会在
+`Get-ChildItem ... -Filter *.pdb -Recurse | Remove-Item` 处抛 `InputObjectNotBound` 而中断；现在改为按路径删除。
+CI 用的仍是 pwsh 7，但发布机只需要 Windows 自带的 PowerShell 也能出包。
 
 ### macOS（`.app` / `.pkg`）
 
@@ -1381,8 +1438,9 @@ build/installer/linux/client/build-deb.sh
 一律在 `artifacts/installer/<平台>/`，角色写在**文件名**里，不另开子目录。发布时 `release.yml` 会把它们改名成
 用户看到的那份资产，形状是 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：九个资产一个形状。
 
-注意一个坑：`artifacts/installer/windows/` 里**没有**带 `Windows` 的文件——Windows 的资产名是发布时才长成终态的。
-照着发布资产名去那个目录里找会一无所获（这个仓库已经踩过一次）。
+构建产物与发布资产名形状相同，只有版本形态不同：构建产物是
+`RemoteDesktop-Client-Windows-x64-<四段版本>.msi`，发布时改名为
+`RemoteDesktop-Client-Windows-x64-<tag>.msi`。`artifacts/installer/windows/` 里找得到带 `Windows` 的文件。
 完整的四类产物路径与 SDK 自己的四层布局见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) §构建产物布局。
 
 ## 九、客户端本机的存储（设备列表）
@@ -1536,6 +1594,8 @@ remotedesktop --self-check
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
+| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | 本机节点被登记成机器名/IP；没有 NodeToken 时服务端只允许回环调用，`/metrics` 和 `/internal/*` 返回 401 | 在 Ops 节点管理把地址改为 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；新 server 包升级会自动改回回环；远程节点需要配置 `Ops:NodeToken` |
+| 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级动作 `SyncLocalNodes` 会同步两个密钥；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
 | 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
 | 日志里成片 "Throttled ... from {地址}" | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |

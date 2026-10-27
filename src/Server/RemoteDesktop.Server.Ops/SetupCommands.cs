@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
+using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Server.Ops;
 
@@ -265,7 +266,13 @@ public static class SetupCommands
     /// </summary>
     private static (OpsOptions Options, string? Error) ReadOptions(string[] args)
     {
-        var configDirectory = Argument(args, "--config-directory") ?? AppContext.BaseDirectory;
+        // The service reads ProgramData on Windows (see ServerSetup.WindowsConfigDirectory) and its working directory
+        // on Linux/macOS. The command has to read the same file, or it creates the first administrator in a database
+        // the service will never open.
+        var configDirectory = Argument(args, "--config-directory")
+            ?? (OperatingSystem.IsWindows()
+                ? Path.Combine(ServerSetup.WindowsConfigDirectory, ServerSetup.OpsFolder)
+                : AppContext.BaseDirectory);
 
         var configuration = new ConfigurationBuilder()
             .SetBasePath(configDirectory)
@@ -276,13 +283,16 @@ public static class SetupCommands
         var options = configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
 
         // A relative SQLite path is relative to the settings it was written in, the same reading the service gives
-        // it. The command used to resolve it against the caller's working directory, which is how an administrator
-        // ended up creating an account in a database the service would never open.
+        // it. Environment variables are expanded here too: the packaged Windows file says %ProgramData%, and the
+        // service expands it, so treating it as a relative path created the administrator in
+        // "...\Ops\%ProgramData%\..." instead of the database the service uses.
         if (string.Equals(options.Database.Provider, OpsDatabaseSettings.Sqlite, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(options.Database.Path)
-            && !Path.IsPathRooted(options.Database.Path))
+            && !string.IsNullOrWhiteSpace(options.Database.Path))
         {
-            options.Database.Path = Path.Combine(configDirectory, options.Database.Path);
+            var databasePath = Environment.ExpandEnvironmentVariables(options.Database.Path);
+            options.Database.Path = Path.IsPathRooted(databasePath)
+                ? databasePath
+                : Path.Combine(configDirectory, databasePath);
         }
 
         try

@@ -36,12 +36,15 @@ public static class SetupCommands
         {
             Urls = Argument(args, "--urls"),
             RelayPublicEndpoint = Argument(args, "--relay-endpoint"),
-            RelaySharedKey = Argument(args, "--relay-key"),
+            // The Windows installer runs this as a child process and puts the three secret values in its environment
+            // rather than on the command line, where they would be visible in the process list and in the MSI log.
+            // The command-line options stay for hand runs and for the Linux/macOS packages.
+            RelaySharedKey = Argument(args, "--relay-key") ?? Environment.GetEnvironmentVariable("RD_RELAY_KEY"),
             DatabaseProvider = Argument(args, "--database"),
             DatabasePath = Argument(args, "--database-path"),
-            PostgresConnectionString = Argument(args, "--postgres"),
+            PostgresConnectionString = Argument(args, "--postgres") ?? Environment.GetEnvironmentVariable("RD_POSTGRES"),
             TlsCertificatePath = Argument(args, "--tls-certificate"),
-            TlsCertificatePassword = Argument(args, "--tls-password"),
+            TlsCertificatePassword = Argument(args, "--tls-password") ?? Environment.GetEnvironmentVariable("RD_TLS_PASSWORD"),
             TlsHostName = Argument(args, "--tls-hostname"),
             OpsDatabasePath = Argument(args, "--ops-database-path"),
             OpsListen = Argument(args, "--ops-listen"),
@@ -49,16 +52,26 @@ public static class SetupCommands
             MetricsEnabled = Array.Exists(args, argument => string.Equals(argument, "--metrics-enabled", StringComparison.Ordinal)),
         };
 
-        var directory = Argument(args, "--install-directory") ?? defaultInstallDirectory;
+        // The program directory (where the shipped appsettings.json defaults live) and the live settings directory are
+        // the same path on Linux and macOS. The Windows package passes --config-directory with ProgramData, because a
+        // major upgrade removes the old product's files from Program Files. A manual run that does not pass it keeps
+        // the historical behaviour: the settings live in --install-directory.
+        var installDirectory = Argument(args, "--install-directory") ?? defaultInstallDirectory;
+        var configDirectory = Argument(args, "--config-directory") ?? installDirectory;
+        var defaultsDirectory = OperatingSystem.IsWindows()
+            && !string.Equals(Path.GetFullPath(configDirectory), Path.GetFullPath(installDirectory), StringComparison.OrdinalIgnoreCase)
+                ? installDirectory
+                : null;
+
         try
         {
-            var notes = ServerSetup.Configure(directory, options);
+            var notes = ServerSetup.Configure(configDirectory, options, defaultsDirectory);
             foreach (var note in notes)
             {
                 output.WriteLine(note);
             }
 
-            Write(directory, notes, output);
+            Write(configDirectory, notes, output);
             return true;
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException)
@@ -66,7 +79,7 @@ public static class SetupCommands
             // Somebody running this by hand gets a sentence rather than a stack trace, and the settings are left as
             // they were. The installer ignores the exit code and shows nobody the output, so it is written down.
             output.WriteLine(ex.Message);
-            Write(directory, [ex.Message], output);
+            Write(configDirectory, [ex.Message], output);
             exitCode = InvalidArguments;
             return true;
         }

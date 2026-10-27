@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Rendezvous;
@@ -47,6 +48,37 @@ public sealed class ServerSetupTests : IDisposable
 
         var urls = Configuration(ServerSetup.RendezvousFolder)["Urls"];
         Assert.Equal("https://0.0.0.0:5443", urls);
+    }
+
+    /// <summary>
+    /// Windows keeps the programs under Program Files and the live settings under ProgramData. The shipped file is
+    /// the base for a first install, and the live file wins on every later run: the installer must not put the
+    /// package's defaults back over what an operator changed.
+    /// </summary>
+    [Fact]
+    public void A_live_file_wins_and_the_shipped_file_is_the_first_install_base()
+    {
+        var install = Path.Combine(_folder, "install");
+        var config = Path.Combine(_folder, "config");
+        var shipped = Path.Combine(install, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(shipped)!);
+        File.WriteAllText(shipped, """{"Urls":"http://0.0.0.0:5080","Rendezvous":{"ReflectorPort":6000}}""");
+
+        ServerSetup.Configure(config, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" }, install);
+
+        var live = Path.Combine(config, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Assert.True(File.Exists(live));
+        Assert.Equal(6000, JsonNode.Parse(File.ReadAllText(live))!["Rendezvous"]!["ReflectorPort"]!.GetValue<int>());
+
+        // A later run reads the live file, not the shipped one.
+        var changed = JsonNode.Parse(File.ReadAllText(live))!.AsObject();
+        changed["Rendezvous"]!["ReflectorPort"] = 6001;
+        File.WriteAllText(live, changed.ToJsonString());
+
+        ServerSetup.Configure(config, new ServerSetupOptions { Urls = "http://0.0.0.0:5081" }, install);
+
+        Assert.Equal(6001, JsonNode.Parse(File.ReadAllText(live))!["Rendezvous"]!["ReflectorPort"]!.GetValue<int>());
+        Assert.Equal("http://0.0.0.0:5081", JsonNode.Parse(File.ReadAllText(live))!["Urls"]!.GetValue<string>());
     }
 
     [Fact]

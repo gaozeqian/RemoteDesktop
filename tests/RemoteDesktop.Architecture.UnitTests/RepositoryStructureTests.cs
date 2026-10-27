@@ -204,7 +204,7 @@ public class RepositoryStructureTests
             "Backup,Checkpoint,Compare,Compress,Convert,ConvertFrom,ConvertTo,Dismount,Edit,Expand,Export,Group," +
             "Import,Initialize,Limit,Merge,Mount,Out,Publish,Restore,Save,Sync,Unpublish,Update," +
             "Approve,Assert,Build,Complete,Confirm,Deny,Deploy,Disable,Enable,Install,Invoke,Register,Request," +
-            "Restart,Resume,Start,Stop,Submit,Suspend,Uninstall,Unregister,Wait"
+            "Restart,Resume,Start,Stop,Submit,Suspend,Test,Uninstall,Unregister,Wait"
         ).Split(','),
         StringComparer.Ordinal);
 }

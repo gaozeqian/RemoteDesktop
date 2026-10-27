@@ -55,16 +55,17 @@ internal static class ClientHost
         var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForUser();
         CrashLog.Register(dataDirectory);
 
-        // The person's own settings file, off Windows: layered over the shipped one and beneath the environment and
+        // The machine layer comes first: the installer writes the address outside the program's directory — under
+        // /Library/Application Support on macOS, and under %ProgramData%\RemoteDesktop on Windows, where the MSI's
+        // major upgrade would otherwise delete a live appsettings.json with the old product's files. No file, no
+        // watcher: a reloading source costs an inotify instance, and desktops run out of them.
+        MachineSettings.AddConfigurationSource(builder.Configuration);
+
+        // The person's own settings file, off Windows: layered over the machine one and beneath the environment and
         // the command line, so an installed client can be repointed without editing files it does not own. On Windows
-        // the installed service owns the address in its own appsettings.json instead — see UserSettings for the whole
-        // story. No file, no watcher: a reloading source costs an inotify instance, and desktops run out of them.
+        // the elevated service owns the machine file; the client reads the same layer.
         if (!OperatingSystem.IsWindows())
         {
-            // macOS has one extra layer: the installer cannot write into the signed bundle, so it writes the
-            // machine-wide defaults under /Library/Application Support. UserSettings goes on top, and the command
-            // line stays above both.
-            MachineSettings.AddConfigurationSource(builder.Configuration);
             UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
         }
 

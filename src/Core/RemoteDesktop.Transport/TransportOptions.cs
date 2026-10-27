@@ -1,5 +1,6 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using RemoteDesktop.Domain;
 
 namespace RemoteDesktop.Transport;
 
@@ -50,15 +51,15 @@ public sealed class TransportOptions
     /// <exception cref="InvalidOperationException">A setting cannot be used; the message names it.</exception>
     public void Validate()
     {
-        if (RendezvousUri is null || !RendezvousUri.IsAbsoluteUri || RendezvousUri.Host.Length == 0)
+        if (RendezvousUri is null || !RendezvousAddress.TryParse(RendezvousUri.OriginalString, out var parsed))
         {
-            throw new InvalidOperationException($"Transport:RendezvousUri must be an absolute address (got '{RendezvousUri}').");
+            throw new InvalidOperationException(
+                $"Transport:RendezvousUri must be a ws:// or wss:// address with a host and the server's /ws path (got '{RendezvousUri}').");
         }
 
-        if (RendezvousUri.Scheme is not ("ws" or "wss"))
-        {
-            throw new InvalidOperationException($"Transport:RendezvousUri must be ws:// or wss:// (got '{RendezvousUri}').");
-        }
+        // The parser fills in /ws for an address typed without a path and refuses any other path. Storing the parsed
+        // form means the connection uses the path the server actually maps, whichever spelling the operator used.
+        RendezvousUri = parsed.Value;
 
         // A pin left behind after the address is changed to ws:// is harmless: there is no TLS to validate. It is only
         // read when the address is wss://, and a missing/broken file there is a startup error, not a silent fallback.

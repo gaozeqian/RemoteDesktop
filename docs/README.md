@@ -43,6 +43,9 @@
 **不是现行约定**，是某一次评审在当时看到的东西，冻结不改。查"当时为什么这么定"时看这里；
 写新代码时**不要**以它为准。归档说明见 [`reviews/README.md`](reviews/README.md)。
 
+* [**Windows 安装包评审（2026-10-26）**](reviews/windows-installer-review-2026-10-26.md) —— client / host / server
+  三个 MSI 的打包、升级、签名与 Ops 首装；服务器升级丢 live settings、Ops 未接入两个服务器、
+  部署秘密进日志/进程列表，以及自签证书缺部署名。
 * [**macOS 安装包评审（2026-10-25）**](reviews/macos-installer-review-2026-10-25.md) —— client / host / server
   三个 `.pkg` 的打包、签名、公证与安装后生命周期；P0 三项阻断与 host/Ops 的首装、升级缺陷。
 * [**客户端 UI 与产品图标评审（2026-10-18，两轮）**](reviews/ui-and-icon-review-2026-10-18.md) —— macOS 26

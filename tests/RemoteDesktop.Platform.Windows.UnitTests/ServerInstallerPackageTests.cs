@@ -47,7 +47,7 @@ public sealed class ServerInstallerPackageTests
     public void The_package_installs_both_servers_the_ports_they_need_and_the_settings_they_share()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\windows\\Build-ServerInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\windows\\server\\Build-ServerInstaller.ps1).");
 
         using var package = new MsiPackage(Msi!);
 
@@ -81,12 +81,17 @@ public sealed class ServerInstallerPackageTests
         // --- the three ports the servers need -------------------------------------------------------------------
         // The column is `Program` and not `Program_`: the underscore belongs to the built-in MsiFirewall table, and
         // asking for the wrong name makes the query fail in a way this reader turns into "no rows at all".
-        var firewall = package.Rows("SELECT `Name`, `Protocol`, `Port`, `Program` FROM `Wix5FirewallException`", 4);
+        var firewall = package.Rows("SELECT `Name`, `Protocol`, `Port`, `Program`, `InterfaceTypes` FROM `Wix5FirewallException`", 5);
         Assert.Equal(3, firewall.Count);
 
         // Each rule is on a program and not on a port alone: "anything may listen on 5080" is a different and much
         // wider statement than "this server may".
         Assert.All(firewall, rule => Assert.Contains("ExeFile", rule[3], StringComparison.Ordinal));
+
+        // All interface types explicitly: the WiX extension logs "All interfaces are empty values" when its Interfaces
+        // list is empty (it is the individual NIC list, not this column) but still adds the rule. Recording "all" here
+        // keeps the intent in the package; the install smoke checks the rules that actually reach the machine.
+        Assert.All(firewall, rule => Assert.Equal("all", rule[4]));
 
         // The protocol is the number the rule is written with (6 = TCP, 17 = UDP), not the word.
         var rules = firewall.Select(row => (Protocol: Protocol(row[1]), Port: row[2])).ToList();
@@ -103,12 +108,15 @@ public sealed class ServerInstallerPackageTests
 
         // --- what an operator can set while installing ----------------------------------------------------------
         var properties = package.Rows("SELECT `Property`, `Value` FROM `Property`", 2).ToDictionary(row => row[0], row => row[1]);
-        foreach (var name in new[] { "RENDEZVOUSURL", "RELAYPUBLICENDPOINT", "RELAYSHAREDKEY", "POSTGRESCONNECTIONSTRING", "TLSCERTIFICATEPATH", "NOFIREWALL" })
+        foreach (var name in new[]
+                 {
+                     "RENDEZVOUSURL", "RELAYPUBLICENDPOINT", "RELAYSHAREDKEY", "POSTGRESCONNECTIONSTRING",
+                     "TLSCERTIFICATEPATH", "TLSCERTIFICATEHOSTNAME", "NOFIREWALL", "REMOVEDATA",
+                 })
         {
             // A property with no value never reaches the property table, and the custom action that reads it finds
             // nothing — so each of them carries one, even when all it says is "decide for me".
             Assert.True(properties.ContainsKey(name), $"The package has no {name} property.");
-            Assert.True(properties.ContainsKey(name), $"The {name} property is not in the property table at all, which is what disables a control that shows it.");
         }
 
         Assert.Equal("auto", properties["RELAYSHAREDKEY"]);
@@ -175,7 +183,11 @@ public sealed class ServerInstallerPackageTests
         // Every control on the page writes a property the deferred action already reads, which is what makes the page
         // work without touching the install logic.
         var pageControls = package.Rows("SELECT `Control`, `Property` FROM `Control` WHERE `Dialog_` = 'ServerSettingsDlg'", 2);
-        foreach (var property in new[] { "POSTGRESCONNECTIONSTRING", "RELAYPUBLICENDPOINT", "TLSCERTIFICATEFILE", "TLSCERTIFICATEPASSWORD" })
+        foreach (var property in new[]
+                 {
+                     "POSTGRESCONNECTIONSTRING", "RELAYPUBLICENDPOINT", "TLSCERTIFICATEFILE",
+                     "TLSCERTIFICATEPASSWORD", "TLSCERTIFICATEHOSTNAME",
+                 })
         {
             Assert.True(pageControls.Any(row => row[1] == property), $"The settings page has no control for {property}.");
         }
@@ -210,16 +222,24 @@ public sealed class ServerInstallerPackageTests
         // button has to lead back, or the choice would be shown and then stranded.
         Assert.Contains("CertificateChosenDlg", dialogs);
         var chosen = package.Rows("SELECT `Control`, `Text` FROM `Control` WHERE `Dialog_` = 'CertificateChosenDlg'", 2);
-        Assert.Contains(chosen, row => row[1] == "[TLSCERTIFICATEPATH]");
+        // It shows the file Browse just set. TLSCERTIFICATEPATH is still "auto" at this point; mapping it to the file
+        // only happens on Next, which is why showing that property here displayed "auto" instead of the chosen path.
+        Assert.Contains(chosen, row => row[1] == "[TLSCERTIFICATEFILE]");
         Assert.Contains(chosen, row => row[0] == "OK");
         var backFromChosen = package.Rows("SELECT `Control_`, `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'CertificateChosenDlg'", 3);
         Assert.Contains(backFromChosen, row => row[0] == "OK" && row[1] == "NewDialog" && row[2] == "ServerSettingsDlg");
+
+        // Choosing "existing certificate file" with no file spawns a dialog instead of quietly installing plain http.
+        Assert.Contains("CertificateMissingDlg", dialogs);
+        var certificateNextEvents = package.Rows("SELECT `Event`, `Argument`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'Next'", 3);
+        Assert.Contains(certificateNextEvents, row => row[0] == "SpawnDialog" && row[1] == "CertificateMissingDlg" && row[2].Contains("TLSCERTIFICATEFILE", StringComparison.Ordinal));
+        Assert.Contains(certificateNextEvents, row => row[0] == "NewDialog" && row[1] == "VerifyReadyDlg" && row[2].Contains("TLSCERTIFICATEFILE <>", StringComparison.Ordinal));
 
         // Nothing on either page may sit outside it, and nothing may sit on top of anything else. The coordinates are
         // all written by hand, and both mistakes are invisible rather than broken: a control off the page simply is not
         // there, and one lying over another is drawn underneath it. The first was already checked here; the second was
         // not, and a checkbox added to the page duly landed on the relay address field directly below it.
-        foreach (var dialog in new[] { "ServerSettingsDlg", "CertificateChosenDlg" })
+        foreach (var dialog in new[] { "ServerSettingsDlg", "CertificateChosenDlg", "CertificateMissingDlg" })
         {
             var bounds = package.Rows($"SELECT `Width`, `Height` FROM `Dialog` WHERE `Dialog` = '{dialog}'", 2);
             var (pageWidth, pageHeight) = (int.Parse(bounds[0][0], CultureInfo.InvariantCulture), int.Parse(bounds[0][1], CultureInfo.InvariantCulture));
@@ -269,14 +289,81 @@ public sealed class ServerInstallerPackageTests
         var howTo = Assert.Single(shortcuts, row => row[0] == "服务器配置说明");
         Assert.Contains("how-to-configure.txt", howTo[1], StringComparison.Ordinal);
 
-        // --- the step that gives both servers the same key ------------------------------------------------------
-        var actions = package.Rows("SELECT `Action` FROM `CustomAction`", 1).Select(row => row[0]).ToList();
-        Assert.Contains(actions, action => action.Contains("Configure", StringComparison.OrdinalIgnoreCase));
+        // --- the machine-side steps ------------------------------------------------------------------------------
+        var actionRows = package.Rows("SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`", 4);
+        var actions = actionRows.Select(row => row[0]).ToList();
+        foreach (var action in new[]
+                 {
+                     "SecureConfigDirectory", "SecureConfigDirectoryFinal", "SetSecureConfigDirectoryFinalData",
+                     "MigrateLiveSettings", "SetDefaultTlsHostName",
+                     "ConfigureServer", "SyncLocalNodes", "CleanupServer", "StopLeftoverProcesses",
+                 })
+        {
+            Assert.Contains(action, actions);
+        }
 
-        var sequence = package.Rows("SELECT `Action`, `Condition` FROM `InstallExecuteSequence`", 2);
-        var configure = sequence.Where(row => row[0].Contains("Configure", StringComparison.OrdinalIgnoreCase)).ToList();
-        Assert.NotEmpty(configure);
-        Assert.All(configure, row => Assert.Contains("NOT REMOVE", row[1], StringComparison.Ordinal));
+        // The secrets must not be in any command line. ConfigureServer is a BinaryRef action with no target; the DLL
+        // passes the relay key, PostgreSQL connection string and TLS password to the child in its environment.
+        foreach (var row in actionRows)
+        {
+            Assert.DoesNotContain("--relay-key", row[3], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("--postgres", row[3], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("--tls-password", row[3], StringComparison.OrdinalIgnoreCase);
+        }
+
+        var sequence = package.Rows("SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`", 3);
+        var secure = Assert.Single(sequence, row => row[0] == "SecureConfigDirectory");
+        var migrateLive = Assert.Single(sequence, row => row[0] == "MigrateLiveSettings");
+        Assert.Contains("NOT REMOVE", secure[1], StringComparison.Ordinal);
+        Assert.Contains("WIX_UPGRADE_DETECTED", migrateLive[1], StringComparison.Ordinal);
+
+        // Both have to run in the immediate sequence before InstallInitialize. RemoveExistingProducts must be the
+        // first action after InstallInitialize (MSI error 2613 otherwise), and the old files must still exist when
+        // the migration copies them; a deferred action cannot run that early.
+        foreach (var name in new[] { "SecureConfigDirectory", "MigrateLiveSettings" })
+        {
+            var type = int.Parse(Assert.Single(actionRows, row => row[0] == name)[1], CultureInfo.InvariantCulture);
+            Assert.Equal(1, type & 0x3F);
+            Assert.Equal(0, type & 0x400);
+        }
+        var installInitialize = int.Parse(
+            Assert.Single(sequence, row => row[0] == "InstallInitialize")[2], CultureInfo.InvariantCulture);
+        Assert.True(int.Parse(secure[2], CultureInfo.InvariantCulture) < int.Parse(migrateLive[2], CultureInfo.InvariantCulture),
+            "SecureConfigDirectory must run before MigrateLiveSettings.");
+        Assert.True(int.Parse(migrateLive[2], CultureInfo.InvariantCulture) < installInitialize,
+            "MigrateLiveSettings must run before InstallInitialize.");
+
+        // The immediate action only prepares the directory; the final ACL has to be applied by a deferred,
+        // no-impersonate action after the files are in place. An immediate action is impersonated as the person
+        // installing, and a GUI install from a double-click can run it with a filtered token — restricting the
+        // directory there left the next enumeration with no access and failed the install after creating an empty
+        // directory. SYSTEM is the only account that can both tighten the files and read a directory an earlier
+        // installation already restricted.
+        var secureFinal = Assert.Single(sequence, row => row[0] == "SecureConfigDirectoryFinal");
+        Assert.Contains("NOT REMOVE", secureFinal[1], StringComparison.Ordinal);
+        var installFiles = int.Parse(
+            Assert.Single(sequence, row => row[0] == "InstallFiles")[2], CultureInfo.InvariantCulture);
+        Assert.True(int.Parse(secureFinal[2], CultureInfo.InvariantCulture) > installFiles,
+            "SecureConfigDirectoryFinal must run after the files are installed.");
+        var secureFinalType = int.Parse(
+            Assert.Single(actionRows, row => row[0] == "SecureConfigDirectoryFinal")[1], CultureInfo.InvariantCulture);
+        Assert.NotEqual(0, secureFinalType & 0x400); // deferred
+        Assert.NotEqual(0, secureFinalType & 0x800); // no impersonation: SYSTEM
+        var secureFinalData = Assert.Single(sequence, row => row[0] == "SetSecureConfigDirectoryFinalData");
+        Assert.True(int.Parse(secureFinalData[2], CultureInfo.InvariantCulture) < int.Parse(secureFinal[2], CultureInfo.InvariantCulture),
+            "SetSecureConfigDirectoryFinalData must run before the deferred action that reads it.");
+        foreach (var setter in new[] { "SetServerInstallDir", "SetServerConfigDir" })
+        {
+            var row = Assert.Single(sequence, row => row[0] == setter);
+            Assert.True(int.Parse(row[2], CultureInfo.InvariantCulture) < int.Parse(secure[2], CultureInfo.InvariantCulture),
+                $"{setter} must run before SecureConfigDirectory, which reads it.");
+        }
+        Assert.Equal("1501", Assert.Single(sequence, row => row[0] == "RemoveExistingProducts")[2]);
+        var configure = Assert.Single(sequence, row => row[0] == "ConfigureServer");
+        Assert.Contains("NOT REMOVE", configure[1], StringComparison.Ordinal);
+        Assert.Contains("NOT WIX_UPGRADE_DETECTED", configure[1], StringComparison.Ordinal);
+        Assert.Contains("WIX_UPGRADE_DETECTED", Assert.Single(sequence, row => row[0] == "SyncLocalNodes")[1], StringComparison.Ordinal);
+        Assert.Contains("REMOVEDATA", Assert.Single(sequence, row => row[0] == "CleanupServer")[1], StringComparison.Ordinal);
     }
 
     /// <summary>
