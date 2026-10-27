@@ -52,7 +52,7 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
     public async Task An_end_report_closes_a_direct_session()
     {
         var correlation = Guid.NewGuid();
-        var start = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var start = fixture.Now.AddSeconds(-30);
         var batch = new List<OpsEventEnvelope>
         {
             Event(OpsEventKinds.SessionRequested, start, new { controllerDeviceId = 111u, hostDeviceId = 222u }, correlation),
@@ -101,11 +101,25 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
     }
 
     [Fact]
+    public async Task An_event_from_a_clock_far_in_the_future_is_refused()
+    {
+        var correlation = Guid.NewGuid();
+        var batch = new List<OpsEventEnvelope>
+        {
+            Event(OpsEventKinds.SessionRequested, fixture.Now.AddDays(30), new { controllerDeviceId = 1u }, correlation),
+        };
+
+        var response = await SendAsync(batch);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task A_body_that_does_not_match_its_signature_is_refused()
     {
         var batch = Lifecycle(Guid.NewGuid());
         var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var timestamp = fixture.Now.ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")
         {
@@ -128,7 +142,7 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
     {
         var batch = Lifecycle(Guid.NewGuid());
         var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
-        var timestamp = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeSeconds();
+        var timestamp = fixture.Now.AddMinutes(-5).ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")
         {
@@ -145,9 +159,9 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    private static List<OpsEventEnvelope> Lifecycle(Guid correlation)
+    private List<OpsEventEnvelope> Lifecycle(Guid correlation)
     {
-        var start = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var start = fixture.Now.AddSeconds(-30);
         string Correlation() => correlation.ToString("D");
 
         return
@@ -173,7 +187,7 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
     private async Task<HttpResponseMessage> SendAsync(List<OpsEventEnvelope> batch)
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var timestamp = fixture.Now.ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")
         {
@@ -196,7 +210,7 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

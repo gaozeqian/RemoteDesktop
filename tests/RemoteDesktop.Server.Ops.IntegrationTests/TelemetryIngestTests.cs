@@ -21,7 +21,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     public async Task A_heartbeat_lands_on_the_relay_row_instead_of_adding_one()
     {
         var correlation = Guid.NewGuid();
-        var start = DateTimeOffset.UtcNow.AddSeconds(-20);
+        var start = fixture.Now.AddSeconds(-20);
 
         var accepted = await SendAsync(
         [
@@ -65,7 +65,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     public async Task A_direct_session_exists_only_because_a_heartbeat_said_so()
     {
         var sessionId = Guid.NewGuid();
-        var start = DateTimeOffset.UtcNow.AddSeconds(-5);
+        var start = fixture.Now.AddSeconds(-5);
 
         await SendAsync(
         [
@@ -106,7 +106,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
         [
             Event(
                 OpsEventKinds.SessionTelemetry,
-                DateTimeOffset.UtcNow,
+                fixture.Now,
                 new
                 {
                     sessionId = sessionId.ToString("N"),
@@ -145,7 +145,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     private async Task<HttpResponseMessage> SendAsync(List<OpsEventEnvelope> batch)
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var timestamp = fixture.Now.ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")
         {
@@ -168,7 +168,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

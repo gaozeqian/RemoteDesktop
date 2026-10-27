@@ -47,9 +47,18 @@ public class SchemaMigrationTests
             columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('ops_session') WHERE name IN ('platform', 'version', 'client_session_id');";
             Assert.Equal(3L, (long)(await columns.ExecuteScalarAsync(Ct))!);
 
+            // Version 4 adds the notification retry timestamp and the single-use TOTP step; version 5 is the
+            // PostgreSQL-only precision change (a no-op here). Both still have to be recorded.
+            await using var newColumns = verify.CreateCommand();
+            newColumns.CommandText = """
+                SELECT (SELECT COUNT(*) FROM pragma_table_info('ops_notification_attempt') WHERE name = 'last_attempt_at')
+                     + (SELECT COUNT(*) FROM pragma_table_info('ops_admin_user') WHERE name = 'last_totp_step');
+                """;
+            Assert.Equal(2L, (long)(await newColumns.ExecuteScalarAsync(Ct))!);
+
             await using var versions = verify.CreateCommand();
             versions.CommandText = "SELECT MAX(version) FROM ops_schema_version;";
-            Assert.Equal(3L, (long)(await versions.ExecuteScalarAsync(Ct))!);
+            Assert.Equal((long)OpsSchema.Version, (long)(await versions.ExecuteScalarAsync(Ct))!);
 
             await using var row = verify.CreateCommand();
             row.CommandText = "SELECT source FROM ops_session WHERE id = 's1';";

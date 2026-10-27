@@ -674,7 +674,9 @@ scrape_configs:
 本地（开发或试用）：
 
 ```bash
-dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin   # 建第一个账号
+# 开发机没有安装包时，显式指向仓库里的设置目录；不传时命令找的是安装后的位置（Linux /etc，Windows ProgramData）
+dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin \
+  --config-directory src/Server/RemoteDesktop.Server.Ops
 dotnet run --project src/Server/RemoteDesktop.Server.Ops                          # http://127.0.0.1:5090
 ```
 
@@ -711,8 +713,26 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 #### 首个管理员
 
 没有默认口令、没有网页初始化入口。`--create-admin <用户名>` 交互式设口令，打印 TOTP 密钥与 `otpauth://` URI，
-导入验证器即可。**密钥只显示这一次**，丢了只能再建一个管理员账号。口令之后还要过 TOTP 二次验证才能登录
-（`Ops:RequireTotp=true` 默认开着，别关）。
+导入验证器即可。**密钥只显示这一次**；丢失后用 `--reset-totp <用户名>` 重置（或让另一位管理员在控制台重置），
+不需要再建一个账号。口令之后还要过 TOTP 二次验证才能登录（`Ops:RequireTotp=true` 默认开着，别关）。
+
+#### 账号管理
+
+管理员登录后侧栏有「账号管理」页，可以新建 `viewer` / `operator` / `admin`、改口令、重置 TOTP、停用/启用和删除。
+**每一种改密、重置或停用都会立刻撤销该账号的所有会话**，下一个请求就要重新登录。最后一个可用的管理员不能被停用
+或删除（否则就没有人能再登录）；管理员也不能停用或删除自己。所有变更都写审计。
+
+控制台进不去时，命令行做同样的事：
+
+```bash
+RemoteDesktop.Server.Ops --reset-password <用户名> [--config-directory <目录>]
+RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
+```
+
+两条命令都会撤销该账号的现有会话。`--create-admin`、`--reset-password`、`--reset-totp` 默认读服务的那份
+`appsettings.json`（Windows `%ProgramData%\Remote Desktop Server\Ops`，Linux
+`/etc/remotedesktop-server/Ops`，macOS 安装根下的 `Ops`）；显式传入的 `--config-directory` 不存在时会直接
+说明，而不是落到另一个数据库。容器没有 `/etc` 副本时回退到程序目录（compose 的数据库配置来自环境变量）。
 
 #### 关键配置（`Ops` 段）
 
@@ -724,12 +744,38 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
-| `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知 |
+| `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
+| `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知。失败后按 1/2/4/8 分钟重试，最多 5 次 |
+| `Ops:TrustedProxies` | 空 | 可信反向代理的 IP 或 CIDR 列表；只有这里的代理写来的 `X-Forwarded-For` / `X-Forwarded-Proto` 会被采信。见“反向代理” |
+| `Ops:Retention:SampleDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `30` / `90` / `180` | 指标样本、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。审计日志不自动删除 |
+| `Ops:Retention:IntervalMinutes` | `60` | 清理任务间隔 |
 | `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
 
 > 内部 API 的 token 不是 `Ops` 段独有的：控制台读 `Ops:NodeToken`，信令读 `Rendezvous:NodeToken`，中继读
 > `Relay:NodeToken`。三处必须同值；只设 `Ops:NodeToken` 时，跨机或容器里的控制台会 401（同机回环仍然可用，
 > 但那是回环豁免，不是 token 生效）。Docker 的基础 compose 已经把同一个 `NODE_TOKEN` 传给两个节点。
+
+#### 反向代理
+
+控制台默认只监听回环，远程访问用 SSH 隧道或 TLS 反向代理。用代理时**必须**把代理地址写进
+`Ops:TrustedProxies`，并让代理写 `X-Forwarded-For` 与 `X-Forwarded-Proto`：
+
+```json
+"Ops": { "TrustedProxies": [ "127.0.0.1" ] }
+```
+
+不配时，控制台看到的是代理的地址：审计日志和登录失败预算都会按代理计，TLS 终止在代理时
+`Request.IsHttps` 为 false，会话 Cookie 也不会带 `Secure`。框架自带的“相信回环代理”默认被移除——本机任何
+进程都能连回环，不能因为连接来自 `127.0.0.1` 就相信它写的头。
+
+`/health` 只给本机用：连接必须来自回环，且请求不能带任何转发头。反向代理**不要**转发 `/health`；即使转了，
+带 `X-Forwarded-For` / `Forwarded` 的请求也会得到 404。
+
+#### 数据保留
+
+控制台每小时清理一次过期历史：默认保留 30 天指标样本、30 天事件、90 天会话、180 天已恢复告警，并删除过期的
+管理员会话。打开中的告警永远不会被删除。`Ops:Retention:*` 可以按部署调整；设为 `0` 表示不清理那一类。
+**审计日志（`ops_audit_log`）是有哈希链的，不自动删除**——需要更长的保留期就备份数据库，或定期整库归档。
 
 #### 让总览出现数字：三件事缺一不可
 
@@ -1594,7 +1640,7 @@ remotedesktop --self-check
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
-| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | 本机节点被登记成机器名/IP；没有 NodeToken 时服务端只允许回环调用，`/metrics` 和 `/internal/*` 返回 401 | 在 Ops 节点管理把地址改为 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；新 server 包升级会自动改回回环；远程节点需要配置 `Ops:NodeToken` |
+| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | 本机节点被登记成机器名/IP；没有 NodeToken 时服务端只允许回环调用，`/metrics` 和 `/internal/*` 返回 401 | 在 Ops 节点管理页点「改地址」改为 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；新 server 包升级会自动改回回环；远程节点需要配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝） |
 | 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级动作 `SyncLocalNodes` 会同步两个密钥；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
 | 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
@@ -1680,8 +1726,10 @@ remotedesktop --self-check
 
 ### 数据模型
 
-基线表 + 三个迁移（`ops_schema_version` 只前进）：v1 基线；v2 加 `ops_session.platform / version`；v3 加
-`ops_session.client_session_id` 与 `ops_admin_action` 表。时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL。
+基线表 + 迁移（`ops_schema_version` 只前进）：v1 基线；v2 加 `ops_session.platform / version`；v3 加
+`ops_session.client_session_id` 与 `ops_admin_action` 表；v4 加通知重试时间 `ops_notification_attempt.last_attempt_at`
+与单次 TOTP 时间步 `ops_admin_user.last_totp_step`；v5 把 PostgreSQL 的实数列改成 `DOUBLE PRECISION`（SQLite 的
+`REAL` 本来就是 8 字节，v5 在 SQLite 上是记录版本的空操作）。时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL。
 
 核心表：`ops_node`（节点）、`ops_metric_sample` / `_catalog`（指标）、`ops_event` / `ops_session`（事实与投影）、
 `ops_alert_rule` / `ops_alert`（规则与告警）、`ops_admin_user` / `_session`（账号）、`ops_audit_log`（哈希链审计）、
@@ -1692,8 +1740,8 @@ remotedesktop --self-check
 | 项 | 决定 |
 |---|---|
 | 口令 | PBKDF2-HMAC-SHA256，60 万次迭代，16 字节盐，32 字节输出 |
-| 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开 |
-| 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时 |
+| 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开；验证通过的时间步写入 `last_totp_step`，同一个码不能再次登录 |
+| 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时；改密、重置 TOTP、停用或删除账号都会撤销该账号的全部会话 |
 | 角色 | `viewer` 只读 / `operator` 确认告警、发起动作 / `admin` 改规则、管账号、批准动作、看审计 |
 | CSRF | 双提交 Cookie + `X-Ops-CSRF`，`SameSite=Strict` |
 | 审计 | `SHA256(prev_hash ‖ 字段)` 哈希链，`/api/audit/verify` 报第一条不一致 |
@@ -1703,15 +1751,16 @@ remotedesktop --self-check
 
 规则是**结构化列，不是表达式**：`single`（单指标）、`ratio`（两指标比值）、`scrape`（抓取失败）、
 `session.rtt`、`session.direct`（直连率）。`forSeconds` 状态机——条件持续满足才开，抖动一次不叫人；
-去重键保证同一对象同时只有一条未恢复告警。通知走一个 Webhook（`Ops:Notifications:WebhookUrl`），开/恢复各一次。
+去重键保证同一对象同时只有一条未恢复告警。通知走一个 Webhook（`Ops:Notifications:WebhookUrl`），开/恢复各一次；
+发送失败按 1/2/4/8 分钟退避重试，最多 5 次，且只在该告警仍处于对应状态时重试（已恢复的告警不会补发“打开”）。
 
 ### 已知边界与未做
 
 - 丢包 / 码率：无来源（见上）。
 - 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
 - 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
-- 明确**单实例**：抓取与告警求值按单实例设计，多副本协调（`ops_lease`）只有表、尚未接到 worker 上；多副本
-  需要先把带租约的 worker 拆出去，未做 SignalR backplane。
+- 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，
+  未做 SignalR backplane。
 - **没有保留清理 worker**：指标样本、事件、会话记录和过期管理会话会一直增长（每个节点每 10 秒一条样本）。
   `OpsStore` 里有按时间删除的方法，但没有宿主服务调用它们。长期部署需要自行备份/归档并定期清理，否则数据库
   会持续变大直到磁盘耗尽。

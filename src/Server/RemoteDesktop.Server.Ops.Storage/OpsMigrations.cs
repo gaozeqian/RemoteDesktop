@@ -3,7 +3,12 @@ namespace RemoteDesktop.Server.Ops.Storage;
 /// <summary>One step from the previous schema version to <paramref name="Version"/>.</summary>
 /// <param name="Version">The version this step produces; versions only ever increase.</param>
 /// <param name="Sql">Statements that take a database at the previous version to this one.</param>
-public sealed record OpsMigration(int Version, string Sql);
+/// <param name="PostgresSql">
+/// Statements for PostgreSQL when they differ from <paramref name="Sql"/>. SQLite and PostgreSQL share a type system
+/// for everything the console added until the real-precision change, which has no SQLite equivalent because its
+/// <c>REAL</c> is already eight bytes.
+/// </param>
+public sealed record OpsMigration(int Version, string Sql, string? PostgresSql = null);
 
 /// <summary>
 /// Changes made after the baseline schema, in order.
@@ -52,6 +57,34 @@ public static class OpsMigrations
                 error TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_ops_admin_action_state ON ops_admin_action (state, requested_at);
+            """),
+
+        // 4 — two facts the console did not keep before. last_attempt_at lets a failed webhook be retried with a
+        // backoff instead of being forgotten after its first attempt. last_totp_step makes a TOTP code single-use:
+        // without it the same six digits can open another session inside the ±30-second acceptance window.
+        new(4, """
+            ALTER TABLE ops_notification_attempt ADD COLUMN last_attempt_at BIGINT;
+            ALTER TABLE ops_admin_user ADD COLUMN last_totp_step BIGINT;
+            CREATE INDEX IF NOT EXISTS ix_ops_event_received ON ops_event (received_at);
+            """),
+
+        // 5 — PostgreSQL's REAL is four bytes while SQLite's is eight. A byte counter above 2^24 loses precision on
+        // PostgreSQL, which is exactly the range a long-lived relay reaches. SQLite needs no equivalent statement,
+        // so its side of this migration is a no-op that still records the version.
+        new(
+            5,
+            "SELECT 1;",
+            """
+            ALTER TABLE ops_metric_sample ALTER COLUMN value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_metric_rollup ALTER COLUMN first_value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_metric_rollup ALTER COLUMN last_value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_metric_rollup ALTER COLUMN min_value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_metric_rollup ALTER COLUMN max_value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_metric_rollup ALTER COLUMN avg_value TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_session ALTER COLUMN rtt_ms TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_session ALTER COLUMN loss_pct TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_alert_rule ALTER COLUMN threshold TYPE DOUBLE PRECISION;
+            ALTER TABLE ops_alert ALTER COLUMN value TYPE DOUBLE PRECISION;
             """),
     ];
 }

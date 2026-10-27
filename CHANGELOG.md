@@ -4,6 +4,42 @@
 
 ## [未发布]
 
+### Added — 运维监控台评审修复
+
+- **账号管理页与命令行**：管理员可在控制台新建 viewer/operator/admin、改口令、重置 TOTP、停用/启用和
+  删除账号；每种操作立即撤销该账号的全部会话，最后一个可用管理员不能被停用或删除，管理员也不能停用或
+  删除自己。控制台进不去时用 `--reset-password` / `--reset-totp`。所有变更写审计。
+- **节点地址可编辑**：节点管理页新增「改地址」，`PATCH /api/nodes/{id}` 接受 `baseUrl`；新增、改地址、启停、
+  删除都写审计。配置了 `Ops:NodeToken` 时，非回环的 http 节点会被拒绝，避免 token 明文上线。
+- **通知重试**：Webhook 失败后按 1/2/4/8 分钟退避重试，最多 5 次；重试只在告警仍处于对应状态时进行。
+- **数据保留**：新增每小时清理任务，默认删除 30 天指标样本、30 天事件、90 天会话、180 天已恢复告警和过期
+  管理员会话；`Ops:Retention:*` 可调，打开中的告警与审计哈希链不删。
+- **反向代理支持**：新增 `Ops:TrustedProxies`，只采信指定代理的 `X-Forwarded-For` / `X-Forwarded-Proto`；
+  `/health` 拒绝任何带转发头的请求，避免被同机代理转发出去。
+- **后台任务租约与动作恢复**：抓取、告警求值、清理和动作恢复通过 `ops_lease` 只让一个实例工作；处于
+  `approved` 超过 `Ops:ActionStaleSeconds` 的动作由恢复任务标记失败并写审计，进程崩溃不再留下永久卡住的动作。
+
+### Fixed — 运维监控台评审
+
+- **后台服务异常会停掉整个控制台**：告警求值与指标抓取现在逐轮、逐节点捕获异常并继续；启动时校验
+  Webhook URL 与节点证书路径（`Ops:NodeCertificatePath`），并设置 `BackgroundServiceExceptionBehavior=Ignore`
+  作为兜底。
+- **并发 ingest 丢失会话投影**：`AppendEventsAsync` 的读-合并-写现在由进程内串行门保护，避免 PostgreSQL
+  读已提交下后写覆盖前写，也避免 SQLite 同时写导致 500。
+- **TOTP 可重放**：验证通过的时间步写入 `last_totp_step`，同一六位码在 ±30 秒窗口内不能再次登录。
+- **Setup CLI 路径与服务不一致**：Windows 默认读 ProgramData、Linux 默认读 `/etc/remotedesktop-server/Ops`、
+  macOS 读安装目录；配置目录不存在时给出说明而不是堆栈；服务与 CLI 共用 `OpsDatabaseSettings.ResolvePath`
+  解析相对路径、展开环境变量、trim provider，空展开按缺失处理。`--create-admin` 不再静默落到已安装的生产库。
+- **审计链可能因 CLI 与服务并发写而分叉**：`AppendAuditAsync` 现在在同一数据库事务内读前一条并写入，
+  SQLite 用 `BEGIN IMMEDIATE`、PostgreSQL 用 advisory lock。
+- **登录限流容量可被填满导致全站登录锁定**：表满时淘汰最旧的未锁定项，不再锁定未知 key；另加按来源地址的
+  宽预算，挡住跨用户名喷洒。
+- **节点响应无大小上限**：`/metrics`、设备列表与动作错误响应最多读取 8 MB（错误文本 64 KB），超限按失败处理；
+  设备代理对超时和非法 JSON 返回 502 而不是 500。
+- **PostgreSQL 的 `REAL` 只有 4 字节**：基线改为 `DOUBLE PRECISION`，v5 迁移修正已有库。
+- **ingest 不校验 `OccurredAt`**：拒绝 7 天以前或 5 分钟以后的事件，避免错误时钟污染会话时间线。
+- **会话分页同毫秒漏页**：游标改为 `(timestamp, id)`，API 返回 `nextBeforeId`。
+
 ### Added — Linux 安装包按部署配置
 
 - **服务端 .deb 安装时选择数据库与 TLS**：debconf 询问 SQLite / PostgreSQL（含连接串）/ 仅内存，以及

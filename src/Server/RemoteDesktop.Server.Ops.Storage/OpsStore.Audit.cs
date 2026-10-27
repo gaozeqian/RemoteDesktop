@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Globalization;
+using Microsoft.Data.Sqlite;
 using RemoteDesktop.Server.Ops.Core;
 
 namespace RemoteDesktop.Server.Ops.Storage;
@@ -21,10 +22,10 @@ public sealed partial class OpsStore
     /// Appends one record and returns its hash, linking it to the previous one.
     /// </summary>
     /// <remarks>
-    /// The previous hash is read and the new row written while holding an in-process semaphore. That is sound only
-    /// because the console is a single instance (the plan's §3.3); a second writer would need the database to
-    /// serialise the pair instead, which SQLite does with a write transaction and PostgreSQL with an advisory lock.
-    /// When multi-instance arrives, this method changes — the table does not.
+    /// The previous hash is read and the new row written inside one transaction. The in-process semaphore only makes
+    /// the common single-console case cheap; the transaction is what makes the pair safe when another process appends
+    /// too — the setup CLI creating an administrator while the service is running is exactly that case. SQLite gets a
+    /// write lock up front with <c>BEGIN IMMEDIATE</c>; PostgreSQL takes an advisory transaction lock.
     /// </remarks>
     public async Task<string> AppendAuditAsync(OpsAuditEntry entry, CancellationToken cancellationToken = default)
     {
@@ -34,8 +35,9 @@ public sealed partial class OpsStore
         try
         {
             await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await using var transaction = await BeginAuditTransactionAsync(connection, cancellationToken).ConfigureAwait(false);
 
-            var (previous, previousTimestamp) = await ReadLatestAsync(connection, cancellationToken).ConfigureAwait(false);
+            var (previous, previousTimestamp) = await ReadLatestAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
 
             // Verification walks the chain in (ts, id) order, so the new row has to be last in that order too. Callers
             // often write several records with one captured "now" (the alert evaluator does), and ids are random, so
@@ -55,6 +57,7 @@ public sealed partial class OpsStore
                     entry.Result));
 
             await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO ops_audit_log (id, ts, actor, action, target, detail_json, ip, result, prev_hash, hash)
                 VALUES (@id, @ts, @actor, @action, @target, @detail, @ip, @result, @prevHash, @hash);
@@ -73,6 +76,7 @@ public sealed partial class OpsStore
                 ("@hash", hash));
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return hash;
         }
         finally
@@ -82,12 +86,39 @@ public sealed partial class OpsStore
     }
 
     /// <summary>
+    /// Starts the transaction that holds the chain's read-and-append pair, taking the database's write lock first.
+    /// </summary>
+    /// <remarks>
+    /// SQLite's ordinary (deferred) transaction reads before it writes, so two processes can read the same previous
+    /// hash; <c>BEGIN IMMEDIATE</c> takes the write lock at once and the second process waits. PostgreSQL has no
+    /// database-wide write lock, so an advisory transaction lock gives the same serialisation.
+    /// </remarks>
+    private async Task<DbTransaction> BeginAuditTransactionAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        if (string.Equals(_provider, OpsDatabaseSettings.Sqlite, StringComparison.Ordinal))
+        {
+            return ((SqliteConnection)connection).BeginTransaction(deferred: false);
+        }
+
+        var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var advisory = connection.CreateCommand();
+        advisory.Transaction = transaction;
+        advisory.CommandText = "SELECT pg_advisory_xact_lock(hashtext('remotedesktop.ops.audit'));";
+        await advisory.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return transaction;
+    }
+
+    /// <summary>
     /// The newest hash and timestamp, or <see cref="AuditChain.Genesis"/> and <c>long.MinValue</c> when the log is
     /// empty.
     /// </summary>
-    private static async Task<(string Hash, long Timestamp)> ReadLatestAsync(DbConnection connection, CancellationToken cancellationToken)
+    private static async Task<(string Hash, long Timestamp)> ReadLatestAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT hash, ts FROM ops_audit_log ORDER BY ts DESC, id DESC LIMIT 1;";
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

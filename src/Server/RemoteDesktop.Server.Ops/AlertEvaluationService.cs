@@ -60,30 +60,46 @@ public sealed partial class AlertRuleSeeder(OpsStore store, TimeProvider time, I
 public sealed partial class AlertEvaluationService(
     AlertService alerts,
     OpsOptions options,
+    OpsLease lease,
     TimeProvider time,
     ILogger<AlertEvaluationService> logger) : BackgroundService
 {
+    private const string LeaseName = "alerts";
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds)), time);
-        try
+
+        do
         {
-            do
+            try
             {
                 await RunOnceAsync(stoppingToken).ConfigureAwait(false);
             }
-            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // A database hiccup or one bad rule must not fault the worker: the default host behaviour for an
+                // unhandled BackgroundService exception is to stop the console, and a monitoring console that goes
+                // down when the thing it monitors misbehaves is worse than no console.
+                EvaluationFailed(logger, ex);
+            }
         }
-        catch (OperationCanceledException)
-        {
-            // Shutdown.
-        }
+        while (await WaitAsync(timer, stoppingToken).ConfigureAwait(false));
     }
 
     /// <summary>One pass, public so a test can drive it without waiting for the timer.</summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
+        if (!await lease.TryAcquireAsync(LeaseName, TimeSpan.FromMinutes(5), cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var (opened, resolved) = await alerts.EvaluateOnceAsync(cancellationToken).ConfigureAwait(false);
         if (opened > 0 || resolved > 0)
         {
@@ -91,6 +107,21 @@ public sealed partial class AlertEvaluationService(
         }
     }
 
+    private static async Task<bool> WaitAsync(PeriodicTimer timer, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Alert evaluation opened {Opened} and resolved {Resolved} alerts.")]
     private static partial void Evaluated(ILogger logger, int opened, int resolved);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Alert evaluation failed; will try again next pass.")]
+    private static partial void EvaluationFailed(ILogger logger, Exception exception);
 }

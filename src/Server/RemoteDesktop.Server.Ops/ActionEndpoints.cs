@@ -137,8 +137,11 @@ public static class ActionEndpoints
             {
                 outcome = (ActionStates.Failed, "the approval was cancelled before the node answered");
             }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException)
+            catch (Exception ex)
             {
+                // Every other failure — DNS, TLS, a response over the size limit, an unexpected provider error —
+                // becomes a terminal state too. The row being left approved is the one outcome that cannot be
+                // retried from the UI.
                 outcome = (ActionStates.Failed, $"the node call failed: {ex.Message}");
             }
 
@@ -168,6 +171,11 @@ public static class ActionEndpoints
             return (ActionStates.Failed, "the rendezvous node is no longer registered");
         }
 
+        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken))
+        {
+            return (ActionStates.Failed, "refusing to send NodeToken over plain HTTP to a non-loopback address");
+        }
+
         var path = action.Kind == ActionKinds.DisconnectSession
             ? "/internal/v1/admin/disconnect"
             : "/internal/v1/admin/revoke";
@@ -193,8 +201,19 @@ public static class ActionEndpoints
             return (ActionStates.Executed, null);
         }
 
-        var message = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return (ActionStates.Failed, $"node answered HTTP {(int)response.StatusCode}: {message.Trim()}");
+        // An error body is shown to an operator and stored in the action row. It does not need to be megabytes, and a
+        // node that answers an error with an unbounded stream must not decide how much the console buffers.
+        const int maxErrorBytes = 64 * 1024;
+        var message = await NodeHttp
+            .ReadStringBoundedAsync(response.Content, maxErrorBytes, cancellationToken)
+            .ConfigureAwait(false);
+        var trimmed = message.Trim();
+        if (trimmed.Length > 512)
+        {
+            trimmed = trimmed[..512];
+        }
+
+        return (ActionStates.Failed, $"node answered HTTP {(int)response.StatusCode}: {trimmed}");
     }
 
     private static object Describe(OpsAdminActionRow row) => new

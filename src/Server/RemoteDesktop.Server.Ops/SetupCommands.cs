@@ -39,6 +39,18 @@ public static class SetupCommands
             return true;
         }
 
+        if (string.Equals(args[0], "--reset-password", StringComparison.Ordinal))
+        {
+            exitCode = ResetPasswordAsync(args, output).GetAwaiter().GetResult();
+            return true;
+        }
+
+        if (string.Equals(args[0], "--reset-totp", StringComparison.Ordinal))
+        {
+            exitCode = ResetTotpAsync(args, output).GetAwaiter().GetResult();
+            return true;
+        }
+
         if (string.Equals(args[0], "--seed-local-nodes", StringComparison.Ordinal))
         {
             exitCode = SeedLocalNodesAsync(args, output).GetAwaiter().GetResult();
@@ -67,17 +79,17 @@ public static class SetupCommands
         if (error is not null)
         {
             output.WriteLine(error);
-            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
+            WriteConfigHint(output);
             return 2;
         }
 
-        var store = OpsStore.Open(options.Database);
+        using var store = OpsStore.Open(options.Database);
         await store.EnsureSchemaAsync().ConfigureAwait(false);
 
         var existing = await store.FindUserAsync(username).ConfigureAwait(false);
         if (existing is not null)
         {
-            output.WriteLine($"账号 {existing.Username} 已存在，未做任何修改。改口令请用另一个用户名，或直接更新数据库。");
+            output.WriteLine($"账号 {existing.Username} 已存在，未做任何修改。改口令请用 --reset-password {existing.Username}，或让另一位管理员在控制台的账号管理里修改。");
             return 3;
         }
 
@@ -125,7 +137,7 @@ public static class SetupCommands
         output.WriteLine($"otpauth URI: {uri}");
         output.WriteLine();
         output.WriteLine("把上面的 URI 导入验证器（大多数应用也支持手动输入密钥）。");
-        output.WriteLine("密钥只显示这一次；丢失后只能再建一个管理员账号。");
+        output.WriteLine("密钥只显示这一次；丢失后可用 --reset-totp 重置，或让另一位管理员在控制台重置。");
         return 0;
     }
 
@@ -147,7 +159,7 @@ public static class SetupCommands
         if (error is not null)
         {
             output.WriteLine(error);
-            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
+            WriteConfigHint(output);
             return 2;
         }
 
@@ -201,7 +213,7 @@ public static class SetupCommands
         if (error is not null)
         {
             output.WriteLine(error);
-            output.WriteLine("If this is an installed package, pass --config-directory with the place the service reads (Linux: /etc/remotedesktop-server/Ops).");
+            WriteConfigHint(output);
             return 2;
         }
 
@@ -260,39 +272,73 @@ public static class SetupCommands
     }
 
     /// <summary>
-    /// Reads the settings the service itself reads. The packaged service keeps them in /etc, not next to the program;
-    /// without a way to point the commands at that directory they would use a different database, or refuse to run
-    /// because there is no database path at all.
+    /// Reads the settings the service itself reads, from the same directory the installed service uses.
     /// </summary>
+    /// <remarks>
+    /// The default is no longer "next to this executable": on Linux the service runs with
+    /// <c>/etc/remotedesktop-server/Ops</c> as its content root and on Windows it reads ProgramData, while the
+    /// executable lives under <c>/usr/lib</c> or Program Files. A relative SQLite path is resolved against the
+    /// settings directory with the same helper the service uses, so the command and the service cannot open two
+    /// different files. A missing directory or a path that expands to nothing is reported as a sentence, not a stack
+    /// trace.
+    /// </remarks>
     private static (OpsOptions Options, string? Error) ReadOptions(string[] args)
     {
-        // The service reads ProgramData on Windows (see ServerSetup.WindowsConfigDirectory) and its working directory
-        // on Linux/macOS. The command has to read the same file, or it creates the first administrator in a database
-        // the service will never open.
-        var configDirectory = Argument(args, "--config-directory")
-            ?? (OperatingSystem.IsWindows()
-                ? Path.Combine(ServerSetup.WindowsConfigDirectory, ServerSetup.OpsFolder)
-                : AppContext.BaseDirectory);
+        var explicitDirectory = Argument(args, "--config-directory");
+        var configDirectory = explicitDirectory ?? ServerSetup.DefaultConfigDirectory(ServerSetup.OpsFolder);
 
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(configDirectory)
-            .AddJsonFile("appsettings.json", optional: true)
-            .AddEnvironmentVariables()
-            .Build();
+        try
+        {
+            configDirectory = Path.GetFullPath(configDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return (new OpsOptions(), $"配置目录无效: {ex.Message}");
+        }
+
+        if (!Directory.Exists(configDirectory))
+        {
+            // A container deployment has no /etc copy: the image's WORKDIR holds the shipped appsettings and the
+            // compose file supplies provider and connection string through the environment. Falling back to the
+            // program directory keeps `docker compose ... run ops --create-admin admin` working. An explicitly named
+            // directory is still an error when it does not exist — a typo must not silently use another database.
+            if (explicitDirectory is not null)
+            {
+                return (new OpsOptions(), $"配置目录不存在: {configDirectory}");
+            }
+
+            configDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+        }
+
+        IConfigurationRoot configuration;
+        try
+        {
+            configuration = new ConfigurationBuilder()
+                .SetBasePath(configDirectory)
+                .AddJsonFile("appsettings.json", optional: true)
+                .AddEnvironmentVariables()
+                .Build();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return (new OpsOptions(), $"无法读取配置目录 {configDirectory}: {ex.Message}");
+        }
 
         var options = configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
+        options.Database ??= new OpsDatabaseSettings();
 
-        // A relative SQLite path is relative to the settings it was written in, the same reading the service gives
-        // it. Environment variables are expanded here too: the packaged Windows file says %ProgramData%, and the
-        // service expands it, so treating it as a relative path created the administrator in
-        // "...\Ops\%ProgramData%\..." instead of the database the service uses.
-        if (string.Equals(options.Database.Provider, OpsDatabaseSettings.Sqlite, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(options.Database.Path))
+        // Provider names are trimmed by OpsDatabaseSettings.Canonical everywhere else; resolving only an exact
+        // "sqlite" here would leave " sqlite " with an unexpanded, relative path.
+        try
         {
-            var databasePath = Environment.ExpandEnvironmentVariables(options.Database.Path);
-            options.Database.Path = Path.IsPathRooted(databasePath)
-                ? databasePath
-                : Path.Combine(configDirectory, databasePath);
+            options.Database.Path = OpsDatabaseSettings.ResolvePath(
+                options.Database.Provider,
+                options.Database.Path,
+                configDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return (options, $"数据库路径无效: {ex.Message}");
         }
 
         try
@@ -306,6 +352,132 @@ public static class SetupCommands
 
         return (options, null);
     }
+
+    /// <summary>
+    /// Resets an account's password from the machine. The same change is available in the console, but a console that
+    /// cannot be signed into is exactly when the command line is needed.
+    /// </summary>
+    private static async Task<int> ResetPasswordAsync(string[] args, TextWriter output)
+    {
+        var username = args.Length > 1 ? args[1] : null;
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            output.WriteLine("用法: RemoteDesktop.Server.Ops --reset-password <用户名> [--config-directory <目录>]");
+            return 2;
+        }
+
+        var (options, error) = ReadOptions(args);
+        if (error is not null)
+        {
+            output.WriteLine(error);
+            WriteConfigHint(output);
+            return 2;
+        }
+
+        using var store = OpsStore.Open(options.Database);
+        await store.EnsureSchemaAsync().ConfigureAwait(false);
+
+        var user = await store.FindUserAsync(username).ConfigureAwait(false);
+        if (user is null)
+        {
+            output.WriteLine($"账号 {username.Trim()} 不存在。");
+            return 3;
+        }
+
+        var password = ReadSecret(output, "设置新口令（至少 12 位）: ");
+        if (password.Length < 12)
+        {
+            output.WriteLine("口令太短：至少 12 位。");
+            return 2;
+        }
+
+        var confirmation = ReadSecret(output, "再输入一次: ");
+        if (!string.Equals(password, confirmation, StringComparison.Ordinal))
+        {
+            output.WriteLine("两次输入不一致。");
+            return 2;
+        }
+
+        if (!await store.UpdateUserPasswordAsync(user.Id, PasswordHasher.Hash(password)).ConfigureAwait(false))
+        {
+            output.WriteLine($"账号 {user.Username} 不存在。");
+            return 3;
+        }
+
+        await store.AppendAuditAsync(
+            new OpsAuditEntry(
+                Guid.NewGuid().ToString("N"),
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                "cli",
+                "admin.reset-password",
+                user.Username,
+                "{\"sessions\":\"revoked\"}",
+                "-",
+                "success")).ConfigureAwait(false);
+
+        output.WriteLine($"账号 {user.Username} 的口令已重置，现有会话已全部退出。");
+        return 0;
+    }
+
+    /// <summary>Resets an account's TOTP secret and prints the new enrolment URI once.</summary>
+    private static async Task<int> ResetTotpAsync(string[] args, TextWriter output)
+    {
+        var username = args.Length > 1 ? args[1] : null;
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            output.WriteLine("用法: RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]");
+            return 2;
+        }
+
+        var (options, error) = ReadOptions(args);
+        if (error is not null)
+        {
+            output.WriteLine(error);
+            WriteConfigHint(output);
+            return 2;
+        }
+
+        using var store = OpsStore.Open(options.Database);
+        await store.EnsureSchemaAsync().ConfigureAwait(false);
+
+        var user = await store.FindUserAsync(username).ConfigureAwait(false);
+        if (user is null)
+        {
+            output.WriteLine($"账号 {username.Trim()} 不存在。");
+            return 3;
+        }
+
+        var secret = Totp.GenerateSecret();
+        if (!await store.UpdateUserTotpSecretAsync(user.Id, secret).ConfigureAwait(false))
+        {
+            output.WriteLine($"账号 {user.Username} 不存在。");
+            return 3;
+        }
+
+        await store.AppendAuditAsync(
+            new OpsAuditEntry(
+                Guid.NewGuid().ToString("N"),
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                "cli",
+                "admin.reset-totp",
+                user.Username,
+                "{\"sessions\":\"revoked\"}",
+                "-",
+                "success")).ConfigureAwait(false);
+
+        output.WriteLine($"账号 {user.Username} 的 TOTP 密钥已重置，现有会话已全部退出。");
+        output.WriteLine($"TOTP 密钥: {secret}");
+        output.WriteLine($"otpauth URI: {Totp.BuildUri("RemoteDesktop", user.Username, secret)}");
+        output.WriteLine("密钥只显示这一次。");
+        return 0;
+    }
+
+    /// <summary>The directories to try when the default is wrong, one per platform that packages the server.</summary>
+    private static void WriteConfigHint(TextWriter output) =>
+        output.WriteLine(
+            "If this is an installed package, pass --config-directory with the directory the service reads: "
+            + $"Windows {Path.Combine(ServerSetup.WindowsConfigDirectory, ServerSetup.OpsFolder)}, "
+            + "Linux /etc/remotedesktop-server/Ops, macOS the Ops directory under the install root.");
 
     private static string? Argument(string[] args, string name)
     {

@@ -1,4 +1,7 @@
+using System.Net;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Core;
@@ -13,36 +16,46 @@ namespace RemoteDesktop.Server.Ops;
 public static class OpsServer
 {
     /// <summary>Registers options, the store, the auth scheme and the policies.</summary>
-    public static WebApplicationBuilder AddOps(this WebApplicationBuilder builder)
+    /// <param name="builder">The host builder.</param>
+    /// <param name="databasePathBase">
+    /// The directory a relative SQLite path is resolved against. The service passes the directory its live settings
+    /// came from; a test or a plain <c>dotnet run</c> leaves it as the content root. Resolving the path here once, with
+    /// the same helper the setup CLI uses, is what keeps <c>--create-admin</c> and the service on one database.
+    /// </param>
+    public static WebApplicationBuilder AddOps(this WebApplicationBuilder builder, string? databasePathBase = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         var options = builder.Configuration.GetSection(OpsOptions.SectionName).Get<OpsOptions>() ?? new OpsOptions();
+        options.Database ??= new OpsDatabaseSettings();
 
-        // A relative SQLite path is relative to the program's content root, which for a service is where the program
-        // lives — not the directory the service manager happened to start it in. (A Windows service starts in System32,
-        // so the old behaviour put the console's database there.) Expanding environment variables lets a packaged
-        // install say %ProgramData%, which is right even on a machine whose data directory is not on C:. Absolute
-        // paths — what the Linux and macOS packages configure — are left as they are.
-        if (!string.IsNullOrWhiteSpace(options.Database.Path))
+        // Absolute paths — what the Linux and macOS packages configure — are left as they are. A relative one is
+        // resolved against the settings directory, not the process's current directory: a Windows service starts in
+        // System32, and the setup CLI may run from anywhere. Expanding environment variables lets a packaged install
+        // say %ProgramData%, which is right even on a machine whose data directory is not on C:.
+        try
         {
-            var databasePath = Environment.ExpandEnvironmentVariables(options.Database.Path);
-            if (!Path.IsPathRooted(databasePath))
-            {
-                databasePath = Path.Combine(builder.Environment.ContentRootPath, databasePath);
-            }
-
-            options.Database.Path = databasePath;
+            options.Database.Path = OpsDatabaseSettings.ResolvePath(
+                options.Database.Provider,
+                options.Database.Path,
+                databasePathBase ?? builder.Environment.ContentRootPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new InvalidOperationException($"Ops:Database:Path is not a usable path: {ex.Message}", ex);
         }
 
-        // Stopping at start-up beats serving a sign-in page that cannot work. The message names Ops:Database:*.
-        options.Database.Validate();
+        // Stopping at start-up beats serving a sign-in page that cannot work, or a background worker that faults on
+        // every pass because a pin or webhook cannot be read. Each message names the key.
+        options.Validate();
         ValidateIngestKeys(options);
+        NodeCertificatePin.Validate(options.NodeCertificatePath);
 
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(OpsStore.Open(options.Database));
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<LoginThrottle>();
+        builder.Services.AddSingleton<AddressThrottle>();
         builder.Services.AddSingleton<ChallengeStore>();
         builder.Services.AddSingleton<AuthService>();
         builder.Services.AddSingleton<OverviewService>();
@@ -50,6 +63,12 @@ public static class OpsServer
         builder.Services.AddSingleton<AlertStateMachine>();
         builder.Services.AddSingleton<AlertService>();
         builder.Services.AddHostedService<AlertRuleSeeder>();
+        builder.Services.AddSingleton<OpsLease>();
+
+        // The last line of defence for a background pass that still throws: one bad scrape or webhook must not stop the
+        // console. The individual loops catch and continue; this only decides what happens when one does not.
+        builder.Services.Configure<HostOptions>(
+            host => host.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
         // Registered as a singleton as well as a hosted service, so a test can drive one evaluation directly.
         builder.Services.AddSingleton<AlertEvaluationService>();
@@ -57,14 +76,22 @@ public static class OpsServer
 
         // The scraper is a singleton as well as a hosted service so a test can drive one pass directly.
         builder.Services.AddHttpClient(MetricScraper.ClientName, client =>
-                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)))
+            {
+                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds));
+                client.MaxResponseContentBufferSize = NodeHttp.MaxResponseBytes;
+            })
             .ConfigurePrimaryHttpMessageHandler(() => NodeCertificatePin.Handler(options.NodeCertificatePath));
         builder.Services.AddHttpClient(DeviceEndpoints.ClientName, client =>
-                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds)))
+            {
+                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.ScrapeTimeoutSeconds));
+                client.MaxResponseContentBufferSize = NodeHttp.MaxResponseBytes;
+            })
             .ConfigurePrimaryHttpMessageHandler(() => NodeCertificatePin.Handler(options.NodeCertificatePath));
         builder.Services.AddHttpClient(AlertService.ClientName, client => client.Timeout = TimeSpan.FromSeconds(5));
         builder.Services.AddSingleton<MetricScraper>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricScraper>());
+        builder.Services.AddHostedService<RetentionService>();
+        builder.Services.AddHostedService<ActionRecoveryService>();
 
         builder.Services
             .AddAuthentication(OpsAuth.Scheme)
@@ -82,6 +109,11 @@ public static class OpsServer
     public static WebApplication UseOps(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
+
+        // Before anything reads RemoteIpAddress or Request.IsHttps. The framework's trust of loopback proxies is
+        // removed: a proxy on this machine is named in Ops:TrustedProxies like any other, so a local caller cannot
+        // choose its own audit address or make a cookie Secure by writing a header.
+        app.UseForwardedHeaders(ForwardedHeaderOptions(app));
 
         // The shell loads nothing from anywhere else, so the policy can be this strict. Inline script and style are
         // excluded on purpose: a future page that needs them should be a decision, not an accident.
@@ -113,6 +145,7 @@ public static class OpsServer
         app.MapOpsAlerts();
         app.MapOpsAudit();
         app.MapOpsActions();
+        app.MapOpsUsers();
         app.MapOpsIngest();
 
         // Anything else under /api is a 404, not the single-page shell: a JSON client that receives HTML has to parse
@@ -121,6 +154,38 @@ public static class OpsServer
         app.MapFallbackToFile("index.html");
 
         return app;
+    }
+
+    /// <summary>
+    /// The proxies whose forwarded headers are believed. The defaults are cleared first: keeping the framework's
+    /// loopback trust would let anything that can reach the local socket choose the address the audit log records and
+    /// the address the sign-in throttle counts against.
+    /// </summary>
+    private static ForwardedHeadersOptions ForwardedHeaderOptions(WebApplication app)
+    {
+        var options = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+            ForwardLimit = 1,
+        };
+
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
+
+        foreach (var entry in app.Services.GetRequiredService<OpsOptions>().TrustedProxies)
+        {
+            // Validated at start-up, so both parses are known to succeed here.
+            if (IPAddress.TryParse(entry, out var address))
+            {
+                options.KnownProxies.Add(address);
+            }
+            else if (System.Net.IPNetwork.TryParse(entry, out var network))
+            {
+                options.KnownIPNetworks.Add(network);
+            }
+        }
+
+        return options;
     }
 
     /// <summary>
@@ -137,9 +202,9 @@ public static class OpsServer
             {
                 key = Convert.FromBase64String(value);
             }
-            catch (FormatException)
+            catch (Exception ex) when (ex is FormatException or ArgumentNullException)
             {
-                throw new InvalidOperationException($"Ops:Ingest:Keys:{id} must be base64 (generate one with: openssl rand -base64 48).");
+                throw new InvalidOperationException($"Ops:Ingest:Keys:{id} must be base64 (generate one with: openssl rand -base64 48).", ex);
             }
 
             if (key.Length < 32)

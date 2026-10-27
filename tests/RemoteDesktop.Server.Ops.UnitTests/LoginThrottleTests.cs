@@ -52,6 +52,37 @@ public class LoginThrottleTests
     }
 
     [Fact]
+    public void A_full_table_does_not_lock_an_unknown_key()
+    {
+        // The old behaviour made every unknown key locked once the table was full. An unauthenticated attacker could
+        // fill it with ten thousand names and stop the administrator from signing in.
+        var time = new ManualTimeProvider(Start);
+        var throttle = new LoginThrottle(time, maxFailures: 2, lockSeconds: 60, maxTrackedKeys: 2);
+
+        throttle.RecordFailure("a");
+        throttle.RecordFailure("b");
+
+        Assert.False(throttle.IsLocked("c", out _));
+        throttle.RecordFailure("c");
+        Assert.False(throttle.IsLocked("c", out _));
+    }
+
+    [Fact]
+    public void Making_room_evicts_an_unlocked_key_before_a_locked_one()
+    {
+        var time = new ManualTimeProvider(Start);
+        var throttle = new LoginThrottle(time, maxFailures: 2, lockSeconds: 60, maxTrackedKeys: 2);
+
+        throttle.RecordFailure("locked");
+        throttle.RecordFailure("locked");        // this key is now locked
+        throttle.RecordFailure("old-unlocked"); // one failure: an entry, but not locked
+        throttle.RecordFailure("new");           // forces eviction
+
+        Assert.True(throttle.IsLocked("locked", out _));
+        Assert.False(throttle.IsLocked("old-unlocked", out _));
+    }
+
+    [Fact]
     public void Spelling_variants_of_a_name_share_the_accounts_budget()
     {
         // The account lookup trims and upper-cases; a throttle that did not would let an attacker spend five guesses

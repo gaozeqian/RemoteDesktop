@@ -23,6 +23,13 @@ public sealed partial class OpsStore : IDisposable
     /// <summary>Serialises audit appends so the chain cannot fork. See the remarks on <see cref="AppendAuditAsync"/>.</summary>
     private readonly SemaphoreSlim _auditGate = new(1, 1);
 
+    /// <summary>
+    /// Serialises ingest batches. Two batches for one correlation id each read the session, merge their events and
+    /// write the whole row; interleaved, the second overwrites the first's fields and the projection silently loses an
+    /// update. The console is a single process, so one gate is enough, and ingest batches are small and infrequent.
+    /// </summary>
+    private readonly SemaphoreSlim _ingestGate = new(1, 1);
+
     private OpsStore(string provider, string connectionString)
     {
         _provider = provider;
@@ -32,8 +39,12 @@ public sealed partial class OpsStore : IDisposable
     /// <summary>The provider in canonical spelling, for logging.</summary>
     public string Provider => _provider;
 
-    /// <summary>Releases the audit gate. Connections are pooled by the driver and are not this type's to own.</summary>
-    public void Dispose() => _auditGate.Dispose();
+    /// <summary>Releases the in-process gates. Connections are pooled by the driver and are not this type's to own.</summary>
+    public void Dispose()
+    {
+        _auditGate.Dispose();
+        _ingestGate.Dispose();
+    }
 
     /// <summary>
     /// A store for <paramref name="settings"/>, with the SQLite folder created if it is missing.
@@ -94,7 +105,10 @@ public sealed partial class OpsStore : IDisposable
             await using (var step = connection.CreateCommand())
             {
                 step.Transaction = transaction;
-                step.CommandText = migration.Sql;
+                step.CommandText = string.Equals(_provider, OpsDatabaseSettings.Postgres, StringComparison.Ordinal)
+                    && migration.PostgresSql is { } postgres
+                        ? postgres
+                        : migration.Sql;
                 await step.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

@@ -52,6 +52,36 @@ public sealed class OpsDatabaseSettings
         }
     }
 
+    /// <summary>
+    /// Resolves the SQLite file the same way for the service and the setup commands.
+    /// </summary>
+    /// <remarks>
+    /// Environment variables are expanded first because the packaged Windows settings say <c>%ProgramData%</c>. A
+    /// relative path is then resolved against one explicit base directory, never against the process's current
+    /// directory: a Windows service starts in System32, and a CLI run from somewhere else must still find the file the
+    /// service will open. An expansion that produces nothing is treated as "not configured" so the caller's
+    /// <see cref="Validate"/> names the key rather than opening the configuration directory as a database.
+    /// </remarks>
+    public static string? ResolvePath(string? provider, string? path, string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+
+        if (!string.Equals(Canonical(provider), Sqlite, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(path).Trim();
+        if (string.IsNullOrWhiteSpace(expanded))
+        {
+            return null;
+        }
+
+        return System.IO.Path.IsPathRooted(expanded)
+            ? expanded
+            : System.IO.Path.Combine(baseDirectory, expanded);
+    }
+
     /// <summary>The stored spelling of a provider name, or <c>null</c> when it is neither of the two.</summary>
     public static string? Canonical(string? provider)
     {

@@ -128,6 +128,50 @@ public class SetupCommandTests : IDisposable
     /// "...\Ops\%ProgramData%\..." while the service uses the real database.
     /// </summary>
     [Fact]
+    public void A_missing_configuration_directory_is_reported_without_a_stack_trace()
+    {
+        var missing = Path.Combine(_directory, "does-not-exist");
+        var output = new StringWriter();
+
+        Assert.True(SetupCommands.TryRun(
+            [
+                "--seed-local-nodes",
+                "--config-directory", missing,
+                "--rendezvous-base-url", "http://127.0.0.1:5080",
+            ],
+            output,
+            out var exitCode));
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("不存在", output.ToString(), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(missing));
+    }
+
+    [Fact]
+    public async Task A_relative_path_and_a_provider_with_spaces_resolve_like_the_service()
+    {
+        await WriteSettingsAsync("data/ops.db", provider: " SQLite ");
+        var database = Path.Combine(_directory, "data", "ops.db");
+
+        var output = new StringWriter();
+        Assert.True(SetupCommands.TryRun(
+            [
+                "--seed-local-nodes",
+                "--config-directory", _directory,
+                "--rendezvous-base-url", "http://127.0.0.1:5080",
+                "--relay-base-url", "http://127.0.0.1:5083",
+            ],
+            output,
+            out var exitCode));
+
+        Assert.Equal(0, exitCode);
+        Assert.True(File.Exists(database), output.ToString());
+
+        using var store = OpsStore.Open(new OpsDatabaseSettings { Provider = OpsDatabaseSettings.Sqlite, Path = database });
+        Assert.Equal(2, (await store.ListNodesAsync(Ct)).Count);
+    }
+
+    [Fact]
     public async Task A_percent_variable_in_the_database_path_is_expanded_like_the_service_does()
     {
         var expanded = Path.Combine(_directory, "expanded");
@@ -170,13 +214,13 @@ public class SetupCommandTests : IDisposable
         }
     }
 
-    private Task WriteSettingsAsync(string databasePath = "ops.db") =>
+    private Task WriteSettingsAsync(string databasePath = "ops.db", string provider = "sqlite") =>
         File.WriteAllTextAsync(
             Path.Combine(_directory, "appsettings.json"),
             $$"""
             {
               "Ops": {
-                "Database": { "Provider": "sqlite", "Path": "{{databasePath}}" }
+                "Database": { "Provider": "{{provider}}", "Path": "{{databasePath}}" }
               }
             }
             """,

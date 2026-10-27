@@ -83,7 +83,10 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
             await scraper.RunOnceAsync(Ct);
             node.Advance(64 * 1024);
-            await Task.Delay(1100, Ct);
+
+            // The scraper timestamps samples from the host clock, which is virtual here; without moving it the second
+            // scrape replaces the first at the same timestamp and there is no interval to compute a rate from.
+            fixture.Time.Advance(TimeSpan.FromSeconds(2));
             await scraper.RunOnceAsync(Ct);
 
             var overview = await client.GetFromJsonAsync<OverviewDto>("/api/overview", Ct);
@@ -146,7 +149,7 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

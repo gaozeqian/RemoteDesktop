@@ -25,7 +25,7 @@ public sealed partial class OpsStore
         command.CommandText = """
             INSERT INTO ops_lease (name, holder, expires_at) VALUES (@name, @holder, @expiresAt)
             ON CONFLICT (name) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at
-            WHERE ops_lease.expires_at < @now;
+            WHERE ops_lease.expires_at < @now OR ops_lease.holder = @holder;
             """;
         Bind(
             command,

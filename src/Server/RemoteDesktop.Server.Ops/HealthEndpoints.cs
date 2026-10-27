@@ -22,6 +22,16 @@ public static class HealthEndpoints
                 return Results.NotFound();
             }
 
+            // A reverse proxy on this machine connects from loopback, so the socket check alone would let it expose
+            // this endpoint. A forwarded header means the request came through one; the health check is for a local
+            // curl or a supervisor, not for the proxy's clients.
+            if (context.Request.Headers.ContainsKey("X-Forwarded-For")
+                || context.Request.Headers.ContainsKey("X-Forwarded-Proto")
+                || context.Request.Headers.ContainsKey("Forwarded"))
+            {
+                return Results.NotFound();
+            }
+
             try
             {
                 await store.ProbeAsync(cancellationToken).ConfigureAwait(false);

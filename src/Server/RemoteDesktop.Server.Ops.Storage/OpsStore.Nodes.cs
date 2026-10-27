@@ -38,6 +38,20 @@ public sealed partial class OpsStore
         return nodes;
     }
 
+    /// <summary>One node by id, or <c>null</c>.</summary>
+    public async Task<OpsNode?> FindNodeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {NodeColumns} FROM ops_node WHERE id = @id;";
+        Bind(command, ("@id", id));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadNode(reader) : null;
+    }
+
     /// <summary>Adds a node. A duplicate name surfaces as the provider's unique-constraint error.</summary>
     public async Task CreateNodeAsync(OpsNode node, CancellationToken cancellationToken = default)
     {
@@ -75,6 +89,54 @@ public sealed partial class OpsStore
         await using var command = connection.CreateCommand();
         command.CommandText = "UPDATE ops_node SET base_url = @baseUrl WHERE name = @name;";
         Bind(command, ("@name", name), ("@baseUrl", baseUrl));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>
+    /// Changes a node's enabled flag and/or address. A new address clears the last-scrape status: the old success
+    /// says nothing about a different endpoint.
+    /// </summary>
+    public async Task<bool> UpdateNodeAsync(
+        string id,
+        bool? enabled,
+        string? baseUrl,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        if (enabled is null && baseUrl is null)
+        {
+            throw new ArgumentException("At least one of enabled or baseUrl is required.", nameof(enabled));
+        }
+
+        var assignments = new List<string>(5);
+        if (enabled is { } value)
+        {
+            assignments.Add("enabled = @enabled");
+        }
+
+        if (baseUrl is not null)
+        {
+            assignments.Add("base_url = @baseUrl");
+            assignments.Add("last_scrape_at = NULL");
+            assignments.Add("last_scrape_ok = NULL");
+        }
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"UPDATE ops_node SET {string.Join(", ", assignments)} WHERE id = @id;";
+
+        // Only bind parameters the generated statement contains; Npgsql is stricter than SQLite about unused ones.
+        Bind(command, ("@id", id));
+        if (enabled is { } flag)
+        {
+            Bind(command, ("@enabled", flag ? 1 : 0));
+        }
+
+        if (baseUrl is not null)
+        {
+            Bind(command, ("@baseUrl", baseUrl));
+        }
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
     }

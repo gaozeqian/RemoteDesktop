@@ -68,6 +68,7 @@
       <button class="nav-item" type="button" data-page="alerts">告警中心</button>
       <button class="nav-item" type="button" data-page="actions">管理动作</button>
       <button class="nav-item" type="button" data-page="audit" id="navAudit">审计日志</button>
+      <button class="nav-item" type="button" data-page="users" id="navUsers" hidden>账号管理</button>
       <button class="nav-item" type="button" disabled>系统设置 <span class="soon">M6</span></button>
     </nav>
 
@@ -322,6 +323,45 @@
           </table>
           <p class="empty" id="devicesEmpty" hidden>没有可用的信令节点，或该节点还没有登记过设备。</p>
           <div class="load-more"><button class="small" type="button" id="devicesMore" hidden>加载更多</button></div>
+        </div>
+      </section>
+
+      <!-- ---------- 账号管理 ---------- -->
+      <section class="page" id="page-users" hidden>
+        <div class="banner">
+          <div>
+            <strong>改口令、重置动态码、停用或删除账号，都会立刻结束该账号的所有会话。</strong>
+            <p>最后一个可用的管理员不能被停用或删除。新账号的 TOTP 密钥只显示一次；丢失后用“重置 TOTP”生成新的。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>账号</h2><span class="muted" id="usersHint"></span></div>
+          <table class="data-table">
+            <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th><th></th></tr></thead>
+            <tbody id="userTbody"></tbody>
+          </table>
+          <p class="empty" id="usersEmpty" hidden>还没有账号。</p>
+          <p class="hint mono" id="usersNotice" hidden></p>
+        </div>
+
+        <div class="card" id="userFormCard" hidden>
+          <div class="card-head"><h2>新建账号</h2><span class="muted">管理员</span></div>
+          <form id="userForm" class="form-grid">
+            <label class="field"><span>账号</span><input id="newUserName" type="text" required maxlength="64" autocomplete="off"></label>
+            <label class="field"><span>口令（至少 12 位）</span><input id="userPassword" type="password" required minlength="12" autocomplete="new-password"></label>
+            <label class="field"><span>角色</span>
+              <select id="newUserRole">
+                <option value="viewer">viewer（只读）</option>
+                <option value="operator">operator（可确认告警）</option>
+                <option value="admin">admin（管理员）</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button class="primary" type="submit" id="userSubmit">创建</button>
+              <span class="error inline" id="userError" hidden></span>
+            </div>
+          </form>
         </div>
       </section>
 

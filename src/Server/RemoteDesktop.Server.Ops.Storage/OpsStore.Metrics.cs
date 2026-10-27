@@ -147,20 +147,23 @@ public sealed partial class OpsStore
     }
 
     /// <summary>Deletes readings older than <paramref name="beforeUnixMilliseconds"/> in bounded chunks.</summary>
-    public async Task<int> DeleteSamplesBeforeAsync(long beforeUnixMilliseconds, CancellationToken cancellationToken = default)
+    public async Task<int> DeleteSamplesBeforeAsync(
+        long beforeUnixMilliseconds,
+        int limit = 5000,
+        CancellationToken cancellationToken = default)
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
 
         // A single DELETE over a week of readings locks the database for minutes. The limit keeps each statement short
-        // enough that a page load in between still gets through; the caller loops until it returns zero.
+        // enough that a page load in between still gets through; the caller loops until it returns fewer than the batch.
         command.CommandText = """
             DELETE FROM ops_metric_sample
             WHERE (node_id, metric, ts) IN (
-                SELECT node_id, metric, ts FROM ops_metric_sample WHERE ts < @before LIMIT 5000
+                SELECT node_id, metric, ts FROM ops_metric_sample WHERE ts < @before LIMIT @limit
             );
             """;
-        Bind(command, ("@before", beforeUnixMilliseconds));
+        Bind(command, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

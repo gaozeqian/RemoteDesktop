@@ -37,7 +37,18 @@ if (!string.IsNullOrWhiteSpace(listen))
     builder.WebHost.UseUrls(listen);
 }
 
-builder.AddOps();
+// The live settings on Windows are in ProgramData, so a relative SQLite path in that file has to resolve there too —
+// resolving it against Program Files would put the database beside the program the MSI replaces on every upgrade.
+// When the live file does not exist this is a development run reading the project's appsettings, and the content
+// root is the right base. On Linux and macOS the content root is the settings directory, and AddOps uses it.
+var liveOpsSettings = Path.Combine(
+    ServerSetup.WindowsConfigDirectory,
+    ServerSetup.OpsFolder,
+    ServerSetup.SettingsFileName);
+var databasePathBase = OperatingSystem.IsWindows() && File.Exists(liveOpsSettings)
+    ? Path.GetDirectoryName(liveOpsSettings)
+    : null;
+builder.AddOps(databasePathBase);
 
 var app = builder.Build();
 app.UseOps();

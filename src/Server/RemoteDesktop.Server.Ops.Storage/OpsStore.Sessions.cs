@@ -86,4 +86,28 @@ public sealed partial class OpsStore
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Deletes projected sessions whose last activity is before the cutoff, in bounded batches. A session that never
+    /// ended is included when its projection stopped being updated: a connection that has been silent for the whole
+    /// retention window is not going to report an end.
+    /// </summary>
+    public async Task<int> DeleteSessionsBeforeAsync(
+        long beforeUnixMilliseconds,
+        int limit = 5000,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM ops_session WHERE id IN (
+                SELECT id FROM ops_session
+                WHERE COALESCE(ended_at, updated_at) < @before
+                LIMIT @limit
+            );
+            """;
+        Bind(command, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

@@ -11,6 +11,7 @@ const state = {
   alerts: [],
   rules: [],
   actions: [],
+  users: [],
   devices: [],
   deviceCursor: null,
   timer: null,
@@ -46,6 +47,7 @@ const el = {
     audit: document.getElementById("page-audit"),
     devices: document.getElementById("page-devices"),
     nodes: document.getElementById("page-nodes"),
+    users: document.getElementById("page-users"),
   },
   kpiDevices: document.getElementById("kpiDevices"),
   kpiSessions: document.getElementById("kpiSessions"),
@@ -90,6 +92,18 @@ const el = {
   platformMix: document.getElementById("platformMix"),
   mixEmpty: document.getElementById("mixEmpty"),
   navAudit: document.getElementById("navAudit"),
+  navUsers: document.getElementById("navUsers"),
+  userTbody: document.getElementById("userTbody"),
+  usersEmpty: document.getElementById("usersEmpty"),
+  usersHint: document.getElementById("usersHint"),
+  usersNotice: document.getElementById("usersNotice"),
+  userFormCard: document.getElementById("userFormCard"),
+  userForm: document.getElementById("userForm"),
+  newUserName: document.getElementById("newUserName"),
+  userPassword: document.getElementById("userPassword"),
+  newUserRole: document.getElementById("newUserRole"),
+  userSubmit: document.getElementById("userSubmit"),
+  userError: document.getElementById("userError"),
   alertsHint: document.getElementById("alertsHint"),
   alertTbody: document.getElementById("alertTbody"),
   alertsEmpty: document.getElementById("alertsEmpty"),
@@ -119,6 +133,7 @@ const pageTitles = {
   audit: "审计日志",
   devices: "设备管理",
   nodes: "节点管理",
+  users: "账号管理",
 };
 
 /* ---------------- theme ---------------- */
@@ -232,6 +247,8 @@ function showApp(user) {
   el.nodeFormCard.hidden = user.role !== "admin";
   el.ruleForm.hidden = user.role !== "admin";
   el.navAudit.hidden = user.role !== "admin";
+  el.navUsers.hidden = user.role !== "admin";
+  el.userFormCard.hidden = user.role !== "admin";
 
   switchPage("overview");
   startPolling();
@@ -262,6 +279,9 @@ function switchPage(page) {
   }
   if (page === "actions") {
     void loadActions();
+  }
+  if (page === "users") {
+    void loadUsers();
   }
   if (page === "devices") {
     void (async () => {
@@ -1302,6 +1322,13 @@ function renderNodes() {
     actions.className = "actions";
 
     if (isAdmin) {
+      const edit = document.createElement("button");
+      edit.className = "small";
+      edit.type = "button";
+      edit.textContent = "改地址";
+      edit.addEventListener("click", () => editNode(node));
+      actions.append(edit);
+
       const toggle = document.createElement("button");
       toggle.className = "small";
       toggle.type = "button";
@@ -1321,6 +1348,26 @@ function renderNodes() {
     row.append(nameCell, roleCell, urlCell, statusCell, whenCell, actionCell);
     el.nodeTbody.append(row);
   }
+}
+
+async function editNode(node) {
+  const baseUrl = window.prompt(`节点「${node.name}」的新基础地址（http:// 或 https://）`, node.baseUrl);
+  if (baseUrl === null) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}`, {
+    method: "PATCH",
+    body: { baseUrl: baseUrl.trim() },
+  });
+
+  if (status === 204) {
+    await loadNodes();
+    await loadOverview();
+    return;
+  }
+
+  window.alert(payload && payload.message ? payload.message : "修改失败。");
 }
 
 async function toggleNode(node) {
@@ -1377,6 +1424,212 @@ el.nodeForm.addEventListener("submit", async (event) => {
     el.nodeError.hidden = false;
   } finally {
     el.nodeSubmit.disabled = false;
+  }
+});
+
+/* ---------------- accounts ---------------- */
+
+async function loadUsers() {
+  const { status, payload } = await api("/api/users");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  state.users = payload;
+  renderUsers();
+}
+
+function setUsersNotice(message) {
+  el.usersNotice.textContent = message || "";
+  el.usersNotice.hidden = !message;
+}
+
+function renderUsers() {
+  const users = state.users;
+  const current = state.user ? state.user.name : "";
+
+  el.userTbody.replaceChildren();
+  el.usersEmpty.hidden = users.length > 0;
+  el.usersHint.textContent = users.length === 0 ? "" : `共 ${users.length} 个`;
+
+  for (const user of users) {
+    const row = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.className = "mono";
+    name.textContent = user.username;
+
+    const roleCell = document.createElement("td");
+    const role = document.createElement("span");
+    role.className = "role-pill";
+    role.textContent = user.role;
+    roleCell.append(role);
+
+    const statusCell = document.createElement("td");
+    const status = document.createElement("span");
+    status.textContent = user.disabled ? "已停用" : "正常";
+    status.className = user.disabled ? "state-bad" : "state-ok";
+    statusCell.append(status);
+
+    const created = document.createElement("td");
+    created.className = "mono";
+    created.textContent = formatRelative(user.createdAt);
+
+    const actionCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const password = document.createElement("button");
+    password.className = "small";
+    password.type = "button";
+    password.textContent = "改密";
+    password.addEventListener("click", () => resetUserPassword(user));
+    actions.append(password);
+
+    const totp = document.createElement("button");
+    totp.className = "small";
+    totp.type = "button";
+    totp.textContent = "重置 TOTP";
+    totp.addEventListener("click", () => resetUserTotp(user));
+    actions.append(totp);
+
+    if (user.username !== current) {
+      const toggle = document.createElement("button");
+      toggle.className = "small";
+      toggle.type = "button";
+      toggle.textContent = user.disabled ? "启用" : "停用";
+      toggle.addEventListener("click", () => toggleUser(user));
+      actions.append(toggle);
+
+      const remove = document.createElement("button");
+      remove.className = "small danger";
+      remove.type = "button";
+      remove.textContent = "删除";
+      remove.addEventListener("click", () => deleteUser(user));
+      actions.append(remove);
+    }
+
+    actionCell.append(actions);
+    row.append(name, roleCell, statusCell, created, actionCell);
+    el.userTbody.append(row);
+  }
+}
+
+async function resetUserPassword(user) {
+  const password = window.prompt(`为「${user.username}」设置新口令（至少 12 位）。\n如果这是当前账号，完成后需要重新登录。`);
+  if (password === null) {
+    return;
+  }
+  if (password.length < 12) {
+    setUsersNotice("口令太短：至少 12 位。");
+    return;
+  }
+
+  const confirmation = window.prompt("再输入一次新口令。");
+  if (confirmation !== password) {
+    setUsersNotice("两次输入不一致。");
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/password`, {
+    method: "POST",
+    body: { password },
+  });
+
+  setUsersNotice(status === 204
+    ? `「${user.username}」的口令已重置，它的所有会话已退出。`
+    : payload && payload.message ? `重置失败：${payload.message}` : "重置失败。");
+
+  if (status === 204) {
+    await loadUsers();
+  }
+}
+
+async function resetUserTotp(user) {
+  if (!window.confirm(`为「${user.username}」生成新的 TOTP 密钥？旧的验证器条目将不能再登录。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/totp`, { method: "POST" });
+  if (status !== 200 || !payload) {
+    setUsersNotice(payload && payload.message ? `重置失败：${payload.message}` : "重置失败。");
+    return;
+  }
+
+  if (user.username === state.user.name) {
+    // Resetting your own secret revoked the session this page is using. Keep the once-only secret in front of the
+    // operator before the page returns to the sign-in screen.
+    window.alert(`新的 TOTP 密钥（只显示一次）：\n${payload.totpSecret}\n${payload.otpauthUri}\n\n当前会话已退出，请用新动态码重新登录。`);
+    signedOut();
+    return;
+  }
+
+  setUsersNotice(`「${user.username}」的新 TOTP 密钥（只显示一次）：${payload.totpSecret}\n${payload.otpauthUri}`);
+  await loadUsers();
+}
+
+async function toggleUser(user) {
+  if (!user.disabled && !window.confirm(`停用「${user.username}」？它的所有会话会立刻退出。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/disabled`, {
+    method: "POST",
+    body: { disabled: !user.disabled },
+  });
+
+  if (status !== 204) {
+    setUsersNotice(payload && payload.message ? `操作失败：${payload.message}` : "操作失败。");
+    return;
+  }
+
+  await loadUsers();
+}
+
+async function deleteUser(user) {
+  if (!window.confirm(`删除账号「${user.username}」？这个操作不能撤销。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+  if (status !== 204) {
+    setUsersNotice(payload && payload.message ? `删除失败：${payload.message}` : "删除失败。");
+    return;
+  }
+
+  await loadUsers();
+}
+
+el.userForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  el.userError.hidden = true;
+  el.userSubmit.disabled = true;
+  setUsersNotice(null);
+
+  try {
+    const { status, payload } = await api("/api/users", {
+      method: "POST",
+      body: {
+        username: el.newUserName.value.trim(),
+        password: el.userPassword.value,
+        role: el.newUserRole.value,
+      },
+    });
+
+    if (status === 200 && payload) {
+      el.userForm.reset();
+      setUsersNotice(`账号「${payload.username}」已创建。TOTP 密钥（只显示一次）：${payload.totpSecret}\n${payload.otpauthUri}`);
+      await loadUsers();
+      return;
+    }
+
+    el.userError.textContent = payload && payload.message ? `创建失败：${payload.message}` : "创建失败。";
+    el.userError.hidden = false;
+  } catch {
+    el.userError.textContent = "无法连接服务器。";
+    el.userError.hidden = false;
+  } finally {
+    el.userSubmit.disabled = false;
   }
 });
 

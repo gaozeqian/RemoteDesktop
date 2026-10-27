@@ -15,6 +15,35 @@ namespace RemoteDesktop.Server.Ops;
 /// </remarks>
 internal static class NodeCertificatePin
 {
+    /// <summary>
+    /// Fails at start-up when the configured pin cannot be read, rather than on every scrape. A bad path used to throw
+    /// inside the scraper's handler factory after the host was already serving, which the background worker could not
+    /// recover from.
+    /// </summary>
+    public static void Validate(string? certificatePath)
+    {
+        if (string.IsNullOrWhiteSpace(certificatePath))
+        {
+            return;
+        }
+
+        if (!File.Exists(certificatePath))
+        {
+            throw new InvalidOperationException($"Ops:NodeCertificatePath '{certificatePath}' does not exist.");
+        }
+
+        try
+        {
+            using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+        }
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                $"Ops:NodeCertificatePath '{certificatePath}' could not be read as a certificate: {ex.Message}",
+                ex);
+        }
+    }
+
     public static HttpMessageHandler Handler(string? certificatePath)
     {
         var handler = new SocketsHttpHandler();

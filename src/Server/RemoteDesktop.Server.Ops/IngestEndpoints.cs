@@ -25,6 +25,12 @@ public static partial class IngestEndpoints
     private const int MaxEvents = 500;
     private const int MaxSkewSeconds = 60;
 
+    /// <summary>How old an event may be. A retrying node is minutes behind, not a week.</summary>
+    private static readonly TimeSpan MaxEventAge = TimeSpan.FromDays(7);
+
+    /// <summary>How far ahead a node's clock may be. More than this is a wrong clock, not skew.</summary>
+    private static readonly TimeSpan MaxEventFuture = TimeSpan.FromMinutes(5);
+
     /// <summary>Maps <c>POST /ingest/events</c>.</summary>
     public static void MapOpsIngest(this IEndpointRouteBuilder endpoints)
     {
@@ -107,11 +113,18 @@ public static partial class IngestEndpoints
                 return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
             }
 
+            // OccurredAt is the node's clock, not the console's. A value far in the future or in the past is not an
+            // event the projection can order against anything else; accepting it would let one wrong clock put a
+            // session at the top of the list forever or hide it behind the retention cutoff.
+            var earliest = now - MaxEventAge;
+            var latest = now + MaxEventFuture;
             var invalid = events.FindIndex(envelope =>
                 string.IsNullOrWhiteSpace(envelope.EventId)
                 || string.IsNullOrWhiteSpace(envelope.Kind)
                 || string.IsNullOrWhiteSpace(envelope.CorrelationId)
-                || envelope.V != 1);
+                || envelope.V != 1
+                || envelope.OccurredAt < earliest
+                || envelope.OccurredAt > latest);
             if (invalid >= 0)
             {
                 return Results.BadRequest(new { error = "event", index = invalid });

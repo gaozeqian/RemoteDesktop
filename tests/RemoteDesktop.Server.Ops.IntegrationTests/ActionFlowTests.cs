@@ -167,7 +167,7 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(secret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(secret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

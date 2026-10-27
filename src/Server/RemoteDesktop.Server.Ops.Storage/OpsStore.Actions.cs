@@ -129,8 +129,41 @@ public sealed partial class OpsStore
         return await FindActionAsync(id, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Marks an approved action as executed, or as failed with a reason.</summary>
-    public async Task CompleteActionAsync(string id, string state, long at, string? error, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Actions that have been approved since before the cutoff and still have not reached a terminal state. An
+    /// approval normally completes within one node call; one that has been sitting this long belongs to a process
+    /// that died between the two steps, and no handler is left to finish it.
+    /// </summary>
+    public async Task<IReadOnlyList<OpsAdminActionRow>> ListStaleApprovedActionsAsync(
+        long approvedBeforeUnixMilliseconds,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT {ActionColumns} FROM ops_admin_action
+            WHERE state = 'approved' AND approved_at < @before
+            ORDER BY approved_at
+            LIMIT @limit;
+            """;
+        Bind(command, ("@before", approvedBeforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 500)));
+
+        var actions = new List<OpsAdminActionRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            actions.Add(ReadAction(reader));
+        }
+
+        return actions;
+    }
+
+    /// <summary>
+    /// Marks an approved action as executed, or as failed with a reason. False means the row was no longer approved —
+    /// another handler got there first — so a caller that also writes an audit entry can skip it.
+    /// </summary>
+    public async Task<bool> CompleteActionAsync(string id, string state, long at, string? error, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
 
@@ -141,7 +174,7 @@ public sealed partial class OpsStore
             WHERE id = @id AND state = 'approved';
             """;
         Bind(command, ("@id", id), ("@state", state), ("@at", at), ("@error", error));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
     }
 
     private static OpsAdminActionRow ReadAction(DbDataReader reader) =>

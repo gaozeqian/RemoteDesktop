@@ -190,7 +190,7 @@ public class AlertFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtu
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

@@ -186,9 +186,9 @@ public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtur
     /// <summary>
     /// A six-digit value that is not the current code and is far enough away not to match a neighbouring window.
     /// </summary>
-    private static string WrongCode(string secret)
+    private string WrongCode(string secret)
     {
-        var current = int.Parse(Totp.Compute(secret, DateTimeOffset.UtcNow), CultureInfo.InvariantCulture);
+        var current = int.Parse(Totp.Compute(secret, fixture.Now), CultureInfo.InvariantCulture);
         return ((current + 500_000) % 1_000_000).ToString("D6", CultureInfo.InvariantCulture);
     }
 
@@ -206,7 +206,7 @@ public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtur
         var login = await LoginAsync(client, username);
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge = login.Challenge, code = Totp.Compute(secret, DateTimeOffset.UtcNow) },
+            new { challenge = login.Challenge, code = fixture.NextTotp(secret) },
             Ct);
 
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);

@@ -1,3 +1,4 @@
+using System.Net;
 using RemoteDesktop.Server.Ops.Core;
 
 namespace RemoteDesktop.Server.Ops;
@@ -56,6 +57,111 @@ public sealed class OpsOptions
 
     /// <summary>Where alerts are announced.</summary>
     public NotificationSettings Notifications { get; set; } = new();
+
+    /// <summary>
+    /// Proxies whose <c>X-Forwarded-For</c> and <c>X-Forwarded-Proto</c> headers are believed. Empty by default: a
+    /// header anybody can write must not decide the audit address, the sign-in budget, or whether a cookie is Secure.
+    /// A same-machine nginx/Caddy is named here like any other proxy.
+    /// </summary>
+    public List<string> TrustedProxies { get; set; } = [];
+
+    /// <summary>How long a stuck management action may stay approved before the recovery task closes it.</summary>
+    public int ActionStaleSeconds { get; set; } = 60;
+
+    /// <summary>How much history the console keeps in its own database.</summary>
+    public RetentionSettings Retention { get; set; } = new();
+
+    /// <summary>Refuses settings that cannot work, before the host starts serving.</summary>
+    /// <exception cref="InvalidOperationException">A value cannot be used; the message names the key.</exception>
+    public void Validate()
+    {
+        // The binder can turn an explicit null in appsettings into a null property even though the defaults are
+        // non-null; normalise before anything dereferences them.
+        Database ??= new OpsDatabaseSettings();
+        Notifications ??= new NotificationSettings();
+        Ingest ??= new IngestSettings();
+        Retention ??= new RetentionSettings();
+        TrustedProxies ??= [];
+
+        Database.Validate();
+
+        if (ScrapeIntervalSeconds < 1)
+        {
+            throw new InvalidOperationException("Ops:ScrapeIntervalSeconds must be at least 1.");
+        }
+
+        if (ScrapeTimeoutSeconds < 1)
+        {
+            throw new InvalidOperationException("Ops:ScrapeTimeoutSeconds must be at least 1.");
+        }
+
+        if (AlertIntervalSeconds < 1)
+        {
+            throw new InvalidOperationException("Ops:AlertIntervalSeconds must be at least 1.");
+        }
+
+        if (ActionStaleSeconds < 1)
+        {
+            throw new InvalidOperationException("Ops:ActionStaleSeconds must be at least 1.");
+        }
+
+        if (SessionLifetime <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("Ops:SessionLifetime must be positive.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(Notifications.WebhookUrl)
+            && (!Uri.TryCreate(Notifications.WebhookUrl.Trim(), UriKind.Absolute, out var webhook)
+                || (webhook.Scheme != Uri.UriSchemeHttp && webhook.Scheme != Uri.UriSchemeHttps)))
+        {
+            throw new InvalidOperationException(
+                "Ops:Notifications:WebhookUrl must be an absolute http(s) URL, or empty to disable notifications.");
+        }
+
+        foreach (var entry in TrustedProxies)
+        {
+            if (!IPAddress.TryParse(entry, out _) && !System.Net.IPNetwork.TryParse(entry, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Ops:TrustedProxies contains '{entry}', which is neither an IP address nor a CIDR network.");
+            }
+        }
+
+        Retention.Validate();
+    }
+}
+
+/// <summary>Retention windows, in days. Zero disables the delete for that table.</summary>
+public sealed class RetentionSettings
+{
+    /// <summary>Raw metric samples. The overview reads minutes, not months.</summary>
+    public int SampleDays { get; set; } = 30;
+
+    /// <summary>Ingested events. A session's timeline is useful while the session list still shows it.</summary>
+    public int EventDays { get; set; } = 30;
+
+    /// <summary>Projected sessions.</summary>
+    public int SessionDays { get; set; } = 90;
+
+    /// <summary>Resolved alerts. Open alerts are never removed.</summary>
+    public int AlertDays { get; set; } = 180;
+
+    /// <summary>How often the maintenance task runs.</summary>
+    public int IntervalMinutes { get; set; } = 60;
+
+    /// <summary>Refuses negative windows and an interval that would spin.</summary>
+    public void Validate()
+    {
+        if (SampleDays < 0 || EventDays < 0 || SessionDays < 0 || AlertDays < 0)
+        {
+            throw new InvalidOperationException("Ops:Retention:* values cannot be negative.");
+        }
+
+        if (IntervalMinutes < 1)
+        {
+            throw new InvalidOperationException("Ops:Retention:IntervalMinutes must be at least 1.");
+        }
+    }
 }
 
 /// <summary>

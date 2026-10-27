@@ -122,7 +122,56 @@ public static class ServerSetup
     /// <summary>The monitoring console's folder, which has settings of its own.</summary>
     public const string OpsFolder = "Ops";
 
+    /// <summary>Where the Linux package keeps the live settings for all three servers.</summary>
+    public const string LinuxConfigDirectory = "/etc/remotedesktop-server";
+
     public const string SettingsFileName = "appsettings.json";
+
+    /// <summary>
+    /// The directory a setup command reads for <paramref name="roleFolder"/>, matching where the installed service
+    /// reads it.
+    /// </summary>
+    /// <remarks>
+    /// Installed layouts differ from a development or container run. On Windows the package puts the program under
+    /// Program Files and the live settings in ProgramData; a repository build lives under <c>artifacts/bin</c> and
+    /// must read the settings beside itself, not the production database of an installed console on the same machine.
+    /// Linux packages install under <c>/usr/lib/remotedesktop-server</c> and read <c>/etc/remotedesktop-server</c>;
+    /// Docker's <c>/app</c> and a dev build read beside the program. macOS keeps settings beside the executable in
+    /// both cases.
+    /// </remarks>
+    public static string DefaultConfigDirectory(string roleFolder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(roleFolder);
+
+        var programDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+
+        if (OperatingSystem.IsWindows() && IsUnder(programDirectory, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)))
+        {
+            return Path.Combine(WindowsConfigDirectory, roleFolder);
+        }
+
+        if (OperatingSystem.IsLinux()
+            && IsUnder(programDirectory, "/usr/lib/remotedesktop-server"))
+        {
+            return Path.Combine(LinuxConfigDirectory, roleFolder);
+        }
+
+        return programDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static bool IsUnder(string path, string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return false;
+        }
+
+        var prefix = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>The default signaling port, used when no URL is given.</summary>
     public const int DefaultSignalingPort = 5080;

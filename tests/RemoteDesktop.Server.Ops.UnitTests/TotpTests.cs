@@ -42,6 +42,16 @@ public class TotpTests
         Assert.False(Totp.Verify(RfcSecret, older, at));
     }
 
+    [Fact]
+    public void Verification_reports_the_step_that_matched()
+    {
+        var at = DateTimeOffset.FromUnixTimeSeconds(1_234_567_890L);
+        var code = Totp.Compute(RfcSecret, at);
+
+        Assert.True(Totp.TryVerify(RfcSecret, code, at, out var step));
+        Assert.Equal(at.ToUnixTimeSeconds() / Totp.StepSeconds, step);
+    }
+
     [Theory]
     [InlineData("12345")]
     [InlineData("1234567")]

@@ -102,7 +102,60 @@ public sealed partial class AlertService(
             resolved++;
         }
 
+        // A webhook that was down when an alert opened used to lose that page permanently: the open alert no longer
+        // produces a transition, and NotifyAsync is only called from transitions. Retry the deliveries that are still
+        // owed, with a backoff, before the pass ends.
+        await RetryNotificationsAsync(now, cancellationToken).ConfigureAwait(false);
+
         return (opened, resolved);
+    }
+
+    /// <summary>
+    /// Re-delivers notifications whose first attempt failed and whose alert is still in the matching state.
+    /// </summary>
+    private async Task RetryNotificationsAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<OpsPendingNotification> pending;
+        try
+        {
+            pending = await store
+                .ListPendingNotificationsAsync(NotificationChannel, NotificationBackoff.MaxAttempts, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            RetryScanFailed(logger, ex);
+            return;
+        }
+
+        foreach (var item in pending)
+        {
+            if (!NotificationBackoff.IsDue(item.LastAttemptAt, item.Attempts, now))
+            {
+                continue;
+            }
+
+            // The labels are not needed to notify and are not stored on the attempt row; the alert's dedupe key is
+            // the only identity the receiver needs beyond the id.
+            var alert = new OpsAlertRow(
+                item.AlertId,
+                item.RuleId,
+                item.Severity,
+                item.DedupeKey,
+                item.State,
+                item.Value,
+                "{}",
+                item.OpenedAt,
+                null,
+                null,
+                item.ResolvedAt);
+
+            await NotifyAsync(alert, item.RuleName, item.Severity, item.Transition, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -245,6 +298,16 @@ public sealed partial class AlertService(
             ? $"[{severity}] {ruleName}"
             : $"[已恢复] {ruleName}";
 
+        // The URL is checked at start-up, but this method also runs from the retry pass and must not let a malformed
+        // value thrown from Uri's constructor escape into the background loop.
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var webhook)
+            || (webhook.Scheme != Uri.UriSchemeHttp && webhook.Scheme != Uri.UriSchemeHttps))
+        {
+            NotifyFailed(logger, ruleName, "Ops:Notifications:WebhookUrl is not an absolute http(s) URL");
+            await TryRecordAttemptAsync(alert, transition, sent: false, "invalid webhook URL", now, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         try
         {
             using var client = httpClientFactory.CreateClient(ClientName);
@@ -260,18 +323,17 @@ public sealed partial class AlertService(
                         severity,
                         value = alert.Value,
                         openedAt = alert.OpenedAt,
-                        resolvedAt = transition == "resolved" ? now : (long?)null,
+                        resolvedAt = transition == "resolved" ? alert.ResolvedAt ?? now : (long?)null,
                     },
                 },
                 OpsEventJson.Options);
 
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using var response = await client.PostAsync(new Uri(url), content, cancellationToken).ConfigureAwait(false);
+            using var response = await client.PostAsync(webhook, content, cancellationToken).ConfigureAwait(false);
 
             var sent = response.IsSuccessStatusCode;
-            await store.RecordNotificationAttemptAsync(
-                alert.Id,
-                NotificationChannel,
+            await TryRecordAttemptAsync(
+                alert,
                 transition,
                 sent,
                 sent ? null : $"HTTP {(int)response.StatusCode}",
@@ -283,29 +345,51 @@ public sealed partial class AlertService(
                 NotifyRejected(logger, ruleName, (int)response.StatusCode);
             }
         }
-        catch (HttpRequestException ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await store.RecordNotificationAttemptAsync(
-                alert.Id,
-                NotificationChannel,
-                transition,
-                sent: false,
-                ex.Message,
-                now,
-                cancellationToken).ConfigureAwait(false);
+            throw;
+        }
+        catch (TaskCanceledException)
+        {
+            await TryRecordAttemptAsync(alert, transition, sent: false, "timed out", now, cancellationToken).ConfigureAwait(false);
+            NotifyFailed(logger, ruleName, "timed out");
+        }
+        catch (Exception ex)
+        {
+            // A DNS failure, a TLS error, a response the handler could not parse: none of these may reach the
+            // evaluation loop, and all of them are worth another attempt later.
+            await TryRecordAttemptAsync(alert, transition, sent: false, ex.Message, now, cancellationToken).ConfigureAwait(false);
             NotifyFailed(logger, ruleName, ex.Message);
         }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+    }
+
+    /// <summary>Records an attempt without letting a database failure escape the notifier.</summary>
+    private async Task TryRecordAttemptAsync(
+        OpsAlertRow alert,
+        string transition,
+        bool sent,
+        string? error,
+        long at,
+        CancellationToken cancellationToken)
+    {
+        try
         {
             await store.RecordNotificationAttemptAsync(
                 alert.Id,
                 NotificationChannel,
                 transition,
-                sent: false,
-                "timed out",
-                now,
+                sent,
+                error,
+                at,
                 cancellationToken).ConfigureAwait(false);
-            NotifyFailed(logger, ruleName, "timed out");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            NotifyRecordFailed(logger, ex);
         }
     }
 
@@ -327,4 +411,10 @@ public sealed partial class AlertService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The webhook for rule {Rule} failed: {Reason}.")]
     private static partial void NotifyFailed(ILogger logger, string rule, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record a webhook attempt; the retry pass may not see this alert.")]
+    private static partial void NotifyRecordFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read pending webhook deliveries; will try again next pass.")]
+    private static partial void RetryScanFailed(ILogger logger, Exception exception);
 }
