@@ -40,6 +40,13 @@
 - **ingest 不校验 `OccurredAt`**：拒绝 7 天以前或 5 分钟以后的事件，避免错误时钟污染会话时间线。
 - **会话分页同毫秒漏页**：游标改为 `(timestamp, id)`，API 返回 `nextBeforeId`。
 
+### Fixed — 服务端安装
+
+- **默认安装后 Ops 会话监控为空**：原生 Windows / Linux / macOS 服务端的共享安装步骤现在自动生成独立的
+  32 字节 Ops HMAC 密钥，并写入 Rendezvous 与 Relay 的 `OpsEvents` 以及控制台的 `Ops:Ingest:Keys`；升级会
+  补齐旧安装缺失的一侧而不轮换已有密钥。多机 Relay 可用 `--ops-events-endpoint` 和 `RD_OPS_INGEST_KEY`
+  指向中央控制台。自定义 KeyId、额外接收密钥和 Endpoint 保持不变；同一 KeyId 对应不同密钥时安装明确失败。
+
 ### Added — Linux 安装包按部署配置
 
 - **服务端 .deb 安装时选择数据库与 TLS**：debconf 询问 SQLite / PostgreSQL（含连接串）/ 仅内存，以及

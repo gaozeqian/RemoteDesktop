@@ -781,16 +781,19 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 
 1. **节点能上报指标**：信令服务设 `Rendezvous:MetricsEnabled=true`；中继默认就有 `/metrics`。Docker 的 ops overlay 已为信令打开。
 2. **控制台里登记节点**：节点管理页登记两个节点的 `baseUrl`（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）。Docker 部署里控制台和节点在同一 compose 网络，用服务名：`http://rendezvous:5080`、`http://relay:5083`。
-3. **事件通道**：信令/中继把会话事件推给控制台，三处要同一个 HMAC 密钥（`openssl rand -base64 32`）：
+3. **事件通道**：信令/中继把会话事件推给控制台，三处要同一个 HMAC 密钥。原生 Windows / Linux / macOS
+   Server 安装包会自动生成 32 字节密钥并写好三处配置；升级会补齐旧安装缺少的配置，但不会轮换已有密钥：
 
    ```text
    # 信令服务、中继服务的 appsettings.json（或环境变量）
-   "OpsEvents": { "Endpoint": "http://127.0.0.1:5090", "Key": "<Base64>", "KeyId": "k1" }
+   "OpsEvents": { "Endpoint": "http://127.0.0.1:5090", "Key": "<自动生成的 Base64>", "KeyId": "k1" }
    # 控制台
    "Ops": { "Ingest": { "Keys": { "k1": "<同一个 Base64>" } } }
    ```
 
    Docker 的 ops overlay 用环境变量 `OPS_INGEST_KEY` 配这一组值，两边的 Endpoint 是 `http://ops:5090`。
+   额外安装在其他机器上的 Relay 必须显式使用中央 Ops 的地址和同一密钥，可通过 `--ops-events-endpoint` 与
+   `RD_OPS_INGEST_KEY` 传给 `--configure-system`；不能让那台机器自行生成另一把密钥。
    密钥不配，控制台收不到任何事件——`/ingest/events` 返回 503，而不是收到伪造数据。会话、链路、告警、心跳
    全是这条通道进来的；只有节点指标走抓取那条。
 

@@ -36,8 +36,8 @@ public static class SetupCommands
         {
             Urls = Argument(args, "--urls"),
             RelayPublicEndpoint = Argument(args, "--relay-endpoint"),
-            // The Windows installer runs this as a child process and puts the three secret values in its environment
-            // rather than on the command line, where they would be visible in the process list and in the MSI log.
+            // The Windows installer runs this as a child process and puts the secret values in its environment rather
+            // than on the command line, where they would be visible in the process list and in the MSI log.
             // The command-line options stay for hand runs and for the Linux/macOS packages.
             RelaySharedKey = Argument(args, "--relay-key") ?? Environment.GetEnvironmentVariable("RD_RELAY_KEY"),
             DatabaseProvider = Argument(args, "--database"),
@@ -48,6 +48,8 @@ public static class SetupCommands
             TlsHostName = Argument(args, "--tls-hostname"),
             OpsDatabasePath = Argument(args, "--ops-database-path"),
             OpsListen = Argument(args, "--ops-listen"),
+            OpsEventsEndpoint = Argument(args, "--ops-events-endpoint"),
+            OpsIngestKey = Argument(args, "--ops-ingest-key") ?? Environment.GetEnvironmentVariable("RD_OPS_INGEST_KEY"),
             OpsNodeCertificatePath = Argument(args, "--ops-node-certificate-path"),
             MetricsEnabled = Array.Exists(args, argument => string.Equals(argument, "--metrics-enabled", StringComparison.Ordinal)),
         };

@@ -299,9 +299,9 @@ public static class ServerConfigurationActions
                 return ActionResult.Success;
             }
 
-            // An upgrade preserves the live files, so ConfigureServer does not run. The relay key and the console's
-            // local nodes both have to be re-synchronized here; --configure-system with no options leaves the
-            // address, TLS, database and metrics alone and only rewrites the two shared-key entries.
+            // An upgrade preserves the live files, so ConfigureServer does not run. Shared keys and the console's
+            // local nodes still have to be synchronized here; --configure-system with no options leaves the address,
+            // TLS, database and metrics alone, and also completes the Ops event channel missing from older packages.
             SyncRelayKey(session, install, config);
 
             var urls = ReadUrls(settings);
@@ -343,14 +343,12 @@ public static class ServerConfigurationActions
         });
 
     /// <summary>
-    /// Rewrites the relay shared key on an upgrade, without touching any of the values an operator may have changed.
+    /// Synchronizes shared settings on an upgrade, without replacing values an operator may have changed.
     /// </summary>
     /// <remarks>
-    /// <c>--configure-system</c> with no address, database, TLS or metrics options leaves those sections as they are,
-    /// but still reads the existing key and writes it into both <c>Rendezvous:RelaySharedKey</c> and
-    /// <c>Relay:SharedKey</c>. A fresh install already does this in <see cref="ConfigureServer"/>; an upgrade skips
-    /// that action, and before this the relay kept an empty <c>SharedKey</c> while the signaling server had the real
-    /// one, so every relayed ticket was rejected.
+    /// <c>--configure-system</c> with no address, database, TLS or metrics options leaves those sections as they are.
+    /// It retains the relay ticket key and completes the Ops event channel for packages installed before that channel
+    /// was automatic. A fresh install already does this in <see cref="ConfigureServer"/>; an upgrade skips that action.
     /// </remarks>
     private static void SyncRelayKey(Session session, string install, string config)
     {

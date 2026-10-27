@@ -85,6 +85,18 @@ public sealed record ServerSetupOptions
     public string? OpsListen { get; init; }
 
     /// <summary>
+    /// Where Rendezvous and Relay send session events. <see cref="Auto"/> keeps an existing endpoint and otherwise
+    /// derives a loopback endpoint from <see cref="OpsListen"/>. An explicit value is needed by a relay on another machine.
+    /// </summary>
+    public string? OpsEventsEndpoint { get; init; }
+
+    /// <summary>
+    /// The base64 HMAC key shared by Rendezvous, Relay and the console. <see cref="Auto"/> keeps existing keys and
+    /// generates one only when this machine has none. An explicit value synchronizes the well-known <c>k1</c> key.
+    /// </summary>
+    public string? OpsIngestKey { get; init; }
+
+    /// <summary>
     /// A certificate the console pins when it calls its nodes (scrapes and the device proxy). Empty means the system
     /// trust store; a self-signed signaling certificate cannot be trusted that way from an installer script.
     /// </summary>
@@ -92,8 +104,8 @@ public sealed record ServerSetupOptions
 }
 
 /// <summary>
-/// The steps the server installer runs that are not file copying: pointing the two servers at each other, giving them
-/// a shared key, and configuring TLS. Run through
+/// The steps the server installer runs that are not file copying: pointing the servers at each other and at the
+/// console, giving them shared keys, and configuring TLS. Run through
 /// <c>RemoteDesktop.Server.Rendezvous.exe --configure-system</c>; every step is safe to repeat.
 /// </summary>
 /// <remarks>
@@ -181,6 +193,10 @@ public static class ServerSetup
 
     private const int MinimumKeyBytes = 32;
 
+    private const string DefaultOpsKeyId = "k1";
+
+    private const string DefaultOpsEventsEndpoint = "http://127.0.0.1:5090";
+
     /// <summary>The section the provider and its settings live in, nested under <c>Rendezvous</c>.</summary>
     private const string DatabaseSectionName = "Database";
 
@@ -255,6 +271,7 @@ public static class ServerSetup
 
         var database = ConfigureDatabase(rendezvousSection, options, notes);
         var opsConfigured = ConfigureOps(ops, database, options, notes);
+        var opsEventsConfigured = ConfigureOpsEvents(rendezvous, relay, ops, options, notes);
 
         // A password that was not given is not "the certificate has no password": configure-server.sh and the
         // installer's upgrade pane leave the password field empty because they do not store it. If the path did not
@@ -371,10 +388,9 @@ public static class ServerSetup
         Write(rendezvousPath, rendezvous);
         Write(relayPath, relay);
 
-        // The console's settings are touched when the database changed (the Windows installer passes --database auto,
-        // so a first install writes them) or when one of the Ops options was given. A reconfigure that only changes
-        // the URL leaves them alone.
-        if (opsConfigured)
+        // A first install and an upgrade from a version without event reporting both have console settings to write.
+        // Later runs leave the file alone when neither its database nor its event keys changed.
+        if (opsConfigured || opsEventsConfigured)
         {
             Write(opsPath, ops);
         }
@@ -510,6 +526,208 @@ public static class ServerSetup
                     ? fromRendezvous
                     : null;
     }
+
+    /// <summary>
+    /// Gives all three server processes the same event-channel settings. Existing keys are authoritative: an upgrade
+    /// can complete a missing side, but it must never rotate a secret that another node already uses.
+    /// </summary>
+    private static bool ConfigureOpsEvents(
+        JsonObject rendezvous,
+        JsonObject relay,
+        JsonObject ops,
+        ServerSetupOptions options,
+        List<string> notes)
+    {
+        var nodes = new[] { Section(rendezvous, "OpsEvents"), Section(relay, "OpsEvents") };
+        var configuredEndpoint = Expand(options.OpsEventsEndpoint);
+        var explicitEndpoint = IsAuto(configuredEndpoint) ? null : configuredEndpoint;
+        if (explicitEndpoint is not null)
+        {
+            ValidateOpsEventsEndpoint(explicitEndpoint);
+        }
+
+        var existingEndpoints = nodes
+            .Select(node => Text(node, "Endpoint"))
+            .Where(endpoint => endpoint is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var existing in existingEndpoints)
+        {
+            ValidateOpsEventsEndpoint(existing);
+        }
+
+        var repaired = false;
+        for (var index = 0; index < nodes.Length; index++)
+        {
+            if (explicitEndpoint is not null)
+            {
+                nodes[index]["Endpoint"] = explicitEndpoint;
+            }
+            else if (Text(nodes[index], "Endpoint") is null)
+            {
+                nodes[index]["Endpoint"] = existingEndpoints.Length == 1
+                    ? existingEndpoints[0]
+                    : LocalOpsEventsEndpoint(ops);
+                repaired = true;
+            }
+        }
+
+        var keys = Section(Section(Section(ops, "Ops"), "Ingest"), "Keys");
+        var configuredKey = Expand(options.OpsIngestKey);
+        if (!IsAuto(configuredKey))
+        {
+            ValidateOpsKey(configuredKey);
+            var changed = !string.Equals(Text(keys, DefaultOpsKeyId), configuredKey, StringComparison.Ordinal);
+            foreach (var node in nodes)
+            {
+                node["KeyId"] = DefaultOpsKeyId;
+                node["Key"] = configuredKey;
+            }
+
+            keys[DefaultOpsKeyId] = configuredKey;
+            notes.Add("The Ops event channel was configured with the key supplied by the installer.");
+            return changed;
+        }
+
+        var acceptedKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in keys)
+        {
+            var value = property.Value?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException($"Ops ingest key '{property.Key}' is empty; fix or remove it before running setup.");
+            }
+
+            ValidateOpsKey(value);
+            acceptedKeys.Add(property.Key, value);
+        }
+
+        // The union is what a node may reuse. A duplicated id with different secrets can never authenticate both
+        // nodes against the same console, so guessing which side to overwrite would only hide a broken deployment.
+        var knownKeys = new Dictionary<string, string>(acceptedKeys, StringComparer.Ordinal);
+        var nodeKeys = new OpsEventKey?[nodes.Length];
+        for (var index = 0; index < nodes.Length; index++)
+        {
+            if (Text(nodes[index], "Key") is not { } value)
+            {
+                continue;
+            }
+
+            ValidateOpsKey(value);
+            var pair = new OpsEventKey(Text(nodes[index], "KeyId") ?? DefaultOpsKeyId, value);
+            nodeKeys[index] = pair;
+            AddKnownOpsKey(knownKeys, pair);
+        }
+
+        var opsChanged = false;
+        var generated = false;
+        for (var index = 0; index < nodes.Length; index++)
+        {
+            if (nodeKeys[index] is not null)
+            {
+                continue;
+            }
+
+            OpsEventKey pair;
+            var requestedId = Text(nodes[index], "KeyId");
+            if (requestedId is not null && knownKeys.TryGetValue(requestedId, out var requestedKey))
+            {
+                pair = new OpsEventKey(requestedId, requestedKey);
+            }
+            else if (nodeKeys[1 - index] is { } other)
+            {
+                pair = other;
+            }
+            else if (acceptedKeys.Count == 1)
+            {
+                var only = acceptedKeys.Single();
+                pair = new OpsEventKey(only.Key, only.Value);
+            }
+            else if (knownKeys.Count == 0)
+            {
+                pair = new OpsEventKey(DefaultOpsKeyId, Convert.ToBase64String(RandomNumberGenerator.GetBytes(MinimumKeyBytes)));
+                knownKeys.Add(pair.Id, pair.Value);
+                generated = true;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "The Ops event settings are incomplete and contain multiple possible ingest keys. " +
+                    "Set --ops-ingest-key explicitly so setup cannot choose the wrong secret.");
+            }
+
+            nodes[index]["KeyId"] = pair.Id;
+            nodes[index]["Key"] = pair.Value;
+            nodeKeys[index] = pair;
+            repaired = true;
+        }
+
+        // Extra console keys are retained for other nodes. Every key used here must also be accepted by the console.
+        foreach (var pair in nodeKeys.Select(pair => pair!.Value))
+        {
+            if (acceptedKeys.ContainsKey(pair.Id))
+            {
+                continue;
+            }
+
+            keys[pair.Id] = pair.Value;
+            acceptedKeys.Add(pair.Id, pair.Value);
+            opsChanged = true;
+            repaired = true;
+        }
+
+        if (generated)
+        {
+            notes.Add("An Ops ingest key was generated and shared by Rendezvous, Relay and the console.");
+        }
+        else if (repaired || explicitEndpoint is not null)
+        {
+            notes.Add("The Ops event channel was completed without rotating an existing ingest key.");
+        }
+
+        return opsChanged;
+    }
+
+    private static void AddKnownOpsKey(Dictionary<string, string> keys, OpsEventKey pair)
+    {
+        if (keys.TryGetValue(pair.Id, out var existing) && !string.Equals(existing, pair.Value, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Ops ingest key id '{pair.Id}' has different values in the server settings. " +
+                "Set --ops-ingest-key explicitly to synchronize the deployment.");
+        }
+
+        keys[pair.Id] = pair.Value;
+    }
+
+    private static string LocalOpsEventsEndpoint(JsonObject ops)
+    {
+        var listen = Text(ops["Ops"] as JsonObject, "Listen");
+        if (listen is not null
+            && Uri.TryCreate(listen, UriKind.Absolute, out var uri)
+            && uri.Scheme is "http" or "https")
+        {
+            var host = uri.Host is "0.0.0.0" or "::" ? "127.0.0.1" : uri.Host;
+            return new UriBuilder(uri.Scheme, host, uri.Port).Uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        }
+
+        return DefaultOpsEventsEndpoint;
+    }
+
+    private static void ValidateOpsEventsEndpoint(string endpoint)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidOperationException(
+                $"The Ops events endpoint must be an absolute http(s) URL without a query or fragment (got '{endpoint}').");
+        }
+    }
+
+    private readonly record struct OpsEventKey(string Id, string Value);
 
     /// <summary>
     /// Writes where device codes are kept, and says so in the notes.
@@ -963,6 +1181,24 @@ public static class ServerSetup
         if (bytes.Length < MinimumKeyBytes)
         {
             throw new InvalidOperationException($"The relay shared key must be at least {MinimumKeyBytes} bytes ({bytes.Length} given). Generate one with: openssl rand -base64 48");
+        }
+    }
+
+    private static void ValidateOpsKey(string key)
+    {
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(key);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("The Ops ingest key must be base64 (generate one with: openssl rand -base64 32).");
+        }
+
+        if (bytes.Length < MinimumKeyBytes)
+        {
+            throw new InvalidOperationException($"The Ops ingest key must be at least {MinimumKeyBytes} bytes ({bytes.Length} given). Generate one with: openssl rand -base64 32.");
         }
     }
 

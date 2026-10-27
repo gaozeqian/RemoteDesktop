@@ -11,7 +11,7 @@ using RemoteDesktop.Server.Storage;
 namespace RemoteDesktop.Transport.IntegrationTests;
 
 /// <summary>
-/// What the server installer writes into the two settings files. The point of checking it here rather than by
+/// What the server installer writes into the settings files. The point of checking it here rather than by
 /// installing is the contract: the files have to be readable by the servers' own option types, and a value that
 /// would stop a server from starting has to be refused while somebody is still watching the installation.
 /// </summary>
@@ -94,6 +94,122 @@ public sealed class ServerSetupTests : IDisposable
 
         Assert.Equal(first, second);
         Assert.True(Convert.FromBase64String(first).Length >= 32);
+    }
+
+    [Fact]
+    public void The_ops_event_channel_is_generated_once_and_shared_by_all_three_services()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        var rendezvous = Configuration(ServerSetup.RendezvousFolder);
+        var relay = Configuration(ServerSetup.RelayFolder);
+        var ops = Configuration(ServerSetup.OpsFolder);
+        var key = rendezvous["OpsEvents:Key"];
+
+        Assert.False(string.IsNullOrWhiteSpace(key));
+        Assert.Equal(32, Convert.FromBase64String(key).Length);
+        Assert.Equal(key, relay["OpsEvents:Key"]);
+        Assert.Equal(key, ops["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("k1", rendezvous["OpsEvents:KeyId"]);
+        Assert.Equal("k1", relay["OpsEvents:KeyId"]);
+        Assert.Equal("http://127.0.0.1:5090", rendezvous["OpsEvents:Endpoint"]);
+        Assert.Equal("http://127.0.0.1:5090", relay["OpsEvents:Endpoint"]);
+        Assert.NotEqual(rendezvous["Rendezvous:RelaySharedKey"], key);
+
+        // Upgrades run the same setup with no event options. The existing secret must not be rotated.
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        Assert.Equal(key, Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void An_old_or_incomplete_ops_event_channel_is_repaired_with_the_existing_key()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var key = Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"];
+
+        var relay = MutableSettings(ServerSetup.RelayFolder);
+        relay.Remove("OpsEvents");
+        WriteSettings(ServerSetup.RelayFolder, relay);
+        var ops = MutableSettings(ServerSetup.OpsFolder);
+        ops["Ops"]!.AsObject().Remove("Ingest");
+        WriteSettings(ServerSetup.OpsFolder, ops);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("http://127.0.0.1:5090", Configuration(ServerSetup.RelayFolder)["OpsEvents:Endpoint"]);
+    }
+
+    [Fact]
+    public void Custom_ops_event_keys_endpoints_and_extra_console_keys_survive_an_upgrade()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var customKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)7, 32)]);
+        var extraKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)9, 32)]);
+
+        foreach (var folder in new[] { ServerSetup.RendezvousFolder, ServerSetup.RelayFolder })
+        {
+            var settings = MutableSettings(folder);
+            settings["OpsEvents"] = new JsonObject
+            {
+                ["Endpoint"] = "https://ops.example.test/ingest/events",
+                ["KeyId"] = "k2",
+                ["Key"] = customKey,
+                ["Node"] = "operator-name",
+            };
+            WriteSettings(folder, settings);
+        }
+
+        var ops = MutableSettings(ServerSetup.OpsFolder);
+        ops["Ops"]!["Ingest"]!["Keys"] = new JsonObject
+        {
+            ["k2"] = customKey,
+            ["another-node"] = extraKey,
+        };
+        WriteSettings(ServerSetup.OpsFolder, ops);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        var rendezvous = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("https://ops.example.test/ingest/events", rendezvous["OpsEvents:Endpoint"]);
+        Assert.Equal("k2", rendezvous["OpsEvents:KeyId"]);
+        Assert.Equal(customKey, rendezvous["OpsEvents:Key"]);
+        Assert.Equal("operator-name", rendezvous["OpsEvents:Node"]);
+        var console = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(customKey, console["Ops:Ingest:Keys:k2"]);
+        Assert.Equal(extraKey, console["Ops:Ingest:Keys:another-node"]);
+        Assert.Null(console["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void Conflicting_ops_keys_are_refused_instead_of_one_side_being_overwritten()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var relay = MutableSettings(ServerSetup.RelayFolder);
+        var conflictingKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)11, 32)]);
+        relay["OpsEvents"]!["Key"] = conflictingKey;
+        WriteSettings(ServerSetup.RelayFolder, relay);
+
+        var error = Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions()));
+
+        Assert.Contains("different values", error.Message, StringComparison.Ordinal);
+        Assert.Equal(conflictingKey, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+    }
+
+    [Theory]
+    [InlineData("not base64 at all")]
+    [InlineData("c2hvcnQ=")]
+    public void An_invalid_ops_ingest_key_is_refused_before_anything_is_written(string key)
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ServerSetup.Configure(_folder, new ServerSetupOptions { OpsIngestKey = key }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.OpsFolder, ServerSetup.SettingsFileName)));
     }
 
     /// <summary>
@@ -501,6 +617,40 @@ public sealed class ServerSetupTests : IDisposable
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
         rendezvous.Validate();
         Assert.Equal("203.0.113.10:5082", rendezvous.RelayEndpoint);
+
+        // This is the command every native installer runs without extra event options. A successful install must
+        // already have a working console event channel.
+        var key = Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"];
+        Assert.False(string.IsNullOrWhiteSpace(key));
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void A_remote_node_can_be_given_the_central_ops_endpoint_and_key_without_logging_the_secret()
+    {
+        var key = Convert.ToBase64String([.. Enumerable.Repeat((byte)5, 32)]);
+        var output = new StringWriter();
+
+        var handled = SetupCommands.TryRun(
+            [
+                "--configure-system",
+                "--install-directory", _folder,
+                "--ops-events-endpoint", "https://ops.example.test/ingest/events",
+                "--ops-ingest-key", key,
+            ],
+            _folder,
+            output,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(SetupCommands.Success, exitCode);
+        Assert.Equal(key, Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("https://ops.example.test/ingest/events", Configuration(ServerSetup.RelayFolder)["OpsEvents:Endpoint"]);
+        Assert.DoesNotContain(key, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(key, File.ReadAllText(Path.Combine(_folder, SetupCommands.LogFileName)), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -844,6 +994,14 @@ public sealed class ServerSetupTests : IDisposable
         Assert.True(mode.HasFlag(UnixFileMode.GroupRead));
         Assert.False(mode.HasFlag(UnixFileMode.GroupWrite));
         Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
+    }
+
+    private JsonObject MutableSettings(string folder) =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(_folder, folder, ServerSetup.SettingsFileName)))!.AsObject();
+
+    private void WriteSettings(string folder, JsonObject settings)
+    {
+        File.WriteAllText(Path.Combine(_folder, folder, ServerSetup.SettingsFileName), settings.ToJsonString());
     }
 
     private string WriteCertificate()
