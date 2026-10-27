@@ -38,7 +38,7 @@ public class FileTransferDestinationTests
     {
         var local = new FakeSource();
         var remote = new FakeSource();
-        remote.Listings["/remote/Documents"] =
+        remote.Listings[remote.Combine("/remote", "Documents")] =
         [
             new FileEntryInfo("..", IsDirectory: true, 0, DateTimeOffset.UnixEpoch, FileEntryAttributes.None),
         ];
