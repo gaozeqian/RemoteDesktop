@@ -156,7 +156,7 @@ if (Test-Path -LiteralPath $ops) {
         $port = 5080
         try { $port = ([Uri]$urls).Port } catch { }
         if ($port -le 0) { $port = 5080 }
-        $rendezvousNodeUrl = "https://$($env:COMPUTERNAME):$port"
+        $rendezvousNodeUrl = "https://127.0.0.1:$port"
     }
     elseif ($urls) {
         try {

@@ -455,7 +455,7 @@ seed_local_nodes() {
     local urls rendezvous_url
     urls="$(plutil -extract Urls raw "$settings" 2>/dev/null || true)"
     case "$urls" in
-        https://*) rendezvous_url="https://$(hostname):5080" ;;
+        https://*) rendezvous_url="https://127.0.0.1:5080" ;;
         *)         rendezvous_url="http://127.0.0.1:5080" ;;
     esac
 

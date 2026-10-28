@@ -315,10 +315,9 @@ case "$1" in
         # A new console has no nodes, and its whole device page reads through one. Register the two servers this
         # installation just configured. The command adds nothing when the node table already has rows, so an
         # operator's own list survives reinstalls and upgrades.
-        node_host=$(hostname 2>/dev/null || uname -n)
         case "$tls_mode" in
             none) rendezvous_node_url="http://127.0.0.1:5080" ;;
-            *) rendezvous_node_url="https://$node_host:5080" ;;
+            *) rendezvous_node_url="https://127.0.0.1:5080" ;;
         esac
         if [ -f "$INSTALL_DIRECTORY/Ops/appsettings.json" ] \
             && [ -x "$PROGRAM_DIRECTORY/Ops/RemoteDesktop.Server.Ops" ] \
@@ -329,6 +328,14 @@ case "$1" in
                 --rendezvous-base-url "$rendezvous_node_url" \
                 --relay-base-url "http://127.0.0.1:5083"; then
                 echo "remotedesktop-server: could not register the local nodes in the Ops console; add them on its 节点管理 page." >&2
+            fi
+            # Seeding only fills an empty table. An upgrade that switched http/https must also update the local rows.
+            if ! runuser -u "$SERVICE_USER" -- "$PROGRAM_DIRECTORY/Ops/RemoteDesktop.Server.Ops" \
+                --sync-local-nodes \
+                --config-directory "$INSTALL_DIRECTORY/Ops" \
+                --rendezvous-base-url "$rendezvous_node_url" \
+                --relay-base-url "http://127.0.0.1:5083"; then
+                echo "remotedesktop-server: could not update the local node addresses in the Ops console." >&2
             fi
         fi
 

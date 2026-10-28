@@ -8,10 +8,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
 #
 # The console is published on 127.0.0.1:5090 only. Reach it through an SSH tunnel or put your own TLS reverse proxy in
-# front; do not publish 5090 on the internet. In the console, register the two nodes by their Docker service names:
-#
-#   rendezvous   http://rendezvous:5080
-#   relay        http://relay:5083
+# front; do not publish 5090 on the internet. The two nodes are seeded automatically and the operation is idempotent.
 #
 # OpsEvents carries session facts to the console; OPS_INGEST_KEY must be at least 32 bytes of base64 and is the same
 # value in Ops__Ingest__Keys__k1 and in both nodes' OpsEvents__Key.
@@ -50,6 +47,19 @@ services:
       Ops__Database__ConnectionString: "Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}"
       Ops__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
       Ops__Ingest__Keys__k1: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
+      # The compose network is isolated. This explicit opt-in lets the console send NodeToken to service names over
+      # its internal HTTP links; the application default remains HTTPS or loopback only.
+      Ops__AllowInsecureNodeHttp: "true"
+      OPS_RENDEZVOUS_NODE_URL: ${OPS_RENDEZVOUS_NODE_URL:-http://rendezvous:5080}
+      OPS_RELAY_NODE_URL: ${OPS_RELAY_NODE_URL:-http://relay:5083}
+    command:
+      - bash
+      - -ec
+      - |
+        dotnet RemoteDesktop.Server.Ops.dll --seed-local-nodes \
+          --rendezvous-base-url "$$OPS_RENDEZVOUS_NODE_URL" \
+          --relay-base-url "$$OPS_RELAY_NODE_URL"
+        exec dotnet RemoteDesktop.Server.Ops.dll
     ports:
       # Loopback only: the console has its own sign-in and TOTP, but it is not a public listener.
       - "127.0.0.1:5090:5090/tcp"

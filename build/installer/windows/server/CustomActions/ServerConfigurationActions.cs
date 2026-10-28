@@ -300,8 +300,8 @@ public static class ServerConfigurationActions
             }
 
             // An upgrade preserves the live files, so ConfigureServer does not run. Shared keys and the console's
-            // local nodes still have to be synchronized here; --configure-system with no options leaves the address,
-            // TLS, database and metrics alone, and also completes the Ops event channel missing from older packages.
+            // local nodes still have to be synchronized here; setup leaves the address, TLS and database alone, turns
+            // signaling metrics on, and completes the Ops event channel missing from older packages.
             SyncRelayKey(session, install, config);
 
             var urls = ReadUrls(settings);
@@ -346,9 +346,9 @@ public static class ServerConfigurationActions
     /// Synchronizes shared settings on an upgrade, without replacing values an operator may have changed.
     /// </summary>
     /// <remarks>
-    /// <c>--configure-system</c> with no address, database, TLS or metrics options leaves those sections as they are.
-    /// It retains the relay ticket key and completes the Ops event channel for packages installed before that channel
-    /// was automatic. A fresh install already does this in <see cref="ConfigureServer"/>; an upgrade skips that action.
+    /// <c>--configure-system</c> with no address, database or TLS options leaves those sections as they are. It retains
+    /// the relay ticket key, enables signaling metrics like a fresh install, and completes the Ops event channel for
+    /// packages installed before that channel was automatic. A fresh install does this in <see cref="ConfigureServer"/>.
     /// </remarks>
     private static void SyncRelayKey(Session session, string install, string config)
     {
@@ -364,6 +364,9 @@ public static class ServerConfigurationActions
             "--configure-system",
             "--install-directory", install,
             "--config-directory", config,
+            // Fresh installs enable the same endpoint in ConfigureServer. Older packages may have left it off; keeping
+            // it off forever would leave this console's signaling metrics and online-device KPI empty after an upgrade.
+            "--metrics-enabled",
         };
 
         var result = RunProcess(session, executable, install, arguments, new Dictionary<string, string>(), config);
