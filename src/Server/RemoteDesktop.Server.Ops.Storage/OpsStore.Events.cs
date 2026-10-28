@@ -214,9 +214,14 @@ public sealed partial class OpsStore
         var relayed = 0;
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = """
+            command.CommandText = $"""
                 SELECT transport, COUNT(*) FROM ops_session
                 WHERE transport IN ('direct', 'relay') AND COALESCE(started_at, updated_at) >= @since
+                  AND EXISTS (
+                      SELECT 1 FROM ops_event e
+                      WHERE e.correlation_id = ops_session.correlation_id
+                        AND e.kind = '{OpsEventKinds.SessionTelemetry}'
+                  )
                 GROUP BY transport;
                 """;
             Bind(command, ("@since", sinceUnix));

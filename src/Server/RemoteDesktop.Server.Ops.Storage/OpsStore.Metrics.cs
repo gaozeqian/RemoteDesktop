@@ -8,6 +8,9 @@ namespace RemoteDesktop.Server.Ops.Storage;
 /// <summary>One stored reading. <see cref="Metric"/> is the series key: name plus canonical labels.</summary>
 public readonly record struct MetricPoint(string NodeId, string Metric, long Timestamp, double Value);
 
+/// <summary>A series name and the Prometheus kind its first scrape recorded.</summary>
+public readonly record struct MetricCatalogRow(string Metric, string Kind);
+
 public sealed partial class OpsStore
 {
     private const int SampleBatchSize = 200;
@@ -116,6 +119,48 @@ public sealed partial class OpsStore
             """;
         BindMetrics(command, metrics);
         Bind(command, ("@since", sinceUnixMilliseconds));
+
+        return await ReadPointsAsync(command, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Every known series and its kind, for a picker that names what this deployment actually scrapes.</summary>
+    public async Task<IReadOnlyList<MetricCatalogRow>> ListMetricCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT metric, kind FROM ops_metric_catalog ORDER BY metric;";
+
+        var rows = new List<MetricCatalogRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new MetricCatalogRow(reader.GetString(0), reader.GetString(1)));
+        }
+
+        return rows;
+    }
+
+    /// <summary>The newest reading for every series a single node has reported. No freshness cutoff: the page shows
+    /// each sample's own time, so it never presents a stale value as current.</summary>
+    public async Task<IReadOnlyList<MetricPoint>> ReadLatestForNodeAsync(
+        string nodeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(nodeId);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT node_id, metric, ts, value FROM (
+                SELECT node_id, metric, ts, value,
+                       ROW_NUMBER() OVER (PARTITION BY metric ORDER BY ts DESC) AS rn
+                FROM ops_metric_sample
+                WHERE node_id = @nodeId
+            ) AS newest
+            WHERE rn = 1
+            ORDER BY metric;
+            """;
+        Bind(command, ("@nodeId", nodeId));
 
         return await ReadPointsAsync(command, cancellationToken).ConfigureAwait(false);
     }
