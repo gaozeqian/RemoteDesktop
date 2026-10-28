@@ -171,7 +171,7 @@ public static class ActionEndpoints
             return (ActionStates.Failed, "the rendezvous node is no longer registered");
         }
 
-        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken))
+        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
         {
             return (ActionStates.Failed, "refusing to send NodeToken over plain HTTP to a non-loopback address");
         }

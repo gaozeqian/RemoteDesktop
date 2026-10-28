@@ -21,7 +21,7 @@ internal static class NodeHttp
     /// bearer credential on the wire in the clear; the node API refuses such a row on create, and this catches one a
     /// hand-edited database or an older version left behind.
     /// </summary>
-    public static bool TokenCanTravelTo(string baseUrl, string? nodeToken)
+    public static bool TokenCanTravelTo(string baseUrl, string? nodeToken, bool allowInsecureHttp = false)
     {
         if (string.IsNullOrEmpty(nodeToken))
         {
@@ -29,7 +29,7 @@ internal static class NodeHttp
         }
 
         return Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttps || uri.IsLoopback);
+            && (uri.Scheme == Uri.UriSchemeHttps || uri.IsLoopback || (allowInsecureHttp && uri.Scheme == Uri.UriSchemeHttp));
     }
 
     /// <summary>Reads the body, failing as soon as it grows past <paramref name="maxBytes"/>.</summary>

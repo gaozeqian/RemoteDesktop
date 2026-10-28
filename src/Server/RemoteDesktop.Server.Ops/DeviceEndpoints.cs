@@ -42,7 +42,7 @@ public static class DeviceEndpoints
                 return Results.NotFound(new { error = "node", message = "no enabled rendezvous node matches" });
             }
 
-            if (!NodeHttp.TokenCanTravelTo(target.BaseUrl, options.NodeToken))
+            if (!NodeHttp.TokenCanTravelTo(target.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
             {
                 return Results.Json(
                     new { error = "node", message = "refusing to send NodeToken over plain HTTP to a non-loopback address" },

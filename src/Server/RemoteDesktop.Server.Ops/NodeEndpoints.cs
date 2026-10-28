@@ -36,6 +36,49 @@ public static class NodeEndpoints
             return Results.Ok(nodes.Select(Describe));
         });
 
+        group.MapGet("/{id}/detail", async (
+            string id,
+            OpsStore store,
+            IHttpClientFactory httpClientFactory,
+            OpsOptions options,
+            TimeProvider time,
+            CancellationToken cancellationToken) =>
+        {
+            var node = await store.FindNodeAsync(id, cancellationToken).ConfigureAwait(false);
+            if (node is null)
+            {
+                return Results.NotFound();
+            }
+
+            var (info, infoError) = await FetchInfoAsync(node, httpClientFactory, options, cancellationToken).ConfigureAwait(false);
+            var metrics = await store.ReadLatestForNodeAsync(node.Id, cancellationToken).ConfigureAwait(false);
+            var now = time.GetUtcNow();
+
+            return Results.Ok(new
+            {
+                node = Describe(node),
+                info = info is null
+                    ? null
+                    : new
+                    {
+                        info.Name,
+                        info.Role,
+                        info.Version,
+                        info.StartedAtUnixMilliseconds,
+                        uptimeSeconds = Math.Max(0, (long)(now - DateTimeOffset.FromUnixTimeMilliseconds(info.StartedAtUnixMilliseconds)).TotalSeconds),
+                    },
+                infoError,
+                metrics = metrics.Select(point => new { point.Metric, point.Timestamp, point.Value }),
+            });
+        });
+
+        // The rule form needs a closed vocabulary of what this deployment scrapes. The catalog is filled by every
+        // successful scrape, so an empty list honestly means "no node has answered yet".
+        endpoints.MapGet("/api/metrics", async (OpsStore store, CancellationToken cancellationToken) =>
+            Results.Ok((await store.ListMetricCatalogAsync(cancellationToken).ConfigureAwait(false))
+                .Select(row => new { metric = row.Metric, kind = row.Kind })))
+            .RequireAuthorization(OpsAuth.ViewerPolicy);
+
         group.MapPost("/", async (
             CreateNodeRequest request,
             HttpContext context,
@@ -182,6 +225,57 @@ public static class NodeEndpoints
         lastScrapeOk = node.LastScrapeOk,
     };
 
+    private static async Task<(NodeInfo? Info, string? Error)> FetchInfoAsync(
+        OpsNode node,
+        IHttpClientFactory httpClientFactory,
+        OpsOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
+        {
+            return (null, "refusing to send NodeToken over plain HTTP to a non-loopback address");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, node.BaseUrl.TrimEnd('/') + "/internal/v1/info");
+        if (!string.IsNullOrEmpty(options.NodeToken))
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
+        }
+
+        using var client = httpClientFactory.CreateClient(DeviceEndpoints.ClientName);
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return (null, ex is TaskCanceledException ? "timed out" : ex.Message);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                return (null, $"HTTP {(int)response.StatusCode}");
+            }
+
+            try
+            {
+                var body = await NodeHttp.ReadBoundedAsync(response.Content, NodeHttp.MaxResponseBytes, cancellationToken).ConfigureAwait(false);
+                return (JsonSerializer.Deserialize<NodeInfo>(body, OpsEventJson.Options), null);
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or NodeResponseTooLargeException or HttpRequestException or TaskCanceledException)
+            {
+                return (null, ex is TaskCanceledException ? "timed out" : ex.Message);
+            }
+        }
+    }
+
     private static string? CanonicalRole(string? role)
     {
         if (string.Equals(role?.Trim(), "rendezvous", StringComparison.OrdinalIgnoreCase))
@@ -217,6 +311,7 @@ public static class NodeEndpoints
     {
         message = string.Empty;
         if (string.IsNullOrEmpty(options.NodeToken)
+            || options.AllowInsecureNodeHttp
             || uri is null
             || uri.Scheme != Uri.UriSchemeHttp
             || uri.IsLoopback)

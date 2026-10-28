@@ -129,6 +129,78 @@ public class AlertFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtu
         }
     }
 
+    [Fact]
+    public async Task A_rule_with_an_unknown_metric_is_refused_before_it_is_saved()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        await store.UpsertMetricCatalogAsync([new KeyValuePair<string, string>("remotedesktop_devices_online", "gauge")], Ct);
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/settings/rules")
+            {
+                Content = JsonContent.Create(new
+                {
+                    name = "未知指标",
+                    kind = "single",
+                    metric = "remotedesktop_not_a_real_metric",
+                    comparator = "gt",
+                    threshold = 1,
+                    forSeconds = 0,
+                    severity = "P2",
+                    enabled = true,
+                }),
+            };
+            request.Headers.Add("X-Ops-CSRF", csrf);
+
+            var response = await client.SendAsync(request, Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+            var rules = await client.GetFromJsonAsync<List<RuleDto>>("/api/settings/rules", Ct);
+            Assert.DoesNotContain(rules!, rule => rule.Name == "未知指标");
+        }
+    }
+
+    [Fact]
+    public async Task A_ratio_rule_can_be_created_and_keeps_its_numerator_and_denominator()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        await store.UpsertMetricCatalogAsync(
+            [new KeyValuePair<string, string>("remotedesktop_devices_online", "gauge"), new KeyValuePair<string, string>("remotedesktop_relay_bytes_to_host_total", "counter")],
+            Ct);
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/settings/rules")
+            {
+                Content = JsonContent.Create(new
+                {
+                    name = "比值规则",
+                    kind = "ratio",
+                    numerator = "remotedesktop_relay_bytes_to_host_total",
+                    denominator = "remotedesktop_devices_online",
+                    comparator = "gt",
+                    threshold = 1,
+                    forSeconds = 0,
+                    severity = "P3",
+                    enabled = true,
+                }),
+            };
+            request.Headers.Add("X-Ops-CSRF", csrf);
+
+            var response = await client.SendAsync(request, Ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var rule = await response.Content.ReadFromJsonAsync<RuleDto>(Ct);
+            _rules.Add(rule!.Id);
+            Assert.Equal("remotedesktop_relay_bytes_to_host_total", rule.Numerator);
+            Assert.Equal("remotedesktop_devices_online", rule.Denominator);
+        }
+    }
+
     private async Task<string> CreateRuleAsync(HttpClient client, CookieContainer cookies)
     {
         var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
@@ -201,7 +273,7 @@ public class AlertFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtu
     public sealed record AlertDto(string Id, string RuleId, string Severity, bool Active, string? AckedBy, long? ResolvedAt);
 
     /// <summary>One rule as the API returns it.</summary>
-    public sealed record RuleDto(string Id, string Name);
+    public sealed record RuleDto(string Id, string Name, string? Metric, string? Numerator, string? Denominator);
 
     /// <summary>One node as the API returns it.</summary>
     public sealed record NodeDto(string Id, string Name);

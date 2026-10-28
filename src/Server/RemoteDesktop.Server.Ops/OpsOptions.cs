@@ -39,6 +39,12 @@ public sealed class OpsOptions
     public string NodeToken { get; set; } = string.Empty;
 
     /// <summary>
+    /// Allows the node token to travel over plain HTTP to non-loopback addresses. Off by default because a public
+    /// network would expose the bearer credential. Enable only for an isolated deployment network such as Compose.
+    /// </summary>
+    public bool AllowInsecureNodeHttp { get; set; }
+
+    /// <summary>
     /// A certificate to pin for calls to nodes, as a PEM or DER file. Empty means the system trust store decides.
     /// </summary>
     /// <remarks>

@@ -87,7 +87,7 @@ public sealed partial class MetricScraper(
     private async Task<bool> ScrapeAsync(OpsNode node, CancellationToken cancellationToken)
     {
         var timestamp = time.GetUtcNow().ToUnixTimeMilliseconds();
-        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken))
+        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
         {
             await RecordFailureAsync(
                 node,

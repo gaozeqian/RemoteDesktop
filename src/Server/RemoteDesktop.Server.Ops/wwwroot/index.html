@@ -234,11 +234,13 @@
               <select id="ruleKind">
                 <option value="scrape">抓取失败</option>
                 <option value="single">单指标</option>
+                <option value="ratio">比值</option>
                 <option value="session.rtt">会话 RTT</option>
                 <option value="session.direct">直连率</option>
               </select>
             </label>
-            <label class="field"><span>指标 / 分子</span><input id="ruleMetric" type="text" placeholder="remotedesktop_devices_online"></label>
+            <label class="field" id="ruleMetricField"><span>指标 / 分子</span><select id="ruleMetric"></select></label>
+            <label class="field" id="ruleDenominatorField" hidden><span>分母指标</span><select id="ruleDenominator"></select></label>
             <label class="field"><span>比较</span>
               <select id="ruleComparator"><option value="gt">大于</option><option value="lt">小于</option></select>
             </label>
@@ -383,6 +385,21 @@
             <tbody id="nodeTbody"></tbody>
           </table>
           <p class="empty" id="nodesEmpty" hidden>还没有节点。在下面登记第一个。</p>
+        </div>
+
+        <div class="card" id="nodeDetailCard" hidden>
+          <div class="card-head">
+            <h2 id="nodeDetailTitle">节点详情</h2>
+            <div class="toolbar">
+              <button class="small" type="button" id="nodeDetailClose">关闭</button>
+            </div>
+          </div>
+          <div id="nodeDetailInfo" class="muted"></div>
+          <table class="data-table">
+            <thead><tr><th>指标</th><th>最新值</th><th>采样时间</th></tr></thead>
+            <tbody id="nodeMetricTbody"></tbody>
+          </table>
+          <p class="empty" id="nodeMetricsEmpty" hidden>该节点还没有被抓取到指标。</p>
         </div>
 
         <div class="card" id="nodeFormCard" hidden>

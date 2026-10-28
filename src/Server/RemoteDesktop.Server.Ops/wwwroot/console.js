@@ -71,6 +71,12 @@ const el = {
   nodeRegion: document.getElementById("nodeRegion"),
   nodeSubmit: document.getElementById("nodeSubmit"),
   nodeError: document.getElementById("nodeError"),
+  nodeDetailCard: document.getElementById("nodeDetailCard"),
+  nodeDetailTitle: document.getElementById("nodeDetailTitle"),
+  nodeDetailClose: document.getElementById("nodeDetailClose"),
+  nodeDetailInfo: document.getElementById("nodeDetailInfo"),
+  nodeMetricTbody: document.getElementById("nodeMetricTbody"),
+  nodeMetricsEmpty: document.getElementById("nodeMetricsEmpty"),
   sessionTbody: document.getElementById("sessionTbody"),
   sessionsEmpty: document.getElementById("sessionsEmpty"),
   sessionsHint: document.getElementById("sessionsHint"),
@@ -113,6 +119,9 @@ const el = {
   ruleName: document.getElementById("ruleName"),
   ruleKind: document.getElementById("ruleKind"),
   ruleMetric: document.getElementById("ruleMetric"),
+  ruleMetricField: document.getElementById("ruleMetricField"),
+  ruleDenominator: document.getElementById("ruleDenominator"),
+  ruleDenominatorField: document.getElementById("ruleDenominatorField"),
   ruleComparator: document.getElementById("ruleComparator"),
   ruleThreshold: document.getElementById("ruleThreshold"),
   ruleFor: document.getElementById("ruleFor"),
@@ -273,6 +282,7 @@ function switchPage(page) {
   if (page === "alerts") {
     void loadRules();
     void loadAlerts();
+    void loadMetrics();
   }
   if (page === "audit") {
     void loadAudit();
@@ -711,6 +721,39 @@ async function ackAlert(id) {
   await loadAlerts();
 }
 
+async function loadMetrics() {
+  const { status, payload } = await api("/api/metrics");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  const options = payload.map((entry) => entry.metric);
+  for (const select of [el.ruleMetric, el.ruleDenominator]) {
+    select.replaceChildren();
+    for (const metric of options) {
+      const option = document.createElement("option");
+      option.value = metric;
+      option.textContent = metric;
+      select.append(option);
+    }
+  }
+
+  el.ruleMetricField.title = options.length === 0
+    ? "还没有已抓取指标，节点抓取成功后这里会出现可选项。"
+    : "";
+  updateRuleFields();
+}
+
+function updateRuleFields() {
+  const kind = el.ruleKind.value;
+  const needsMetric = kind === "single";
+  const isRatio = kind === "ratio";
+  el.ruleMetricField.hidden = !needsMetric && !isRatio;
+  el.ruleDenominatorField.hidden = !isRatio;
+  el.ruleMetric.required = needsMetric || isRatio;
+  el.ruleDenominator.required = isRatio;
+}
+
 async function loadRules() {
   const { status, payload } = await api("/api/settings/rules");
   if (status !== 200 || !Array.isArray(payload)) {
@@ -792,6 +835,8 @@ async function deleteRule(rule) {
   }
 }
 
+el.ruleKind.addEventListener("change", updateRuleFields);
+
 el.ruleForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   el.ruleError.hidden = true;
@@ -804,8 +849,11 @@ el.ruleForm.addEventListener("submit", async (event) => {
       body: {
         name: el.ruleName.value.trim(),
         kind,
-        // The two session rules read their own numbers; a metric name would only be stored and ignored.
-        metric: kind === "scrape" || kind.startsWith("session.") ? null : el.ruleMetric.value.trim(),
+        // Single-metric rules name one series; ratio rules name a numerator and a denominator. Session rules read
+        // their own numbers, so a metric name would only be stored and ignored.
+        metric: kind === "single" ? el.ruleMetric.value : null,
+        numerator: kind === "ratio" ? el.ruleMetric.value : null,
+        denominator: kind === "ratio" ? el.ruleDenominator.value : null,
         comparator: el.ruleComparator.value,
         threshold: Number(el.ruleThreshold.value),
         forSeconds: Number(el.ruleFor.value),
@@ -1321,6 +1369,13 @@ function renderNodes() {
     const actions = document.createElement("div");
     actions.className = "actions";
 
+    const detail = document.createElement("button");
+    detail.className = "small";
+    detail.type = "button";
+    detail.textContent = "详情";
+    detail.addEventListener("click", () => showNodeDetail(node));
+    actions.append(detail);
+
     if (isAdmin) {
       const edit = document.createElement("button");
       edit.className = "small";
@@ -1348,6 +1403,63 @@ function renderNodes() {
     row.append(nameCell, roleCell, urlCell, statusCell, whenCell, actionCell);
     el.nodeTbody.append(row);
   }
+}
+
+async function showNodeDetail(node) {
+  el.nodeDetailCard.hidden = false;
+  el.nodeDetailTitle.textContent = `节点详情 · ${node.name}`;
+  el.nodeDetailInfo.textContent = "正在读取…";
+  el.nodeMetricTbody.replaceChildren();
+  el.nodeMetricsEmpty.hidden = true;
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}/detail`);
+  if (status !== 200 || !payload) {
+    el.nodeDetailInfo.textContent = "读取失败。";
+    return;
+  }
+
+  const info = payload.info;
+  if (info) {
+    const started = info.startedAtUnixMilliseconds
+      ? `${clockText(new Date(info.startedAtUnixMilliseconds))} · 已运行 ${formatDuration(info.uptimeSeconds * 1000)}`
+      : "—";
+    el.nodeDetailInfo.textContent = `${info.version || "未知版本"} · ${started}`;
+  } else if (payload.infoError) {
+    el.nodeDetailInfo.textContent = `节点信息不可用：${payload.infoError}`;
+  } else {
+    el.nodeDetailInfo.textContent = "";
+  }
+
+  const metrics = payload.metrics || [];
+  el.nodeMetricsEmpty.hidden = metrics.length > 0;
+  for (const point of metrics) {
+    const row = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.className = "mono";
+    name.textContent = point.metric;
+
+    const value = document.createElement("td");
+    value.className = "mono";
+    value.textContent = formatMetricValue(point.value);
+
+    const when = document.createElement("td");
+    when.className = "mono";
+    when.textContent = clockText(new Date(point.timestamp));
+
+    row.append(name, value, when);
+    el.nodeMetricTbody.append(row);
+  }
+}
+
+function formatMetricValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  if (Number.isInteger(value) && Math.abs(value) < 1_000_000_000) {
+    return String(value);
+  }
+  return value.toFixed(2);
 }
 
 async function editNode(node) {
@@ -1393,6 +1505,10 @@ async function deleteNode(node) {
     await loadOverview();
   }
 }
+
+el.nodeDetailClose.addEventListener("click", () => {
+  el.nodeDetailCard.hidden = true;
+});
 
 el.nodeForm.addEventListener("submit", async (event) => {
   event.preventDefault();

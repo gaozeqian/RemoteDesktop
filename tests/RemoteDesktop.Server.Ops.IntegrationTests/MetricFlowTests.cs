@@ -70,6 +70,51 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
     }
 
     [Fact]
+    public async Task A_node_detail_lists_every_latest_metric_and_the_node_info()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            await RegisterAsync(client, cookies, node);
+
+            var scraper = fixture.Services.GetRequiredService<MetricScraper>();
+            await scraper.RunOnceAsync(Ct);
+
+            var nodes = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
+            var detail = await client.GetFromJsonAsync<NodeDetailDto>(
+                $"/api/nodes/{Uri.EscapeDataString(Assert.Single(nodes!).Id)}/detail",
+                Ct);
+
+            Assert.NotNull(detail);
+            Assert.Null(detail.InfoError);
+            Assert.Equal("9.9.9-test", detail.Info!.Version);
+            Assert.True(detail.Info.UptimeSeconds >= 0);
+            Assert.Contains(detail.Metrics, point => point.Metric == "remotedesktop_devices_online" && point.Value == 7);
+            Assert.Contains(detail.Metrics, point => point.Metric == "remotedesktop_relay_bytes_to_host_total");
+        }
+    }
+
+    [Fact]
+    public async Task The_metric_catalog_names_what_has_been_scraped()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            await RegisterAsync(client, cookies, node);
+            await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+            var catalog = await client.GetFromJsonAsync<List<CatalogDto>>("/api/metrics", Ct);
+
+            Assert.NotEmpty(catalog!);
+            Assert.Contains(catalog!, entry => entry.Metric == "remotedesktop_devices_online" && entry.Kind == "gauge");
+        }
+    }
+
+    [Fact]
     public async Task Two_scrapes_produce_a_bandwidth_rate_and_traffic_points()
     {
         await using var node = await FakeNode.StartAsync();
@@ -201,6 +246,10 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         /// <summary>Whether the node answers 503, which is how a broken scrape is simulated.</summary>
         public bool Fail { get; set; }
 
+        public string Version { get; } = "9.9.9-test";
+
+        public long StartedAtUnixMilliseconds { get; } = DateTimeOffset.UtcNow.AddMinutes(-3).ToUnixTimeMilliseconds();
+
         private long Bytes { get; set; }
 
         public void Advance(long bytes) => Bytes += bytes;
@@ -234,6 +283,14 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
                 return Results.Text(text, "text/plain; version=0.0.4; charset=utf-8");
             });
 
+            app.MapGet("/internal/v1/info", () => Results.Ok(new
+            {
+                name = node.Name,
+                role = "relay",
+                version = node.Version,
+                startedAtUnixMilliseconds = node.StartedAtUnixMilliseconds,
+            }));
+
             await app.StartAsync(TestContext.Current.CancellationToken);
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
             node.BaseUrl = address;
@@ -260,4 +317,16 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
     /// <summary>What the node endpoint returns after registering one.</summary>
     public sealed record CreatedNode(string Id);
+
+    /// <summary>The node detail, as much of it as these tests read.</summary>
+    public sealed record NodeDetailDto(InfoDto? Info, string? InfoError, List<MetricDto> Metrics);
+
+    /// <summary>The node's self-description.</summary>
+    public sealed record InfoDto(string Name, string Role, string Version, long StartedAtUnixMilliseconds, long UptimeSeconds);
+
+    /// <summary>One latest reading.</summary>
+    public sealed record MetricDto(string Metric, long Timestamp, double Value);
+
+    /// <summary>One metric catalog row.</summary>
+    public sealed record CatalogDto(string Metric, string Kind);
 }
