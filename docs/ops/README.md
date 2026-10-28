@@ -584,12 +584,16 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops 
 ```
 
 控制台发布在 `127.0.0.1:5090`，不直接对公网开放；远程访问用 SSH 隧道或自己的 TLS 反向代理。首次登录用刚建的
-管理员（口令 + TOTP）。在控制台的节点管理里登记两个节点，baseUrl 用 Docker 服务名：
+管理员（口令 + TOTP）。两个节点会在控制台启动前自动登记（幂等），默认 baseUrl 为：
 
 ```text
 rendezvous   http://rendezvous:5080
 relay        http://relay:5083
 ```
+
+可用 `OPS_RENDEZVOUS_NODE_URL` / `OPS_RELAY_NODE_URL` 覆盖；用 `docker-compose.selfsigned.yml` 时把前者设为
+`http://rendezvous:5082`（内部明文口）。因为 Compose 网络是隔离的，overlay 同时显式开启
+`Ops:AllowInsecureNodeHttp`，允许节点令牌在该内部 HTTP 网络上传输；这仍是默认关闭的公网安全边界。
 
 `OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。会话、告警与
 审计数据存在 PostgreSQL（与设备注册表同一个库，表名以 `ops_` 开头）；备份 `postgres-data` 或 `pg_dump` 一次
@@ -742,6 +746,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
+| `Ops:AllowInsecureNodeHttp` | `false` | 允许节点令牌经非回环明文 HTTP 发送；仅用于 Compose 等隔离网络，公网节点保持关闭 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
 | `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
@@ -780,7 +785,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 #### 让总览出现数字：三件事缺一不可
 
 1. **节点能上报指标**：信令服务设 `Rendezvous:MetricsEnabled=true`；中继默认就有 `/metrics`。Docker 的 ops overlay 已为信令打开。
-2. **控制台里登记节点**：节点管理页登记两个节点的 `baseUrl`（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）。Docker 部署里控制台和节点在同一 compose 网络，用服务名：`http://rendezvous:5080`、`http://relay:5083`。
+2. **控制台里登记节点**：原生安装包会自动登记本机节点（信令 `http://127.0.0.1:5080`、中继 `http://127.0.0.1:5083`）；Docker overlay 也会在启动前自动登记服务名节点。手工部署在节点管理页添加即可。
 3. **事件通道**：信令/中继把会话事件推给控制台，三处要同一个 HMAC 密钥。原生 Windows / Linux / macOS
    Server 安装包会自动生成 32 字节密钥并写好三处配置；升级会补齐旧安装缺少的配置，但不会轮换已有密钥：
 
@@ -1668,7 +1673,7 @@ remotedesktop --self-check
 第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：控制台宕机、重启、升级，
 不影响任何一次远程连接。
 
-**做什么**：节点健康、在线设备、会话、告警、审计，浅色/深色主题。
+**做什么**：节点健康与全部已抓取指标、节点版本/uptime、在线设备、会话、告警（含比值规则）、审计，浅色/深色主题。
 
 **不做什么**（有意不做）：日志聚合、远程命令执行、存画面/剪贴板/文件内容、替代 Prometheus/Grafana。
 

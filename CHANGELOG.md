@@ -47,6 +47,17 @@
   补齐旧安装缺失的一侧而不轮换已有密钥。多机 Relay 可用 `--ops-events-endpoint` 和 `RD_OPS_INGEST_KEY`
   指向中央控制台。自定义 KeyId、额外接收密钥和 Endpoint 保持不变；同一 KeyId 对应不同密钥时安装明确失败。
 
+### Fixed — 运维监控台数据接入
+
+- **节点指标只采不展**：节点管理页新增「详情」，展示节点版本、启动时间、运行时长和该节点全部最新指标；新增
+  `/api/metrics` 目录供告警规则选择。Windows 升级现在同样开启信令 `/metrics`；macOS/Linux TLS 本机节点统一
+  用回环地址，Linux 升级同步节点地址，避免无 `NodeToken` 时的 401。
+- **Docker 节点不再手工登记**：Ops 容器启动前幂等登记 `rendezvous` / `relay`；Compose 显式开启
+  `Ops:AllowInsecureNodeHttp` 以允许令牌在隔离网络内明文传输，公网默认仍拒绝。
+- **告警规则补比值与校验**：UI 增加 `ratio` 和指标选择器；保存 `single`/`ratio` 时校验指标确实被抓取过，
+  避免拼写错误静默失效。
+- **链路占比不再把“无数据”当成 0**：只统计收到过客户端心跳的会话，`session.direct` 规则同样受益。
+
 ### Added — Linux 安装包按部署配置
 
 - **服务端 .deb 安装时选择数据库与 TLS**：debconf 询问 SQLite / PostgreSQL（含连接串）/ 仅内存，以及
