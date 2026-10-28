@@ -71,7 +71,7 @@ public sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : 
 
         try
         {
-            return new DxgiScreenCapturer(display);
+            return new DxgiScreenCapturer(display, logger);
         }
         catch (Exception ex) when (ex is SharpGenException or InvalidOperationException)
         {
@@ -95,19 +95,31 @@ public sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : 
 /// consumer reads the pixels without another copy; the next capture is only possible once that frame is disposed.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Losing access (resolution change, desktop switch to UAC / lock screen) recreates the duplication; while that is
 /// impossible (secure desktop from a user process, until milestone M3) captures simply return no frame.
-/// The mouse cursor is not part of the image; cursor rendering arrives in M4.
+/// </para>
+/// <para>
+/// A removed or reset graphics device is different: nothing on that device ever works again, so the failure is
+/// reported through <see cref="IsFaulted"/> and the whole device is rebuilt instead of being retried. Retrying it was
+/// how a driver reset used to leave every controller of a display on the same frozen picture until the host process
+/// was restarted. The mouse cursor is not part of the image; cursor rendering arrives in M4.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class DxgiScreenCapturer : IScreenCapturer
+internal sealed partial class DxgiScreenCapturer : IScreenCapturer
 {
     private const int WaitTimeout = unchecked((int)0x887A0027);
     private const int AccessLost = unchecked((int)0x887A0026);
+    private const int DeviceRemoved = unchecked((int)0x887A0005);
+    private const int DeviceReset = unchecked((int)0x887A0007);
+    private const int MaxFirstFrameRestarts = 3;
     private static readonly TimeSpan RetryInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan FirstFrameTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan FaultLogInterval = TimeSpan.FromSeconds(10);
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly ILogger _logger;
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
     private IDXGIOutputDuplication? _duplication;
@@ -116,16 +128,23 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
     private int _height;
     private bool _mapped;
     private bool _firstFrame = true;
+    private bool _faulted;
+    private int _firstFrameRestarts;
     private TimeSpan _nextRetry;
     private TimeSpan _initializedAt;
+    private TimeSpan _lastFaultLog = TimeSpan.MinValue;
 
-    public DxgiScreenCapturer(DisplayInfo display)
+    public DxgiScreenCapturer(DisplayInfo display, ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
         Display = display;
+        _logger = logger;
         Initialize();
     }
 
     public DisplayInfo Display { get; }
+
+    public bool IsFaulted => _faulted;
 
     public event EventHandler<CursorShape>? CursorChanged;
 
@@ -145,13 +164,22 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
             return ValueTask.FromResult<VideoFrame?>(null);
         }
 
-        var result = _duplication!.AcquireNextFrame((uint)Math.Max(0, timeout.TotalMilliseconds), out var info, out var resource);
+        // Set together with the duplication and cleared together with it, so this is not null here.
+        var duplication = _duplication!;
+        var result = duplication.AcquireNextFrame((uint)Math.Max(0, timeout.TotalMilliseconds), out var info, out var resource);
         if (result.Code == WaitTimeout)
         {
             // A fresh duplication normally delivers the current image at once; if it does not, start over rather
-            // than wait for the screen to change.
-            if (_firstFrame && _clock.Elapsed - _initializedAt > FirstFrameTimeout)
+            // than wait for the screen to change — but only a few times. A desktop nobody is touching has nothing
+            // to deliver, and rebuilding the device every second for it is worse than simply waiting.
+            if (_firstFrame && _clock.Elapsed - _initializedAt > FirstFrameTimeout && _firstFrameRestarts < MaxFirstFrameRestarts)
             {
+                _firstFrameRestarts++;
+                if (_firstFrameRestarts == MaxFirstFrameRestarts)
+                {
+                    LogNoFirstFrame(_logger, Display.Id);
+                }
+
                 ReleaseDuplication();
             }
 
@@ -160,11 +188,24 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
 
         if (result.Code == AccessLost)
         {
-            ReleaseDuplication();
+            // UAC, the lock screen or a display mode change: this duplication is dead, and only a new one works.
+            Fault("The desktop duplication was lost.", result.Code, timeout);
             return ValueTask.FromResult<VideoFrame?>(null);
         }
 
-        result.CheckError();
+        if (!result.Success)
+        {
+            // A removed or reset device never comes back on the same object: throw the whole device away instead of
+            // calling AcquireNextFrame on it forever.
+            Fault(
+                result.Code == DeviceRemoved || result.Code == DeviceReset
+                    ? "The graphics device was removed."
+                    : "Acquiring the next frame failed.",
+                result.Code,
+                timeout);
+            return ValueTask.FromResult<VideoFrame?>(null);
+        }
+
         try
         {
             RaiseCursorEvents(info);
@@ -181,10 +222,12 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
         finally
         {
             resource.Dispose();
-            _duplication.ReleaseFrame();
+            duplication.ReleaseFrame();
         }
 
         _firstFrame = false;
+        _firstFrameRestarts = 0;
+        _faulted = false;
         var mapped = _context.Map(_staging!, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
         _mapped = true;
         return ValueTask.FromResult<VideoFrame?>(new MappedFrame(this, mapped.DataPointer, (int)mapped.RowPitch)
@@ -196,17 +239,21 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
         });
     }
 
+    /// <summary>
+    /// Releases everything, so the next capture builds a new device and duplication. Called between frames by the
+    /// shared capture loop, which is the only thread that touches this object.
+    /// </summary>
+    public void Reset()
+    {
+        ReleaseAll();
+        _nextRetry = TimeSpan.Zero;
+        _firstFrameRestarts = 0;
+        _faulted = true;
+    }
+
     public ValueTask DisposeAsync()
     {
-        if (_mapped)
-        {
-            Unmap();
-        }
-
-        ReleaseDuplication();
-        _staging?.Dispose();
-        _context?.Dispose();
-        _device?.Dispose();
+        ReleaseAll();
         return ValueTask.CompletedTask;
     }
 
@@ -253,18 +300,37 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
 
         try
         {
-            _staging?.Dispose();
-            _staging = null;
-            _context?.Dispose();
-            _device?.Dispose();
+            ReleaseAll();
             Initialize();
+            _faulted = false;
             return true;
         }
         catch (Exception ex) when (ex is SharpGenException or InvalidOperationException)
         {
+            // Reported, not swallowed: a display that cannot be duplicated (the secure desktop, an unplugged
+            // monitor) used to look exactly like a static screen in the log, i.e. like nothing at all.
+            ReleaseAll();
             _nextRetry = _clock.Elapsed + RetryInterval;
+            _faulted = true;
+            LogRebuildFailed(_logger, Display.Id, ex);
             return false;
         }
+    }
+
+    /// <summary>Drops the duplication and the device: for anything a rebuild is the only cure for.</summary>
+    private void Fault(string reason, int code, TimeSpan timeout)
+    {
+        ReleaseAll();
+        _faulted = true;
+
+        // The first failure is always worth a line; a device that keeps failing is not worth one every 100 ms.
+        if (_lastFaultLog == TimeSpan.MinValue || _clock.Elapsed - _lastFaultLog >= FaultLogInterval)
+        {
+            _lastFaultLog = _clock.Elapsed;
+            LogFault(_logger, Display.Id, reason, code);
+        }
+
+        Thread.Sleep(timeout);
     }
 
     // Must run while the frame is still held: the pointer shape is only available until ReleaseFrame.
@@ -296,10 +362,33 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
         _duplication = null;
     }
 
+    private void ReleaseAll()
+    {
+        _mapped = false;
+        ReleaseDuplication();
+        _staging?.Dispose();
+        _staging = null;
+        _context?.Dispose();
+        _context = null;
+        _device?.Dispose();
+        _device = null;
+    }
+
     private void Unmap()
     {
-        _context!.Unmap(_staging!, 0);
+        if (!_mapped)
+        {
+            return;
+        }
+
         _mapped = false;
+
+        // After a fault the context is already gone; there is nothing left to unmap, and touching it would throw
+        // out of a frame's Dispose.
+        if (_context is not null && _staging is not null)
+        {
+            _context.Unmap(_staging, 0);
+        }
     }
 
     private sealed unsafe class MappedFrame(DxgiScreenCapturer owner, nint pixels, int rowPitch) : VideoFrame
@@ -324,4 +413,13 @@ internal sealed class DxgiScreenCapturer : IScreenCapturer
             base.Dispose(disposing);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Capture of display {Display} failed: {Reason} (0x{Code:X8}). Rebuilding it.")]
+    private static partial void LogFault(ILogger logger, string display, string reason, int code);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not rebuild the capture of display {Display}; retrying.")]
+    private static partial void LogRebuildFailed(ILogger logger, string display, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Display {Display} delivered no first picture; waiting for the screen to change instead of rebuilding it again.")]
+    private static partial void LogNoFirstFrame(ILogger logger, string display);
 }

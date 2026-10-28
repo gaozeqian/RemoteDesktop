@@ -23,6 +23,15 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
 
+    /// <summary>No picture for this long and a key frame is asked for: the stream may simply have lost sync.</summary>
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>A key frame asked for and not answered for this long: what is on screen is old, not just unchanged.</summary>
+    private static readonly TimeSpan StallAlarm = TimeSpan.FromSeconds(4);
+
+    /// <summary>Retries stretch out to this, so a static host screen costs a handful of key frames, not a stream of them.</summary>
+    private static readonly TimeSpan MaxKeyFrameBackoff = TimeSpan.FromSeconds(30);
+
     private readonly IChannel _channel;
     private readonly VideoCodecSelector _codecs;
     private readonly TimeProvider _time;
@@ -35,7 +44,9 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private IVideoDecoder? _decoder;
     private byte[] _bgra = [];
     private long _frameNumber;
+    private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
+    private volatile bool _stalled;
 
     private DesktopViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
@@ -48,6 +59,12 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     public DesktopStreamInfo? StreamInfo { get; private set; }
 
     public DesktopStatistics Statistics { get; private set; } = new(0, 0, 0, null);
+
+    /// <summary>
+    /// Whether the host has stopped answering key-frame requests, so the picture on screen is older than it claims
+    /// to be. A static screen is not a stall: the host answers a request even when nothing changed.
+    /// </summary>
+    public bool IsStalled => _stalled;
 
     /// <summary>Total number of frames decoded so far.</summary>
     public long FrameNumber
@@ -225,6 +242,11 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     }
                 }
 
+                // Any picture at all — including a key frame the host encoded from an unchanged screen — proves the
+                // video path is alive, which is what the watchdog below measures.
+                Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+                _stalled = false;
+
                 windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
                 windowFrames++;
                 latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
@@ -261,19 +283,70 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
     }
 
-    // While no picture can be shown (just joined, or a decode error), keep asking for a key frame: the first
-    // request or key frame may have been lost, and a static host screen produces nothing new on its own.
+    // While no picture can be shown (just joined, a decode error, or a stream that stopped mid-way), keep asking for
+    // a key frame: the first request or key frame may have been lost, and a static host screen produces nothing new
+    // on its own. The host answers from its newest picture even when nothing changed, so an answer proves the video
+    // path is alive and an unanswered request proves it is not — which is the only way to tell "old picture" from
+    // "unchanged picture" on this side.
     private async Task KeyFrameWatchdogAsync()
     {
+        var backoff = KeyFrameRetry;
+        var askedAt = 0L;
+        var framesWhenAsked = 0L;
         try
         {
             while (true)
             {
-                await Task.Delay(KeyFrameRetry, _time, _stop.Token).ConfigureAwait(false);
-                if (StreamInfo is not null && _waitingForKeyFrame)
+                await Task.Delay(TimeSpan.FromSeconds(1), _time, _stop.Token).ConfigureAwait(false);
+                if (StreamInfo is null)
                 {
-                    await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                    continue;
                 }
+
+                var now = Stopwatch.GetTimestamp();
+                var quiet = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt), now);
+                if (quiet < StallTimeout)
+                {
+                    // More than the single answer to our request arrived: the screen is really changing, so the
+                    // fast retry rate is right again. A static screen only ever produces that one answer, which is
+                    // why it keeps backing off instead of asking for a key frame every couple of seconds.
+                    if (FrameNumber - framesWhenAsked >= 2)
+                    {
+                        backoff = KeyFrameRetry;
+                    }
+
+                    continue;
+                }
+
+                if (_waitingForKeyFrame)
+                {
+                    // Nothing decodable has ever arrived: ask at a steady rate, there is no picture to lose.
+                    if (askedAt == 0 || Stopwatch.GetElapsedTime(askedAt, now) >= KeyFrameRetry)
+                    {
+                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                        askedAt = now;
+                        framesWhenAsked = FrameNumber;
+                    }
+
+                    continue;
+                }
+
+                var answered = FrameNumber != framesWhenAsked;
+                if (!answered && askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) >= StallAlarm)
+                {
+                    // Asked and unanswered: the host has nothing to send, so what is on screen is stale.
+                    _stalled = true;
+                }
+
+                if (askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) < backoff)
+                {
+                    continue;
+                }
+
+                await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                askedAt = now;
+                framesWhenAsked = FrameNumber;
+                backoff = TimeSpan.FromTicks(Math.Min(MaxKeyFrameBackoff.Ticks, backoff.Ticks * 2));
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
@@ -322,6 +395,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
 
         Displays = [.. info.Displays];
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
         _waitingForKeyFrame = true;
         StreamInfoChanged?.Invoke(this, EventArgs.Empty);
     }

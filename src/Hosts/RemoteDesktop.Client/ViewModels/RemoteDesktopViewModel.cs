@@ -111,6 +111,13 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     public partial string StatusText { get; set; } = "正在等待画面…";
 
     /// <summary>
+    /// The host stopped answering key-frame requests, so the picture in the window is older than it looks. A screen
+    /// that is merely static is not stalled: the host still answers, with the same picture.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsPictureStalled { get; set; }
+
+    /// <summary>
     /// Whether this window captures and sends input. False in watch mode, when the host switches the session to
     /// watch-only, and while the controlled end's desktop has refused or cannot receive synthetic input.
     /// </summary>
@@ -701,9 +708,11 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         var info = Viewer.StreamInfo;
         if (info is null)
         {
+            IsPictureStalled = false;
             return;
         }
 
+        IsPictureStalled = Viewer.IsStalled;
         var stats = Viewer.Statistics;
         var path = _session.Path == ConnectionPath.Direct ? "直连" : "中继";
         var rtt = _session.RoundTripTime is { } value ? $" · RTT {value.TotalMilliseconds:0} ms" : string.Empty;
