@@ -103,11 +103,26 @@ RD_TLS_PASSWORD=""
 # see that name here, or they reject the certificate even though they trust it.
 RD_TLS_HOSTNAME=""
 
-# Whether to open the three ports in ufw, if ufw is installed and active.
+# The public HTTPS listener for the Ops monitoring console. The console itself
+# remains on http://127.0.0.1:5090; this gateway is the only network-facing
+# listener and terminates TLS.
+#
+# The generated certificate contains this machine's IPv4 addresses as IP SAN
+# entries. Its public half is /etc/remotedesktop-server/tls/signaling.crt;
+# administrators must trust that file on the machines they use to open the
+# console. No DNS name is required.
+RD_GATEWAY_LISTEN="https://0.0.0.0:5443"
+
+# Extra comma-separated DNS names or IP addresses for the generated certificate,
+# for an address that is not assigned to this machine (for example a NAT IP).
+RD_GATEWAY_HOSTNAME=""
+
+# Whether to open the public ports in ufw, if ufw is installed and active.
 #
 #   5080/tcp  signaling
 #   5081/udp  address reflection
 #   5082/udp  relay
+#   5443/tcp  Ops HTTPS gateway
 #
 # Left at 0 by default: a package that changes a machine's firewall decides for
 # whoever administers it. Nothing here touches nftables or iptables directly.

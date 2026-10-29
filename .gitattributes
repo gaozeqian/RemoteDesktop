@@ -34,7 +34,12 @@ Dockerfile*         text eol=lf
 build/installer/linux/**/control                             text eol=lf
 build/installer/linux/**/postinst                            text eol=lf
 build/installer/linux/**/postrm                              text eol=lf
+build/installer/linux/**/config                              text eol=lf
+build/installer/linux/**/templates                           text eol=lf
+build/installer/linux/**/*.txt                               text eol=lf
+build/installer/macos/**/*.txt                               text eol=lf
 build/installer/macos/server/scripts/postinstall             text eol=lf
+build/installer/macos/server/scripts/preinstall              text eol=lf
 *.default                                                    text eol=lf
 
 *.plist             text eol=lf

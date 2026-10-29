@@ -35,7 +35,7 @@ rm -rf "$work"
 mkdir -p "$work/DEBIAN" "$work/usr/lib/remotedesktop-server" "$work/lib/systemd/system" "$work/etc/default"
 
 echo "Publishing the servers for $runtime (version $version)..."
-for server in Rendezvous Relay Ops; do
+for server in Rendezvous Relay Ops Gateway; do
     dotnet publish "$root/src/Server/RemoteDesktop.Server.$server" \
         -c Release -r "$runtime" --self-contained true \
         -p:RemoteDesktopCrossTargeting=true \
@@ -50,16 +50,22 @@ done
 rm -f "$work/usr/lib/remotedesktop-server/Rendezvous/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Relay/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Ops/appsettings"*.json
+rm -f "$work/usr/lib/remotedesktop-server/Gateway/appsettings"*.json
 
 # Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
 find "$work/usr/lib/remotedesktop-server" -type f -name '*.pdb' -delete
 
 # The licence and the third-party notices travel with the binaries they cover.
 rd_install_docs "$root" "$work/usr/share/doc/remotedesktop-server"
+# The server has no GUI page for its post-install configuration, and the certificate trust step happens on a different
+# machine from the one this package is installed on. Keep the instructions beside the package documentation.
+install -m 0644 "$root/build/installer/linux/server/how-to-configure.txt" \
+    "$work/usr/share/doc/remotedesktop-server/how-to-configure.txt"
 
 install -m 0644 "$root/build/service/linux/remotedesktop-rendezvous.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-relay.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-ops.service" "$work/lib/systemd/system/"
+install -m 0644 "$root/build/service/linux/remotedesktop-gateway.service" "$work/lib/systemd/system/"
 install -m 0644 "$root/build/service/linux/remotedesktop-server.default" "$work/etc/default/remotedesktop-server"
 
 install -m 0755 "$root/build/installer/linux/server/postinst" "$work/DEBIAN/postinst"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Packages the Remote Desktop servers (signaling, relay and the monitoring console) into a macOS .pkg installer.
+# Packages the Remote Desktop servers (signaling, relay, the monitoring console and its HTTPS gateway) into a macOS
+# .pkg installer.
 #
 # The counterpart of build/installer/windows/server/Build-ServerInstaller.ps1, and deliberately the same shape: the
 # three programs go into one install directory, each with its own appsettings.json, and a setup step writes the
@@ -28,6 +29,8 @@
 #                                            [--database <auto|none|postgres|sqlite>] [--database-path <file>]
 #                                            [--postgres <connection string>]
 #                                            [--tls-certificate <file.pfx>] [--tls-password <password>]
+#                                            [--gateway-listen <https://0.0.0.0:5443>]
+#                                            [--gateway-hostname <ip-or-name,ip-or-name>]
 #
 # The database, TLS and certificate questions are normally answered in the Installer pane, the way Linux asks them
 # through debconf; the options above remain for unattended/local builds and are the fallback when no pane answers
@@ -65,6 +68,8 @@ OPT_DATABASE_PATH=""
 OPT_POSTGRES=""
 OPT_TLS_CERTIFICATE=""
 OPT_TLS_PASSWORD=""
+OPT_GATEWAY_LISTEN="https://0.0.0.0:5443"
+OPT_GATEWAY_HOSTNAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -85,6 +90,8 @@ while [[ $# -gt 0 ]]; do
         --postgres)        OPT_POSTGRES="$2";        shift 2 ;;
         --tls-certificate) OPT_TLS_CERTIFICATE="$2"; shift 2 ;;
         --tls-password)    OPT_TLS_PASSWORD="$2";    shift 2 ;;
+        --gateway-listen)  OPT_GATEWAY_LISTEN="$2";  shift 2 ;;
+        --gateway-hostname) OPT_GATEWAY_HOSTNAME="$2"; shift 2 ;;
         -h|--help)         sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
@@ -150,7 +157,7 @@ fi
 
 if [[ "$SKIP_PUBLISH" != "1" ]]; then
     echo "==> Publishing the servers ($CONFIGURATION, $RID)"
-    for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops; do
+    for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway; do
         # dotnet publish --output does not remove what a previous publish left behind. A dependency that was removed,
         # or a file that was renamed, would otherwise stay in the payload (the host packager already clears its own
         # publish directory for the same reason).
@@ -164,7 +171,7 @@ if [[ "$SKIP_PUBLISH" != "1" ]]; then
     done
 fi
 
-for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops; do
+for project in RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway; do
     [[ -f "$PUBLISH_DIR/$project/$project" ]] || {
         echo "No executable at $PUBLISH_DIR/$project/$project — publish first, or drop --skip-publish." >&2
         exit 1
@@ -204,12 +211,13 @@ fi
 # /Library/LaunchDaemons. The directory names inside the install location match what the launchd plists point at, so
 # the two cannot disagree.
 SERVER_DIR="$STAGE_DIR$INSTALL_LOCATION"
-mkdir -p "$SERVER_DIR/Rendezvous" "$SERVER_DIR/Relay" "$SERVER_DIR/Ops" "$SERVER_DIR/logs" "$STAGE_DIR/Library/LaunchDaemons"
+mkdir -p "$SERVER_DIR/Rendezvous" "$SERVER_DIR/Relay" "$SERVER_DIR/Ops" "$SERVER_DIR/Gateway" "$SERVER_DIR/logs" "$STAGE_DIR/Library/LaunchDaemons"
 
 echo "==> Assembling the payload"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Rendezvous/." "$SERVER_DIR/Rendezvous/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Relay/." "$SERVER_DIR/Relay/"
 cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Ops/." "$SERVER_DIR/Ops/"
+cp -R "$PUBLISH_DIR/RemoteDesktop.Server.Gateway/." "$SERVER_DIR/Gateway/"
 
 # Symbols belong to the machine that built the package, not the one that installs it. The MSIs already strip them.
 find "$SERVER_DIR" -type f -name '*.pdb' -delete
@@ -226,7 +234,7 @@ cp "$REPO_ROOT/THIRD-PARTY-NOTICES.md" "$DOC_DIR/third-party-notices.md"
 # for the signaling server, throw away the relay key every client and relay has been given. The live appsettings.json
 # is created by the postinstall only if it is missing; this template is what it copies on a first install and what an
 # upgrade refreshes for the next fresh install.
-for server in Rendezvous Relay Ops; do
+for server in Rendezvous Relay Ops Gateway; do
     if [ -f "$SERVER_DIR/$server/appsettings.json" ]; then
         mv "$SERVER_DIR/$server/appsettings.json" "$SERVER_DIR/$server/appsettings.default.json"
     fi
@@ -237,7 +245,7 @@ done
 # session and the hard-coded development relay key takes over. Removed rather than renamed.
 find "$SERVER_DIR" -type f -name 'appsettings.Development.json' -delete
 
-cp "$REPO_ROOT/build/service/macos/com.remotedesktop.rendezvous.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.relay.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.ops.plist" "$STAGE_DIR/Library/LaunchDaemons/"
+cp "$REPO_ROOT/build/service/macos/com.remotedesktop.rendezvous.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.relay.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.ops.plist" "$REPO_ROOT/build/service/macos/com.remotedesktop.gateway.plist" "$STAGE_DIR/Library/LaunchDaemons/"
 cp "$SCRIPT_DIR/configure-server.sh" "$SCRIPT_DIR/uninstall-server.sh" "$SCRIPT_DIR/how-to-configure.txt" "$SERVER_DIR/"
 chmod +x "$SERVER_DIR/configure-server.sh" "$SERVER_DIR/uninstall-server.sh"
 
@@ -260,6 +268,8 @@ options_file="$SERVER_DIR/setup-options"
     [[ -n "$OPT_POSTGRES" ]]        && printf -- '--postgres=%s\n'        "$OPT_POSTGRES"
     [[ -n "$OPT_TLS_CERTIFICATE" ]] && printf -- '--tls-certificate=%s\n' "$OPT_TLS_CERTIFICATE"
     [[ -n "$OPT_TLS_PASSWORD" ]]    && printf -- '--tls-password=%s\n'    "$OPT_TLS_PASSWORD"
+    printf -- '--gateway-listen=%s\n' "${OPT_GATEWAY_LISTEN:-https://0.0.0.0:5443}"
+    [[ -n "$OPT_GATEWAY_HOSTNAME" ]] && printf -- '--gateway-hostname=%s\n' "$OPT_GATEWAY_HOSTNAME"
     true
 } > "$options_file"
 
@@ -300,16 +310,19 @@ fi
 cat > "$RES_DIR/welcome.html" <<'HTML'
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Remote Desktop Server</h2>
-<p>This installs the three server programs this product needs into <b>/usr/local/remotedesktop-server</b> and registers
+<p>This installs the four server programs this product needs into <b>/usr/local/remotedesktop-server</b> and registers
 them with <b>launchd</b> so they start at boot and restart if they crash:</p>
 <ul>
   <li><b>Rendezvous</b> — signaling: device codes, presence, and introductions.</li>
   <li><b>Relay</b> — carries the traffic when two machines cannot reach each other directly.</li>
   <li><b>Ops</b> — the monitoring console: nodes, sessions, alerts and audit, on <b>127.0.0.1:5090</b>.</li>
+  <li><b>Gateway</b> — HTTPS access to the console on <b>TCP 5443</b>, using a self-signed certificate with this
+      machine's IP addresses in its subject alternative names.</li>
 </ul>
 <p>The two network servers listen on <b>TCP 5080</b> (signaling), <b>UDP 5081</b> (address reflection) and
 <b>UDP 5082</b> (relay). macOS does not let a package open ports, so open them yourself if other machines have to reach
-this one. The console stays on loopback; exposing it is a reverse-proxy decision.</p>
+this one. The console stays on loopback; the gateway is the only listener exposed for it. Trust the exported gateway
+certificate on each administration Mac before opening <b>https://&lt;server-ip&gt;:5443</b>.</p>
 <p>The next page asks where device codes are kept (<b>SQLite</b> or an existing <b>PostgreSQL</b>) and whether
 signaling uses TLS. For TLS you can let the installer generate a self-signed certificate or point it at an existing
 one (PKCS#12, or PEM with its <b>.key</b> beside it).</p>
@@ -321,8 +334,11 @@ cat > "$RES_DIR/conclusion.html" <<'HTML'
 <h2>Installed</h2>
 <p>The signaling server and the relay are running. Check them with:</p>
 <p style="font-family: ui-monospace, Menlo, monospace;">curl http://127.0.0.1:5080/health</p>
-<p>The monitoring console is running on <b>http://127.0.0.1:5090</b>, but it has no account yet and no default
-password. Create the first administrator in a terminal (it asks for a password and prints a TOTP secret once):</p>
+<p>The monitoring console is available to other machines at <b>https://&lt;this-machine-ip&gt;:5443</b> through the
+HTTPS gateway. Its self-signed certificate is exported to
+<b>/usr/local/share/doc/remotedesktop-server/ops-gateway.crt</b>; trust that file on each administration Mac. The
+console has no account yet and no default password. Create the first administrator in a terminal (it asks for a
+password and prints a TOTP secret once):</p>
 <p style="font-family: ui-monospace, Menlo, monospace;">sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin<br>
 sudo launchctl kickstart -k system/com.remotedesktop.ops</p>
 <p>The console already has this installation's signaling and relay registered as local nodes, and the signaling
@@ -338,7 +354,9 @@ server exposes <b>/metrics</b>, so its node page has data from the first scrape.
       (or to the people running them).</li>
 </ul>
 <p>Both are set with <b>configure-server.sh</b> in the install directory; <b>how-to-configure.txt</b> next to it explains
-them, and logs are in <b>logs/</b>. Reinstalling or upgrading keeps these settings and only updates the programs.</p>
+them, and logs are in <b>logs/</b> (including <b>gateway.log</b>). The gateway's HTTPS address and certificate names
+can be changed with <b>--gateway-listen</b> and <b>--gateway-hostname</b>. Reinstalling or upgrading keeps these
+settings and only updates the programs.</p>
 <p>Uninstall: <b>sudo /usr/local/remotedesktop-server/uninstall-server.sh</b>.</p>
 </body></html>
 HTML
@@ -457,7 +475,7 @@ fi
 # The payload is what actually has to be right here: two executables where the launchd plists say they are, and the
 # plists themselves. Printing both makes a wrong layout visible now rather than as a job that will not start.
 echo "    payload:"
-pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|Ops/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|how-to-configure' | sed 's/^/      /'
+pkgutil --payload-files "$FINAL_PKG" | grep -E 'Rendezvous/RemoteDesktop|Relay/RemoteDesktop|Ops/RemoteDesktop|Gateway/RemoteDesktop|LaunchDaemons/|configure-server|uninstall-server|how-to-configure' | sed 's/^/      /'
 echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries in total)"
 
 echo

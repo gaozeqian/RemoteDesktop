@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The HTTPS gateway for the Ops console as a launchd job.
+
+  It is a LaunchDaemon like the servers because the console must remain reachable whether or not an administrator is
+  logged in. The console itself stays on loopback and this job owns the only network-facing listener.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.remotedesktop.gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/remotedesktop-server/Gateway/RemoteDesktop.Server.Gateway</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/remotedesktop-server/Gateway</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/remotedesktop-server/logs/gateway.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/remotedesktop-server/logs/gateway.log</string>
+
+</dict>
+</plist>

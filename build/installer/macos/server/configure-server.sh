@@ -27,6 +27,8 @@
 #   --tls-password <password>        its password
 #   --ops-listen <url>               the monitoring console's address (default http://127.0.0.1:5090)
 #   --ops-database-path <file>       the console's SQLite file (default .../var/ops.db)
+#   --gateway-listen <url>           the console's public HTTPS listener (default https://0.0.0.0:5443)
+#   --gateway-hostname <names>       extra comma-separated IPs or DNS names for its generated certificate
 #   --no-restart                     write the settings but leave the jobs running on the old ones
 #
 # Examples:
@@ -66,6 +68,8 @@ while [ "$#" -gt 0 ]; do
         --tls-password)    shift; args[${#args[@]}]="--tls-password";    args[${#args[@]}]="$1" ;;
         --ops-listen)      shift; args[${#args[@]}]="--ops-listen";      args[${#args[@]}]="$1" ;;
         --ops-database-path) shift; args[${#args[@]}]="--ops-database-path"; args[${#args[@]}]="$1" ;;
+        --gateway-listen)  shift; args[${#args[@]}]="--gateway-listen";  args[${#args[@]}]="$1" ;;
+        --gateway-hostname) shift; args[${#args[@]}]="--gateway-hostname"; args[${#args[@]}]="$1" ;;
         --no-restart)      restart=0 ;;
         -h|--help)         sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -89,7 +93,7 @@ echo "==> Restarting the servers"
 # The console restarts too: the database provider is shared with the signaling server, so a --database or --postgres
 # change rewrites the console's settings as well. Leaving it running would keep the old database (and make history
 # look as if it had disappeared) until somebody restarted it by hand.
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops; do
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
     # kickstart -k restarts a running job and starts a stopped one, which is what "restart the service" means on
     # Windows. `launchctl stop` alone would only stop it, and KeepAlive would bring it back on the old settings.
     launchctl kickstart -k "system/$label" || echo "  warning: could not restart $label" >&2

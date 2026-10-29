@@ -61,7 +61,7 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 `apt install ./...deb` 会一并解决包声明的依赖（ICU、OpenSSL、debconf、adduser 等）。用 `dpkg -i` 也可以，
 但目标机缺少其中任何一个依赖时包会停在未配置状态，需要再跑一次 `sudo apt-get -f install`。
 
-包把三个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops}`，三个 **system** 单元装到
+包把四个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops,Gateway}`，四个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
 升级不会覆盖运维改过的东西。Windows 现在也把 live settings 放在 `%ProgramData%\Remote Desktop Server`，
 三平台在这一点上一致。
@@ -92,7 +92,7 @@ sudo dpkg-reconfigure remotedesktop-server
 # printf '%s\n' 'remotedesktop-server database-provider select postgres' \
 #   'remotedesktop-server postgres-connection password Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...' \
 #   | debconf-set-selections
-systemctl status remotedesktop-rendezvous remotedesktop-relay remotedesktop-ops
+systemctl status remotedesktop-rendezvous remotedesktop-relay remotedesktop-ops remotedesktop-gateway
 # 这个包的默认答案是 generate，即自签 HTTPS；-k 是因为证书不是公共 CA 签的
 curl -k https://127.0.0.1:5080/health
 curl http://127.0.0.1:5090/health
@@ -127,18 +127,20 @@ msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
   TLSCERTIFICATEPATH="C:\rd\signaling.pfx" TLSCERTIFICATEPASSWORD="..."
 ```
 
-它做的事：把三个服务器（信令、中继与监控台，各自自包含）装进 `%ProgramFiles%\Remote Desktop Server`，
-注册三个自动启动、崩溃后自动重启的服务（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`），
-加三条**只针对两个网络服务器**的入站规则（TCP 5080、UDP 5081、UDP 5082），并按下面的属性写好信令与中继的设置。
+它做的事：把四个服务器（信令、中继、监控台和 Ops HTTPS 网关，各自自包含）装进
+`%ProgramFiles%\Remote Desktop Server`，注册四个自动启动、崩溃后自动重启的服务
+（`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`、`RemoteDesktopGateway`），
+加四条入站规则（TCP 5080、UDP 5081、UDP 5082、TCP 5443），并按下面的属性写好信令与中继的设置。
 **真正生效的设置、数据库、TLS 公钥和 `server-setup.log` 在 `%ProgramData%\Remote Desktop Server\`**，
 不在 Program Files：MSI 的大版本升级会先删除旧产品在 Program Files 里的文件，放在那里的
 `appsettings.json` 会在每次升级时丢失。ProgramData 下的目录只有 SYSTEM 和 Administrators 能读。
 设置由信令服务器自己写入（`--configure-system`），它把做过什么记在
 `%ProgramData%\Remote Desktop Server\server-setup.log` 里——安装程序不会给任何人看这一步的输出。
 
-监控台（Ops）没有安装属性：它默认只监听 `127.0.0.1:5090`，数据库在
-`%ProgramData%\Remote Desktop Server\ops.db`。安装时会自动把本机信令/中继登记为两个节点并打开信令的
-`/metrics`，新装环境不需要手工添加节点。本机节点固定使用回环地址（`https://127.0.0.1:5080` /
+监控台（Ops）没有需要填写的安装属性：它默认只监听 `127.0.0.1:5090`，数据库在
+`%ProgramData%\Remote Desktop Server\ops.db`。同一安装包还会安装 Gateway，默认以
+`https://0.0.0.0:5443` 对外提供 HTTPS；指定 `GATEWAYLISTEN` 可改监听地址。安装时会自动把本机信令/中继登记为
+两个节点并打开信令的 `/metrics`，新装环境不需要手工添加节点。本机节点固定使用回环地址（`https://127.0.0.1:5080` /
 `http://127.0.0.1:5083`）；没有配置 `Ops:NodeToken` 时，服务端的 `/metrics` 和 `/internal/*` 只接受回环调用，
 用机器名或局域网地址访问会返回 401。**它没有默认账号**，装完要自己建第一个管理员（见 §二 10）：
 
@@ -192,9 +194,9 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 # 产物：artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-<版本>.pkg
 ```
 
-装到 `/usr/local/remotedesktop-server`，并把三个服务器注册成 **launchd 守护进程**
-（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay` / `com.remotedesktop.ops`，开机自启、崩溃重启）
-—— 这就是 Windows 那三个服务的对应物。
+装到 `/usr/local/remotedesktop-server`，并把四个服务器注册成 **launchd 守护进程**
+（`com.remotedesktop.rendezvous` / `com.remotedesktop.relay` / `com.remotedesktop.ops` /
+`com.remotedesktop.gateway`，开机自启、崩溃重启）—— 这就是 Windows 那四个服务的对应物。
 
 > **已知边界**：这三个守护进程目前以 **root** 运行（plist 没有 `UserName`，安装脚本也没有创建专用账户）。
 > Linux 包会创建 `remotedesktop` 账户并以它运行；macOS 包目前还没有做到这一点。把服务端放在公网前，
@@ -321,7 +323,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 
 dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Ops
 ```
 
-三个服务端各自一个子目录，因为它们是三个程序，装在同一台机器上时目录不能混。
+四个服务端各自一个子目录，因为它们是四个程序，装在同一台机器上时目录不能混。
 `build/installer/windows/server/Build-ServerInstaller.ps1` 用的就是这个布局（见它的 `$PublishDirectory` 与
 `-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.cmd`/`.ps1`、`how-to-configure.txt`
 与信令/中继的两份 `appsettings.json` 也在这一层；控制台自己那份在 `Ops\appsettings.json`。
@@ -671,7 +673,10 @@ scrape_configs:
 ### 10. 运维监控台（可选）
 
 控制台（`RemoteDesktop.Server.Ops`）是独立于信令与中继的第三个服务，用来**看**数字和**管**设备与会话。不装它，
-远程桌面照常工作。它默认**只监听 `127.0.0.1:5090`**：控制台有自己的登录面，暴露到公网是反向代理的决定，不是默认。
+远程桌面照常工作。控制台自身默认**只监听 `127.0.0.1:5090`**。三平台服务端安装包同时安装
+`RemoteDesktop.Server.Gateway`，默认监听 `https://0.0.0.0:5443` 并转发到该回环地址；它使用包含本机 IPv4 IP SAN
+的自签名证书，所以没有域名也能直接通过 `https://<服务器IP>:5443` 访问。运维电脑只需一次性信任安装包导出的
+证书公钥。不要把 Ops 的 5090 本身对外开放。
 
 #### 启动
 
@@ -684,11 +689,12 @@ dotnet run --project src/Server/RemoteDesktop.Server.Ops -- --create-admin admin
 dotnet run --project src/Server/RemoteDesktop.Server.Ops                          # http://127.0.0.1:5090
 ```
 
-随**服务端安装包**一起装，三个平台都是：Linux 的 `.deb` 带 `remotedesktop-ops.service`（安装时选了
-PostgreSQL 就用同一个库，否则在 `/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带
-`com.remotedesktop.ops` LaunchDaemon（库在
-`/usr/local/remotedesktop-server/var/ops.db`），Windows 的 MSI 带 `RemoteDesktopOps` 服务（库在
-`%ProgramData%\Remote Desktop Server\ops.db`）。它不需要单独安装，也没有安装属性。
+随**服务端安装包**一起装，三个平台都是：Linux 的 `.deb` 带 `remotedesktop-ops.service` 和
+`remotedesktop-gateway.service`（安装时选了 PostgreSQL 就用同一个库，否则在
+`/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带 `com.remotedesktop.ops` 与
+`com.remotedesktop.gateway` LaunchDaemon（库在 `/usr/local/remotedesktop-server/var/ops.db`），Windows 的
+MSI 带 `RemoteDesktopOps` 和 `RemoteDesktopGateway` 服务（库在
+`%ProgramData%\Remote Desktop Server\ops.db`）。它不需要单独安装，也没有必须填写的安装属性。
 
 ```bash
 # Linux — the console keeps its settings in /etc, not next to the program
@@ -742,7 +748,10 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| `Ops:Listen` | `http://127.0.0.1:5090` | Kestrel 监听地址；对外由反向代理上 TLS |
+| `Ops:Listen` | `http://127.0.0.1:5090` | 控制台自身的 Kestrel 监听地址；保持回环，对外只经过 Gateway |
+| `Gateway:Listen` | `https://0.0.0.0:5443` | 安装包内置的 HTTPS Gateway 监听地址；证书自动生成并包含本机 IPv4 IP SAN |
+| `Gateway:Upstream` | `http://127.0.0.1:5090` | Gateway 的固定回环上游；安装步骤每次都会重写，避免被改成任意外部代理 |
+| `GATEWAYHOSTNAME` / `--gateway-hostname` | 空 | 安装参数：给生成证书追加 IP/DNS；本机 IPv4 已自动包含 |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
@@ -762,8 +771,100 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 
 #### 反向代理
 
-控制台默认只监听回环，远程访问用 SSH 隧道或 TLS 反向代理。用代理时**必须**把代理地址写进
-`Ops:TrustedProxies`，并让代理写 `X-Forwarded-For` 与 `X-Forwarded-Proto`：
+服务端安装包自带一个专用 Gateway：它只监听 HTTPS，固定转发到 `http://127.0.0.1:5090`，覆盖客户端伪造的
+`X-Forwarded-*` 头，并把 `127.0.0.1` 写入 `Ops:TrustedProxies`。Windows 的 MSI 会为 TCP 5443 添加规则；
+Linux 的 `/etc/default/remotedesktop-server` 用 `RD_GATEWAY_LISTEN`、`RD_GATEWAY_HOSTNAME` 配置，并在
+`RD_OPEN_FIREWALL=1` 时放行 5443；macOS 的 `configure-server.sh` 使用 `--gateway-listen` 和
+`--gateway-hostname`。
+
+自签名证书公钥的位置：
+
+- Windows：`%ProgramData%\Remote Desktop Server\tls\signaling.cer`
+- Linux：`/etc/remotedesktop-server/tls/signaling.crt`
+- macOS：`/usr/local/share/doc/remotedesktop-server/ops-gateway.crt`
+
+每台运维电脑都必须信任该证书；不能通过忽略浏览器警告代替。服务器 IP 改变后要重新生成并分发证书。
+安装后的副本也可在这些位置查看：Linux 为 `/usr/share/doc/remotedesktop-server/how-to-configure.txt`，
+Windows 为安装目录下的 `how-to-configure.txt`，macOS 为
+`/usr/local/remotedesktop-server/how-to-configure.txt`。
+
+##### 在运维电脑上信任证书
+
+先从服务器把公钥复制到运维电脑。Linux 服务器上配置目录只有 root 和服务器服务组可读，
+所以先在服务器上复制一份可下载的公钥，再在运维电脑上下载：
+
+```bash
+# 服务器上执行
+sudo install -m 0644 /etc/remotedesktop-server/tls/signaling.crt /tmp/ops-gateway.crt
+
+# 运维电脑上执行；完成后可删除服务器上的 /tmp/ops-gateway.crt
+scp <管理员账号>@<服务器IP>:/tmp/ops-gateway.crt ./ops-gateway.crt
+```
+
+macOS 服务器使用：
+
+```bash
+scp <管理员>@<服务器IP>:/usr/local/share/doc/remotedesktop-server/ops-gateway.crt ./ops-gateway.crt
+```
+
+Windows 服务器可在有管理员权限的 PowerShell 中从管理共享复制：
+
+```powershell
+Copy-Item '\\<服务器>\C$\ProgramData\Remote Desktop Server\tls\signaling.cer' .\ops-gateway.cer
+```
+
+导入前应通过可信渠道核对服务器上证书的 SHA-256 指纹。例如 Linux/macOS 服务器执行：
+
+```bash
+openssl x509 -in <证书路径> -noout -fingerprint -sha256
+```
+
+**Windows 运维电脑**（管理员 PowerShell，写入本机受信任根，Chrome/Edge 会使用）：
+
+```powershell
+Import-Certificate -FilePath .\ops-gateway.cer -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+**Linux 运维电脑**（Debian/Ubuntu）：
+
+```bash
+sudo cp ops-gateway.crt /usr/local/share/ca-certificates/remotedesktop-ops-gateway.crt
+sudo update-ca-certificates
+```
+
+Fedora/RHEL：
+
+```bash
+sudo cp ops-gateway.crt /etc/pki/ca-trust/source/anchors/remotedesktop-ops-gateway.crt
+sudo update-ca-trust
+```
+
+Linux 上的 Chromium/Chrome 如果仍不读取系统信任库，需要导入当前用户的 NSS 库（先安装 `libnss3-tools`）：
+
+```bash
+certutil -d sql:$HOME/.pki/nssdb -A -t "C,," \
+  -n "Remote Desktop Ops Gateway" -i ops-gateway.crt
+```
+
+**macOS 运维电脑**（写入系统钥匙串，Safari/Chrome 会使用）：
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain ops-gateway.crt
+```
+
+也可以在“钥匙串访问”中导入证书，打开证书详情的“信任”，把“使用此证书时”设为“始终信任”。
+
+**Firefox 使用独立的信任库**，上述系统导入通常不会生效。在
+“设置 → 隐私与安全 → 证书 → 查看证书 → 证书颁发机构 → 导入”中选择证书，并勾选
+“信任由此证书颁发机构来标识网站”。
+
+导入后关闭并重新打开浏览器，访问 `https://<服务器IP>:5443`。地址栏应显示正常的锁标识且没有证书警告。
+服务器 IP 变化或证书到期重新生成后，应删除旧信任并重新导入新证书。把自签名证书加入受信任根意味着
+**持有对应私钥的人能在这台电脑上冒充该证书覆盖的服务**，因此证书私钥只能留在服务器上，分发时必须核对指纹。
+
+如果部署不使用内置 Gateway，控制台仍可只监听回环，远程访问用 SSH 隧道或自行维护的 TLS 反向代理。用外部代理时
+**必须**把代理地址写进 `Ops:TrustedProxies`，并让代理写 `X-Forwarded-For` 与 `X-Forwarded-Proto`：
 
 ```json
 "Ops": { "TrustedProxies": [ "127.0.0.1" ] }

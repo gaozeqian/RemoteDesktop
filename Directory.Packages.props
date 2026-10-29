@@ -17,6 +17,7 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />
     <!-- The server hosts run under systemd on Linux; the same binary still runs from a console. -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.13" />
+    <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
     <!-- The person's own settings file is layered into configuration; see UserSettings. -->
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />

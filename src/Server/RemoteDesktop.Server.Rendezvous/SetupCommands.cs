@@ -51,6 +51,8 @@ public static class SetupCommands
             OpsEventsEndpoint = Argument(args, "--ops-events-endpoint"),
             OpsIngestKey = Argument(args, "--ops-ingest-key") ?? Environment.GetEnvironmentVariable("RD_OPS_INGEST_KEY"),
             OpsNodeCertificatePath = Argument(args, "--ops-node-certificate-path"),
+            GatewayListen = Argument(args, "--gateway-listen"),
+            GatewayHostName = Argument(args, "--gateway-hostname"),
             MetricsEnabled = Array.Exists(args, argument => string.Equals(argument, "--metrics-enabled", StringComparison.Ordinal)),
         };
 

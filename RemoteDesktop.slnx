@@ -40,6 +40,7 @@
     <Project Path="src/Server/RemoteDesktop.Server.Ops.Core/RemoteDesktop.Server.Ops.Core.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Ops.Storage/RemoteDesktop.Server.Ops.Storage.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Ops/RemoteDesktop.Server.Ops.csproj" />
+    <Project Path="src/Server/RemoteDesktop.Server.Gateway/RemoteDesktop.Server.Gateway.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Rendezvous/RemoteDesktop.Server.Rendezvous.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Relay/RemoteDesktop.Server.Relay.csproj" />
   </Folder>

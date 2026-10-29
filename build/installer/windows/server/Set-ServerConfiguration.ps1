@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   The installer asks for these once. This is the way back in: give it the settings you want to change and it writes
-  them, then restarts the two services so they take effect. Anything you leave out is left alone.
+  them, then restarts the services so they take effect. Anything you leave out is left alone.
 
   It runs the same configuration step the installer does (Rendezvous\RemoteDesktop.Server.Rendezvous.exe
   --configure-system), so the two cannot drift apart, and what it did is appended to server-setup.log in this folder.
@@ -62,6 +62,11 @@ param(
     [string]$OpsListen,
     [string]$OpsDatabasePath,
 
+    # The public HTTPS listener of the Ops reverse proxy, e.g. https://0.0.0.0:5443. The generated certificate covers
+    # this machine's IPv4 addresses; use -GatewayHostName for an address or name that is not assigned locally.
+    [string]$GatewayListen,
+    [string]$GatewayHostName,
+
     # Or let this machine make its own certificate and switch to https. The public half is written to
     # tls\signaling.cer, which clients have to trust or they will refuse the connection.
     [switch]$TlsGenerate,
@@ -79,7 +84,7 @@ $installDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configDirectory = Join-Path $env:ProgramData 'Remote Desktop Server'
 $rendezvous = Join-Path $installDirectory 'Rendezvous\RemoteDesktop.Server.Rendezvous.exe'
 $ops = Join-Path $installDirectory 'Ops\RemoteDesktop.Server.Ops.exe'
-$services = @('RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps')
+$services = @('RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway')
 
 if (-not (Test-Path -LiteralPath $rendezvous)) {
     throw "This script belongs next to the servers it configures; $rendezvous is not there."
@@ -105,6 +110,8 @@ if ($PSBoundParameters.ContainsKey('RelaySharedKey')) { $arguments += @('--relay
 if ($PSBoundParameters.ContainsKey('TlsHostName')) { $arguments += @('--tls-hostname', $TlsHostName) }
 if ($PSBoundParameters.ContainsKey('OpsListen')) { $arguments += @('--ops-listen', $OpsListen) }
 if ($PSBoundParameters.ContainsKey('OpsDatabasePath')) { $arguments += @('--ops-database-path', $OpsDatabasePath) }
+if ($PSBoundParameters.ContainsKey('GatewayListen')) { $arguments += @('--gateway-listen', $GatewayListen) }
+if ($PSBoundParameters.ContainsKey('GatewayHostName')) { $arguments += @('--gateway-hostname', $GatewayHostName) }
 if ($TlsGenerate) {
     $arguments += @('--tls-certificate', 'generate')
     # The console must pin the public half the server just generated: it is in LocalMachine\My, not in the system
@@ -115,7 +122,7 @@ if ($PSBoundParameters.ContainsKey('TlsCertificatePath')) { $arguments += @('--t
 if ($PSBoundParameters.ContainsKey('TlsCertificatePassword')) { $arguments += @('--tls-password', $TlsCertificatePassword) }
 
 if ($arguments.Count -le 5) {
-    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -DatabaseProvider, -DatabasePath, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsHostName, -TlsGenerate, -OpsListen, -OpsDatabasePath.'
+    throw 'Nothing to change: give at least one of -RendezvousUrl, -RelayPublicEndpoint, -DatabaseProvider, -DatabasePath, -PostgresConnectionString, -RelaySharedKey, -TlsCertificatePath, -TlsHostName, -TlsGenerate, -OpsListen, -OpsDatabasePath, -GatewayListen, -GatewayHostName.'
 }
 
 # The WhatIf target names the settings, never their values: a connection string or relay key printed here would end up

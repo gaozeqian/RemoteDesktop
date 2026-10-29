@@ -1,13 +1,14 @@
 Remote Desktop 服务器 —— 装好之后怎么改配置
 ============================================
 
-这个目录里放着三个服务器程序（Rendezvous\ 信令、Relay\ 中继、Ops\ 运维监控台）。程序的配置默认值
-就在各自的 appsettings.json 里，**真正生效的设置、数据库、TLS 证书公钥和 server-setup.log 都在**
-%ProgramData%\Remote Desktop Server\ 下面：
+这个目录里放着四个服务器程序（Rendezvous\ 信令、Relay\ 中继、Ops\ 运维监控台、Gateway\ 运维台 HTTPS
+反向代理）。程序的配置默认值就在各自的 appsettings.json 里，**真正生效的设置、数据库、TLS 证书公钥和
+server-setup.log 都在** %ProgramData%\Remote Desktop Server\ 下面：
 
     %ProgramData%\Remote Desktop Server\Rendezvous\appsettings.json
     %ProgramData%\Remote Desktop Server\Relay\appsettings.json
     %ProgramData%\Remote Desktop Server\Ops\appsettings.json
+    %ProgramData%\Remote Desktop Server\Gateway\appsettings.json
     %ProgramData%\Remote Desktop Server\server-setup.log
     %ProgramData%\Remote Desktop Server\tls\signaling.cer      （自动生成证书时）
 
@@ -29,7 +30,7 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 
     powershell -ExecutionPolicy Bypass -File .\Set-ServerConfiguration.ps1 ...
 
-它会做三件事：把设置写进 ProgramData 下的配置文件，登记/更新监控台里的本机节点，然后重启三个服务
+它会做三件事：把设置写进 ProgramData 下的配置文件，登记/更新监控台里的本机节点，然后重启四个服务
 让它们生效。只给想改的项就行，没给的保持不动。可用的项：
 
     -DatabaseProvider           设备代码存在哪：auto / none / postgres / sqlite。
@@ -42,8 +43,10 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
     -TlsCertificatePath/-TlsCertificatePassword   用已有的证书文件启用 https
     -TlsGenerate                让本机生成一张自签名证书并启用 https
     -TlsHostName                证书里要包含的 DNS 名/IP（逗号分隔）；只和 -TlsGenerate 一起用
-    -OpsListen                  监控台监听地址（默认 http://127.0.0.1:5090）
+    -OpsListen                  监控台监听地址（默认 http://127.0.0.1:5090，保持回环）
     -OpsDatabasePath            监控台的 SQLite 文件（默认 %ProgramData%\Remote Desktop Server\ops.db）
+    -GatewayListen              运维台公网 HTTPS 地址（默认 https://0.0.0.0:5443）
+    -GatewayHostName            生成证书里额外包含的 IP/DNS（逗号分隔；本机 IPv4 会自动包含）
     -NoRestart                  写完不重启（下次重启才生效）
     -WhatIf                     只打印将要执行什么，什么都不改（不打印口令）
 
@@ -83,10 +86,31 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 四、运维监控台（Ops）
 --------------------
 
-监控台是第三个服务（服务名 RemoteDesktopOps），默认只监听 127.0.0.1:5090，
-数据库在 %ProgramData%\Remote Desktop Server\ops.db。安装时会自动把本机的信令/中继登记为两个节点，
-并打开信令的 /metrics；新装环境不需要手工添加节点。它没有默认口令，也没有网页初始化入口，
-第一个管理员要在**管理员** PowerShell 里建：
+监控台是第三个服务（服务名 RemoteDesktopOps），默认只监听 127.0.0.1:5090，数据库在
+%ProgramData%\Remote Desktop Server\ops.db。安装包同时安装 HTTPS 反向代理 Gateway（服务名
+RemoteDesktopGateway），默认监听 https://0.0.0.0:5443 并转发到
+http://127.0.0.1:5090；防火墙只为 Gateway 开放 TCP 5443，不开放 5090。
+
+Gateway 使用自动生成的自签名证书，证书包含本机 IPv4 地址作为 IP SAN，所以没有域名也可以访问：
+
+    https://<服务器IP>:5443
+
+公钥导出为 %ProgramData%\Remote Desktop Server\tls\signaling.cer。每台运维电脑必须一次性信任它。
+先把公钥复制到运维电脑（或通过其他可信方式传输），并在**管理员 PowerShell** 中执行：
+
+    Import-Certificate -FilePath .\signaling.cer -CertStoreLocation Cert:\LocalMachine\Root
+
+这会写入本机所有用户共用的受信任根，Chrome 和 Edge 会直接使用。执行后关闭并重新打开
+浏览器，访问 https://<服务器IP>:5443，地址栏应显示正常的锁标识且没有证书警告。
+
+Firefox 使用自己的信任库，需要在“设置 -> 隐私与安全 -> 证书 -> 查看证书 ->
+证书颁发机构”中导入该文件，并勾选“信任由此证书颁发机构来标识网站”。
+
+不要靠忽略浏览器证书警告来访问；服务器 IP 变化后需要重新生成/分发证书。分发前可在
+服务器上用 openssl x509 -in 证书文件 -noout -fingerprint -sha256 核对指纹。
+
+安装时会自动把本机的信令/中继登记为两个节点，并打开信令的 /metrics；新装环境不需要手工添加节点。
+它没有默认口令，也没有网页初始化入口，第一个管理员要在**管理员** PowerShell 里建：
 
     & "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
     Restart-Service RemoteDesktopOps
@@ -96,7 +120,8 @@ Remote Desktop 服务器 —— 装好之后怎么改配置
 命令默认读写 %ProgramData%\Remote Desktop Server\Ops\appsettings.json，和服务是同一份配置。
 
 监控台自己的配置在 Ops\appsettings.json（Ops:Listen、Ops:Database、Ops:NodeToken 等）。
-它默认不对外，要给它 TLS 或公网访问就在前面放反向代理。
+对外访问由 Gateway 负责；Gateway 配置及其固定回环路由在 Gateway\appsettings.json。Ops 的
+TrustedProxies 已自动加入 127.0.0.1，使 HTTPS Cookie、审计来源 IP 和登录失败限流使用真实客户端地址。
 删掉 ops.db 只会丢掉监控历史、告警与审计，**不影响**远程桌面连接本身。
 
 

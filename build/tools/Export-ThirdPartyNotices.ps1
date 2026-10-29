@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   The list is read from NuGet rather than written by hand: the packages come from "dotnet list package
-  --include-transitive" for the three programs the installer publishes, and each license comes from that package's own
+  --include-transitive" for the server programs the installers publish, and each license comes from that package's own
   .nuspec in the local NuGet cache. Run it again whenever the dependencies change — Dependabot will make that happen.
 
   Only the packages that are actually redistributed are listed, which is what the licenses of MIT, BSD and Apache
@@ -25,8 +25,8 @@ if ([string]::IsNullOrEmpty($OutputPath)) { $OutputPath = Join-Path $root 'THIRD
 
 # The programs the installers ship. Their dependencies together are what is redistributed — the servers included:
 # the server MSI and .pkg carry Npgsql and the SQLite driver, and a license file that omits them is the drift this
-# script exists to prevent. The Ops console is a third program in the same server package, not a separate product:
-# leaving it out made every package's notice list silently incomplete for anything only the console references.
+# script exists to prevent. The Ops console and its gateway are separate programs in the same server package, not
+# separate products: leaving either out makes every package's notice list silently incomplete for its dependencies.
 $shipped = @(
     'src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj'
     'src/Hosts/RemoteDesktop.HostService/RemoteDesktop.HostService.csproj'
@@ -34,6 +34,7 @@ $shipped = @(
     'src/Server/RemoteDesktop.Server.Rendezvous/RemoteDesktop.Server.Rendezvous.csproj'
     'src/Server/RemoteDesktop.Server.Relay/RemoteDesktop.Server.Relay.csproj'
     'src/Server/RemoteDesktop.Server.Ops/RemoteDesktop.Server.Ops.csproj'
+    'src/Server/RemoteDesktop.Server.Gateway/RemoteDesktop.Server.Gateway.csproj'
 )
 
 $packages = @{}
@@ -42,8 +43,11 @@ foreach ($project in $shipped) {
     if ($LASTEXITCODE -ne 0) { throw "dotnet list package failed for $project." }
 
     foreach ($line in $listing) {
-        if ($line -match '^\s*>\s+(\S+)\s+(\S+)\s*$') {
-            $packages[$Matches[1]] = $Matches[2]
+        # Top-level packages have three columns (id, requested, resolved); transitive ones have two (id, resolved).
+        # Taking the optional third column is what includes a package that only the new gateway project references
+        # directly, such as Yarp.ReverseProxy, instead of silently omitting its license.
+        if ($line -match '^\s*>\s+(\S+)\s+(\S+)(?:\s+(\S+))?\s*$') {
+            $packages[$Matches[1]] = if ($Matches[3]) { $Matches[3] } else { $Matches[2] }
         }
     }
 }
@@ -111,7 +115,7 @@ $header = @'
 # 第三方组件声明
 
 本产品使用以下开源组件。它们按各自的许可条款提供，版权归各自的作者所有（许可证全文见各组件的项目主页）。
-列表取自随安装包发布的程序的依赖闭包（客户端、被控端、信令服务器、中继服务器、运维监控台），因此也包含只在构建时用到的包。
+列表取自随安装包发布的程序的依赖闭包（客户端、被控端、信令服务器、中继服务器、运维监控台与 Ops HTTPS 网关），因此也包含只在构建时用到的包。
 
 本文件由 `build/tools/Export-ThirdPartyNotices.ps1` 从 NuGet 元数据生成，请不要手改——改了下次生成就没了。
 依赖变化后（例如 Dependabot 升级了某个包）重新运行一次：

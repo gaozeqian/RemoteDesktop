@@ -17,6 +17,7 @@ set -euo pipefail
 INSTALL_DIR="/usr/local/remotedesktop-server"
 RENDEZVOUS="$INSTALL_DIR/Rendezvous/RemoteDesktop.Server.Rendezvous"
 OPS="$INSTALL_DIR/Ops/RemoteDesktop.Server.Ops"
+GATEWAY="$INSTALL_DIR/Gateway/RemoteDesktop.Server.Gateway"
 OPTIONS="$INSTALL_DIR/setup-options"
 ROOT_ANSWERS="/var/tmp/com.remotedesktop.install.server.root.plist"
 FALLBACK_ANSWERS="/Library/Application Support/RemoteDesktop/install-answers.plist"
@@ -40,10 +41,17 @@ if [ -f "$INSTALL_DIR/Rendezvous/appsettings.json" ]; then
     first_install=0
 fi
 
+# Read before the template copy below creates the live file. Needed to distinguish a first install (and an upgrade
+# from a package without the gateway) from a later reconfiguration that must keep the operator's listener.
+gateway_settings_missing=0
+if [ ! -f "$INSTALL_DIR/Gateway/appsettings.json" ]; then
+    gateway_settings_missing=1
+fi
+
 # The live settings file, from the template the package ships. Only when it is not there: an upgrade must not put the
 # build's defaults back over what the operator configured, and for the signaling server that file holds the relay key
 # every client and relay has been given. The template itself is refreshed by the package on every upgrade.
-for server in Rendezvous Relay Ops; do
+for server in Rendezvous Relay Ops Gateway; do
     if [ ! -f "$INSTALL_DIR/$server/appsettings.json" ] && [ -f "$INSTALL_DIR/$server/appsettings.default.json" ]; then
         cp "$INSTALL_DIR/$server/appsettings.default.json" "$INSTALL_DIR/$server/appsettings.json"
         chmod 0644 "$INSTALL_DIR/$server/appsettings.json"
@@ -252,9 +260,16 @@ if [ "$apply" -eq 1 ]; then
         args+=("${ops_args[@]}")
     fi
 
-    echo "  writing the settings of both servers"
-    # A failure here is fatal: the Installer shows the failure while somebody is watching, instead of leaving three
-    # jobs that restart every five seconds against a settings file nobody can explain.
+    # The console's gateway is enabled by this package. It owns the public HTTPS listener while Ops stays on
+    # loopback; its generated certificate covers this machine's IPv4 addresses, so no DNS name is required. A
+    # reconfiguration with existing gateway settings must not reset an operator's custom listener.
+    if [ "$gateway_settings_missing" -eq 1 ]; then
+        args+=(--gateway-listen "https://0.0.0.0:5443")
+    fi
+
+    echo "  writing the servers' settings"
+    # A failure here is fatal: the Installer shows the failure while somebody is watching, instead of leaving services
+    # that restart every five seconds against a settings file nobody can explain.
     if ! "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "${args[@]}"; then
         echo "Remote Desktop Server: the settings step failed; see $INSTALL_DIR/server-setup.log." >&2
         exit 1
@@ -280,6 +295,9 @@ else
     ops_listen="$(plutil -extract Ops.Listen raw "$INSTALL_DIR/Ops/appsettings.json" 2>/dev/null || true)"
     if [ -z "$ops_listen" ]; then
         preserve_args+=(--ops-listen "http://127.0.0.1:5090")
+    fi
+    if [ "$gateway_settings_missing" -eq 1 ]; then
+        preserve_args+=(--gateway-listen "https://0.0.0.0:5443")
     fi
 
     if [ "${#preserve_args[@]}" -gt 0 ]; then
@@ -414,6 +432,29 @@ export_server_certificate() {
 
 export_server_certificate
 
+# --- export the gateway certificate for console users ------------------------------------------
+
+# The gateway always terminates TLS, even when signaling was configured as plain HTTP. Its public certificate is
+# therefore exported separately: administrators install this one file as a trusted root on the computers they use to
+# open the console. It is deliberately not added to the System keychain; a package postinstall has no user session in
+# which macOS would permit that trust change.
+export_gateway_certificate() {
+    local settings="$INSTALL_DIR/Gateway/appsettings.json"
+    local path destination
+    path="$(plutil -extract Kestrel.Certificates.Default.Path raw "$settings" 2>/dev/null || true)"
+    destination="$DOC_DIR/ops-gateway.crt"
+    rm -f "$destination"
+    if [ -n "$path" ] && [ -f "$path" ] && cp "$path" "$destination"; then
+        chmod 0644 "$destination"
+        chown root:wheel "$destination"
+        echo "  Ops gateway certificate exported to $destination; trust it on the computers that open the console."
+    else
+        echo "  warning: could not export the Ops gateway certificate from $settings." >&2
+    fi
+}
+
+export_gateway_certificate
+
 # --- let the console pin the server certificate ------------------------------------------------
 
 # A package postinstall cannot add a certificate to the macOS System keychain: security add-trusted-cert fails with
@@ -484,7 +525,7 @@ seed_local_nodes
 # bootstrap wants the file owned by root and not writable by anyone else; the package installs it that way already,
 # and this makes that true even if something loosened it.
 echo "  starting the servers"
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops; do
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
     plist="/Library/LaunchDaemons/$label.plist"
     chown root:wheel "$plist"
     chmod 644 "$plist"
@@ -504,8 +545,9 @@ done
 
 echo "Remote Desktop Server: installed in $INSTALL_DIR"
 echo "  health:  curl http://127.0.0.1:5080/health"
-echo "  console: http://127.0.0.1:5090 (no account yet: see how-to-configure.txt, section 6)"
-echo "  logs:    $INSTALL_DIR/logs/rendezvous.log, relay.log and ops.log"
+echo "  console: https://<this-machine-ip>:5443 (no account yet: see how-to-configure.txt, section 6)"
+echo "  console certificate: $DOC_DIR/ops-gateway.crt"
+echo "  logs:    $INSTALL_DIR/logs/rendezvous.log, relay.log, ops.log and gateway.log"
 echo "  settings: $INSTALL_DIR/how-to-configure.txt"
 
 exit 0

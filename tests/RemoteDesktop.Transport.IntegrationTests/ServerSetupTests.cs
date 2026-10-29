@@ -887,6 +887,55 @@ public sealed class ServerSetupTests : IDisposable
     }
 
     [Fact]
+    public void The_ops_gateway_is_https_on_loopback_upstream_with_an_ip_certificate()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "https://0.0.0.0:5443",
+            GatewayHostName = "203.0.113.77, ops.internal",
+            OpsListen = "http://127.0.0.1:5090",
+        });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal("https://0.0.0.0:5443", gateway["Gateway:Listen"]);
+        Assert.Equal(ServerSetup.DefaultGatewayUpstream, gateway["Gateway:Upstream"]);
+        Assert.Equal("/{**catch-all}", gateway["ReverseProxy:Routes:ops:Match:Path"]);
+        Assert.Equal("Set", gateway["ReverseProxy:Routes:ops:Transforms:0:X-Forwarded"]);
+        Assert.Equal(ServerSetup.DefaultGatewayUpstream, gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+
+        // The console stays on loopback. Its trusted-proxy list is what makes the forwarded TLS scheme and real client
+        // address usable for Secure cookies, audit entries and sign-in throttling.
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal("http://127.0.0.1:5090", ops["Ops:Listen"]);
+        var trusted = JsonNode.Parse(File.ReadAllText(
+            Path.Combine(_folder, ServerSetup.OpsFolder, ServerSetup.SettingsFileName)))!["Ops"]!["TrustedProxies"]!.AsArray();
+        Assert.Contains(trusted, entry => entry!.GetValue<string>() == "127.0.0.1");
+
+        // The gateway generates the machine certificate when signaling did not. The extra address becomes an IP SAN,
+        // which is what lets an operator open https://203.0.113.77:5443 without a DNS name.
+        var certificatePath = gateway["Kestrel:Certificates:Default:Path"]!;
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+        Assert.Contains("203.0.113.77", names.EnumerateIPAddresses().Select(address => address.ToString()));
+        Assert.Contains("ops.internal", names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(notes, note => note.Contains("HTTPS gateway", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_ops_gateway_refuses_plain_http_before_writing_any_settings()
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "http://0.0.0.0:5443",
+        }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.GatewayFolder, ServerSetup.SettingsFileName)));
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    [Fact]
     public void The_console_shares_the_postgres_database()
     {
         const string ConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x";

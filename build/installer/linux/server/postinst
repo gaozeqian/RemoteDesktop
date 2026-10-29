@@ -58,6 +58,8 @@ case "$1" in
         RD_RELAY_ENDPOINT=${RD_RELAY_ENDPOINT:-auto}
         RD_RELAY_KEY=${RD_RELAY_KEY:-auto}
         RD_OPEN_FIREWALL=${RD_OPEN_FIREWALL:-0}
+        RD_GATEWAY_LISTEN=${RD_GATEWAY_LISTEN:-https://0.0.0.0:5443}
+        RD_GATEWAY_HOSTNAME=${RD_GATEWAY_HOSTNAME:-}
 
         # The conffile supplies the values the questions do not cover (URLs, relay endpoint, key, firewall). The
         # database and TLS answers come from debconf; the config script seeded them from this file when the
@@ -206,7 +208,7 @@ case "$1" in
         # --configure-system prints what it did and what an operator has to do next. Both the output and its exit code
         # matter: a settings file that cannot be written has to fail the installation, while the operator is still
         # watching, rather than leave a service that will not start.
-        "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" \
+        set -- \
             --configure-system \
             --install-directory "$INSTALL_DIRECTORY" \
             --urls "$RD_URLS" \
@@ -222,6 +224,18 @@ case "$1" in
             --ops-listen "http://127.0.0.1:5090" \
             --metrics-enabled
 
+        # On first install the Gateway settings do not exist yet. On an upgrade they do, and passing defaults again
+        # would overwrite an operator's custom listener. The gateway's own settings then drive regeneration of its
+        # fixed loopback route and shared certificate.
+        if [ ! -f "$INSTALL_DIRECTORY/Gateway/appsettings.json" ]; then
+            set -- "$@" --gateway-listen "$RD_GATEWAY_LISTEN"
+            if [ -n "$RD_GATEWAY_HOSTNAME" ]; then
+                set -- "$@" --gateway-hostname "$RD_GATEWAY_HOSTNAME"
+            fi
+        fi
+
+        "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" "$@"
+
         mkdir -p "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server
         chown -R "$SERVICE_USER:$SERVICE_USER" "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server
 
@@ -230,7 +244,7 @@ case "$1" in
         # leaves, so re-running the step never widens the files.
         chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY"
         chmod 0750 "$INSTALL_DIRECTORY"
-        for directory in Rendezvous Relay Ops; do
+        for directory in Rendezvous Relay Ops Gateway; do
             if [ -d "$INSTALL_DIRECTORY/$directory" ]; then
                 chown root:"$SERVICE_USER" "$INSTALL_DIRECTORY/$directory"
                 chmod 0750 "$INSTALL_DIRECTORY/$directory"
@@ -347,6 +361,7 @@ case "$1" in
                 ufw allow 5080/tcp >/dev/null 2>&1 || true
                 ufw allow 5081/udp >/dev/null 2>&1 || true
                 ufw allow 5082/udp >/dev/null 2>&1 || true
+                ufw allow 5443/tcp >/dev/null 2>&1 || true
 
                 # Purge removes only what this package added. The marker survives the settings file, which dpkg may
                 # have already deleted by the time postrm purge runs.
@@ -370,23 +385,25 @@ case "$1" in
             # preserves an administrator's deliberate `systemctl disable`.
             if [ -z "${2:-}" ]; then
                 deb-systemd-helper purge remotedesktop-rendezvous.service \
-                    remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
+                    remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
             fi
 
             deb-systemd-helper enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper enable remotedesktop-relay.service >/dev/null 2>&1 || true
             deb-systemd-helper enable remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-helper enable remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
             systemctl enable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             systemctl enable remotedesktop-relay.service >/dev/null 2>&1 || true
             systemctl enable remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl enable remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
 
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
             systemctl --system daemon-reload >/dev/null 2>&1 || true
-            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
         ;;
 

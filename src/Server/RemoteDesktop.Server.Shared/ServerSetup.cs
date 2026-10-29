@@ -101,6 +101,12 @@ public sealed record ServerSetupOptions
     /// trust store; a self-signed signaling certificate cannot be trusted that way from an installer script.
     /// </summary>
     public string? OpsNodeCertificatePath { get; init; }
+
+    /// <summary>The public HTTPS address of the Ops reverse proxy. Null leaves the existing listener unchanged.</summary>
+    public string? GatewayListen { get; init; }
+
+    /// <summary>Extra DNS names or IP addresses the generated Gateway certificate must contain.</summary>
+    public string? GatewayHostName { get; init; }
 }
 
 /// <summary>
@@ -133,6 +139,13 @@ public static class ServerSetup
 
     /// <summary>The monitoring console's folder, which has settings of its own.</summary>
     public const string OpsFolder = "Ops";
+
+    /// <summary>The HTTPS reverse proxy that exposes the console without opening its loopback listener.</summary>
+    public const string GatewayFolder = "Gateway";
+
+    public const string DefaultGatewayListen = "https://0.0.0.0:5443";
+
+    public const string DefaultGatewayUpstream = "http://127.0.0.1:5090";
 
     /// <summary>Where the Linux package keeps the live settings for all three servers.</summary>
     public const string LinuxConfigDirectory = "/etc/remotedesktop-server";
@@ -235,13 +248,20 @@ public static class ServerSetup
         var rendezvousPath = Path.Combine(configDirectory, RendezvousFolder, SettingsFileName);
         var relayPath = Path.Combine(configDirectory, RelayFolder, SettingsFileName);
         var opsPath = Path.Combine(configDirectory, OpsFolder, SettingsFileName);
+        var gatewayPath = Path.Combine(configDirectory, GatewayFolder, SettingsFileName);
+        var gatewayDefaultsPath = DefaultsPath(defaultsDirectory, GatewayFolder);
 
-        // Read all three before writing any: a value that turns out to be unusable should leave the machine as it was.
+        // Read every file before writing any: a value that turns out to be unusable should leave the machine as it was.
         // A live file wins; otherwise the shipped file is the base, so a fresh Windows install keeps the template's
         // Urls/ReflectorPort rather than starting from an empty object.
         var rendezvous = ReadOrDefault(rendezvousPath, DefaultsPath(defaultsDirectory, RendezvousFolder));
         var relay = ReadOrDefault(relayPath, DefaultsPath(defaultsDirectory, RelayFolder));
         var ops = ReadOrDefault(opsPath, DefaultsPath(defaultsDirectory, OpsFolder));
+        var configureGateway = options.GatewayListen is not null
+            || options.GatewayHostName is not null
+            || File.Exists(gatewayPath)
+            || gatewayDefaultsPath is not null && File.Exists(gatewayDefaultsPath);
+        var gateway = configureGateway ? ReadOrDefault(gatewayPath, gatewayDefaultsPath) : [];
 
         var rendezvousSection = Section(rendezvous, "Rendezvous");
         var (endpoint, relayPort) = RelayEndpoint(options.RelayPublicEndpoint, notes);
@@ -299,7 +319,11 @@ public static class ServerSetup
             ValidateCertificateFile(options.TlsCertificatePath!, certificatePassword);
         }
 
-        var additionalNames = AdditionalNames(options.TlsHostName);
+        // Signaling and the Ops gateway share the machine certificate. Build its SAN list once so the first caller
+        // cannot create a certificate that omits the address the second listener needs.
+        var additionalNames = AdditionalNames(options.TlsHostName)
+            .Concat(AdditionalNames(options.GatewayHostName))
+            .ToArray();
 
         if (!IsAuto(options.TlsCertificatePath)
             && urls is not null
@@ -385,12 +409,19 @@ public static class ServerSetup
 
         relaySection["SharedKey"] = key;
 
+        var gatewayOpsConfigured = configureGateway
+            && ConfigureGateway(gateway, ops, options, configDirectory, additionalNames, notes);
+
         Write(rendezvousPath, rendezvous);
         Write(relayPath, relay);
+        if (configureGateway)
+        {
+            Write(gatewayPath, gateway);
+        }
 
         // A first install and an upgrade from a version without event reporting both have console settings to write.
         // Later runs leave the file alone when neither its database nor its event keys changed.
-        if (opsConfigured || opsEventsConfigured)
+        if (opsConfigured || opsEventsConfigured || gatewayOpsConfigured)
         {
             Write(opsPath, ops);
         }
@@ -797,6 +828,102 @@ public static class ServerSetup
         }
 
         return new DatabaseChoice(chosen, connectionString, databasePath);
+    }
+
+    /// <summary>
+    /// Configures the public HTTPS console listener and its loopback-only upstream. The certificate is shared with
+    /// signaling when that also uses the generated machine certificate, so there is only one public half to distribute.
+    /// </summary>
+    /// <returns><c>true</c> when the console's trusted-proxy list changed.</returns>
+    private static bool ConfigureGateway(
+        JsonObject settings,
+        JsonObject ops,
+        ServerSetupOptions options,
+        string configDirectory,
+        string[] additionalNames,
+        List<string> notes)
+    {
+        var section = Section(settings, "Gateway");
+        var listen = Given(options.GatewayListen) ?? Text(section, "Listen") ?? DefaultGatewayListen;
+        if (!Uri.TryCreate(listen, UriKind.Absolute, out var address)
+            || address.Scheme != Uri.UriSchemeHttps
+            || string.IsNullOrWhiteSpace(address.Host)
+            || address.AbsolutePath != "/"
+            || address.Query.Length > 0
+            || address.Fragment.Length > 0
+            || address.UserInfo.Length > 0)
+        {
+            throw new InvalidOperationException($"The Ops gateway address must be an HTTPS URL without a path (got '{listen}').");
+        }
+
+        section["Listen"] = listen;
+        section["Upstream"] = DefaultGatewayUpstream;
+
+        // The proxy is not a general-purpose forwarder: its one route and one loopback destination are rewritten on
+        // every setup run. X-Forwarded=Set discards client-supplied forwarding headers before adding the real ones.
+        var proxy = Section(settings, "ReverseProxy");
+        var routes = Section(proxy, "Routes");
+        var route = Section(routes, "ops");
+        route["ClusterId"] = "ops";
+        route["Match"] = new JsonObject { ["Path"] = "/{**catch-all}" };
+        route["Transforms"] = new JsonArray(new JsonObject { ["X-Forwarded"] = "Set" });
+
+        var clusters = Section(proxy, "Clusters");
+        var cluster = Section(clusters, "ops");
+        var destinations = Section(cluster, "Destinations");
+        var loopback = Section(destinations, "loopback");
+        loopback["Address"] = DefaultGatewayUpstream;
+
+        var certificates = Section(Section(Section(settings, "Kestrel"), "Certificates"), "Default");
+        foreach (var stale in (string[])["Path", "KeyPath", "Password", "Subject", "Store", "Location", "AllowInvalid"])
+        {
+            certificates.Remove(stale);
+        }
+
+        var certificateNames = additionalNames;
+        if (!IPAddress.TryParse(address.Host, out var listenAddress) || !IPAddress.Any.Equals(listenAddress) && !IPAddress.IPv6Any.Equals(listenAddress))
+        {
+            certificateNames = [.. certificateNames, address.Host];
+        }
+
+        string publicCertificate;
+        if (OperatingSystem.IsWindows())
+        {
+            SelfSignedCertificate.Ensure(configDirectory, notes, certificateNames);
+            certificates["Subject"] = SelfSignedCertificate.NameForThisMachine;
+            certificates["Store"] = SelfSignedCertificate.CertificateStoreName;
+            certificates["Location"] = SelfSignedCertificate.CertificateStoreLocation;
+            certificates["AllowInvalid"] = "true";
+            publicCertificate = Path.Combine(configDirectory, SelfSignedCertificate.PublicFolder, "signaling.cer");
+        }
+        else
+        {
+            var (certificatePath, keyPath) = SelfSignedCertificate.EnsurePem(
+                Path.Combine(configDirectory, SelfSignedCertificate.PublicFolder),
+                notes,
+                certificateNames);
+            certificates["Path"] = certificatePath;
+            certificates["KeyPath"] = keyPath;
+            publicCertificate = certificatePath;
+        }
+
+        var opsSection = Section(ops, "Ops");
+        var trusted = opsSection["TrustedProxies"] as JsonArray;
+        if (trusted is null)
+        {
+            trusted = [];
+            opsSection["TrustedProxies"] = trusted;
+        }
+
+        var changed = !trusted.Any(entry => string.Equals(entry?.GetValue<string>(), IPAddress.Loopback.ToString(), StringComparison.Ordinal));
+        if (changed)
+        {
+            trusted.Add(IPAddress.Loopback.ToString());
+        }
+
+        notes.Add($"The Ops console is available through the HTTPS gateway on {listen}; its upstream is {DefaultGatewayUpstream}.");
+        notes.Add($"Ops gateway clients must trust {publicCertificate}; the certificate contains this machine's IPv4 addresses as IP SAN entries.");
+        return changed;
     }
 
     /// <summary>

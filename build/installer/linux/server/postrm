@@ -23,19 +23,21 @@ case "$1" in
         rm -f /run/remotedesktop-server.questions-asked
 
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
-            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
 
         if command -v deb-systemd-helper >/dev/null 2>&1; then
             deb-systemd-helper disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper disable remotedesktop-relay.service >/dev/null 2>&1 || true
             deb-systemd-helper disable remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-helper disable remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
             systemctl disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             systemctl disable remotedesktop-relay.service >/dev/null 2>&1 || true
             systemctl disable remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl disable remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
 
         # The trust entry this package may have added goes with it, as the client's and host's do.
@@ -59,7 +61,7 @@ case "$1" in
         # disabled: the package installs, no symlink is created, and the server never starts.
         if command -v deb-systemd-helper >/dev/null 2>&1; then
             deb-systemd-helper purge remotedesktop-rendezvous.service \
-                remotedesktop-relay.service remotedesktop-ops.service >/dev/null 2>&1 || true
+                remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
 
         # Whether the post-install step opened the firewall. Read before the data directory goes away; the marker is
@@ -90,6 +92,7 @@ case "$1" in
             ufw delete allow 5080/tcp >/dev/null 2>&1 || true
             ufw delete allow 5081/udp >/dev/null 2>&1 || true
             ufw delete allow 5082/udp >/dev/null 2>&1 || true
+            ufw delete allow 5443/tcp >/dev/null 2>&1 || true
         fi
 
         if getent passwd remotedesktop >/dev/null 2>&1; then

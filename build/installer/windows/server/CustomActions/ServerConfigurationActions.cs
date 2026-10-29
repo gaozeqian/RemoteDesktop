@@ -27,14 +27,14 @@ public static class ServerConfigurationActions
     private const string LogFileName = "server-setup.log";
 
     /// <summary>The three programs whose settings move with the service, and their folders.</summary>
-    private static readonly string[] Roles = ["Rendezvous", "Relay", "Ops"];
+    private static readonly string[] Roles = ["Rendezvous", "Relay", "Ops", "Gateway"];
 
     /// <summary>The keys <see cref="PrepareServerData"/> packs for the deferred actions.</summary>
     private static readonly string[] SetupDataKeys =
     [
         "InstallDirectory", "ConfigDirectory", "RendezvousUrl", "RelayEndpoint", "RelaySharedKey",
         "DatabaseProvider", "DatabasePath", "PostgresConnectionString", "TlsCertificatePath", "TlsPassword",
-        "TlsHostName",
+        "TlsHostName", "GatewayListen", "GatewayHostName",
     ];
 
     [CustomAction]
@@ -192,6 +192,8 @@ public static class ServerConfigurationActions
             ["TlsCertificatePath"] = session["TLSCERTIFICATEPATH"] ?? string.Empty,
             ["TlsPassword"] = session["TLSCERTIFICATEPASSWORD"] ?? string.Empty,
             ["TlsHostName"] = session["TLSCERTIFICATEHOSTNAME"] ?? string.Empty,
+            ["GatewayListen"] = session["GATEWAYLISTEN"] ?? string.Empty,
+            ["GatewayHostName"] = session["GATEWAYHOSTNAME"] ?? string.Empty,
         };
 
         var data = new StringBuilder();
@@ -234,6 +236,8 @@ public static class ServerConfigurationActions
             var tlsPath = Value(data, "TlsCertificatePath", "auto");
             var tlsPassword = Value(data, "TlsPassword", string.Empty);
             var tlsHostName = Value(data, "TlsHostName", Environment.MachineName);
+            var gatewayListen = Value(data, "GatewayListen", "https://0.0.0.0:5443");
+            var gatewayHostName = Value(data, "GatewayHostName", string.Empty);
 
             var arguments = new List<string>
             {
@@ -246,7 +250,14 @@ public static class ServerConfigurationActions
                 "--database-path", databasePath,
                 "--metrics-enabled",
                 "--tls-hostname", tlsHostName,
+                "--gateway-listen", gatewayListen,
             };
+
+            if (gatewayHostName.Length > 0)
+            {
+                arguments.Add("--gateway-hostname");
+                arguments.Add(gatewayHostName);
+            }
 
             var tlsEnabled = !IsAuto(tlsPath);
             if (tlsEnabled)

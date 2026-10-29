@@ -21,7 +21,7 @@ else
     rm -f "$ROOT_ANSWERS"
 fi
 
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops; do
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
     launchctl bootout system "/Library/LaunchDaemons/$label.plist" 2>/dev/null || true
 done
 

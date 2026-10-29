@@ -6,9 +6,9 @@ using WixToolset.Dtf.WindowsInstaller;
 namespace RemoteDesktop.Platform.Windows.UnitTests;
 
 /// <summary>
-/// What has to be in the server installer for it to be worth anything: three services that start by themselves, the
-/// three ports the public servers need opened, their settings files in place, and the one step that ties them together
-/// — the key that signs relay tickets, which both network servers have to agree on.
+/// What has to be in the server installer for it to be worth anything: four services that start by themselves, the
+/// ports the public listeners need opened, their settings files in place, and the one step that ties them together —
+/// the key that signs relay tickets, which both network servers have to agree on.
 /// </summary>
 /// <remarks>
 /// Checked by opening the package rather than by installing it. WiX 5 drops things without a word (a fragment with
@@ -51,20 +51,20 @@ public sealed class ServerInstallerPackageTests
 
         using var package = new MsiPackage(Msi!);
 
-        // --- the three programs, each with the runtime that comes with it ----------------------------------------
+        // --- the programs, each with the runtime that comes with it ----------------------------------------------
         var files = package.Rows("SELECT `File`, `FileName` FROM `File`", 2);
         var names = files.Select(row => row[1].Split('|')[^1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "RemoteDesktop.Server.Ops.exe", "appsettings.json", "Set-ServerConfiguration.ps1", "how-to-configure.txt" })
+        foreach (var expected in new[] { "RemoteDesktop.Server.Rendezvous.exe", "RemoteDesktop.Server.Relay.exe", "RemoteDesktop.Server.Ops.exe", "RemoteDesktop.Server.Gateway.exe", "appsettings.json", "Set-ServerConfiguration.ps1", "how-to-configure.txt" })
         {
             Assert.Contains(expected, names);
         }
 
         Assert.True(files.Count >= 300, $"Only {files.Count} files in the payload.");
 
-        // --- three services that start on their own, as the system ----------------------------------------------
+        // --- services that start on their own, as the system -----------------------------------------------------
         var services = package.Rows("SELECT `Name`, `StartType` FROM `ServiceInstall`", 2);
         var installed = services.Select(row => row[0]).ToList();
-        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps" })
+        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps", "RemoteDesktopGateway" })
         {
             Assert.True(installed.Contains(service), $"The package does not install the {service} service.");
         }
@@ -73,7 +73,7 @@ public sealed class ServerInstallerPackageTests
 
         // Stopped on uninstall and on upgrades, or the executable is in use while it is being replaced.
         var controls = package.Rows("SELECT `Name` FROM `ServiceControl`", 1).Select(row => row[0]).ToList();
-        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps" })
+        foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps", "RemoteDesktopGateway" })
         {
             Assert.True(controls.Contains(service), $"The package never stops the {service} service.");
         }
@@ -82,7 +82,7 @@ public sealed class ServerInstallerPackageTests
         // The column is `Program` and not `Program_`: the underscore belongs to the built-in MsiFirewall table, and
         // asking for the wrong name makes the query fail in a way this reader turns into "no rows at all".
         var firewall = package.Rows("SELECT `Name`, `Protocol`, `Port`, `Program`, `InterfaceTypes` FROM `Wix5FirewallException`", 5);
-        Assert.Equal(3, firewall.Count);
+        Assert.Equal(4, firewall.Count);
 
         // Each rule is on a program and not on a port alone: "anything may listen on 5080" is a different and much
         // wider statement than "this server may".
@@ -98,6 +98,7 @@ public sealed class ServerInstallerPackageTests
         Assert.Contains(rules, rule => rule == ("tcp", "5080"));
         Assert.Contains(rules, rule => rule == ("udp", "5081"));
         Assert.Contains(rules, rule => rule == ("udp", "5082"));
+        Assert.Contains(rules, rule => rule == ("tcp", "5443"));
 
         static string Protocol(string value) => value switch
         {
@@ -111,7 +112,7 @@ public sealed class ServerInstallerPackageTests
         foreach (var name in new[]
                  {
                      "RENDEZVOUSURL", "RELAYPUBLICENDPOINT", "RELAYSHAREDKEY", "POSTGRESCONNECTIONSTRING",
-                     "TLSCERTIFICATEPATH", "TLSCERTIFICATEHOSTNAME", "NOFIREWALL", "REMOVEDATA",
+                     "TLSCERTIFICATEPATH", "TLSCERTIFICATEHOSTNAME", "GATEWAYLISTEN", "GATEWAYHOSTNAME", "NOFIREWALL", "REMOVEDATA",
                  })
         {
             // A property with no value never reaches the property table, and the custom action that reads it finds

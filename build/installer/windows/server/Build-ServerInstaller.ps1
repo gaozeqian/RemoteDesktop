@@ -3,17 +3,17 @@
   Builds the Windows installer (MSI) for the RemoteDesktop servers.
 
 .DESCRIPTION
-  1. Publishes the three server programs (the rendezvous server, the relay and the monitoring console) self-contained
-     for win-x64, each into a folder of its own (Rendezvous, Relay, Ops) under one publish directory.
+  1. Publishes the server programs (rendezvous, relay, monitoring console and its HTTPS gateway) self-contained for
+     win-x64, each into a folder of its own (Rendezvous, Relay, Ops, Gateway) under one publish directory.
   2. Generates the WiX file list from that directory (WiX v5 has no heat, and the list changes with every build
      anyway).
   3. Builds the MSI with the WiX v5 SDK and, when a signing certificate is given, signs it.
 
-  The MSI installs all three into Program Files\Remote Desktop Server, registers each as a Windows service
-  (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps), adds the three inbound firewall rules the two
-  public servers need, and configures them - the address signaling listens on, the relay endpoint clients are told,
-  the key they share, and optionally a certificate to serve TLS with. The console binds to loopback and gets no rule:
-  exposing it is a reverse-proxy decision, not an installer default.
+  The MSI installs all four into Program Files\Remote Desktop Server, registers each as a Windows service
+  (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps, RemoteDesktopGateway), adds the inbound firewall
+  rules the public listeners need, and configures them - the addresses signaling and the console gateway listen on,
+  the relay endpoint clients are told, the shared key, and optionally a certificate for signaling TLS. The console
+  itself stays on loopback; the gateway is the only network-facing listener for it.
 
   This is a package of its own, next to the client installer in ..\client: a machine can run the servers, the client,
   or both, and upgrading one never touches the other.
@@ -506,6 +506,7 @@ $servers = @(
     @{ Project = 'RemoteDesktop.Server.Rendezvous'; Folder = 'Rendezvous' }
     @{ Project = 'RemoteDesktop.Server.Relay'; Folder = 'Relay' }
     @{ Project = 'RemoteDesktop.Server.Ops'; Folder = 'Ops' }
+    @{ Project = 'RemoteDesktop.Server.Gateway'; Folder = 'Gateway' }
 )
 
 Push-Location $repoRoot
@@ -531,7 +532,8 @@ finally {
 
 foreach ($expected in @('Rendezvous\RemoteDesktop.Server.Rendezvous.exe', 'Rendezvous\appsettings.json',
                         'Relay\RemoteDesktop.Server.Relay.exe', 'Relay\appsettings.json',
-                        'Ops\RemoteDesktop.Server.Ops.exe', 'Ops\appsettings.json')) {
+                        'Ops\RemoteDesktop.Server.Ops.exe', 'Ops\appsettings.json',
+                        'Gateway\RemoteDesktop.Server.Gateway.exe', 'Gateway\appsettings.json')) {
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
@@ -608,7 +610,7 @@ foreach ($extra in 'Set-ServerConfiguration.ps1', 'Set-ServerConfiguration.cmd',
 
 # Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
 # which is what leaves out all three copies of it: the publish output has one in each program folder.
-$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'RemoteDesktop.Server.Ops.exe', 'appsettings.json')
+$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'RemoteDesktop.Server.Ops.exe', 'RemoteDesktop.Server.Gateway.exe', 'appsettings.json')
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
@@ -639,7 +641,7 @@ if ($signer) {
 }
 
 New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten `
-    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder' }
+    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder'; 'Gateway' = 'GatewayFolder' }
 
 # The hand-written components own those files; a second component for one of them would install it twice. The
 # settings files here are the shipped defaults; the live files are in %ProgramData% and are not in the MSI's file
