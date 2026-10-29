@@ -172,6 +172,7 @@ jobs:
       NODE_TOKEN: ci-node-token
       OPS_INGEST_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
       RENDEZVOUS_DOMAIN: rd.example.com
+      OPS_GATEWAY_IP: 127.0.0.1
     steps:
       - uses: actions/checkout@v7
       - name: Check the compose files parse
@@ -190,6 +191,7 @@ jobs:
           docker build -f build/docker/Dockerfile.rendezvous -t remotedesktop/rendezvous:ci .
           docker build -f build/docker/Dockerfile.relay -t remotedesktop/relay:ci .
           docker build -f build/docker/Dockerfile.ops -t remotedesktop/ops:ci .
+          docker build -f build/docker/Dockerfile.gateway -t remotedesktop/gateway:ci .
       - name: Smoke test rendezvous
         run: |
           set -euo pipefail
@@ -230,24 +232,41 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:15083/health
-      - name: Smoke test the ops console
+      - name: Smoke test the ops console through its gateway
         run: |
           set -euo pipefail
-          docker run -d --name rd-ops \
+          # The console is not published; the gateway is the only listener. The dedicated subnet is what the console
+          # trusts for X-Forwarded-For/X-Forwarded-Proto, mirroring docker-compose.ops.yml.
+          docker network create --subnet 172.31.0.0/24 rd-ops-ci
+          docker run -d --name rd-ops --network rd-ops-ci \
             -e Ops__Listen=http://0.0.0.0:5090 \
             -e Ops__Database__Path=/data/ops.db \
-            -p 15090:5090 \
+            -e Ops__TrustedProxies__0=172.31.0.0/24 \
             remotedesktop/ops:ci
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:15090/ >/dev/null; then
+          docker run -d --name rd-gateway --network rd-ops-ci \
+            -e OPS_GATEWAY_IP="$OPS_GATEWAY_IP" \
+            -e Gateway__Upstream=http://rd-ops:5090 \
+            -e ReverseProxy__Clusters__ops__Destinations__loopback__Address=http://rd-ops:5090 \
+            -p 15443:5443 \
+            -v rd-gateway-ci:/data \
+            remotedesktop/gateway:ci
+
+          for _ in $(seq 1 60); do
+            if curl -ksSf https://127.0.0.1:15443/ >/dev/null; then
               break
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:15090/ >/dev/null
+          curl -ksSf https://127.0.0.1:15443/ >/dev/null
+          test "$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1:15443/health)" = "404"
+          docker exec rd-gateway openssl x509 -in /data/gateway/tls/ops-gateway.crt \
+            -noout -ext subjectAltName | grep -q "IP Address:$OPS_GATEWAY_IP"
       - name: Stop the containers
         if: always()
-        run: docker rm -f rd-rendezvous rd-relay rd-ops || true
+        run: |
+          docker rm -f rd-rendezvous rd-relay rd-ops rd-gateway || true
+          docker network rm rd-ops-ci || true
+          docker volume rm rd-gateway-ci || true
 
   docs:
     # Documentation *formatting*: blank lines around headings and lists, indentation, ``` fences tagged with a

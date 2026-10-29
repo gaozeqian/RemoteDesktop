@@ -496,19 +496,19 @@ sc.exe start RemoteDesktopRelay
 
 ### 7. 用 Docker 部署（Linux 服务器首选）
 
-仓库里已经准备好三个镜像和一组 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10
-运行时（不装 SDK）。三个镜像分别是信令、中继与监控台；监控台是可选 overlay。
+仓库里已经准备好四个镜像和一组 compose 文件（`build/docker/`），从源码在容器里构建，运行镜像基于 .NET 10
+运行时（不装 SDK）。四个镜像分别是信令、中继、监控台和 Ops HTTPS 网关；监控台与网关是可选 overlay。
 
 ```bash
 cd build/docker
-cp .env.example .env      # 填好四个必填值；.env 已被 git 忽略
+cp .env.example .env      # 填好四个必填值；启用 Ops 时再填 OPS_GATEWAY_IP
 docker compose up -d --build
 ```
 
-> **需要 Docker Engine 23+。** 三个 Dockerfile 用 BuildKit 的 NuGet cache mount 加速构建；Docker Desktop 和
+> **需要 Docker Engine 23+。** 四个 Dockerfile 用 BuildKit 的 NuGet cache mount 加速构建；Docker Desktop 和
 > 现代 Docker Engine 默认启用 BuildKit。
 
-`docker compose` 自动读取 `build/docker/.env`。必填的四项：
+`docker compose` 自动读取 `build/docker/.env`。基础 compose 必填的四项：
 
 | 变量 | 生成方式 | 用途 |
 |---|---|---|
@@ -516,6 +516,9 @@ docker compose up -d --build
 | `RELAY_SHARED_KEY` | `openssl rand -base64 48` | 中继票据签名密钥；信令与中继必须同值 |
 | `RELAY_PUBLIC_ENDPOINT` | 例如 `203.0.113.10:5082` | 客户端被要求使用的中继**地址**（必须是地址，不是域名） |
 | `NODE_TOKEN` | `openssl rand -base64 32` | `/internal/*` 与 `/metrics` 的 Bearer；信令、中继、监控台同值 |
+
+加载 `docker-compose.ops.yml` 时还必须设置 `OPS_INGEST_KEY` 和 `OPS_GATEWAY_IP`：后者是管理员在浏览器中访问
+Ops 时使用的 Docker 宿主机 IPv4 地址（有 NAT 时填 NAT 地址），会写进自签名证书的 IP SAN。
 
 两个网络服务器都会在**启动时校验密钥**：`RELAY_SHARED_KEY` 缺失、太短（少于 32 字节）或不是 base64 时，
 容器会立刻退出并说明原因，不会带着弱密钥跑起来。`RELAY_PUBLIC_ENDPOINT` 必须是客户端可达的地址；
@@ -550,9 +553,10 @@ RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
 - `5080/tcp`：信令 + `/health`，默认只绑回环；TLS overlay 通过 Caddy 暴露 443。
 - `5081/udp`：地址反射。**必须放通**，否则直连打洞拿不到自己的公网地址。
 - `5082/udp`：中继。**必须放通**，否则直连失败的连接没有退路。
+- `5443/tcp`：加载 `docker-compose.ops.yml` 后的 Ops HTTPS 网关。Ops 的 5090 不再发布到宿主机。
 - 中继的 HTTP 面（`/health`、`/metrics`，见 `Relay:HttpEndpoint`）默认只在容器内回环，不对外发布。
-- Docker 通过自己的 iptables 链发布 `ports:`，常见配置下 **ufw 不会拦住这些端口**。要限制 5080，用默认的回环
-  绑定或 DOCKER-USER 规则，不要只依赖 ufw。
+- Docker 通过自己的 iptables 链发布 `ports:`，常见配置下 **ufw 不会拦住这些端口**。要限制 5080/5443，用
+  Compose 的绑定地址（`RENDEZVOUS_BIND_IP`、`OPS_GATEWAY_BIND_IP`）或 DOCKER-USER 规则，不要只依赖 ufw。
 - `RENDEZVOUS_TRUSTED_PROXIES` 默认 `172.16.0.0/12`，覆盖 Docker 的默认 bridge 网段。这个范围很宽：如果局域网
   本身也用 172.16/12，就把它缩到代理的实际地址或 compose 专用网段，别把客户端网段一起包含进去。
 - 地址反射依赖容器看到客户端真实的 UDP 源地址。标准 Docker bridge + iptables DNAT 会保留它；rootless Docker、
@@ -581,12 +585,33 @@ RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
 
 ```bash
 export OPS_INGEST_KEY="$(openssl rand -base64 32)"   # 写进 .env 也可以
+export OPS_GATEWAY_IP=192.168.1.10                    # 管理员在浏览器里使用的宿主机地址
 docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d --build
 docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
 ```
 
-控制台发布在 `127.0.0.1:5090`，不直接对公网开放；远程访问用 SSH 隧道或自己的 TLS 反向代理。首次登录用刚建的
-管理员（口令 + TOTP）。两个节点会在控制台启动前自动登记（幂等），默认 baseUrl 为：
+Ops 只加入 Compose 内部网络，不发布宿主机端口；`gateway` 是唯一对外监听，使用
+`https://<OPS_GATEWAY_IP>:5443` 访问并转发到 `http://ops:5090`。自签名证书由 gateway 首次启动时生成，
+包含 `OPS_GATEWAY_IP` 的 IP SAN；`OPS_GATEWAY_DNS` 可以追加 DNS 名称。证书保存在 `ops-gateway-data` 卷中：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ops.yml \
+  cp gateway:/data/gateway/tls/ops-gateway.crt ./ops-gateway.crt
+docker compose -f docker-compose.yml -f docker-compose.ops.yml \
+  exec gateway openssl x509 -in /data/gateway/tls/ops-gateway.crt \
+  -noout -subject -ext subjectAltName -fingerprint -sha256
+```
+
+把导出的公钥按本节前面的三平台步骤安装到每台运维电脑。证书有效期三年；在到期前 30 天内重启 gateway 容器即可
+重新签发。`OPS_GATEWAY_IP`、`OPS_GATEWAY_DNS` 或网络配置改变后，也需要删除证书卷并重新生成，然后重新分发证书：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ops.yml down
+docker volume rm remotedesktop_ops-gateway-data
+docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d
+```
+
+首次登录用刚建的管理员（口令 + TOTP）。两个节点会在控制台启动前自动登记（幂等），默认 baseUrl 为：
 
 ```text
 rendezvous   http://rendezvous:5080
@@ -597,9 +622,11 @@ relay        http://relay:5083
 `http://rendezvous:5082`（内部明文口）。因为 Compose 网络是隔离的，overlay 同时显式开启
 `Ops:AllowInsecureNodeHttp`，允许节点令牌在该内部 HTTP 网络上传输；这仍是默认关闭的公网安全边界。
 
-`OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。会话、告警与
-审计数据存在 PostgreSQL（与设备注册表同一个库，表名以 `ops_` 开头）；备份 `postgres-data` 或 `pg_dump` 一次
-覆盖两者。控制台的 DataProtection 键存在 `ops-dataprotection` 卷里，容器重建不会丢。`Ops:RequireTotp` 默认开启，别关。
+`OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。Ops 只信任
+`OPS_GATEWAY_SUBNET`（默认 `172.30.0.0/24`）上的 Gateway，这个专用网络只有 Ops 和 Gateway 加入；不要把它换成整个
+Docker bridge 网段，否则其他容器可以伪造 `X-Forwarded-For`。会话、告警与审计数据存在 PostgreSQL（与设备注册表
+同一个库，表名以 `ops_` 开头）；备份 `postgres-data` 或 `pg_dump` 一次覆盖两者。控制台的 DataProtection 键存在
+`ops-dataprotection` 卷里，Gateway 证书存在 `ops-gateway-data` 卷里，容器重建不会丢。`Ops:RequireTotp` 默认开启，别关。
 
 #### 数据持久化与备份
 
@@ -717,6 +744,7 @@ Docker 用可选的 ops overlay（见 §二 7）：
 
 ```bash
 cd build/docker
+export OPS_GATEWAY_IP=192.168.1.10   # required by the overlay; use the host address administrators reach
 docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
 ```
 

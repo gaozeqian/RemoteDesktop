@@ -1,14 +1,23 @@
 # Optional ops console. Use together with the base file:
 #
 #   export OPS_INGEST_KEY="$(openssl rand -base64 32)"
+#   export OPS_GATEWAY_IP=192.168.1.10     # the address administrators use in the browser
 #   docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d --build
 #
 # The first administrator is created interactively; there is no default account and no first-visit setup page:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
 #
-# The console is published on 127.0.0.1:5090 only. Reach it through an SSH tunnel or put your own TLS reverse proxy in
-# front; do not publish 5090 on the internet. The two nodes are seeded automatically and the operation is idempotent.
+# The console itself is not published on the host. The gateway is the only public listener, on TCP 5443, and forwards
+# to Ops over an isolated compose network. OPS_GATEWAY_IP must be the Docker host's address as administrators reach it;
+# the gateway generates a self-signed certificate containing that IP in its subject alternative names.
+#
+# The public certificate is kept in the ops-gateway-data volume. Copy it to the machines that open the console:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ops.yml \
+#       cp gateway:/data/gateway/tls/ops-gateway.crt ./ops-gateway.crt
+#
+# The two nodes are seeded automatically and the operation is idempotent.
 #
 # OpsEvents carries session facts to the console; OPS_INGEST_KEY must be at least 32 bytes of base64 and is the same
 # value in Ops__Ingest__Keys__k1 and in both nodes' OpsEvents__Key.
@@ -50,6 +59,9 @@ services:
       # The compose network is isolated. This explicit opt-in lets the console send NodeToken to service names over
       # its internal HTTP links; the application default remains HTTPS or loopback only.
       Ops__AllowInsecureNodeHttp: "true"
+      # Only the gateway is attached to this network, so this subnet is the exact source range Ops may believe when it
+      # reads X-Forwarded-For/X-Forwarded-Proto. A broader bridge range would let another container forge client IPs.
+      Ops__TrustedProxies__0: ${OPS_GATEWAY_SUBNET:-172.30.0.0/24}
       OPS_RENDEZVOUS_NODE_URL: ${OPS_RENDEZVOUS_NODE_URL:-http://rendezvous:5080}
       OPS_RELAY_NODE_URL: ${OPS_RELAY_NODE_URL:-http://relay:5083}
     command:
@@ -60,9 +72,11 @@ services:
           --rendezvous-base-url "$$OPS_RENDEZVOUS_NODE_URL" \
           --relay-base-url "$$OPS_RELAY_NODE_URL"
         exec dotnet RemoteDesktop.Server.Ops.dll
-    ports:
-      # Loopback only: the console has its own sign-in and TOTP, but it is not a public listener.
-      - "127.0.0.1:5090:5090/tcp"
+    expose:
+      - "5090"
+    networks:
+      - default
+      - ops-gateway
     volumes:
       # Created and owned by the image. Without this, ASP.NET Core stores its keys in the container layer and warns
       # that they will disappear with it.
@@ -95,5 +109,61 @@ services:
         limits:
           memory: 512M
 
+  gateway:
+    build:
+      context: ../..
+      dockerfile: build/docker/Dockerfile.gateway
+      args:
+        VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+    image: remotedesktop/gateway:${REMOTEDESKTOP_VERSION:-dev}
+    environment:
+      Gateway__Listen: https://0.0.0.0:5443
+      Gateway__Upstream: http://ops:5090
+      # The gateway's shipped settings contain a loopback destination for the package deployment. Inside Compose the
+      # console is another container, so both the informational setting and the actual YARP destination change.
+      ReverseProxy__Clusters__ops__Destinations__loopback__Address: http://ops:5090
+      OPS_GATEWAY_IP: ${OPS_GATEWAY_IP:?set OPS_GATEWAY_IP to the address administrators use for the console}
+      OPS_GATEWAY_DNS: ${OPS_GATEWAY_DNS:-}
+    ports:
+      # The only public Ops listener. Restrict OPS_GATEWAY_BIND_IP when the host has more than one interface.
+      - "${OPS_GATEWAY_BIND_IP:-0.0.0.0}:${OPS_GATEWAY_PORT:-5443}:5443/tcp"
+    networks:
+      - ops-gateway
+    volumes:
+      - ops-gateway-data:/data
+    restart: unless-stopped
+    depends_on:
+      ops:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/5443' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  default:
+  # Only Ops and the gateway join this network. Ops trusts exactly this range for X-Forwarded-*; the gateway is the
+  # only process that can connect to it. Change OPS_GATEWAY_SUBNET if it collides with an existing network.
+  ops-gateway:
+    ipam:
+      config:
+        - subnet: ${OPS_GATEWAY_SUBNET:-172.30.0.0/24}
+
 volumes:
   ops-dataprotection:
+  ops-gateway-data:

@@ -50,10 +50,10 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 打包脚本与脚本目录。client 与 host 的答案应用逻辑只有一份：
 `installer/macos/client/scripts/apply-answers.sh`，host 的 `make-pkg.sh` 在组装脚本目录时把它拷过去。
 
-`docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有三个
-（信令、中继、监控台），`docker-compose.yml` 只启动前两个；监控台与 TLS 是显式加载的 overlay：
-`docker-compose.ops.yml` 与 `docker-compose.tls.yml`（后者带一个 Caddyfile）。上面那张树里其余四项都服从
-`<平台>/<角色>`，只有它不分层。
+`docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有四个
+（信令、中继、监控台、Ops HTTPS 网关），`docker-compose.yml` 只启动前两个；监控台、网关与信令 TLS 是显式
+加载的 overlay：`docker-compose.ops.yml` 与 `docker-compose.tls.yml`（后者带一个 Caddyfile）。上面那张树里
+其余四项都服从 `<平台>/<角色>`，只有它不分层。
 
 ## "本目录"与子目录各放什么
 

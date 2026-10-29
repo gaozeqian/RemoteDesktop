@@ -49,6 +49,7 @@ build/installer/macos/server/scripts/preinstall              text eol=lf
 # Workflow files: their run: blocks are shell, and keeping them LF means the
 # file reads the same whichever OS a maintainer opens it on.
 *.yml               text eol=lf
+build/docker/.env.example                              text eol=lf
 
 # --- Windows tooling and project files ------------------------------------
 # PowerShell accepts LF, but CRLF is what every Windows editor and the WiX

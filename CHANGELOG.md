@@ -4,6 +4,17 @@
 
 ## [未发布]
 
+### Added — Docker Ops HTTPS 网关
+
+- **Docker Ops 访问方式与安装包对齐**：新增 `Dockerfile.gateway` 与 ops overlay 的 `gateway` 服务，默认监听
+  `https://0.0.0.0:5443` 并转发到内部 `http://ops:5090`；Ops 不再发布宿主机 5090，只有 Gateway 的 5443 对外。
+- **IP 自签名证书**：Gateway 首次启动按 `OPS_GATEWAY_IP` 生成包含 IP SAN 的证书，持久化在
+  `ops-gateway-data` 卷；`OPS_GATEWAY_DNS` 可追加 DNS 名称，公钥可用 `docker compose cp` 导出。
+- **精确可信代理范围**：Ops 与 Gateway 加入专用的 `ops-gateway` 网络，Ops 只信任该子网的
+  `X-Forwarded-For` / `X-Forwarded-Proto`，不再信任整个 Docker bridge 网段。
+- **文档与配置**：`.env.example` 增加 Gateway 地址、端口、绑定接口和子网；Docker 文档补充证书导出、指纹校验、
+  续签与防火墙说明。
+
 ### Fixed — 远程画面卡住
 
 - **画面卡住后永不恢复**：采集循环遇到非预期异常（设备移除、驱动重置、后端自身报错）时不再静默结束或对同一个
