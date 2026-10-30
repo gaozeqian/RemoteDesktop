@@ -98,6 +98,10 @@ curl -k https://127.0.0.1:5080/health
 curl http://127.0.0.1:5090/health
 ```
 
+信令用 TLS 时，安装脚本还会把 `/etc/remotedesktop-server/tls/signaling.crt` 写进控制台的
+`Ops:NodeCertificatePath`：本机节点固定用 `127.0.0.1`，而生成的证书不一定包含这个地址（主机名在 Debian/Ubuntu
+上解析到 `127.0.1.1`），固定公钥后控制台不必依赖系统信任库也能抓取 `/metrics` 并读出设备列表。
+
 `/etc/default/remotedesktop-server` 仍是高级设置与非交互安装的入口（监听地址、中继地址、共享密钥、
 防火墙开关，以及数据库/TLS 问题的预置值）；交互式改数据库或 TLS 请用 `dpkg-reconfigure`。
 
@@ -784,6 +788,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
 | `Ops:AllowInsecureNodeHttp` | `false` | 允许节点令牌经非回环明文 HTTP 发送；仅用于 Compose 等隔离网络，公网节点保持关闭 |
+| `Ops:NodeCertificatePath` | 安装包在 TLS 时写入 | 调节点时只信任这张公钥证书，并跳过主机名校验：Linux/macOS 安装包写入本机信令公钥（本机节点用 `127.0.0.1`，证书未必包含它）。这是全局设置——登记了用另一张证书的远程节点时，删掉此键改走系统信任库 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
 | `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
@@ -1781,7 +1786,7 @@ remotedesktop --self-check
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
-| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | 本机节点被登记成机器名/IP；没有 NodeToken 时服务端只允许回环调用，`/metrics` 和 `/internal/*` 返回 401 | 在 Ops 节点管理页点「改地址」改为 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；新 server 包升级会自动改回回环；远程节点需要配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝） |
+| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | ① 本机节点被登记成机器名/IP：没有 NodeToken 时 `/metrics` 与 `/internal/*` 只授权回环调用，非回环访问得到 401；② 地址已经是 `127.0.0.1` 且信令用 TLS：证书 SAN 里没有 `127.0.0.1`（Debian/Ubuntu 把主机名映射到 127.0.1.1），又没有配 `Ops:NodeCertificatePath`，握手报名称不匹配 | ① 在节点管理页「改地址」改回 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；远程节点配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝）；② 在 `Ops/appsettings.json` 的 `Ops` 段加 `"NodeCertificatePath": "/etc/remotedesktop-server/tls/signaling.crt"` 后重启 `remotedesktop-ops`；新 server 包由安装脚本自动 pin，新生成的证书也带 `127.0.0.1` |
 | 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级动作 `SyncLocalNodes` 会同步两个密钥；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
 | 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |

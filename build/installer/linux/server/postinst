@@ -155,9 +155,16 @@ case "$1" in
         # A certificate the operator brought has to be readable by the account the service runs as. Copying it into
         # the installation's own tls directory is what makes that true regardless of where it came from (a root-only
         # /etc/ssl/private, a home directory the unit cannot see, a mounted secret).
+        #
+        # ops_node_certificate_path is the public half the console pins for its own node; empty means "no pin".
+        ops_node_certificate_path=
         case "$tls_mode" in
             generate)
                 tls_argument=generate
+                # Written by --configure-system just below. The console calls this server on 127.0.0.1, while the
+                # certificate names the addresses this machine's name resolves to — on Debian and Ubuntu that is
+                # 127.0.1.1, not 127.0.0.1. Pinning the file is what lets the call verify at all.
+                ops_node_certificate_path=$INSTALL_DIRECTORY/tls/signaling.crt
                 ;;
             none)
                 tls_argument=auto
@@ -191,6 +198,11 @@ case "$1" in
                         if [ -f "$key_file" ] && [ ! "$key_file" -ef "$key_destination" ]; then
                             install -m 0640 "$key_file" "$key_destination"
                         fi
+
+                        # A PEM certificate is its own public half, so the console can pin the copy above. A
+                        # PKCS#12 file cannot be read without its password; that deployment keeps whatever pin it
+                        # had and otherwise falls back to the system trust store.
+                        ops_node_certificate_path=$certificate_destination
                         ;;
                 esac
 
@@ -233,6 +245,21 @@ case "$1" in
                 set -- "$@" --gateway-hostname "$RD_GATEWAY_HOSTNAME"
             fi
         fi
+
+        # The console verifies the certificate its own node serves. That node is the loopback address, which the
+        # certificate does not necessarily name (see the generate branch above), so the public half is pinned here.
+        # Plain http clears any pin left by an earlier TLS deployment: Ops refuses to start when the file it is
+        # told to pin is gone.
+        case "$tls_mode" in
+            none)
+                set -- "$@" --ops-node-certificate-path ""
+                ;;
+            *)
+                if [ -n "$ops_node_certificate_path" ]; then
+                    set -- "$@" --ops-node-certificate-path "$ops_node_certificate_path"
+                fi
+                ;;
+        esac
 
         "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" "$@"
 

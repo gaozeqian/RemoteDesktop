@@ -226,6 +226,12 @@ public static class SelfSignedCertificate
         var host = Dns.GetHostName();
         AddName(host);
 
+        // Loopback is not necessarily an address this machine's name resolves to: Debian and Ubuntu map the host
+        // name to 127.0.1.1 in /etc/hosts. The console calls its own signaling server on 127.0.0.1 and the local
+        // gateway is reached there as well, so a certificate that omits it is refused by name even where it is
+        // trusted — which left a fresh installation with "抓取失败" on its local node and an empty device page.
+        AddName(IPAddress.Loopback.ToString());
+
         try
         {
             foreach (var address in Dns.GetHostAddresses(host))
@@ -233,8 +239,7 @@ public static class SelfSignedCertificate
                 // IPv4 only: what the rest of the product speaks (the relay endpoint is an IPv4 address or a name).
                 if (address.AddressFamily == AddressFamily.InterNetwork)
                 {
-                    names.AddIpAddress(address);
-                    seen.Add(address.ToString());
+                    AddName(address.ToString());
                 }
             }
         }

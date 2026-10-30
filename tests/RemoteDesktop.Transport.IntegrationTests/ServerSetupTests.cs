@@ -770,6 +770,13 @@ public sealed class ServerSetupTests : IDisposable
         var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
         Assert.Contains(Environment.MachineName, names.EnumerateDnsNames());
 
+        // The console calls its own signaling server on 127.0.0.1. A machine whose name resolves to 127.0.1.1 (the
+        // Debian and Ubuntu default) would otherwise be given a certificate that does not cover the address it
+        // connected to, and every scrape would fail with a name mismatch.
+        Assert.Contains(
+            IPAddress.Loopback.ToString(),
+            names.EnumerateIPAddresses().Select(address => address.ToString()));
+
         var usage = certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single();
         Assert.Contains(usage.EnhancedKeyUsages.Cast<Oid>(), oid => oid.Value == "1.3.6.1.5.5.7.3.1"); // serverAuth
     }
@@ -1022,6 +1029,12 @@ public sealed class ServerSetupTests : IDisposable
 
         Assert.Contains("rd.example.com", names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
         Assert.Contains("203.0.113.10", names.EnumerateIPAddresses().Select(address => address.ToString()));
+
+        // Whatever the deployment is reached through, loopback is in there: it is the address the console reads its
+        // own node on.
+        Assert.Contains(
+            IPAddress.Loopback.ToString(),
+            names.EnumerateIPAddresses().Select(address => address.ToString()));
     }
 
     /// <summary>

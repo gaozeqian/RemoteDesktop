@@ -140,6 +140,25 @@ public class RepositoryStructureTests
             "build/ directories that are neither a platform (windows/macos/linux) nor a role (client/host/server):");
     }
 
+    /// <summary>
+    /// The Linux package has to let the console pin the certificate its own node serves.
+    /// </summary>
+    /// <remarks>
+    /// The node is registered as <c>https://127.0.0.1:5080</c>, while a certificate generated on this machine does
+    /// not necessarily name that address: Debian and Ubuntu resolve the host name to 127.0.1.1 in /etc/hosts. Without
+    /// the pin, every scrape and the device page fail with a name mismatch — which is what a freshly installed Linux
+    /// server showed. The Windows and macOS installers have always passed this argument; this is the one that did
+    /// not, and nothing else in the build reads these scripts.
+    /// </remarks>
+    [Fact]
+    public void The_linux_package_lets_the_console_pin_its_own_certificate()
+    {
+        var postinst = File.ReadAllText(Path.Combine(Root, "build", "installer", "linux", "server", "postinst"));
+
+        Assert.Contains("--ops-node-certificate-path", postinst, StringComparison.Ordinal);
+        Assert.Contains("tls/signaling.crt", postinst, StringComparison.Ordinal);
+    }
+
     /// <summary>Fails with every offending path listed; xunit's own formatting truncates a long collection.</summary>
     private static void AssertNoOffenders(string[] offenders, string rule)
     {
