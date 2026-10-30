@@ -1,5 +1,6 @@
 using Avalonia;
 using Microsoft.Extensions.Hosting;
+using RemoteDesktop.Application.Links;
 
 namespace RemoteDesktop.Client;
 
@@ -41,10 +42,19 @@ internal static class Program
             return SelfCheck.Run([.. reported]);
         }
 
+        // A "remotedesktop://" link is not configuration: the host builder and Avalonia would both choke on it. It is
+        // taken out of the arguments here and handed to the window; if another client is already running, it takes
+        // the link over a pipe and this process ends before anything is built.
+        var (startupLink, remaining) = SplitLink(args);
+        if (startupLink is { } pending && LinkActivation.TryForward(pending))
+        {
+            return 0;
+        }
+
         IHost host;
         try
         {
-            host = ClientHost.Build(args);
+            host = ClientHost.Build(remaining, startupLink);
         }
         catch (StartupFailure failure)
         {
@@ -66,12 +76,31 @@ internal static class Program
         host.Start();
         try
         {
-            return BuildAvaloniaApp(host.Services).StartWithClassicDesktopLifetime(args);
+            return BuildAvaloniaApp(host.Services).StartWithClassicDesktopLifetime(remaining);
         }
         finally
         {
             host.StopAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
         }
+    }
+
+    // Anything that starts with the scheme is ours to consume: a malformed link is dropped rather than passed on to
+    // the host builder, which would refuse it as an unknown argument and leave the person with a program that does
+    // not start. A valid one opens the window with the code filled in.
+    internal static (ConnectionLink? Link, string[] Args) SplitLink(string[] args)
+    {
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!args[index].StartsWith(ConnectionLink.Scheme + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var link = ConnectionLink.TryParse(args[index], out var parsed) ? parsed : (ConnectionLink?)null;
+            return (link, [.. args[..index], .. args[(index + 1)..]]);
+        }
+
+        return (null, args);
     }
 
     public static AppBuilder BuildAvaloniaApp(IServiceProvider services) =>

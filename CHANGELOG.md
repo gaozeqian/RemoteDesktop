@@ -4,6 +4,19 @@
 
 ## [未发布]
 
+### Added — `remotedesktop://` 链接带入设备代码
+
+- **链接只带设备代码，不自动连接**：`remotedesktop://connect?code=902226105` 与 `remotedesktop://902226105`
+  两种写法，容忍空格、连字符与百分号编码。链接来自浏览器、聊天消息或邮件，所以密码由人输入、"连接"由人点；
+  解析器里没有存放密码的位置，`?password=` 之类参数被忽略。
+- **第二次启动把链接交给已打开的窗口**：控制端身份在信令里每设备只保留一个会话，开出第二个窗口会让两个进程
+  每秒互踢。第一个客户端占一条每用户命名管道，带链接的启动把 URL 写进去后退出；不带链接的启动行为不变，
+  只是不会拿到那条管道。
+- **Windows 与 Linux 注册协议**：MSI 在 `HKLM\Software\Classes\remotedesktop` 写下 `URL Protocol` 与
+  `shell\open\command`（卸载即删，包内容测试会打开 MSI 核对这两行），`.desktop` 增加
+  `MimeType=x-scheme-handler/remotedesktop` 与 `%u`。**macOS 未做**：LaunchServices 走 Apple Event
+  （`kAEGetURL`），原生辅助库还没有这条通道。
+
 ### Changed — 客户端界面的遗留观察项收尾
 
 - **固定密码区块的"关闭"改为"删除"**（评审 R6）：它本来就是删除已保存的固定密码，现在按钮名、ToolTip 与

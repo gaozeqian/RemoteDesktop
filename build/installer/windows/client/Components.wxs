@@ -30,6 +30,19 @@
         <!-- Windows Installer only removes folders it is told about. -->
         <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
       </Component>
+
+      <!-- The remotedesktop:// scheme. Windows hands the URL to the program named here, which fills the device code
+           into the window rather than dialling out by itself. Machine-wide because the registration belongs to the
+           installed program, and MSI takes it away again on uninstall. -->
+      <Component Id="UrlSchemeRegistration" Guid="b6877280-0bed-4911-bd9e-d401cb06f562">
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop" Type="string"
+                       Value="URL:Remote Desktop connection" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop" Name="URL Protocol" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop\DefaultIcon" Type="string"
+                       Value="[INSTALLFOLDER]RemoteDesktop.Client.exe,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop\shell\open\command" Type="string"
+                       Value="&quot;[INSTALLFOLDER]RemoteDesktop.Client.exe&quot; &quot;%1&quot;" />
+      </Component>
       <?endif?>
 
       <!-- The service that accepts connections and starts the agent inside the interactive session. -->

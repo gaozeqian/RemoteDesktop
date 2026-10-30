@@ -139,6 +139,8 @@
       <!-- Start menu shortcut (per-user, so it only goes for the user who uninstalls). -->
       <?ifndef var.HostOnly ?>
       <ComponentRef Id="StartMenuShortcut" />
+      <!-- The remotedesktop:// scheme: only the client package has a program to hand a link to. -->
+      <ComponentRef Id="UrlSchemeRegistration" />
       <?endif?>
       <!-- Only in a build that signed with a self-signed certificate (see Components.wxs). -->
       <?ifdef var.TrustedRootCertificate ?>

@@ -6,7 +6,11 @@ Type=Application
 Name=Remote Desktop
 Comment=Control another computer
 Comment[zh_CN]=远程控制另一台电脑
-Exec=/usr/bin/remotedesktop
+# %u passes the remotedesktop:// URL through as an argument. The MimeType line is what makes the desktop offer this
+# program for the scheme; the client hands the URL to a window that is already open over a pipe, so a link never starts
+# a second client that would fight the first over the same controller identity.
+Exec=/usr/bin/remotedesktop %u
+MimeType=x-scheme-handler/remotedesktop;
 Icon=remotedesktop
 Terminal=false
 Categories=Network;RemoteAccess;

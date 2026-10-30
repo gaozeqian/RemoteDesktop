@@ -71,6 +71,28 @@ public sealed class InstallerPackageTests
     }
 
     /// <summary>
+    /// The <c>remotedesktop://</c> scheme is a registry row, so a source review cannot show whether it made it into the
+    /// package. Windows starts the client with the URL as its argument; without these rows a link does nothing at all.
+    /// </summary>
+    [Fact]
+    public void The_package_registers_the_connection_scheme()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        using var package = new MsiPackage(Msi!);
+
+        // The Registry table's Root column is 0 = HKCR, 1 = HKCU, 2 = HKLM: the scheme belongs to the installed
+        // program, so it has to be machine-wide rather than only for whoever happened to install it.
+        var scheme = package.Rows("SELECT `Name`, `Value`, `Root` FROM `Registry` WHERE `Key` = 'Software\\Classes\\remotedesktop'", 3);
+        Assert.Contains(scheme, row => row[0] == "URL Protocol" && row[2] == "2");
+
+        var command = Assert.Single(
+            package.Rows("SELECT `Value` FROM `Registry` WHERE `Key` = 'Software\\Classes\\remotedesktop\\shell\\open\\command'", 1))[0];
+        Assert.Contains("RemoteDesktop.Client.exe", command, StringComparison.Ordinal);
+        Assert.Contains("%1", command, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The number Settings > Apps shows is the number the build was made from, plus the fourth part MSI requires.
     /// Nothing else checks that: the build script computes it, and a package left over from an earlier build would
     /// happily sit in artifacts/ and be reviewed as if it were this one.

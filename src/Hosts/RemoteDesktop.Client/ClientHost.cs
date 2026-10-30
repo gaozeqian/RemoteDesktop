@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Application.Links;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Client.ViewModels;
@@ -43,7 +44,9 @@ internal static class ClientHost
     /// <summary>How long a client launched by the same login waits for that service's control socket.</summary>
     private static readonly TimeSpan HostServiceStartupWait = TimeSpan.FromSeconds(3);
 
-    public static IHost Build(string[] args)
+    /// <param name="args">The command line, with any <c>remotedesktop://</c> link already taken out.</param>
+    /// <param name="startupLink">The link this process was opened with, or <c>null</c> for an ordinary launch.</param>
+    public static IHost Build(string[] args, ConnectionLink? startupLink = null)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -96,6 +99,9 @@ internal static class ClientHost
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and
             // gets its own list and remembered passwords) — see docs/ops/README.md.
             .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
+            // Registered even when there is no link: the window asks one question, and "no link" is an answer rather
+            // than a missing service.
+            .AddSingleton(new StartupLink(startupLink))
             .AddSingleton<MainWindowViewModel>();
 
         // Off unless the deployment turns it on. Read here rather than inside the application layer so both

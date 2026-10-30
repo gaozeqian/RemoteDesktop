@@ -12,6 +12,7 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Application.Links;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Setup;
 using RemoteDesktop.Client.Storage;
@@ -88,7 +89,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ClientEnvironment environment,
         TransportOptions transport,
         IVideoRecorderFactory? recorderFactory = null,
-        ILoginItem? loginItem = null)
+        ILoginItem? loginItem = null,
+        StartupLink? startupLink = null)
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
@@ -149,6 +151,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         _ = RefreshHostStatusAsync();
         _ = LoadRecentDevicesAsync();
+
+        if (startupLink?.Value is { } link)
+        {
+            ApplyConnectionLink(link);
+        }
+    }
+
+    /// <summary>
+    /// Fills in the device code a <c>remotedesktop://</c> link carried. It deliberately does not connect: the link
+    /// came from a browser, a chat message or an e-mail, so the person confirms the code and supplies the password.
+    /// </summary>
+    public void ApplyConnectionLink(ConnectionLink link)
+    {
+        RemoteDeviceId = link.Device.ToDisplayString();
+        StatusMessage = $"已从链接填入设备代码 {link.Device.ToDisplayString()}，输入密码后点“连接”。";
+        SelectedPageIndex = 0;
     }
 
     [ObservableProperty]
