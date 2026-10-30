@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### Added — 每节点令牌
+
+- **控制台可以给单个节点配自己的令牌**：`POST /api/nodes/{id}/token`（管理员，写审计）生成或接受一个令牌并
+  只返回这一次，`DELETE` 清除并退回部署级 `Ops:NodeToken`。节点详情里多了「生成独立令牌 / 重置 / 清除」。
+  节点自己的令牌优先，没设的节点继续用部署级令牌——升级不改变任何现有行为。
+- **抓取、设备代理、管理动作与节点详情都按节点的令牌发请求**：此前四处各写一遍 `options.NodeToken`，现在统一
+  走 `NodeHttp.TokenFor` / `ApplyAuthorization`，出口规则（`Ops:NodeTokenHosts`、https 或回环）对每一条令牌
+  一视同仁。
+- **节点 API 只说有没有令牌，不说是什么**：`hasOwnToken` 是响应里唯一的令牌相关字段；令牌明文存在控制台库里，
+  与 `Ops:NodeToken` 存在配置文件同理。
+- **schema v7**：`ops_node` 增加 `token` 列，旧行是 `NULL`，即继续使用部署级令牌。
+
 ### Added — 告警的邮件通知与静默
 
 - **邮件通知**：新增 `Ops:Notifications:Smtp:*`，在 Webhook 之外多一条通道。SMTP 客户端是自己写的——STARTTLS、

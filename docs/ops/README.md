@@ -790,7 +790,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `GATEWAYHOSTNAME` / `--gateway-hostname` | 空 | 安装参数：给生成证书追加 IP/DNS；本机 IPv4 已自动包含 |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
-| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
+| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值。**节点自己的令牌优先**（见「每节点令牌」），这个键是没设独立令牌的节点的默认值 |
 | `Ops:AllowInsecureNodeHttp` | `false` | 允许节点令牌经非回环明文 HTTP 发送；仅用于 Compose 等隔离网络，公网节点保持关闭 |
 | `Ops:NodeTokenHosts` | 空 | 节点令牌只允许发往这些主机（裸主机名或 IP，不带协议/端口/路径；回环始终允许）。空 = 沿用"https 或回环"的规则。节点地址由管理员在控制台填写，填了这个列表后，即使管理员会话被拿走也无法把令牌引到列表外的地址 |
 | `Ops:NodeCertificatePath` | 安装包在 TLS 时写入 | 调节点时只信任这张公钥证书，并跳过主机名校验：Linux/macOS 安装包写入本机信令公钥（本机节点用 `127.0.0.1`，证书未必包含它）。这是全局设置——登记了用另一张证书的远程节点时，删掉此键改走系统信任库 |
@@ -810,6 +810,20 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 > 内部 API 的 token 不是 `Ops` 段独有的：控制台读 `Ops:NodeToken`，信令读 `Rendezvous:NodeToken`，中继读
 > `Relay:NodeToken`。三处必须同值；只设 `Ops:NodeToken` 时，跨机或容器里的控制台会 401（同机回环仍然可用，
 > 但那是回环豁免，不是 token 生效）。Docker 的基础 compose 已经把同一个 `NODE_TOKEN` 传给两个节点。
+
+#### 每节点令牌（可选）
+
+部署级 `Ops:NodeToken` 的问题是它同时是每台节点的密钥：任何一台节点泄露它，等于泄露全部。控制台允许给单个
+节点配自己的令牌——**节点自己的令牌优先，没设的节点继续用 `Ops:NodeToken`**，所以升级不会改变任何现有行为。
+
+设置方式：节点管理 → 某节点「详情」→「生成独立令牌」（`POST /api/nodes/{id}/token`，管理员动作，写审计）。
+控制台只会显示这一次——没有读取接口，页面拿不回已存的令牌。把显示出来的值填到那台节点的
+`Rendezvous:NodeToken` 或 `Relay:NodeToken`，重启该节点，抓取随即改用新令牌。
+
+- **重置**会让旧令牌立刻失效：在节点改好配置并重启之前，该节点会显示「抓取失败」并在节点详情里给出 401。
+- **清除**（`DELETE /api/nodes/{id}/token`）把节点改回部署级令牌。
+- 出口规则不变：`Ops:NodeTokenHosts` 与「https 或回环」对**每一条**令牌都生效，独立令牌不是把密钥发到别处的许可。
+- 令牌以明文存在控制台的库里（与 `Ops:NodeToken` 存在于配置文件同理）。库文件是 0600，备份与只读副本要按密钥对待。
 
 #### 反向代理
 
@@ -1921,8 +1935,9 @@ remotedesktop --self-check
 - 丢包 / 码率：无来源（见上）。
 - 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。多通道目前就这两条，
   每节点令牌未做。
-- 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
-  在哪之前，`Ops:NodeTokenHosts` 可以把这个令牌的出口收窄到自有的几台服务器（见上面的配置表）。
+- 节点鉴权可以每节点一份令牌（见「每节点令牌」），但**默认仍是部署级**：没设独立令牌的节点共用 `Ops:NodeToken`，
+  泄露一个节点的配置仍会暴露其余节点。全部换完后可以把 `Ops:NodeToken` 留空，只有回环调用能直连节点。
+  `Ops:NodeTokenHosts` 仍决定令牌能发往哪些主机（见上面的配置表）。
 - 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，
   未做 SignalR backplane。
 - **历史靠清理任务收敛，不是无限保留**：指标样本、事件、会话与已恢复告警按 `Ops:Retention:*` 每小时删除一次
