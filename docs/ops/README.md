@@ -870,7 +870,11 @@ sudo update-ca-trust
 Linux 上的 Chromium/Chrome 如果仍不读取系统信任库，需要导入当前用户的 NSS 库（先安装 `libnss3-tools`）：
 
 ```bash
-certutil -d sql:$HOME/.pki/nssdb -A -t "C,," \
+# 若数据库尚不存在，先初始化（可留空密码）：
+#   mkdir -p "$HOME/.pki/nssdb" && certutil -d sql:"$HOME/.pki/nssdb" -N
+# 该证书是自签名叶子证书（BasicConstraints CA:FALSE），必须用受信任对端标志 "P,," 直接信任它；
+# 用 "C,,"（信任为 CA）会被 NSS 拒绝，报 "issuer is not recognized"。
+certutil -d sql:"$HOME/.pki/nssdb" -A -t "P,," \
   -n "Remote Desktop Ops Gateway" -i ops-gateway.crt
 ```
 
