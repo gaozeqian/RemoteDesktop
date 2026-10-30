@@ -113,7 +113,10 @@ appsettings.json 在升级时**不会被覆盖**，所以手改的值会保留�
 
 监控台没有默认口令，也没有网页初始化入口。第一个管理员要在终端里建：
 
-    sudo ./Ops/RemoteDesktop.Server.Ops --create-admin admin
+    sudo -u _remotedesktop ./Ops/RemoteDesktop.Server.Ops --create-admin admin
+
+（以安装包创建的服务账号运行，和监控台自身一样：数据库与它的 -wal/-shm 文件属于这个账号，用 root 建
+会让之后的监控台写不进去。）
 
 它会交互式地问口令，然后打印一个 TOTP 密钥和 otpauth:// 链接，用验证器扫码即可。**密钥只显示这一次**，
 丢了只能再建一个账号。之后每次登录都要口令 + TOTP。

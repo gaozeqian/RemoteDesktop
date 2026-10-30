@@ -19,6 +19,12 @@
     <key>WorkingDirectory</key>
     <string>/usr/local/remotedesktop-server/Gateway</string>
 
+    <!-- Same account as the servers; see com.remotedesktop.rendezvous.plist. -->
+    <key>UserName</key>
+    <string>_remotedesktop</string>
+    <key>GroupName</key>
+    <string>_remotedesktop</string>
+
     <key>RunAtLoad</key>
     <true/>
 

@@ -18,6 +18,8 @@ INSTALL_DIR="/usr/local/remotedesktop-server"
 RENDEZVOUS="$INSTALL_DIR/Rendezvous/RemoteDesktop.Server.Rendezvous"
 OPS="$INSTALL_DIR/Ops/RemoteDesktop.Server.Ops"
 GATEWAY="$INSTALL_DIR/Gateway/RemoteDesktop.Server.Gateway"
+SERVICE_USER="_remotedesktop"
+SERVICE_GROUP="_remotedesktop"
 OPTIONS="$INSTALL_DIR/setup-options"
 ROOT_ANSWERS="/var/tmp/com.remotedesktop.install.server.root.plist"
 FALLBACK_ANSWERS="/Library/Application Support/RemoteDesktop/install-answers.plist"
@@ -519,6 +521,130 @@ seed_local_nodes() {
 }
 
 seed_local_nodes
+
+# --- the account the daemons run as ------------------------------------------------------------
+
+# None of the four programs needs root: they listen above 1024, read their settings, and write only their database and
+# the DataProtection key ring under var/. Linux has run them as a dedicated account since 1.0.0; macOS left them as
+# root, so a compromised signaling server or console was a root process. The launchd plists name the account; the work
+# here is to create it, hand it what it must own, and prove it can actually read and write before the jobs start.
+
+free_unix_id() {
+    local kind="$1" id=300
+    while dscl . -list "$kind" UniqueID 2>/dev/null | awk '{print $2}' | grep -qx "$id"; do
+        id=$((id + 1))
+    done
+    printf '%s' "$id"
+}
+
+create_service_account() {
+    if ! dscl . -read "/Groups/$SERVICE_GROUP" >/dev/null 2>&1; then
+        local gid
+        gid="$(free_unix_id /Groups)"
+        dscl . -create "/Groups/$SERVICE_GROUP"
+        dscl . -create "/Groups/$SERVICE_GROUP" PrimaryGroupID "$gid"
+        dscl . -create "/Groups/$SERVICE_GROUP" RealName "Remote Desktop Server"
+        dscl . -create "/Groups/$SERVICE_GROUP" Password '*'
+    fi
+
+    if ! dscl . -read "/Users/$SERVICE_USER" >/dev/null 2>&1; then
+        local uid gid
+        uid="$(free_unix_id /Users)"
+        gid="$(dscl . -read "/Groups/$SERVICE_GROUP" PrimaryGroupID | awk '{print $2}')"
+        dscl . -create "/Users/$SERVICE_USER"
+        dscl . -create "/Users/$SERVICE_USER" UniqueID "$uid"
+        dscl . -create "/Users/$SERVICE_USER" PrimaryGroupID "$gid"
+        dscl . -create "/Users/$SERVICE_USER" RealName "Remote Desktop Server"
+        # No login: /usr/bin/false, no home of its own. var/ is where ASP.NET Core puts the console's key ring, which
+        # is why the Ops job sets HOME to it.
+        dscl . -create "/Users/$SERVICE_USER" NFSHomeDirectory "$INSTALL_DIR/var"
+        dscl . -create "/Users/$SERVICE_USER" UserShell /usr/bin/false
+        dscl . -create "/Users/$SERVICE_USER" IsHidden 1
+        dscl . -create "/Users/$SERVICE_USER" Password '*'
+    fi
+}
+
+prepare_service_account() {
+    local folder file
+
+    # The daemons write here: the databases (and SQLite's -wal/-shm files), the key ring, and launchd's log files.
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR/var" "$INSTALL_DIR/logs"
+    chmod 700 "$INSTALL_DIR/var" "$INSTALL_DIR/logs"
+
+    # Settings hold the relay key and, with PostgreSQL, its password: root owns them, the service group reads.
+    for folder in Rendezvous Relay Ops Gateway; do
+        file="$INSTALL_DIR/$folder/appsettings.json"
+        if [ -f "$file" ]; then
+            chown "root:$SERVICE_GROUP" "$file"
+            chmod 640 "$file"
+        fi
+    done
+
+    # The certificate directory is created 0700 root and the private key 0600 root, so nothing but root could read the
+    # key Kestrel serves TLS with. Both are opened up to the service group only.
+    if [ -d "$INSTALL_DIR/tls" ]; then
+        chown -R "root:$SERVICE_GROUP" "$INSTALL_DIR/tls"
+        find "$INSTALL_DIR/tls" -type d -exec chmod 750 {} +
+        find "$INSTALL_DIR/tls" -type f -exec chmod 640 {} +
+        if [ -f "$INSTALL_DIR/tls/signaling.crt" ]; then
+            # The public half is meant to be given to clients.
+            chmod 644 "$INSTALL_DIR/tls/signaling.crt"
+        fi
+    fi
+}
+
+runs_as_service() {
+    if [ -x /usr/bin/sudo ]; then
+        /usr/bin/sudo -u "$SERVICE_USER" /usr/bin/test "$@" >/dev/null 2>&1
+        return $?
+    fi
+
+    # No sudo: the ownership and modes above are all this script can check, and they are deterministic.
+    return 0
+}
+
+service_account_can_run() {
+    local folder settings key path
+    for folder in Rendezvous Relay Ops Gateway; do
+        runs_as_service -r "$INSTALL_DIR/$folder/appsettings.json" || return 1
+        runs_as_service -x "$INSTALL_DIR/$folder/RemoteDesktop.Server.$folder" || return 1
+    done
+
+    runs_as_service -w "$INSTALL_DIR/var" || return 1
+    runs_as_service -w "$INSTALL_DIR/logs" || return 1
+
+    if [ -f "$INSTALL_DIR/tls/signaling.key" ]; then
+        runs_as_service -r "$INSTALL_DIR/tls/signaling.key" || return 1
+    fi
+
+    # "Existing certificate" is a path the operator chose, possibly outside the install directory with a mode only
+    # root can read. Running as root used to cover that; an unreadable certificate would now keep Kestrel from
+    # starting, so it counts as a reason to stay as root.
+    for settings in "$INSTALL_DIR/Rendezvous/appsettings.json" "$INSTALL_DIR/Gateway/appsettings.json"; do
+        [ -f "$settings" ] || continue
+        for key in Path KeyPath; do
+            path="$(plutil -extract "Kestrel.Certificates.Default.$key" raw "$settings" 2>/dev/null || true)"
+            case "$path" in
+                /*) runs_as_service -r "$path" || return 1 ;;
+            esac
+        done
+    done
+
+    return 0
+}
+
+if create_service_account && prepare_service_account && service_account_can_run; then
+    echo "  the servers run as $SERVICE_USER"
+else
+    # Better a working server that runs as root — what every earlier version did — than one that cannot read its own
+    # settings. The reason is in this log; the fix is to correct the permissions and reinstall.
+    echo "  warning: could not hand the servers to $SERVICE_USER; they will keep running as root" >&2
+    for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
+        plist="/Library/LaunchDaemons/$label.plist"
+        /usr/libexec/PlistBuddy -c "Delete :UserName" "$plist" >/dev/null 2>&1 || true
+        /usr/libexec/PlistBuddy -c "Delete :GroupName" "$plist" >/dev/null 2>&1 || true
+    done
+fi
 
 # --- launchd -----------------------------------------------------------------------------------
 

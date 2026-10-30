@@ -84,6 +84,54 @@ else
     "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR"
 fi
 
+# The step above runs as root and writes root:wheel 0640, which is right for a file only root reads. Once the package
+# has handed the jobs to their own account, this script has to put the group back, or the servers cannot read the
+# settings they were just given and restart into a loop. A machine installed before that account existed keeps root.
+SERVICE_GROUP=_remotedesktop
+apply_service_group() {
+    if ! dscl . -read "/Groups/$SERVICE_GROUP" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local folder file
+    for folder in Rendezvous Relay Ops Gateway; do
+        file="$INSTALL_DIR/$folder/appsettings.json"
+        if [ -f "$file" ]; then
+            chown "root:$SERVICE_GROUP" "$file"
+            chmod 640 "$file"
+        fi
+    done
+
+    if [ -d "$INSTALL_DIR/tls" ]; then
+        chown -R "root:$SERVICE_GROUP" "$INSTALL_DIR/tls"
+        find "$INSTALL_DIR/tls" -type d -exec chmod 750 {} +
+        find "$INSTALL_DIR/tls" -type f -exec chmod 640 {} +
+        if [ -f "$INSTALL_DIR/tls/signaling.crt" ]; then
+            chmod 644 "$INSTALL_DIR/tls/signaling.crt"
+        fi
+    fi
+
+    # A certificate the operator named may live outside the install directory, where this script changes nothing.
+    # Root used to be able to read it anywhere; the service account cannot, and Kestrel would restart forever.
+    if [ -x /usr/bin/sudo ]; then
+        local settings key path
+        for settings in "$INSTALL_DIR/Rendezvous/appsettings.json" "$INSTALL_DIR/Gateway/appsettings.json"; do
+            [ -f "$settings" ] || continue
+            for key in Path KeyPath; do
+                path="$(plutil -extract "Kestrel.Certificates.Default.$key" raw "$settings" 2>/dev/null || true)"
+                case "$path" in
+                    /*)
+                        if ! /usr/bin/sudo -u "_remotedesktop" /usr/bin/test -r "$path" >/dev/null 2>&1; then
+                            echo "  warning: _remotedesktop cannot read $path; give it group read or move the file under $INSTALL_DIR" >&2
+                        fi
+                        ;;
+                esac
+            done
+        done
+    fi
+}
+apply_service_group
+
 if [ "$restart" -eq 0 ]; then
     echo "==> Not restarting (--no-restart): the new settings take effect on the next start"
     exit 0
