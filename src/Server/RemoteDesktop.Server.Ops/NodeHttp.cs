@@ -19,17 +19,82 @@ internal static class NodeHttp
     /// <summary>
     /// Whether a node's address can carry the configured node token. HTTP to a non-loopback address would put the
     /// bearer credential on the wire in the clear; the node API refuses such a row on create, and this catches one a
-    /// hand-edited database or an older version left behind.
+    /// hand-edited database or an older version left behind. A non-empty <paramref name="allowedHosts"/> narrows it
+    /// further to the servers the deployment named.
     /// </summary>
-    public static bool TokenCanTravelTo(string baseUrl, string? nodeToken, bool allowInsecureHttp = false)
+    public static bool TokenCanTravelTo(
+        string baseUrl,
+        string? nodeToken,
+        bool allowInsecureHttp = false,
+        IReadOnlyCollection<string>? allowedHosts = null)
     {
         if (string.IsNullOrEmpty(nodeToken))
         {
             return true;
         }
 
-        return Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttps || uri.IsLoopback || (allowInsecureHttp && uri.Scheme == Uri.UriSchemeHttp));
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback && !(allowInsecureHttp && uri.Scheme == Uri.UriSchemeHttp))
+        {
+            return false;
+        }
+
+        return HostMayReceiveToken(uri, allowedHosts);
+    }
+
+    /// <summary>Why the node token must not be sent to this address, or <c>null</c> when it may be.</summary>
+    /// <remarks>
+    /// One sentence, so the scrape failure, the node API's refusal and the action error all say the same thing. The two
+    /// reasons are kept apart on purpose: a plain-http address is a transport mistake, an unlisted host is a policy one.
+    /// </remarks>
+    public static string? RefusalReason(string baseUrl, OpsOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrEmpty(options.NodeToken))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return "the node address is not an absolute URL";
+        }
+
+        if (TokenCanTravelTo(baseUrl, options.NodeToken, options.AllowInsecureNodeHttp, options.NodeTokenHosts))
+        {
+            return null;
+        }
+
+        return uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback && !options.AllowInsecureNodeHttp
+            ? "refusing to send NodeToken over plain HTTP to a non-loopback address (use https, a loopback address, or Ops:AllowInsecureNodeHttp)"
+            : $"refusing to send NodeToken to '{uri.Host}', which is not listed in Ops:NodeTokenHosts";
+    }
+
+    /// <summary>
+    /// Where the token may go: loopback always (the nodes the installer seeds), then the configured list, then — when
+    /// nothing is listed — any host the scheme rules already allowed.
+    /// </summary>
+    private static bool HostMayReceiveToken(Uri uri, IReadOnlyCollection<string>? allowedHosts)
+    {
+        if (uri.IsLoopback || allowedHosts is null || allowedHosts.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var allowed in allowedHosts)
+        {
+            if (string.Equals(allowed?.Trim(), uri.Host, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Reads the body, failing as soon as it grows past <paramref name="maxBytes"/>.</summary>

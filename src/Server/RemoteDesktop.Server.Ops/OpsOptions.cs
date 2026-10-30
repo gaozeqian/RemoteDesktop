@@ -45,6 +45,18 @@ public sealed class OpsOptions
     public bool AllowInsecureNodeHttp { get; set; }
 
     /// <summary>
+    /// Hosts (DNS names or IP addresses) the node token may be sent to, besides loopback. Empty — the default — allows
+    /// any host the transport rules permit, which is what a deployment whose administrators are as trusted as its
+    /// server needs. Set it to the servers this deployment runs and a node row pointed anywhere else is refused before
+    /// the token leaves the process, so an administrator session alone cannot turn the console into a way to leak it.
+    /// </summary>
+    /// <remarks>
+    /// Entries are plain host names: no scheme, no port, no path. Matching is case-insensitive and exact; loopback
+    /// (127.0.0.1, ::1, localhost) is always allowed because the installers seed the local nodes there.
+    /// </remarks>
+    public List<string> NodeTokenHosts { get; set; } = [];
+
+    /// <summary>
     /// A certificate to pin for calls to nodes, as a PEM or DER file. Empty means the system trust store decides.
     /// </summary>
     /// <remarks>
@@ -131,6 +143,23 @@ public sealed class OpsOptions
                 throw new InvalidOperationException(
                     $"Ops:TrustedProxies contains '{entry}', which is neither an IP address nor a CIDR network.");
             }
+        }
+
+        NodeTokenHosts ??= [];
+        for (var index = 0; index < NodeTokenHosts.Count; index++)
+        {
+            var host = NodeTokenHosts[index]?.Trim();
+            if (string.IsNullOrEmpty(host)
+                || host.Contains("://", StringComparison.Ordinal)
+                || host.Contains('/', StringComparison.Ordinal)
+                || host.Contains('\\', StringComparison.Ordinal)
+                || Uri.CheckHostName(host) == UriHostNameType.Unknown)
+            {
+                throw new InvalidOperationException(
+                    $"Ops:NodeTokenHosts contains '{NodeTokenHosts[index]}', which is not a bare host name or IP address (no scheme, port or path).");
+            }
+
+            NodeTokenHosts[index] = host;
         }
 
         Retention.Validate();

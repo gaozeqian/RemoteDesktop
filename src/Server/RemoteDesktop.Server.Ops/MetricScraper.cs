@@ -87,13 +87,9 @@ public sealed partial class MetricScraper(
     private async Task<bool> ScrapeAsync(OpsNode node, CancellationToken cancellationToken)
     {
         var timestamp = time.GetUtcNow().ToUnixTimeMilliseconds();
-        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
+        if (NodeHttp.RefusalReason(node.BaseUrl, options) is { } refusal)
         {
-            await RecordFailureAsync(
-                node,
-                timestamp,
-                "refusing to send NodeToken over plain HTTP to a non-loopback address",
-                cancellationToken).ConfigureAwait(false);
+            await RecordFailureAsync(node, timestamp, refusal, cancellationToken).ConfigureAwait(false);
             return false;
         }
 

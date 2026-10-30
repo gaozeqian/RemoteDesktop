@@ -42,10 +42,10 @@ public static class DeviceEndpoints
                 return Results.NotFound(new { error = "node", message = "no enabled rendezvous node matches" });
             }
 
-            if (!NodeHttp.TokenCanTravelTo(target.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
+            if (NodeHttp.RefusalReason(target.BaseUrl, options) is { } refusal)
             {
                 return Results.Json(
-                    new { error = "node", message = "refusing to send NodeToken over plain HTTP to a non-loopback address" },
+                    new { error = "node", message = refusal },
                     statusCode: StatusCodes.Status502BadGateway);
             }
 

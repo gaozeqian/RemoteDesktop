@@ -99,14 +99,14 @@ public static class NodeEndpoints
                 return Results.BadRequest(new { error = "role", message = "role must be rendezvous or relay" });
             }
 
-            if (!TryNormalizeBaseUrl(request.BaseUrl, out var baseUrl, out var uri))
+            if (!TryNormalizeBaseUrl(request.BaseUrl, out var baseUrl, out _))
             {
                 return Results.BadRequest(new { error = "baseUrl", message = "baseUrl must be an absolute http(s) URL" });
             }
 
-            if (TokenWouldTravelInClear(uri, options, out var clearWarning))
+            if (NodeHttp.RefusalReason(baseUrl, options) is { } refusal)
             {
-                return Results.BadRequest(new { error = "baseUrl", message = clearWarning });
+                return Results.BadRequest(new { error = "baseUrl", message = refusal });
             }
 
             var nodes = await store.ListNodesAsync(cancellationToken).ConfigureAwait(false);
@@ -155,14 +155,14 @@ public static class NodeEndpoints
             string? baseUrl = null;
             if (request.BaseUrl is not null)
             {
-                if (!TryNormalizeBaseUrl(request.BaseUrl, out var normalized, out var uri))
+                if (!TryNormalizeBaseUrl(request.BaseUrl, out var normalized, out _))
                 {
                     return Results.BadRequest(new { error = "baseUrl", message = "baseUrl must be an absolute http(s) URL" });
                 }
 
-                if (TokenWouldTravelInClear(uri, options, out var clearWarning))
+                if (NodeHttp.RefusalReason(normalized, options) is { } refusal)
                 {
-                    return Results.BadRequest(new { error = "baseUrl", message = clearWarning });
+                    return Results.BadRequest(new { error = "baseUrl", message = refusal });
                 }
 
                 baseUrl = normalized;
@@ -231,9 +231,9 @@ public static class NodeEndpoints
         OpsOptions options,
         CancellationToken cancellationToken)
     {
-        if (!NodeHttp.TokenCanTravelTo(node.BaseUrl, options.NodeToken, options.AllowInsecureNodeHttp))
+        if (NodeHttp.RefusalReason(node.BaseUrl, options) is { } refusal)
         {
-            return (null, "refusing to send NodeToken over plain HTTP to a non-loopback address");
+            return (null, refusal);
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, node.BaseUrl.TrimEnd('/') + "/internal/v1/info");
@@ -299,27 +299,6 @@ public static class NodeEndpoints
 
         uri = parsed;
         normalized = parsed.GetLeftPart(UriPartial.Path).TrimEnd('/');
-        return true;
-    }
-
-    /// <summary>
-    /// Refuses an http node when a node token is configured. The token is a bearer credential; sending it to a
-    /// non-loopback address in the clear hands it to anyone on the path. Loopback http is allowed because it never
-    /// leaves the machine.
-    /// </summary>
-    private static bool TokenWouldTravelInClear(Uri? uri, OpsOptions options, out string message)
-    {
-        message = string.Empty;
-        if (string.IsNullOrEmpty(options.NodeToken)
-            || options.AllowInsecureNodeHttp
-            || uri is null
-            || uri.Scheme != Uri.UriSchemeHttp
-            || uri.IsLoopback)
-        {
-            return false;
-        }
-
-        message = "an http baseUrl would send Ops:NodeToken in the clear; use https or a loopback address";
         return true;
     }
 
