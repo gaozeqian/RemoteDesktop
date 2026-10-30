@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace RemoteDesktop.Features.Terminal.Emulation;
@@ -368,7 +369,7 @@ public sealed partial class TerminalEmulator
     {
         if (_stringIsOsc)
         {
-            DispatchOsc(Encoding.UTF8.GetString([.. _string]));
+            DispatchOsc(Encoding.UTF8.GetString(CollectionsMarshal.AsSpan(_string)));
         }
 
         _string.Clear();
