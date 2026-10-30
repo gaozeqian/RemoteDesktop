@@ -798,6 +798,10 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
 | `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
 | `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知。失败后按 1/2/4/8 分钟重试，最多 5 次 |
+| `Ops:Notifications:Smtp:Host` | 空 | 邮件投递的 SMTP 服务器；空 = 不发邮件。配了它就要给 `From`、`To`，否则启动时按配置错误拒绝 |
+| `Ops:Notifications:Smtp:Port` / `UseStartTls` | `587` / `true` | 提交端口与 STARTTLS。不支持 465 的隐式 TLS：那种部署请在前置一个本机中继 |
+| `Ops:Notifications:Smtp:From` / `To` | 空 | 信封与头部的发件人；收件人可用逗号或分号分隔多个 |
+| `Ops:Notifications:Smtp:Username` / `Password` | 空 | 中继需要认证时填写；支持 AUTH PLAIN 与 AUTH LOGIN。**口令只写进 AUTH 交换**，不进日志、不进审计、不进投递记录 |
 | `Ops:TrustedProxies` | 空 | 可信反向代理的 IP 或 CIDR 列表；只有这里的代理写来的 `X-Forwarded-For` / `X-Forwarded-Proto` 会被采信。见“反向代理” |
 | `Ops:Retention:SampleDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `30` / `90` / `180` | 指标样本、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。审计日志不自动删除 |
 | `Ops:Retention:IntervalMinutes` | `60` | 清理任务间隔 |
@@ -1902,13 +1906,21 @@ remotedesktop --self-check
 
 规则是**结构化列，不是表达式**：`single`（单指标）、`ratio`（两指标比值）、`scrape`（抓取失败）、
 `session.rtt`、`session.direct`（直连率）。`forSeconds` 状态机——条件持续满足才开，抖动一次不叫人；
-去重键保证同一对象同时只有一条未恢复告警。通知走一个 Webhook（`Ops:Notifications:WebhookUrl`），开/恢复各一次；
-发送失败按 1/2/4/8 分钟退避重试，最多 5 次，且只在该告警仍处于对应状态时重试（已恢复的告警不会补发“打开”）。
+去重键保证同一对象同时只有一条未恢复告警。
+
+通知有两条通道，开/恢复各发一次：Webhook（`Ops:Notifications:WebhookUrl`）与邮件（`Ops:Notifications:Smtp`）。
+两条通道**各自**在 `ops_notification_attempt` 里记一行，失败各自按 1/2/4/8 分钟退避重试、最多 5 次，彼此不影响；
+一条通道挂着不会让另一条重发。
+
+**静默**（告警页「静默 1 小时」或 `POST /api/silences`）只压通知：告警照常打开、恢复、认领，照常写审计。
+范围可以是某条规则、某个节点（抓取失败类）或两者；窗口结束需要重新触发一次才会再通知——被跳过的消息不会补发。
+静默的创建与解除都是管理员动作，各写一条审计。
 
 ### 已知边界与未做
 
 - 丢包 / 码率：无来源（见上）。
-- 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
+- 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。多通道目前就这两条，
+  每节点令牌未做。
 - 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
   在哪之前，`Ops:NodeTokenHosts` 可以把这个令牌的出口收窄到自有的几台服务器（见上面的配置表）。
 - 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，

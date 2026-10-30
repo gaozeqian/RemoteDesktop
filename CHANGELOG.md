@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### Added — 告警的邮件通知与静默
+
+- **邮件通知**：新增 `Ops:Notifications:Smtp:*`，在 Webhook 之外多一条通道。SMTP 客户端是自己写的——STARTTLS、
+  AUTH PLAIN/LOGIN、DATA 的点转义、非 ASCII 主题的 RFC 2047——没有引入新依赖。口令只写进 AUTH 交换，不进日志、
+  审计与投递记录。
+- **两条通道各自重试**：`ops_notification_attempt` 按通道分行，Webhook 挂着不会让邮件重发，反之亦然；退避与
+  去重沿用原有规则。一条通道的失败不会阻塞另一条。
+- **静默**：告警页可直接「静默 1 小时」，`GET/POST/DELETE /api/silences` 支持按规则、按节点或两者组合。静默
+  只压通知：告警照常打开、恢复、写审计；被压掉的转换不会在窗口结束后补发。创建与解除都是管理员动作，各写审计。
+- **schema v6**：`ops_silence` 表从 1.0.0 起就在基线里（matcher_json / starts_at / ends_at / created_by），本次
+  只补 `reason` 列，因此是 `ALTER TABLE` 而不是建表。
+
 ### Added — `remotedesktop://` 链接带入设备代码
 
 - **链接只带设备代码，不自动连接**：`remotedesktop://connect?code=902226105` 与 `remotedesktop://902226105`
