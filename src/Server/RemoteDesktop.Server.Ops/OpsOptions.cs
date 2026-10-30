@@ -97,6 +97,7 @@ public sealed class OpsOptions
         // non-null; normalise before anything dereferences them.
         Database ??= new OpsDatabaseSettings();
         Notifications ??= new NotificationSettings();
+        Notifications.Smtp ??= new SmtpSettings();
         Ingest ??= new IngestSettings();
         Retention ??= new RetentionSettings();
         TrustedProxies ??= [];
@@ -135,6 +136,8 @@ public sealed class OpsOptions
             throw new InvalidOperationException(
                 "Ops:Notifications:WebhookUrl must be an absolute http(s) URL, or empty to disable notifications.");
         }
+
+        Notifications.Smtp.Validate();
 
         foreach (var entry in TrustedProxies)
         {
@@ -200,13 +203,112 @@ public sealed class RetentionSettings
 }
 
 /// <summary>
-/// Outgoing notifications. One webhook for the whole console rather than a channel table: the common receiver is a
-/// group-chat robot, the URL is the whole configuration, and a table with no UI would be a table nobody fills in.
+/// Outgoing notifications. One webhook and one mailbox for the whole console rather than a channel table: the common
+/// receiver is a group-chat robot, the URL is the whole configuration, and a table with no UI would be a table nobody
+/// fills in. The two channels are independent — one failing does not stop the other, and each keeps its own retries.
 /// </summary>
 public sealed class NotificationSettings
 {
     /// <summary>Receives a JSON POST when an alert opens or resolves. Empty disables notifications.</summary>
     public string WebhookUrl { get; set; } = string.Empty;
+
+    /// <summary>Mail delivery of the same alerts. Empty <see cref="SmtpSettings.Host"/> disables it.</summary>
+    public SmtpSettings Smtp { get; set; } = new();
+}
+
+/// <summary>How the console sends an alert by mail.</summary>
+/// <remarks>
+/// The password is read from configuration and only ever written into the AUTH exchange: it is not logged, not put in
+/// an error message and not stored on the attempt row (which keeps the server's reason for refusing, nothing more).
+/// </remarks>
+public sealed class SmtpSettings
+{
+    /// <summary>Empty disables mail delivery entirely.</summary>
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>587 (submission), 465 for implicit TLS (not supported — use STARTTLS) or 25 on an internal relay.</summary>
+    public int Port { get; set; } = 587;
+
+    /// <summary>Upgrade the connection with STARTTLS before AUTH. Off only on a trusted network.</summary>
+    public bool UseStartTls { get; set; } = true;
+
+    /// <summary>Empty means the relay needs no authentication.</summary>
+    public string Username { get; set; } = string.Empty;
+
+    public string Password { get; set; } = string.Empty;
+
+    /// <summary>Envelope and header sender. Required when <see cref="Host"/> is set.</summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>One or more recipients, separated by commas or semicolons.</summary>
+    public string To { get; set; } = string.Empty;
+
+    /// <summary>Whether mail delivery was configured at all.</summary>
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(Host);
+
+    /// <summary>The recipients, trimmed, with the empty entries a trailing comma leaves behind removed.</summary>
+    public IReadOnlyList<string> Recipients() =>
+        [.. To.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    /// <summary>Refuses a half-written configuration, naming the key that has to change.</summary>
+    /// <exception cref="InvalidOperationException">A value cannot be used.</exception>
+    public void Validate()
+    {
+        if (!IsConfigured)
+        {
+            if (!string.IsNullOrWhiteSpace(From) || !string.IsNullOrWhiteSpace(To) || !string.IsNullOrWhiteSpace(Username))
+            {
+                throw new InvalidOperationException(
+                    "Ops:Notifications:Smtp:Host is required as soon as any other Ops:Notifications:Smtp value is set (empty Host disables mail delivery).");
+            }
+
+            return;
+        }
+
+        if (Port is < 1 or > 65535)
+        {
+            throw new InvalidOperationException($"Ops:Notifications:Smtp:Port must be between 1 and 65535 (got {Port}).");
+        }
+
+        if (!LooksLikeAddress(From))
+        {
+            throw new InvalidOperationException(
+                "Ops:Notifications:Smtp:From must be one mail address, for example ops@example.com.");
+        }
+
+        var recipients = Recipients();
+        if (recipients.Count == 0)
+        {
+            throw new InvalidOperationException("Ops:Notifications:Smtp:To must name at least one recipient.");
+        }
+
+        foreach (var recipient in recipients)
+        {
+            if (!LooksLikeAddress(recipient))
+            {
+                throw new InvalidOperationException($"Ops:Notifications:Smtp:To contains '{recipient}', which is not a mail address.");
+            }
+        }
+
+        if (string.IsNullOrEmpty(Username) && !string.IsNullOrEmpty(Password))
+        {
+            throw new InvalidOperationException(
+                "Ops:Notifications:Smtp:Password is set but Ops:Notifications:Smtp:Username is empty; an unauthenticated relay cannot use one.");
+        }
+    }
+
+    // Deliberately not a full RFC 5322 parse: this only has to catch the mistakes that would otherwise fail at
+    // delivery time, on the one path whose failure nobody sees.
+    private static bool LooksLikeAddress(string? value)
+    {
+        var at = value?.IndexOf('@', StringComparison.Ordinal) ?? -1;
+        return !string.IsNullOrWhiteSpace(value)
+            && at > 0
+            && at < value.Length - 1
+            && !value.Contains(' ', StringComparison.Ordinal)
+            && !value.Contains('\r', StringComparison.Ordinal)
+            && !value.Contains('\n', StringComparison.Ordinal);
+    }
 }
 
 /// <summary>

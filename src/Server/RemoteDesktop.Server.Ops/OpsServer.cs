@@ -87,7 +87,12 @@ public static class OpsServer
                 client.MaxResponseContentBufferSize = NodeHttp.MaxResponseBytes;
             })
             .ConfigurePrimaryHttpMessageHandler(() => NodeCertificatePin.Handler(options.NodeCertificatePath));
-        builder.Services.AddHttpClient(AlertService.ClientName, client => client.Timeout = TimeSpan.FromSeconds(5));
+        builder.Services.AddHttpClient(WebhookNotificationChannel.ClientName, client => client.Timeout = TimeSpan.FromSeconds(5));
+
+        // Both channels are always registered; each says whether the deployment configured it. The alert service
+        // iterates whatever is there, so adding a third way to reach a person is one class and one line.
+        builder.Services.AddSingleton<INotificationChannel, WebhookNotificationChannel>();
+        builder.Services.AddSingleton<INotificationChannel, SmtpNotificationChannel>();
         builder.Services.AddSingleton<MetricScraper>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricScraper>());
         builder.Services.AddHostedService<RetentionService>();
@@ -143,6 +148,7 @@ public static class OpsServer
         app.MapOpsSessions();
         app.MapOpsDevices();
         app.MapOpsAlerts();
+        app.MapOpsSilences();
         app.MapOpsAudit();
         app.MapOpsActions();
         app.MapOpsUsers();

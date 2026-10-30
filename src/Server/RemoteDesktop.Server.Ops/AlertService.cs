@@ -17,15 +17,11 @@ namespace RemoteDesktop.Server.Ops;
 public sealed partial class AlertService(
     OpsStore store,
     AlertStateMachine machine,
-    OpsOptions options,
-    IHttpClientFactory httpClientFactory,
+    IEnumerable<INotificationChannel> channels,
     TimeProvider time,
     ILogger<AlertService> logger)
 {
-    /// <summary>Named client for the webhook, so a slow receiver cannot hold an evaluation open indefinitely.</summary>
-    public const string ClientName = "ops-webhook";
-
-    private const string NotificationChannel = "webhook";
+    private readonly INotificationChannel[] _channels = [.. channels];
 
     /// <summary>Runs one pass. Returns how many alerts were opened and how many resolved.</summary>
     public async Task<(int Opened, int Resolved)> EvaluateOnceAsync(CancellationToken cancellationToken)
@@ -35,6 +31,10 @@ public sealed partial class AlertService(
         var now = time.GetUtcNow();
         var opened = 0;
         var resolved = 0;
+
+        // Read once per pass: a silence is a handful of rows, and a notification path that read the table per alert
+        // would be a query per mail. A failure here must not stop alerts either, so it reads as "nothing silenced".
+        var silences = await LoadSilencesAsync(now, cancellationToken).ConfigureAwait(false);
 
         // Every dedupe key this pass actually looked at. An open alert outside this set has no signal behind it at
         // all: its node was deleted, its rule was disabled, or the rule itself is gone. Comparing a current reading
@@ -66,7 +66,7 @@ public sealed partial class AlertService(
 
                     await store.OpenAlertAsync(alert, cancellationToken).ConfigureAwait(false);
                     await AuditAsync("alert.open", rule.Name, rule.Severity, now, cancellationToken).ConfigureAwait(false);
-                    await NotifyAsync(alert, rule.Name, rule.Severity, "opened", cancellationToken).ConfigureAwait(false);
+                    await NotifyAsync(alert, rule.Name, rule.Severity, "opened", silences, cancellationToken).ConfigureAwait(false);
                     opened++;
                 }
                 else if (decision == AlertDecision.Resolve && open is not null)
@@ -74,7 +74,7 @@ public sealed partial class AlertService(
                     if (await store.ResolveAlertAsync(open.Id, now.ToUnixTimeMilliseconds(), cancellationToken).ConfigureAwait(false))
                     {
                         await AuditAsync("alert.resolve", rule.Name, open.Id, now, cancellationToken).ConfigureAwait(false);
-                        await NotifyAsync(open, rule.Name, rule.Severity, "resolved", cancellationToken).ConfigureAwait(false);
+                        await NotifyAsync(open, rule.Name, rule.Severity, "resolved", silences, cancellationToken).ConfigureAwait(false);
                         resolved++;
                     }
                 }
@@ -98,14 +98,14 @@ public sealed partial class AlertService(
             // name left, and a resolved notification with an id in it is better than a permanent open one.
             var name = rulesById.TryGetValue(orphan.RuleId, out var rule) ? rule.Name : orphan.DedupeKey;
             await AuditAsync("alert.resolve", name, orphan.Id, now, cancellationToken).ConfigureAwait(false);
-            await NotifyAsync(orphan, name, orphan.Severity, "resolved", cancellationToken).ConfigureAwait(false);
+            await NotifyAsync(orphan, name, orphan.Severity, "resolved", silences, cancellationToken).ConfigureAwait(false);
             resolved++;
         }
 
         // A webhook that was down when an alert opened used to lose that page permanently: the open alert no longer
         // produces a transition, and NotifyAsync is only called from transitions. Retry the deliveries that are still
         // owed, with a backoff, before the pass ends.
-        await RetryNotificationsAsync(now, cancellationToken).ConfigureAwait(false);
+        await RetryNotificationsAsync(now, silences, cancellationToken).ConfigureAwait(false);
 
         return (opened, resolved);
     }
@@ -113,14 +113,16 @@ public sealed partial class AlertService(
     /// <summary>
     /// Re-delivers notifications whose first attempt failed and whose alert is still in the matching state.
     /// </summary>
-    private async Task RetryNotificationsAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    /// <summary>Reads the silences that still apply; a database failure reads as "nothing is silenced".</summary>
+    private async Task<IReadOnlyList<SilenceWindow>> LoadSilencesAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
-        IReadOnlyList<OpsPendingNotification> pending;
         try
         {
-            pending = await store
-                .ListPendingNotificationsAsync(NotificationChannel, NotificationBackoff.MaxAttempts, cancellationToken: cancellationToken)
+            var rows = await store
+                .ListActiveSilencesAsync(now.ToUnixTimeMilliseconds(), cancellationToken)
                 .ConfigureAwait(false);
+
+            return [.. rows.Select(row => new SilenceWindow(row.RuleId, row.Node, row.UntilAt))];
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -128,33 +130,86 @@ public sealed partial class AlertService(
         }
         catch (Exception ex)
         {
-            RetryScanFailed(logger, ex);
-            return;
+            SilenceScanFailed(logger, ex);
+            return [];
         }
+    }
 
-        foreach (var item in pending)
+    private async Task RetryNotificationsAsync(
+        DateTimeOffset now,
+        IReadOnlyList<SilenceWindow> silences,
+        CancellationToken cancellationToken)
+    {
+        // Per channel: a webhook that has been down says nothing about the mail, and each keeps its own attempt count.
+        foreach (var channel in _channels)
         {
-            if (!NotificationBackoff.IsDue(item.LastAttemptAt, item.Attempts, now))
+            if (!channel.IsConfigured)
             {
                 continue;
             }
 
-            // The labels are not needed to notify and are not stored on the attempt row; the alert's dedupe key is
-            // the only identity the receiver needs beyond the id.
-            var alert = new OpsAlertRow(
-                item.AlertId,
-                item.RuleId,
-                item.Severity,
-                item.DedupeKey,
-                item.State,
-                item.Value,
-                "{}",
-                item.OpenedAt,
-                null,
-                null,
-                item.ResolvedAt);
+            IReadOnlyList<OpsPendingNotification> pending;
+            try
+            {
+                pending = await store
+                    .ListPendingNotificationsAsync(channel.Id, NotificationBackoff.MaxAttempts, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                RetryScanFailed(logger, ex);
+                continue;
+            }
 
-            await NotifyAsync(alert, item.RuleName, item.Severity, item.Transition, cancellationToken).ConfigureAwait(false);
+            foreach (var item in pending)
+            {
+                if (!NotificationBackoff.IsDue(item.LastAttemptAt, item.Attempts, now))
+                {
+                    continue;
+                }
+
+                // A silence that was created after the first attempt still suppresses the retry: the row simply
+                // stays owed until the window closes, and is dropped once the alert leaves the matching state.
+                if (SilenceMatcher.IsSilenced(
+                        silences,
+                        item.RuleId,
+                        AlertDedupeKeys.NodeOf(item.DedupeKey),
+                        now.ToUnixTimeMilliseconds()))
+                {
+                    continue;
+                }
+
+                // The labels are not needed to notify and are not stored on the attempt row; the alert's dedupe key
+                // is the only identity the receiver needs beyond the id.
+                var alert = new OpsAlertRow(
+                    item.AlertId,
+                    item.RuleId,
+                    item.Severity,
+                    item.DedupeKey,
+                    item.State,
+                    item.Value,
+                    "{}",
+                    item.OpenedAt,
+                    null,
+                    null,
+                    item.ResolvedAt);
+
+                var error = await channel
+                    .SendAsync(alert, item.RuleName, item.Severity, item.Transition, cancellationToken)
+                    .ConfigureAwait(false);
+                await TryRecordAttemptAsync(
+                    alert,
+                    channel.Id,
+                    item.Transition,
+                    error is null,
+                    error,
+                    now.ToUnixTimeMilliseconds(),
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -174,7 +229,7 @@ public sealed partial class AlertService(
             return
             [
                 .. nodes.Select(node => (
-                    $"rule:{rule.Id}:node:{node.Name}",
+                    AlertDedupeKeys.ForNode(rule.Id, node.Name),
                     node.Enabled && node.LastScrapeOk == false,
                     (double?)(node.Enabled && node.LastScrapeOk == false ? 1 : 0))),
             ];
@@ -187,7 +242,7 @@ public sealed partial class AlertService(
 
         var value = await MetricValueAsync(rule, now, cancellationToken).ConfigureAwait(false);
         var firing = value is { } current && AlertComparators.Evaluate(current, rule.Comparator, rule.Threshold);
-        return [($"rule:{rule.Id}", firing, value)];
+        return [(AlertDedupeKeys.ForRule(rule.Id), firing, value)];
     }
 
     /// <summary>
@@ -214,7 +269,7 @@ public sealed partial class AlertService(
         }
 
         var firing = value is { } current && AlertComparators.Evaluate(current, rule.Comparator, rule.Threshold);
-        return ($"rule:{rule.Id}", firing, value);
+        return (AlertDedupeKeys.ForRule(rule.Id), firing, value);
     }
 
     private async Task<double?> MetricValueAsync(AlertRule rule, DateTimeOffset now, CancellationToken cancellationToken)
@@ -275,97 +330,61 @@ public sealed partial class AlertService(
         return perNode.Length == 0 ? null : perNode.Sum();
     }
 
+    /// <summary>
+    /// Offers the transition to every configured channel. Each one decides for itself and is recorded on its own row,
+    /// so a webhook that is down neither blocks the mail nor causes it to be sent twice.
+    /// </summary>
     private async Task NotifyAsync(
         OpsAlertRow alert,
         string ruleName,
         string severity,
         string transition,
+        IReadOnlyList<SilenceWindow> silences,
         CancellationToken cancellationToken)
     {
-        var url = options.Notifications.WebhookUrl;
-        if (string.IsNullOrWhiteSpace(url))
+        // Silence suppresses the pages, never the alert: the row was already opened (or resolved) and audited, and
+        // the silence is not recorded as an attempt, so nothing is delivered after the window closes either.
+        if (SilenceMatcher.IsSilenced(
+                silences,
+                alert.RuleId,
+                AlertDedupeKeys.NodeOf(alert.DedupeKey),
+                time.GetUtcNow().ToUnixTimeMilliseconds()))
         {
+            LogSilenced(logger, alert.Id, ruleName);
             return;
         }
 
-        if (await store.HasNotificationAttemptAsync(alert.Id, NotificationChannel, transition, cancellationToken).ConfigureAwait(false))
+        foreach (var channel in _channels)
         {
-            return;
-        }
+            if (!channel.IsConfigured)
+            {
+                continue;
+            }
 
-        var now = time.GetUtcNow().ToUnixTimeMilliseconds();
-        var title = transition == "opened"
-            ? $"[{severity}] {ruleName}"
-            : $"[已恢复] {ruleName}";
+            if (await store.HasNotificationAttemptAsync(alert.Id, channel.Id, transition, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
 
-        // The URL is checked at start-up, but this method also runs from the retry pass and must not let a malformed
-        // value thrown from Uri's constructor escape into the background loop.
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var webhook)
-            || (webhook.Scheme != Uri.UriSchemeHttp && webhook.Scheme != Uri.UriSchemeHttps))
-        {
-            NotifyFailed(logger, ruleName, "Ops:Notifications:WebhookUrl is not an absolute http(s) URL");
-            await TryRecordAttemptAsync(alert, transition, sent: false, "invalid webhook URL", now, cancellationToken).ConfigureAwait(false);
-            return;
-        }
+            var error = await channel
+                .SendAsync(alert, ruleName, severity, transition, cancellationToken)
+                .ConfigureAwait(false);
 
-        try
-        {
-            using var client = httpClientFactory.CreateClient(ClientName);
-            var payload = JsonSerializer.Serialize(
-                new
-                {
-                    @event = transition,
-                    title,
-                    alert = new
-                    {
-                        id = alert.Id,
-                        rule = ruleName,
-                        severity,
-                        value = alert.Value,
-                        openedAt = alert.OpenedAt,
-                        resolvedAt = transition == "resolved" ? alert.ResolvedAt ?? now : (long?)null,
-                    },
-                },
-                OpsEventJson.Options);
-
-            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using var response = await client.PostAsync(webhook, content, cancellationToken).ConfigureAwait(false);
-
-            var sent = response.IsSuccessStatusCode;
             await TryRecordAttemptAsync(
                 alert,
+                channel.Id,
                 transition,
-                sent,
-                sent ? null : $"HTTP {(int)response.StatusCode}",
-                now,
+                error is null,
+                error,
+                time.GetUtcNow().ToUnixTimeMilliseconds(),
                 cancellationToken).ConfigureAwait(false);
-
-            if (!sent)
-            {
-                NotifyRejected(logger, ruleName, (int)response.StatusCode);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (TaskCanceledException)
-        {
-            await TryRecordAttemptAsync(alert, transition, sent: false, "timed out", now, cancellationToken).ConfigureAwait(false);
-            NotifyFailed(logger, ruleName, "timed out");
-        }
-        catch (Exception ex)
-        {
-            // A DNS failure, a TLS error, a response the handler could not parse: none of these may reach the
-            // evaluation loop, and all of them are worth another attempt later.
-            await TryRecordAttemptAsync(alert, transition, sent: false, ex.Message, now, cancellationToken).ConfigureAwait(false);
-            NotifyFailed(logger, ruleName, ex.Message);
         }
     }
 
     /// <summary>Records an attempt without letting a database failure escape the notifier.</summary>
     private async Task TryRecordAttemptAsync(
         OpsAlertRow alert,
+        string channelId,
         string transition,
         bool sent,
         string? error,
@@ -376,7 +395,7 @@ public sealed partial class AlertService(
         {
             await store.RecordNotificationAttemptAsync(
                 alert.Id,
-                NotificationChannel,
+                channelId,
                 transition,
                 sent,
                 error,
@@ -406,15 +425,15 @@ public sealed partial class AlertService(
                 "success"),
             cancellationToken);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The webhook for rule {Rule} answered HTTP {Status}.")]
-    private static partial void NotifyRejected(ILogger logger, string rule, int status);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The webhook for rule {Rule} failed: {Reason}.")]
-    private static partial void NotifyFailed(ILogger logger, string rule, string reason);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record a webhook attempt; the retry pass may not see this alert.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record a notification attempt; the retry pass may not see this alert.")]
     private static partial void NotifyRecordFailed(ILogger logger, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read pending webhook deliveries; will try again next pass.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read pending deliveries; will try again next pass.")]
     private static partial void RetryScanFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Alert {Alert} of rule {Rule} was silenced: the alert stands, no notification was sent.")]
+    private static partial void LogSilenced(ILogger logger, string alert, string rule);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read the silence windows; notifications are sent as if nothing were silenced.")]
+    private static partial void SilenceScanFailed(ILogger logger, Exception exception);
 }

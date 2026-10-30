@@ -9,6 +9,7 @@ const state = {
   nodes: [],
   sessions: [],
   alerts: [],
+  silences: [],
   rules: [],
   actions: [],
   users: [],
@@ -113,6 +114,9 @@ const el = {
   alertsHint: document.getElementById("alertsHint"),
   alertTbody: document.getElementById("alertTbody"),
   alertsEmpty: document.getElementById("alertsEmpty"),
+  silencesHint: document.getElementById("silencesHint"),
+  silenceTbody: document.getElementById("silenceTbody"),
+  silencesEmpty: document.getElementById("silencesEmpty"),
   rulesHint: document.getElementById("rulesHint"),
   ruleTbody: document.getElementById("ruleTbody"),
   ruleForm: document.getElementById("ruleForm"),
@@ -666,6 +670,75 @@ async function loadAlerts() {
   state.alerts = payload;
   el.alertsHint.textContent = payload.length === 0 ? "" : `${payload.filter((alert) => alert.active).length} 条未恢复`;
   renderAlerts();
+  void loadSilences();
+}
+
+async function loadSilences() {
+  const { status, payload } = await api("/api/silences");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  state.silences = payload;
+  el.silencesHint.textContent = payload.length === 0 ? "" : `${payload.length} 条生效中`;
+  renderSilences();
+}
+
+function renderSilences() {
+  el.silenceTbody.replaceChildren();
+  el.silencesEmpty.hidden = state.silences.length > 0;
+
+  const canManage = state.user && state.user.role === "admin";
+
+  for (const silence of state.silences) {
+    const row = document.createElement("tr");
+
+    const scope = document.createElement("td");
+    const rule = silence.ruleId ? state.rules.find((candidate) => candidate.id === silence.ruleId) : null;
+    if (rule) {
+      scope.textContent = silence.node ? `${rule.name} · 节点 ${silence.node}` : rule.name;
+    } else if (silence.node) {
+      scope.textContent = `节点 ${silence.node}`;
+    } else {
+      scope.textContent = silence.ruleId || "全部";
+    }
+
+    const reason = document.createElement("td");
+    reason.textContent = silence.reason;
+
+    const until = document.createElement("td");
+    until.className = "mono";
+    until.textContent = formatDateTime(silence.untilAt);
+
+    const createdBy = document.createElement("td");
+    createdBy.textContent = silence.createdBy;
+
+    const action = document.createElement("td");
+    if (canManage) {
+      const remove = document.createElement("button");
+      remove.className = "small";
+      remove.type = "button";
+      remove.textContent = "解除";
+      remove.addEventListener("click", () => void removeSilence(silence.id));
+      action.append(remove);
+    }
+
+    row.append(scope, reason, until, createdBy, action);
+    el.silenceTbody.append(row);
+  }
+}
+
+async function silenceRule(ruleId) {
+  await api("/api/silences", {
+    method: "POST",
+    body: { ruleId, hours: 1, reason: "从告警页静默 1 小时" },
+  });
+  await loadSilences();
+}
+
+async function removeSilence(id) {
+  await api(`/api/silences/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await loadSilences();
 }
 
 function renderAlerts() {
@@ -709,6 +782,16 @@ function renderAlerts() {
       ack.textContent = "认领";
       ack.addEventListener("click", () => void ackAlert(alert.id));
       action.append(ack);
+    }
+
+    // Silence is an admin's decision (it changes who gets paged), so it is not offered to operators or viewers.
+    if (state.user && state.user.role === "admin" && alert.active) {
+      const mute = document.createElement("button");
+      mute.className = "small";
+      mute.type = "button";
+      mute.textContent = "静默 1 小时";
+      mute.addEventListener("click", () => void silenceRule(alert.ruleId));
+      action.append(mute);
     }
 
     row.append(severity, ruleCell, value, opened, statusCell, action);
@@ -764,6 +847,7 @@ async function loadRules() {
   el.rulesHint.textContent = `${payload.length} 条规则`;
   renderRules();
   renderAlerts();
+  renderSilences();
 }
 
 function ruleCondition(rule) {

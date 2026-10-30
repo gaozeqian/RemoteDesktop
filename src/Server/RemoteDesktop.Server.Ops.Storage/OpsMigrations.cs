@@ -86,5 +86,10 @@ public static class OpsMigrations
             ALTER TABLE ops_alert_rule ALTER COLUMN threshold TYPE DOUBLE PRECISION;
             ALTER TABLE ops_alert ALTER COLUMN value TYPE DOUBLE PRECISION;
             """),
+
+        // 6 — the one thing the planned silence table was missing: why it exists. The baseline has held
+        // ops_silence (matcher_json, starts_at, ends_at, created_by) since the first version, waiting for the feature;
+        // an operator reading the list needs the reason next to the window, and a reason is not a matcher.
+        new(6, "ALTER TABLE ops_silence ADD COLUMN reason TEXT;"),
     ];
 }

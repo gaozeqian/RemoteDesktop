@@ -116,6 +116,92 @@ public class NotificationRetryTests(OpsHostFixture fixture) : IClassFixture<OpsH
         }
     }
 
+    /// <summary>
+    /// Two ways of reaching a person are two independent promises: the mail arrives while the webhook is unreachable,
+    /// and each channel keeps its own attempt row — one being owed a retry says nothing about the other.
+    /// </summary>
+    [Fact]
+    public async Task A_dead_webhook_does_not_stop_the_mail_and_the_two_keep_separate_retries()
+    {
+        await using var smtp = new FakeSmtpServer();
+
+        var options = fixture.Services.GetRequiredService<OpsOptions>();
+        var previousUrl = options.Notifications.WebhookUrl;
+        var previousSmtp = options.Notifications.Smtp;
+        options.Notifications.WebhookUrl = "http://127.0.0.1:1/hook";
+        options.Notifications.Smtp = new SmtpSettings
+        {
+            Host = "127.0.0.1",
+            Port = smtp.Port,
+            UseStartTls = false,
+            From = "ops@example.com",
+            To = "ops@example.com",
+        };
+
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var (client, cookies) = await SignInAsync();
+        string? ruleId = null;
+        string? nodeId = null;
+        var otherScrapeRules = Array.Empty<AlertRule>();
+
+        try
+        {
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            ruleId = await CreateRuleAsync(client, csrf);
+            nodeId = await CreateFailingNodeAsync(client, csrf);
+
+            otherScrapeRules = (await store.ListAlertRulesAsync(Ct))
+                .Where(rule => rule.Id != ruleId && rule.Kind == AlertRuleKinds.Scrape && rule.Enabled)
+                .ToArray();
+            foreach (var rule in otherScrapeRules)
+            {
+                await store.UpsertAlertRuleAsync(rule with { Enabled = false }, Ct);
+            }
+
+            await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+            await fixture.Services.GetRequiredService<AlertEvaluationService>().RunOnceAsync(Ct);
+
+            // The mail went out even though the webhook could not be reached.
+            var message = await smtp.Message.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            Assert.Contains("测试：重试通知", message, StringComparison.Ordinal);
+
+            var alert = Assert.Single(await store.ListOpenAlertsAsync(Ct), row => row.RuleId == ruleId);
+            Assert.Contains(
+                await store.ListPendingNotificationsAsync("webhook", NotificationBackoff.MaxAttempts, cancellationToken: Ct),
+                item => item.AlertId == alert.Id);
+            Assert.DoesNotContain(
+                await store.ListPendingNotificationsAsync("smtp", NotificationBackoff.MaxAttempts, cancellationToken: Ct),
+                item => item.AlertId == alert.Id);
+        }
+        finally
+        {
+            options.Notifications.WebhookUrl = previousUrl;
+            options.Notifications.Smtp = previousSmtp;
+            foreach (var rule in otherScrapeRules)
+            {
+                await store.UpsertAlertRuleAsync(rule with { Enabled = true }, Ct);
+            }
+
+            using (client)
+            {
+                var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]?.Value;
+                if (nodeId is not null && csrf is not null)
+                {
+                    using var deleteNode = new HttpRequestMessage(HttpMethod.Delete, $"/api/nodes/{nodeId}");
+                    deleteNode.Headers.Add("X-OPS-CSRF", csrf);
+                    await client.SendAsync(deleteNode, Ct);
+                }
+
+                if (ruleId is not null && csrf is not null)
+                {
+                    using var deleteRule = new HttpRequestMessage(HttpMethod.Delete, $"/api/settings/rules/{ruleId}");
+                    deleteRule.Headers.Add("X-OPS-CSRF", csrf);
+                    await client.SendAsync(deleteRule, Ct);
+                }
+            }
+        }
+    }
+
     private static async Task<string> CreateRuleAsync(HttpClient client, string csrf)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/settings/rules")

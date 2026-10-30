@@ -222,6 +222,17 @@
         </div>
 
         <div class="card">
+          <div class="card-head"><h2>静默</h2><span class="muted" id="silencesHint"></span></div>
+          <p class="muted">静默只压通知：告警照常打开与恢复、照常写审计。窗口结束后不会补发这段时间跳过的消息，
+            需要重新触发一次才会再通知。</p>
+          <table class="data-table">
+            <thead><tr><th>范围</th><th>原因</th><th>到</th><th>创建人</th><th></th></tr></thead>
+            <tbody id="silenceTbody"></tbody>
+          </table>
+          <p class="empty" id="silencesEmpty" hidden>当前没有静默。</p>
+        </div>
+
+        <div class="card">
           <div class="card-head"><h2>规则</h2><span class="muted" id="rulesHint"></span></div>
           <table class="data-table">
             <thead><tr><th>名称</th><th>类型</th><th>条件</th><th>持续时间</th><th>严重度</th><th>启用</th><th></th></tr></thead>
