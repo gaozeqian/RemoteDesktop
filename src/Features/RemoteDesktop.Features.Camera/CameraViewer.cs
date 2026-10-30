@@ -48,7 +48,6 @@ public sealed partial class CameraViewer : IAsyncDisposable
 {
     private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(30);
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
@@ -112,8 +111,13 @@ public sealed partial class CameraViewer : IAsyncDisposable
         {
             try
             {
-                await ProtobufFrames.WriteAsync(channel.Stream, new CameraRequest { List = new ListCamerasRequest() }, cancellationToken).ConfigureAwait(false);
-                var answer = await ReadEventAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(
+                    async token =>
+                    {
+                        await ProtobufFrames.WriteAsync(channel.Stream, new CameraRequest { List = new ListCamerasRequest() }, token).ConfigureAwait(false);
+                        return await ReadEventAsync(channel.Stream, token).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
                 return answer.BodyCase switch
                 {
                     CameraEvent.BodyOneofCase.Cameras =>
@@ -127,6 +131,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     _ => throw new CameraException(CameraError.Unsupported, "The host answered unexpectedly."),
                 };
             }
+            catch (TimeoutException ex)
+            {
+                throw new CameraException(ex.Message, ex);
+            }
             catch (Exception ex) when (ex is IOException or InvalidDataException)
             {
                 throw new CameraException("The connection to the host failed.", ex);
@@ -136,6 +144,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     /// <summary>Starts streaming a camera and returns once the host has confirmed it and announced the picture size.</summary>
     /// <exception cref="CameraException">The host refused or could not open the camera.</exception>
+    /// <exception cref="TimeoutException">
+    /// The host did not answer within <see cref="RequestTimeout.Default"/> — an unanswered permission prompt on the host
+    /// is the ordinary way to get here, so the window turns this into advice rather than an error.
+    /// </exception>
     public static async Task<CameraViewer> StartAsync(
         IPeerConnection connection,
         VideoCodecSelector codecs,
@@ -157,10 +169,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
                 new CameraRequest { Open = new OpenCamera { CameraId = cameraId, Width = (uint)mode.Width, Height = (uint)mode.Height, FrameRate = (uint)mode.FrameRate } },
                 cancellationToken).ConfigureAwait(false);
 
-            // The first answer is the stream description, or the reason there is none. Opening a camera can take a moment.
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(OpenTimeout);
-            var first = await ReadEventAsync(channel.Stream, timeout.Token).ConfigureAwait(false);
+            // The first answer is the stream description, or the reason there is none. Opening a camera can take a moment
+            // on the host — a permission prompt may be waiting for somebody to walk up to it — so the deadline is the
+            // shared one-shot one rather than anything tighter.
+            var first = await RequestTimeout.RunAsync(token => ReadEventAsync(channel.Stream, token), cancellationToken).ConfigureAwait(false);
             switch (first.BodyCase)
             {
                 case CameraEvent.BodyOneofCase.StreamInfo:

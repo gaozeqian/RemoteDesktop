@@ -195,12 +195,14 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             Message = ex.Message;
             IsStreaming = false;
         }
-        catch (OperationCanceledException)
+        catch (TimeoutException)
         {
-            // CameraViewer gives the host thirty seconds to answer. An unanswered permission prompt on the other
+            // CameraViewer gives the host one request deadline to answer. An unanswered permission prompt on the other
             // machine is the ordinary way to reach this, and it must read as a timeout, not end the command on the
             // UI thread — an unobserved exception there used to take the whole client down.
-            Message = "被控端没有在 30 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。";
+            Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"被控端没有在 {RequestTimeout.Default.TotalSeconds:0} 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。");
             IsStreaming = false;
         }
     }

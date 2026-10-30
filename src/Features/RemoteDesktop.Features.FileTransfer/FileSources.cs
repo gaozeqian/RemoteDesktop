@@ -53,7 +53,12 @@ public sealed class LocalFileSource : IFileSource
 /// The other computer's files, asked for over one long-lived channel. The channel is opened on first use and reopened
 /// when it turns out to be broken (the host may have restarted its agent, for instance).
 /// </summary>
-public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, IAsyncDisposable
+/// <param name="connection">The session to ask over.</param>
+/// <param name="requestTimeout">
+/// How long one request waits for its answer; <see cref="RequestTimeout.Default"/> when omitted. Exposed so a test can
+/// use a deadline it does not have to wait out.
+/// </param>
+public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? requestTimeout = null) : IFileSource, IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private IChannel? _channel;
@@ -182,9 +187,26 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
                 try
                 {
                     _channel ??= await connection.OpenChannelAsync(ChannelType.FileTransfer, bidirectional: true, cancellationToken).ConfigureAwait(false);
-                    await ProtobufFrames.WriteAsync(_channel.Stream, request, cancellationToken).ConfigureAwait(false);
-                    return await ProtobufFrames.ReadAsync(_channel.Stream, FileResponse.Parser, cancellationToken: cancellationToken).ConfigureAwait(false)
-                        ?? throw new EndOfStreamException("The remote computer closed the file channel.");
+                    var channel = _channel;
+                    return await RequestTimeout.RunAsync(
+                        async token =>
+                        {
+                            await ProtobufFrames.WriteAsync(channel.Stream, request, token).ConfigureAwait(false);
+                            return await ProtobufFrames.ReadAsync(channel.Stream, FileResponse.Parser, cancellationToken: token).ConfigureAwait(false)
+                                ?? throw new EndOfStreamException("The remote computer closed the file channel.");
+                        },
+                        cancellationToken,
+                        requestTimeout).ConfigureAwait(false);
+                }
+                catch (TimeoutException) when (reused)
+                {
+                    // A channel that used to answer and now says nothing is as good as broken: ask again on a fresh one.
+                    await DropChannelAsync().ConfigureAwait(false);
+                }
+                catch (TimeoutException ex)
+                {
+                    await DropChannelAsync().ConfigureAwait(false);
+                    throw new FileOperationException(FileError.Io, ex.Message, ex);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException && !cancellationToken.IsCancellationRequested)
                 {

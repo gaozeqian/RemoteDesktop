@@ -77,14 +77,23 @@ public sealed class TerminalClient : IAsyncDisposable
         {
             try
             {
-                await ProtobufFrames.WriteAsync(channel.Stream, new TerminalRequest { ListShells = new ListShellsRequest() }, cancellationToken).ConfigureAwait(false);
-                var answer = await ReadEventAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(
+                    async token =>
+                    {
+                        await ProtobufFrames.WriteAsync(channel.Stream, new TerminalRequest { ListShells = new ListShellsRequest() }, token).ConfigureAwait(false);
+                        return await ReadEventAsync(channel.Stream, token).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
                 return answer.BodyCase switch
                 {
                     TerminalEvent.BodyOneofCase.Shells => [.. answer.Shells.Shells],
                     TerminalEvent.BodyOneofCase.Failed => throw Failure(answer.Failed),
                     _ => throw new TerminalException(TerminalError.Unsupported, "The host answered unexpectedly."),
                 };
+            }
+            catch (TimeoutException ex)
+            {
+                throw new TerminalException(ex.Message, ex);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException)
             {
@@ -102,11 +111,16 @@ public sealed class TerminalClient : IAsyncDisposable
         var channel = await connection.OpenChannelAsync(ChannelType.Terminal, bidirectional: true, cancellationToken).ConfigureAwait(false);
         try
         {
-            await ProtobufFrames.WriteAsync(
-                channel.Stream,
-                new TerminalRequest { Open = new OpenTerminal { Shell = shell ?? string.Empty, Columns = (uint)columns, Rows = (uint)rows } },
+            var answer = await RequestTimeout.RunAsync(
+                async token =>
+                {
+                    await ProtobufFrames.WriteAsync(
+                        channel.Stream,
+                        new TerminalRequest { Open = new OpenTerminal { Shell = shell ?? string.Empty, Columns = (uint)columns, Rows = (uint)rows } },
+                        token).ConfigureAwait(false);
+                    return await ReadEventAsync(channel.Stream, token).ConfigureAwait(false);
+                },
                 cancellationToken).ConfigureAwait(false);
-            var answer = await ReadEventAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
             switch (answer.BodyCase)
             {
                 case TerminalEvent.BodyOneofCase.Opened:
@@ -116,6 +130,11 @@ public sealed class TerminalClient : IAsyncDisposable
                 default:
                     throw new TerminalException(TerminalError.Unsupported, "The host answered unexpectedly.");
             }
+        }
+        catch (TimeoutException ex)
+        {
+            await channel.DisposeAsync().ConfigureAwait(false);
+            throw new TerminalException(ex.Message, ex);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException)
         {

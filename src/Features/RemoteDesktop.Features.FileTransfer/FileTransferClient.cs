@@ -121,7 +121,7 @@ public static class FileTransferClient
                     },
                 }, cancellationToken).ConfigureAwait(false);
 
-                var answer = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (answer.BodyCase == FileResponse.BodyOneofCase.Result)
                 {
                     Check(answer.Result.Status);
@@ -145,7 +145,7 @@ public static class FileTransferClient
                 var hash = await FileSender.SendAsync(stream, info.FullName, size, offset, observer.Progress, cancellationToken).ConfigureAwait(false);
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Finish = new TransferComplete { Status = new FileStatus(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
 
-                var verdict = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var verdict = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (verdict.BodyCase != FileResponse.BodyOneofCase.Complete)
                 {
                     throw new FileOperationException(FileError.Unsupported, "The remote computer answered unexpectedly.");
@@ -158,6 +158,11 @@ public static class FileTransferClient
 
                 Check(verdict.Complete.Status);
                 return (TransferOutcome.Completed, false);
+            }
+            catch (TimeoutException ex)
+            {
+                // The host took the channel and then stopped answering: the transfer never started, or never ended.
+                throw new FileOperationException(FileError.Io, ex.Message, ex);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or EndOfStreamException && !cancellationToken.IsCancellationRequested)
             {
@@ -181,7 +186,7 @@ public static class FileTransferClient
             try
             {
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Download = new DownloadRequest { Path = remotePath } }, cancellationToken).ConfigureAwait(false);
-                var answer = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (answer.BodyCase == FileResponse.BodyOneofCase.Result)
                 {
                     Check(answer.Result.Status);
@@ -233,7 +238,7 @@ public static class FileTransferClient
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Start = new TransferStart { Offset = (ulong)offset } }, cancellationToken).ConfigureAwait(false);
 
                 var hash = await FileReceiver.ReceiveAsync(stream, partial, size, offset, observer.Progress, cancellationToken, InterpretControl).ConfigureAwait(false);
-                var verdict = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var verdict = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (verdict.BodyCase != FileResponse.BodyOneofCase.Complete)
                 {
                     throw new FileOperationException(FileError.Unsupported, "The remote computer answered unexpectedly.");
@@ -251,6 +256,11 @@ public static class FileTransferClient
 
                 Place(partial, final, policy == ConflictPolicy.Overwrite, modified);
                 return (TransferOutcome.Completed, false);
+            }
+            catch (TimeoutException ex)
+            {
+                // The host took the channel and then stopped answering: the transfer never started, or never ended.
+                throw new FileOperationException(FileError.Io, ex.Message, ex);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException && !cancellationToken.IsCancellationRequested)
             {
