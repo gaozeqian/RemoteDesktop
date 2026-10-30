@@ -202,15 +202,18 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 （`com.remotedesktop.rendezvous` / `com.remotedesktop.relay` / `com.remotedesktop.ops` /
 `com.remotedesktop.gateway`，开机自启、崩溃重启）—— 这就是 Windows 那四个服务的对应物。
 
-> **已知边界**：这三个守护进程目前以 **root** 运行（plist 没有 `UserName`，安装脚本也没有创建专用账户）。
-> Linux 包会创建 `remotedesktop` 账户并以它运行；macOS 包目前还没有做到这一点。把服务端放在公网前，
-> 请按最小权限原则自行评估，或用一个普通账户手工加载 plist。
+四个守护进程以专用账号 **`_remotedesktop`** 运行（与 Linux 的 `remotedesktop` 对应）：plist 里写
+`UserName`/`GroupName`，postinstall 创建隐藏账号（UID/GID 从 300 起找空位，`/usr/bin/false`、无自己的家目录），
+把 `var/`（数据库、DataProtection 密钥环）与 `logs/`（`launchd` 的 stdout）交给它，并让 `appsettings.json`
+与 `tls/` 变成 `root:_remotedesktop`、0640/0750 —— 服务读得到、其他本机用户读不到。postinstall 结束前会以该
+账号实测读设置、读私钥、写 `var` 与 `logs`；任何一项不通过就把 `UserName`/`GroupName` 从四个 plist 里删掉并
+**退回 root 运行**，安装照常完成（日志里有警告）。`configure-server.sh` 改写设置后会重新应用同一组权限。
 
 ```bash
 sudo installer -pkg <文件>.pkg -target /
 curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个网络服务器都活着
 curl http://127.0.0.1:5090/health      # 监控台
-sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+sudo -u _remotedesktop /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
 sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
 
@@ -221,8 +224,8 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
   provider。
 - **TLS**：不使用（`http`）、生成自签名证书（可填客户端将使用的域名/IP），或使用已有证书
   （PKCS#12，或与 `.key` 同目录同名的 PEM）。
-- 证书口令与连接串写进 `appsettings.json`（`root:wheel`，0644）——安装目录本机其他用户可读，敏感部署
-  要另行收紧目录权限。安装器面板的答案在 `/var/tmp` 里只存在到 postinstall 读取为止。
+- 证书口令与连接串写进 `appsettings.json`（`root:_remotedesktop`，0640 —— 只有服务账号读得到；回退成 root
+  运行时仍是 `root:wheel`）。安装器面板的答案在 `/var/tmp` 里只存在到 postinstall 读取为止。
 - 升级时同一页默认勾选 **保留现有设置**，不会把运维改过的数据库、TLS 或地址覆盖掉。
 
 **无人值守安装**（`sudo installer`、MDM）把同样的答案写到
@@ -249,7 +252,8 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 - **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
   别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
 - **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist、安装目录、
-  文档目录与安装回执；`--keep-settings` 可只删程序）。
+  文档目录与安装回执；`--keep-settings` 可只删程序）。`_remotedesktop` 账号与组会留下，和 Linux 上
+  `remotedesktop` 账号的处理一致——重装后同一份数据仍然属于它。
 - **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.cmd` 一一对应 ——
   同样的选项，跑的是同一个 `--configure-system` 步骤；它现在会重启**三个**守护进程（数据库 provider 与
   监控台共享）。
@@ -733,8 +737,8 @@ sudo -u remotedesktop /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops
   --create-admin admin --config-directory /etc/remotedesktop-server/Ops
 sudo systemctl restart remotedesktop-ops
 
-# macOS
-sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
+# macOS — 以服务账号运行：数据库与它的 -wal/-shm 属于该账号，用 root 建会让监控台之后写不进去
+sudo -u _remotedesktop /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
 sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
 
@@ -788,6 +792,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
 | `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值 |
 | `Ops:AllowInsecureNodeHttp` | `false` | 允许节点令牌经非回环明文 HTTP 发送；仅用于 Compose 等隔离网络，公网节点保持关闭 |
+| `Ops:NodeTokenHosts` | 空 | 节点令牌只允许发往这些主机（裸主机名或 IP，不带协议/端口/路径；回环始终允许）。空 = 沿用"https 或回环"的规则。节点地址由管理员在控制台填写，填了这个列表后，即使管理员会话被拿走也无法把令牌引到列表外的地址 |
 | `Ops:NodeCertificatePath` | 安装包在 TLS 时写入 | 调节点时只信任这张公钥证书，并跳过主机名校验：Linux/macOS 安装包写入本机信令公钥（本机节点用 `127.0.0.1`，证书未必包含它）。这是全局设置——登记了用另一张证书的远程节点时，删掉此键改走系统信任库 |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
@@ -1905,6 +1910,7 @@ remotedesktop --self-check
 - 丢包 / 码率：无来源（见上）。
 - 通知只有 Webhook；SMTP、多通道、静默匹配未做（表已建，等有 UI 再填）。
 - 节点鉴权只有部署级 NodeToken（`Ops:NodeToken` / `Rendezvous:NodeToken` / `Relay:NodeToken`）；每节点令牌未做。
+  在哪之前，`Ops:NodeTokenHosts` 可以把这个令牌的出口收窄到自有的几台服务器（见上面的配置表）。
 - 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，
   未做 SignalR backplane。
 - **历史靠清理任务收敛，不是无限保留**：指标样本、事件、会话与已恢复告警按 `Ops:Retention:*` 每小时删除一次

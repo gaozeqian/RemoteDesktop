@@ -4,6 +4,28 @@
 
 ## [未发布]
 
+### Security — macOS 服务端不再以 root 运行
+
+- **四个守护进程改为专用账号 `_remotedesktop`**：plist 增加 `UserName`/`GroupName`；postinstall 创建隐藏账号
+  （UID/GID 从 300 起找空位、`/usr/bin/false`、无自己的家目录），把 `var/`（数据库与 DataProtection 密钥环）
+  与 `logs/` 交给它，并把 `appsettings.json`、`tls/` 收紧为 `root:_remotedesktop` 的 0640/0750——此前私钥是
+  0600 root，除了 root 谁也读不到，降权也无从谈起。启动前会以该账号实测读设置、读私钥、写两个状态目录；
+  任何一项不通过就从四个 plist 删掉 `UserName`/`GroupName`、退回 root 运行，安装照常完成并在日志里说明。
+- **`configure-server.sh` 重配后重新应用同一组权限**：`--configure-system` 以 root 写出的 0640 `root:wheel`
+  会让服务读不到刚写的设置并进入重启循环。
+- **控制台的 DataProtection 密钥环有了可写的 HOME**：LaunchDaemon 的环境里没有 HOME，密钥环无处落地会让每次
+  重启都让所有人重新登录；Ops 的 plist 把 `HOME` 指向 `var/`。
+- **首个管理员改用服务账号创建**：`sudo -u _remotedesktop ... --create-admin`；用 root 建会让 SQLite 的
+  `-wal`/`-shm` 归 root，监控台之后写不进去。macOS 的卸载不清除 `_remotedesktop` 账号，与 Linux 一致。
+
+### Security — 节点令牌的出站白名单
+
+- **管理员可以把节点指向任意地址，令牌会跟着去**：新增 `Ops:NodeTokenHosts`（裸主机名或 IP）。填了之后，
+  节点令牌只能发往列表内的主机，回环始终允许（安装包登记的本机节点不受影响）；列表外的地址在登记、改地址、
+  抓取、设备代理与管理动作上都直接拒绝，错误信息点名这个键。不填时行为与之前一致。
+- **四处拒绝共用同一句原因**：`NodeHttp.RefusalReason` 统一"明文 HTTP"与"主机不在白名单"两种拒绝的措辞，
+  抓取失败、节点详情、设备代理与动作失败不再各写一份。
+
 ### Fixed — 控制端一次性请求没有超时
 
 - **被控端接受通道后不回答，界面会一直等下去**：文件面板的列目录/改名/删除、终端的列出 shell 与打开、摄像头
