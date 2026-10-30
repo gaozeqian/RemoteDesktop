@@ -1989,6 +1989,13 @@ Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, User
 `agent-*.log`（agent 起来了但连不上服务或接管会话失败）；`startup-error.log`（设置读不出来时服务直接退出）。
 服务被系统拒绝启动时另外看 `Get-WinEvent -LogName System -MaxEvents 50` 里的 Service Control Manager 条目。
 
+**实测结论（2026-10-30，Hyper-V 被控端 VM + 本机控制端）**：服务以 `LocalSystem` 运行、`RemoteDesktop.SessionAgent`
+以登录用户身份运行（提权只读命令确认）；控制端流尺寸如实显示（本次 2048×1152），画面保持比例不拉伸，鼠标四角落点
+对齐——托管形态与渲染都通过。**非 16:9 letterbox 与混合 DPI 的边界**：letterbox 的"等比缩放 + 居中"路径已被
+"画面保持比例"覆盖（它不依赖源宽高比）；"多显示器不同 DPI"在 Hyper-V 里无法构造，且 Windows 单显示器抓屏走物理
+像素、DPI 缩放不影响鼠标映射——所以这一项对 Windows 标注为**不适用**，而非未验证。要字面验证 4:3 源，把 vmconnect
+切到"基础会话"（guest 落到 1024×768）即可。
+
 ### V2 · macOS：服务端专用账户（P0）
 
 **前置**：服务端 `.pkg` 已安装（`sudo installer -pkg RemoteDesktop-Server-macOS-arm64-<版本>.pkg -target /`）。
