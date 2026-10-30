@@ -378,7 +378,12 @@
                                 IsVisible="{Binding !HasFixedPassword}" />
                         <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}"
                                 IsVisible="{Binding HasFixedPassword}" />
-                        <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}"
+                        <!-- "关闭" read as if it turned the feature off temporarily; it deletes the stored password
+                             outright, and there is no undo short of setting it again. The label, the tooltip and the
+                             accessible name now say the same thing. -->
+                        <Button Content="删除" Command="{Binding ClearFixedPasswordCommand}"
+                                AutomationProperties.Name="删除固定密码"
+                                ToolTip.Tip="删除已保存的固定密码；之后只能用临时密码连接，直到重新设置"
                                 IsVisible="{Binding HasFixedPassword}" />
                       </StackPanel>
 
