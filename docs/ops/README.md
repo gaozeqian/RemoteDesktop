@@ -1933,8 +1933,7 @@ remotedesktop --self-check
 ### 已知边界与未做
 
 - 丢包 / 码率：无来源（见上）。
-- 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。多通道目前就这两条，
-  每节点令牌未做。
+- 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。通道目前就这两条。
 - 节点鉴权可以每节点一份令牌（见「每节点令牌」），但**默认仍是部署级**：没设独立令牌的节点共用 `Ops:NodeToken`，
   泄露一个节点的配置仍会暴露其余节点。全部换完后可以把 `Ops:NodeToken` 留空，只有回环调用能直连节点。
   `Ops:NodeTokenHosts` 仍决定令牌能发往哪些主机（见上面的配置表）。
@@ -1945,3 +1944,229 @@ remotedesktop --self-check
   无限长——备份、归档与磁盘容量仍是运维自己的事：每个节点每 10 秒一条样本，十几个节点的部署一年就是数千万行。
 - Windows 侧控制台现在是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
   手工 `sc.exe create` 仍然可行，但不是安装包的做法。
+
+## 十二、上线前真机验收
+
+这一节是发布前要**逐条跑过**的清单：每条给出可直接粘贴的命令、可以对照的判据、以及失败时先看哪个文件。
+V1–V3 是目前唯一没法在 CI 里跑的三项；V4–V8 按需抽查，结果填进文末的记录表。
+
+| 编号 | 平台 | 验证什么 | 优先级 |
+|---|---|---|---|
+| V1 | Windows | 服务托管 + SessionAgent 在登录会话里 | P0 |
+| V2 | macOS | 服务端四个守护进程以 `_remotedesktop` 运行 | P0 |
+| V3 | Linux / Wayland | 多显示器按被共享的那块屏采集 | P0 |
+| V4 | macOS | 公证与 Gatekeeper 放行 | P1 |
+| V5 | Linux | 摄像头授权 / VA-API 硬编 / X11 会话 | P1 |
+| V6 | Windows | 摄像头首帧黑屏（复现记录） | P2 |
+| V7 | 服务器 | QUIC listener 泄漏观察 | P2 |
+| V8 | 服务器 | 控制台新功能抽查（独立令牌 / 静默 / 邮件） | P2 |
+
+**日志在哪。** 失败时先看这张表，不要先重建环境。
+
+| 组件 | Windows | Linux | macOS |
+|---|---|---|---|
+| 客户端崩溃 | `%APPDATA%\RemoteDesktop\crash.log` | `~/.local/share/RemoteDesktop/crash.log` | `~/Library/Application Support/RemoteDesktop/crash.log` |
+| 被控端服务 | `%ProgramData%\RemoteDesktop\logs\service-*.log`、`agent-*.log`、`startup-error.log` | `journalctl --user -u app-RemoteDesktopHost`，同一份文件日志在 `~/.local/share/RemoteDesktop/logs/` | `~/Library/Application Support/RemoteDesktop/logs/service-*.log` |
+| 服务端 | 三个服务 `RemoteDesktopRendezvous` / `RemoteDesktopRelay` / `RemoteDesktopOps`；**没有文件日志**，排错要停服务后以控制台方式运行同一份设置 | `journalctl -u remotedesktop-{rendezvous,relay,ops,gateway}`，文件在 `/var/log/remotedesktop-server/` | `/usr/local/remotedesktop-server/logs/{rendezvous,relay,ops,gateway}.log` |
+
+### V1 · Windows：服务托管与 SessionAgent（P0）
+
+**前置**：客户端 MSI 已安装，当前是**管理员** PowerShell，机器上有一个已登录的交互会话。
+
+```powershell
+Get-Service RemoteDesktopHost | Format-List Status, StartType
+Get-CimInstance Win32_Service -Filter "Name='RemoteDesktopHost'" | Select-Object -ExpandProperty StartName
+Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, UserName
+Restart-Service RemoteDesktopHost; Start-Sleep 5
+Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, UserName
+```
+
+**预期**：`Status=Running`、`StartType=Automatic`；`LocalSystem`；第三行与第五行都能看到 `RemoteDesktop.SessionAgent`，
+`UserName` 是**登录用户名**而不是 `NT AUTHORITY\SYSTEM`。客户端「高级设置 → 服务器与托管」应显示被控端托管方式为
+"后台服务"，且"本机控制端代码"与主页的设备代码是两个不同的值。
+
+**失败看哪里**：`%ProgramData%\RemoteDesktop\logs\service-*.log`（服务起不来、起不了 agent）；同目录的
+`agent-*.log`（agent 起来了但连不上服务或接管会话失败）；`startup-error.log`（设置读不出来时服务直接退出）。
+服务被系统拒绝启动时另外看 `Get-WinEvent -LogName System -MaxEvents 50` 里的 Service Control Manager 条目。
+
+### V2 · macOS：服务端专用账户（P0）
+
+**前置**：服务端 `.pkg` 已安装（`sudo installer -pkg RemoteDesktop-Server-macOS-arm64-<版本>.pkg -target /`）。
+
+```bash
+dscl . -read /Users/_remotedesktop UniqueID PrimaryGroupID NFSHomeDirectory UserShell
+ps -o pid=,user= -p $(pgrep -f RemoteDesktop.Server.Rendezvous)
+ls -ld /usr/local/remotedesktop-server/var
+ls -l /usr/local/remotedesktop-server/Ops/appsettings.json
+grep -c UserName /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
+```
+
+**预期**：`UniqueID` / `PrimaryGroupID` 落在 300–499；`NFSHomeDirectory` 是 `/usr/local/remotedesktop-server/var`；
+`UserShell` 是 `/usr/bin/false`；`ps` 的 user 是 `_remotedesktop`；`var` 是 `drwx------ _remotedesktop _remotedesktop`；
+`appsettings.json` 是 `-rw-r----- root _remotedesktop`；最后一条输出 `1`。
+
+最后一条输出 `0` 说明交接没有通过、按 root 回退了（安装仍然会成功）。原因写在安装日志里：
+
+```bash
+grep -n "could not hand the servers" /var/log/install.log | tail -3
+```
+
+**再验证运维入口**：第一个管理员必须用服务账号创建——用 root 创建会让 SQLite 的 `-wal`/`-shm` 归 root，
+之后监控台写不进去。
+
+```bash
+sudo -u _remotedesktop /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin <用户名>
+sudo launchctl kickstart -k system/com.remotedesktop.ops
+```
+
+**失败看哪里**：`/var/log/install.log`（安装器与 postinstall 的全部输出）；`/usr/local/remotedesktop-server/logs/`
+下对应角色的 `.log`（守护进程读不到设置、证书或数据库时在这里说原因）。
+
+### V3 · Linux / Wayland：多显示器（P0）
+
+**前置**：GNOME Wayland 会话，两块显示器（最好分辨率不同，其中一块 1.5 倍缩放更能暴露进位问题）；被控端已安装并在跑。
+
+```bash
+loginctl show-session "$XDG_SESSION_ID" -p Type -p Active
+systemctl --user status app-RemoteDesktopHost --no-pager
+```
+
+**预期**：`Type=wayland`、`Active=yes`；服务是 `active (running)`。
+
+**场景 A：请求一块没有共享的屏幕。** 从控制端发起连接、被控端弹出共享对话框时**只勾选左屏**；随后在控制端工具栏
+改选右屏。预期：画面是**左屏**，工具栏随之显示左屏的名字，状态栏分辨率等于左屏的物理分辨率。
+
+```bash
+journalctl --user -u app-RemoteDesktopHost --since "10 min ago" | grep "is sharing"
+```
+
+预期出现一条形如 `The desktop is sharing 'DP-1' (2560x1440), not the requested 'HDMI-1'; ...` 的记录（屏幕名与
+尺寸以你的机器为准）。
+
+**场景 B：两块都共享。** 重新连接并在对话框里两块都勾选，来回切换。预期：每次切换后状态栏分辨率与系统设置里那块屏
+一致；把鼠标移到画面四角，被控端指针落在对应的角上，不是边框外，也不是另一块屏。
+
+**自动化部分**（仓库里的真实链路测试；需要 .NET SDK、仓库源码，以及一块能弹对话框的桌面）：
+
+```bash
+RD_PORTAL_TEST=1 dotnet test --project tests/RemoteDesktop.Platform.Linux.UnitTests/RemoteDesktop.Platform.Linux.UnitTests.csproj \
+  -- --filter-class "*PipeWireScreenCapturerTests*" --filter-class "*PortalScreenCastTests*" \
+     --filter-class "*LibEiInputInjectorTests*" --filter-class "*SessionEndToEndTests*"
+```
+
+预期 `0 failed, 0 skipped`；过程中桌面会弹出真实的共享与控制授权框，需要点"允许"。
+
+**失败看哪里**：`journalctl --user -u app-RemoteDesktopHost -n 100 --no-pager`（`is sharing`、授权被拒、
+拷贝帧失败都在这里）；同一份文件日志在 `~/.local/share/RemoteDesktop/logs/service-*.log`。
+
+### V4 · macOS：公证与 Gatekeeper（P1）
+
+**前置**：用**真实的 Developer ID** 构建并公证过的 `.pkg`，不是自签名包。
+
+```bash
+spctl -a -vvv -t install RemoteDesktop-Client-macOS-arm64-<版本>.pkg
+pkgutil --check-signature RemoteDesktop-Client-macOS-arm64-<版本>.pkg
+xcrun stapler validate RemoteDesktop-Client-macOS-arm64-<版本>.pkg
+```
+
+**预期**：第一条输出 `accepted` 且含 `source=Notarized Developer ID`；第二条
+`Status: signed by a developer certificate issued by Apple for distribution`；第三条 `The validate action worked!`。
+
+**失败看哪里**：`spctl` 自己给出的拒绝原因；`xcrun notarytool log <submission-id>` 是 Apple 的逐项说明；打包脚本的
+输出里有签名与公证那一步的原始命令与响应。
+
+### V5 · Linux：摄像头、VA-API 与 X11（P1）
+
+**摄像头**：在被控机上打开客户端窗口「高级设置 → 安全 → 摄像头权限」点「允许」，然后从控制端打开摄像头窗口。
+
+```bash
+journalctl --user -u app-RemoteDesktopHost --since "5 min ago" | grep -i camera
+```
+
+**预期**：控制端能列出摄像头并出图；日志里是打开成功的记录（设备名、分辨率），没有 portal 拒绝。
+
+**VA-API 硬编**：
+
+```bash
+vainfo | grep -E "VAProfileH264|VAEntrypointEncSlice"
+```
+
+**预期**：至少一条 `VAProfileH264High : VAEntrypointEncSlice`；此时控制端状态栏显示"硬件编码"。没有输出说明驱动
+不支持编码，回退软件编码是预期行为，不算失败。
+
+**X11 会话**：注销后选择 "Ubuntu on Xorg" 登录：
+
+```bash
+echo "$XDG_SESSION_TYPE"
+```
+
+**预期**：`x11`；重复 V3 场景 B 的单屏连接，画面与指针都正常。
+
+**失败看哪里**：同样是 `journalctl --user -u app-RemoteDesktopHost`——授权被拒、摄像头被占用、设备打不开都会写在那里。
+
+### V6 · Windows：摄像头首帧黑屏（P2，观察）
+
+**做法**：从控制端打开摄像头窗口 → 开始 → 看 2 秒内是否出图 → 关闭，重复 20 次；记录黑帧出现的次数、每次的分辨率
+与编码器（窗口底部那行）。
+
+**预期**：20 次都在 2 秒内出图。历史上出现过一次 1280×720 首帧全黑、随后正常，至今没有稳定复现路径；这份记录的价值
+是下一次能对上具体的机器、摄像头与次数。
+
+**证据**：`%ProgramData%\RemoteDesktop\logs\agent-*.log` 里同一时刻的摄像头行
+（`Select-String -Path <log> -Pattern camera`），加一张黑帧截图与时间点。
+
+### V7 · 服务器：QUIC listener 泄漏（P2，观察）
+
+**背景**：每次入站连接会新建一个 `QuicListener`，.NET/MsQuic 侧有一个已知的原生泄漏（约 1.2 MB/次，已报上游；
+1.0.0 只限制了并发 32）。这一条不是通过/失败，而是长期部署的体检。
+
+**做法**：服务稳定后取基线，正常使用一天后再取一次，同时记下当天的入站连接量。
+
+```bash
+# Linux / macOS
+ps -o rss= -p $(pgrep -f RemoteDesktop.Server.Rendezvous)
+```
+
+```powershell
+# Windows
+[math]::Round((Get-Process RemoteDesktop.Server.Rendezvous).WorkingSet64 / 1MB)
+```
+
+**判据**：RSS 增长与连接数大致线性、每个连接超过 1 MB 时记下来。没有连接也持续增长，说明是另一类问题，按上面的
+日志继续查。
+
+**失败看哪里**：Linux `journalctl -u remotedesktop-rendezvous`；macOS
+`/usr/local/remotedesktop-server/logs/rendezvous.log`；Windows 服务端没有文件日志，需要停服务后以控制台方式运行。
+
+### V8 · 控制台：独立令牌、静默与邮件（P2，抽查）
+
+三条都是最近才加的实现，CI 里只有合成数据；在真实部署上各走一遍。
+
+**独立令牌**：节点管理 → 某节点「详情」→「生成独立令牌」并复制；**先不改节点配置**，等一个抓取周期（默认 10 秒），
+该节点应变成"抓取失败"。把值填进这台节点的 `Rendezvous:NodeToken`（或 `Relay:NodeToken`），重启节点服务，下一个
+周期恢复"正常"。再点「清除」，节点回到部署级令牌后仍正常。
+
+**静默**：规则页先有一条 `scrape`（抓取失败）规则；把某节点地址临时改成 `http://127.0.0.1:1` 触发一条告警；
+告警出现后点「静默 1 小时」，再把地址改回、让规则恢复并再次触发。预期：告警列表里两次都有记录，但静默窗口内 Webhook/邮件没有新增；审计页有一条
+`silence.create`，解除后有一条 `silence.delete`。
+
+**邮件**：把 `Ops:Notifications:Smtp:Host` 指到 `127.0.0.1:1` 并重启控制台，触发一次告警。预期日志里出现
+`The mail for rule ... was not delivered: cannot reach 127.0.0.1:1`，而 Webhook 仍收到——两条通道互不影响。
+
+**失败看哪里**：Linux `journalctl -u remotedesktop-ops`；macOS `/usr/local/remotedesktop-server/logs/ops.log`；
+Windows 上以控制台方式运行 `RemoteDesktop.Server.Ops.exe` 才有输出。
+
+### 记录表
+
+复制这张表进发布记录，每条验收一行；"证据"写日志文件名与时间点，不要只写"已通过"。
+
+| 日期 | 版本 | 条目 | 结果 | 证据 / 备注 |
+|---|---|---|---|---|
+|  |  | V1 |  |  |
+|  |  | V2 |  |  |
+|  |  | V3 |  |  |
+|  |  | V4 |  |  |
+|  |  | V5 |  |  |
+|  |  | V6 |  |  |
+|  |  | V7 |  |  |
+|  |  | V8 |  |  |
