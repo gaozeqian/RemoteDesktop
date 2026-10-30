@@ -14,6 +14,11 @@ namespace RemoteDesktop.Server.Rendezvous;
 public sealed partial class ConnectionBroker
 {
     private readonly ConcurrentDictionary<string, PendingRequest> _pending = new(StringComparer.Ordinal);
+
+    // The per-device count is kept beside the table rather than walked out of it, and both are updated under the same
+    // gate so the ceiling and the table cannot drift apart under concurrency.
+    private readonly Lock _pendingGate = new();
+    private readonly ConcurrentDictionary<uint, int> _pendingPerDevice = new();
     private readonly DevicePresence _presence;
     private readonly KeyedTokenBucket<uint> _connectBudget;
     private readonly RendezvousOptions _options;
@@ -76,20 +81,14 @@ public sealed partial class ConnectionBroker
             return;
         }
 
-        if (_pending.Count >= _options.MaxPendingRequests || PendingFor(controller.DeviceId) >= _options.MaxPendingRequestsPerDevice)
-        {
-            _metrics.ConnectRequestRefused();
-            LogTooManyPendingRequests(_logger, controller.DeviceId, _pending.Count);
-            await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
         var relay = CreateRelayInfo(out var correlationId);
         var pending = new PendingRequest(controller, host.DeviceId, relay, correlationId);
-        if (!_pending.TryAdd(request.RequestId, pending))
+        if (!TryAdmit(request.RequestId, pending))
         {
-            // The same request id is already waiting: a refusal this request id gets instead of a second entry.
+            // Refused for one of three reasons: the global table is full, this device already has its share pending, or
+            // the same request id is already waiting. All three get the same refusal.
             _metrics.ConnectRequestRefused();
+            LogTooManyPendingRequests(_logger, controller.DeviceId, _pending.Count);
             await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -155,7 +154,7 @@ public sealed partial class ConnectionBroker
 
         if (_pending.TryGetValue(requestId, out pending!) && pending.HostDeviceId == host.DeviceId)
         {
-            return _pending.TryRemove(new KeyValuePair<string, PendingRequest>(requestId, pending));
+            return TryRemovePending(requestId, pending);
         }
 
         return false;
@@ -164,7 +163,7 @@ public sealed partial class ConnectionBroker
     private async Task ExpireAsync(string requestId, PendingRequest pending)
     {
         await Task.Delay(_options.ConnectTimeout, _time).ConfigureAwait(false);
-        if (_pending.TryRemove(new KeyValuePair<string, PendingRequest>(requestId, pending)))
+        if (TryRemovePending(requestId, pending))
         {
             Publish(OpsEventKinds.SessionFailed, pending.CorrelationId, new { reason = "timeout" });
             await FailAsync(pending.Controller, requestId, FailureReason.Timeout, CancellationToken.None).ConfigureAwait(false);
@@ -172,22 +171,42 @@ public sealed partial class ConnectionBroker
     }
 
     /// <summary>
-    /// Counts by walking the table instead of keeping a counter beside it: the table is capped, the requests that get
-    /// this far are rate limited, and a number that cannot drift out of step with the table is worth more than the
-    /// microseconds the walk costs.
+    /// Reserves a request under the gate: the ceiling check, the insert and the per-device count are one step, so two
+    /// concurrent requests from the same device cannot both see space and both slip past the ceiling.
     /// </summary>
-    private int PendingFor(uint deviceId)
+    private bool TryAdmit(string requestId, PendingRequest pending)
     {
-        var count = 0;
-        foreach (var (_, pending) in _pending)
+        lock (_pendingGate)
         {
-            if (pending.Controller.DeviceId == deviceId)
+            if (_pending.Count >= _options.MaxPendingRequests
+                || _pendingPerDevice.GetValueOrDefault(pending.Controller.DeviceId) >= _options.MaxPendingRequestsPerDevice)
             {
-                count++;
+                return false;
             }
-        }
 
-        return count;
+            if (!_pending.TryAdd(requestId, pending))
+            {
+                return false;
+            }
+
+            _pendingPerDevice.AddOrUpdate(pending.Controller.DeviceId, 1, static (_, count) => count + 1);
+            return true;
+        }
+    }
+
+    /// <summary>Removes a request and its per-device count together, so the counter cannot drift out of step.</summary>
+    private bool TryRemovePending(string requestId, PendingRequest pending)
+    {
+        lock (_pendingGate)
+        {
+            if (!_pending.TryRemove(new KeyValuePair<string, PendingRequest>(requestId, pending)))
+            {
+                return false;
+            }
+
+            _pendingPerDevice.AddOrUpdate(pending.Controller.DeviceId, 0, static (_, count) => count - 1);
+            return true;
+        }
     }
 
     private RelayInfo? CreateRelayInfo(out Guid correlationId)

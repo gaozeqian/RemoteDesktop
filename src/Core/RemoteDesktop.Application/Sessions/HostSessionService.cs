@@ -184,12 +184,14 @@ public sealed partial class HostSessionService(
                     await SendCurrentInputAccessAsync(hosted, end.Token).ConfigureAwait(false);
                 }
 
-                keepAwake?.Acquire();
-                telemetry.Track(session, end.Token);
-                lifecycle.Track(session, end.Token);
-                SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {
+                    // Fenced off from the session's lifetime: an event handler that throws must not prevent the cleanup
+                    // in the finally below, nor escape ServeAsync as an unobserved task exception.
+                    keepAwake?.Acquire();
+                    telemetry.Track(session, end.Token);
+                    lifecycle.Track(session, end.Token);
+                    RaiseSessionEvent(SessionStarted, session, nameof(SessionStarted));
                     await RunSessionAsync(hosted).ConfigureAwait(false);
                 }
                 finally
@@ -200,7 +202,7 @@ public sealed partial class HostSessionService(
                     hosted.Dispose();
                     keepAwake?.Release();
                     LogSessionEnded(logger, session.Id);
-                    SessionEnded?.Invoke(this, new HostSessionEventArgs(session));
+                    RaiseSessionEvent(SessionEnded, session, nameof(SessionEnded));
                 }
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or SessionException or OperationCanceledException)
@@ -214,6 +216,29 @@ public sealed partial class HostSessionService(
                     await control.DisposeAsync().ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Raises a session event without letting a handler's exception end the session's lifetime: the session must
+    /// still run, and its cleanup must still happen.
+    /// </summary>
+    private void RaiseSessionEvent(EventHandler<HostSessionEventArgs>? handler, SessionContext session, string name)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(this, new HostSessionEventArgs(session));
+        }
+#pragma warning disable CA1031 // A handler's exception must not end the session.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogSessionEventFailed(logger, session.Id, name, ex);
         }
     }
 
@@ -589,4 +614,7 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Session {SessionId}: {Channel} channel failed.")]
     private static partial void LogChannelFailed(ILogger logger, SessionId sessionId, ChannelType channel, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: the {Handler} handler threw; the session proceeds.")]
+    private static partial void LogSessionEventFailed(ILogger logger, SessionId sessionId, string handler, Exception exception);
 }

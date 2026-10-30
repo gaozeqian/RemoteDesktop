@@ -170,36 +170,53 @@ public sealed partial class SignalingEndpoint(
         while (true)
         {
             var message = await WebSocketMessaging.ReceiveAsync(socket, ClientMessage.Parser, cancellationToken).ConfigureAwait(false);
-            switch (message?.BodyCase)
+            if (message is null)
             {
-                case null:
-                    await CloseAsync(socket, WebSocketCloseStatus.NormalClosure, null).ConfigureAwait(false);
-                    return;
-                case ClientMessage.BodyOneofCase.ConnectRequest:
-                    await broker.HandleConnectRequestAsync(session, message.ConnectRequest, cancellationToken).ConfigureAwait(false);
-                    break;
-                case ClientMessage.BodyOneofCase.ConnectAccept:
-                    await broker.HandleAcceptAsync(session, message.ConnectAccept, cancellationToken).ConfigureAwait(false);
-                    break;
-                case ClientMessage.BodyOneofCase.ConnectReject:
-                    await broker.HandleRejectAsync(session, message.ConnectReject, cancellationToken).ConfigureAwait(false);
-                    break;
-                case ClientMessage.BodyOneofCase.PresenceQuery:
-                    await presenceQueries.HandleQueryAsync(session, message.PresenceQuery, cancellationToken).ConfigureAwait(false);
-                    break;
-                case ClientMessage.BodyOneofCase.Telemetry:
-                    // Fire-and-forget, and synchronous on purpose: it validates, rate-limits and queues, and the queue
-                    // drops rather than waits, so a flood of heartbeats cannot hold this loop.
-                    telemetry.Handle(session, message.Telemetry);
-                    break;
-                case ClientMessage.BodyOneofCase.SessionEnded:
-                    // The only end fact a direct session has; same fire-and-forget contract as a heartbeat.
-                    telemetry.HandleSessionEnded(session, message.SessionEnded);
-                    break;
-                default:
-                    // Unknown or out-of-order message: ignore so newer clients keep working.
-                    break;
+                await CloseAsync(socket, WebSocketCloseStatus.NormalClosure, null).ConfigureAwait(false);
+                return;
             }
+
+            try
+            {
+                await HandleMessageAsync(session, message, cancellationToken).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // One bad message must not take down the device's whole connection.
+            catch (Exception ex) when (ex is not OperationCanceledException)
+#pragma warning restore CA1031
+            {
+                LogMessageFailed(logger, session.DeviceId, ex);
+            }
+        }
+    }
+
+    private async Task HandleMessageAsync(DeviceSession session, ClientMessage message, CancellationToken cancellationToken)
+    {
+        switch (message.BodyCase)
+        {
+            case ClientMessage.BodyOneofCase.ConnectRequest:
+                await broker.HandleConnectRequestAsync(session, message.ConnectRequest, cancellationToken).ConfigureAwait(false);
+                break;
+            case ClientMessage.BodyOneofCase.ConnectAccept:
+                await broker.HandleAcceptAsync(session, message.ConnectAccept, cancellationToken).ConfigureAwait(false);
+                break;
+            case ClientMessage.BodyOneofCase.ConnectReject:
+                await broker.HandleRejectAsync(session, message.ConnectReject, cancellationToken).ConfigureAwait(false);
+                break;
+            case ClientMessage.BodyOneofCase.PresenceQuery:
+                await presenceQueries.HandleQueryAsync(session, message.PresenceQuery, cancellationToken).ConfigureAwait(false);
+                break;
+            case ClientMessage.BodyOneofCase.Telemetry:
+                // Fire-and-forget, and synchronous on purpose: it validates, rate-limits and queues, and the queue
+                // drops rather than waits, so a flood of heartbeats cannot hold this loop.
+                telemetry.Handle(session, message.Telemetry);
+                break;
+            case ClientMessage.BodyOneofCase.SessionEnded:
+                // The only end fact a direct session has; same fire-and-forget contract as a heartbeat.
+                telemetry.HandleSessionEnded(session, message.SessionEnded);
+                break;
+            default:
+                // Unknown or out-of-order message: ignore so newer clients keep working.
+                break;
         }
     }
 
@@ -230,4 +247,7 @@ public sealed partial class SignalingEndpoint(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a registration from device {DeviceId}: it has been revoked.")]
     private static partial void LogRefusedRevoked(ILogger logger, uint deviceId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Device {DeviceId}: a message handler failed; the connection continues.")]
+    private static partial void LogMessageFailed(ILogger logger, uint deviceId, Exception exception);
 }

@@ -343,17 +343,30 @@ public sealed partial class TerminalEmulator
 
     private void ScrollUp(int count)
     {
-        count = Math.Min(count, _scrollBottom - _scrollTop + 1);
+        var height = _scrollBottom - _scrollTop + 1;
+        count = Math.Min(count, height);
+
+        // The rows that scroll off the top, in the order they leave.
+        var removed = new TerminalLine[count];
         for (var i = 0; i < count; i++)
         {
-            var removed = _screen[_scrollTop];
-            Array.Copy(_screen, _scrollTop + 1, _screen, _scrollTop, _scrollBottom - _scrollTop);
+            removed[i] = _screen[_scrollTop + i];
+        }
+
+        // Shift the rest up in one move, then blank the bottom — O(height) rather than O(count × height).
+        Array.Copy(_screen, _scrollTop + count, _screen, _scrollTop, height - count);
+        for (var i = height - count; i < height; i++)
+        {
             var fresh = new TerminalLine(Columns);
             EraseCells(fresh, 0, Columns);
-            _screen[_scrollBottom] = fresh;
-            if (!_alternateActive && _scrollTop == 0)
+            _screen[_scrollTop + i] = fresh;
+        }
+
+        if (!_alternateActive && _scrollTop == 0)
+        {
+            foreach (var line in removed)
             {
-                _scrollback.Add(removed);
+                _scrollback.Add(line);
             }
         }
 
@@ -362,13 +375,16 @@ public sealed partial class TerminalEmulator
 
     private void ScrollDown(int count)
     {
-        count = Math.Min(count, _scrollBottom - _scrollTop + 1);
+        var height = _scrollBottom - _scrollTop + 1;
+        count = Math.Min(count, height);
+
+        // Shift down in one move, then blank the top.
+        Array.Copy(_screen, _scrollTop, _screen, _scrollTop + count, height - count);
         for (var i = 0; i < count; i++)
         {
-            Array.Copy(_screen, _scrollTop, _screen, _scrollTop + 1, _scrollBottom - _scrollTop);
             var fresh = new TerminalLine(Columns);
             EraseCells(fresh, 0, Columns);
-            _screen[_scrollTop] = fresh;
+            _screen[_scrollTop + i] = fresh;
         }
 
         _dirty = true;

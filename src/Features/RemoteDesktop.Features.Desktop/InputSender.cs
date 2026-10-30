@@ -13,7 +13,16 @@ namespace RemoteDesktop.Features.Desktop;
 public sealed class InputSender : IAsyncDisposable
 {
     private readonly IChannel _channel;
-    private readonly Channel<InputEvent> _queue = Channel.CreateUnbounded<InputEvent>(new UnboundedChannelOptions { SingleReader = true });
+
+    // Bounded: pointer moves are coalesced, but a slow link must not let the rest of the input (keys, buttons, wheel)
+    // grow without limit. When the queue is full the newest event is dropped rather than the oldest — dropping an old
+    // key press could leave a key looking stuck.
+    private readonly Channel<InputEvent> _queue = Channel.CreateBounded<InputEvent>(
+        new BoundedChannelOptions(1024)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
     private readonly CancellationTokenSource _stop = new();
     private Task _loop = Task.CompletedTask;
 

@@ -517,6 +517,8 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
     {
         var pixels = frame.GetPixels(out var stride);
         var length = stride * frame.Height;
+
+        byte[] buffer;
         lock (_gate)
         {
             if (_disposed)
@@ -528,13 +530,26 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
             // grace, so a controller that reconnects inside it gets the desktop as it is now. Dropping it there
             // consumed the change — DXGI only reports what is new since the last frame — and the picture before
             // the change became permanent.
-            var buffer = _pool.Count > 0 ? _pool.Pop() : [];
-            if (buffer.Length < length)
+            buffer = _pool.Count > 0 ? _pool.Pop() : [];
+        }
+
+        if (buffer.Length < length)
+        {
+            buffer = new byte[length];
+        }
+
+        // The copy is the expensive part and must not hold _gate: WaitForFrame, TakeFrame and the cursor readers all
+        // take the same lock, and a 4K memcpy here would serialize them behind the capture loop.
+        pixels[..length].CopyTo(buffer);
+
+        lock (_gate)
+        {
+            if (_disposed)
             {
-                buffer = new byte[length];
+                // The share went away while the copy ran; the buffer is dropped rather than returned to a dead pool.
+                return;
             }
 
-            pixels[..length].CopyTo(buffer);
             var next = new SharedFrame(
                 buffer, frame.Width, frame.Height, stride, frame.Timestamp, ++_version, Stopwatch.GetTimestamp(), ReturnBuffer);
             var previous = _latest;

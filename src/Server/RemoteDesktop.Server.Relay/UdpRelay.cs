@@ -30,6 +30,10 @@ public sealed partial class UdpRelay : IDisposable
     private readonly ILogger<UdpRelay> _logger;
     private readonly Dictionary<Guid, Pairing> _pairings = [];
     private readonly Dictionary<IPEndPoint, Route> _routes = [];
+
+    // Reverse index: which pairing, if any, holds this endpoint. Kept beside _routes so "is this endpoint already
+    // bound to another session?" is a lookup instead of a scan of every pairing.
+    private readonly Dictionary<IPEndPoint, Pairing> _endpoints = [];
     private DateTimeOffset _nextCleanup;
 
     // Exported numbers. The receive loop owns the tables above and runs on one thread; these five are read from an HTTP
@@ -245,6 +249,8 @@ public sealed partial class UdpRelay : IDisposable
             pairing.Host = from;
         }
 
+        _endpoints[from] = pairing;
+
         pairing.LastActivity = _time.GetUtcNow();
         if (pairing.Controller is not null && pairing.Host is not null)
         {
@@ -282,18 +288,20 @@ public sealed partial class UdpRelay : IDisposable
     }
 
     private bool IsBoundElsewhere(IPEndPoint endPoint, Pairing except) =>
-        _pairings.Values.Any(p => p != except && (endPoint.Equals(p.Controller) || endPoint.Equals(p.Host)));
+        _endpoints.TryGetValue(endPoint, out var owner) && owner != except;
 
     private void Unroute(Pairing pairing)
     {
         if (pairing.Controller is not null)
         {
             _routes.Remove(pairing.Controller);
+            _endpoints.Remove(pairing.Controller);
         }
 
         if (pairing.Host is not null)
         {
             _routes.Remove(pairing.Host);
+            _endpoints.Remove(pairing.Host);
         }
     }
 

@@ -139,7 +139,17 @@ internal sealed partial class DxgiScreenCapturer : IScreenCapturer
         ArgumentNullException.ThrowIfNull(logger);
         Display = display;
         _logger = logger;
-        Initialize();
+        try
+        {
+            Initialize();
+        }
+        catch
+        {
+            // The factory falls back to GDI and drops this instance, so anything Initialize created — the device and
+            // context in particular — must be released here or it leaks.
+            ReleaseAll();
+            throw;
+        }
     }
 
     public DisplayInfo Display { get; }

@@ -60,7 +60,11 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
     private IVideoDecoder? _decoder;
-    private byte[] _bgra = [];
+
+    // Two buffers: the decode loop converts into _back outside the lock and swaps, while the UI copies _front under
+    // the lock. Only the decode loop touches _back; _front is guarded by _frameLock.
+    private byte[] _front = [];
+    private byte[] _back = [];
     private long _frameNumber;
     private volatile bool _waitingForKeyFrame = true;
     private volatile string? _failure;
@@ -217,7 +221,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
             var rowBytes = width * 4;
             for (var y = 0; y < height; y++)
             {
-                _bgra.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
+                _front.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
             }
 
             return _frameNumber;
@@ -300,9 +304,13 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
                 using (picture)
                 {
+                    // Convert into the back buffer outside the lock: the UI copies the front buffer under the same
+                    // lock, and a full-frame colour conversion here must not serialize the two against each other.
+                    ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _back, picture.Width * 4);
+
                     lock (_frameLock)
                     {
-                        ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _bgra, picture.Width * 4);
+                        (_front, _back) = (_back, _front);
                         _frameNumber++;
                     }
                 }
@@ -388,9 +396,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
         _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
         lock (_frameLock)
         {
-            if (_bgra.Length != width * height * 4)
+            if (_front.Length != width * height * 4)
             {
-                _bgra = new byte[width * height * 4];
+                _front = new byte[width * height * 4];
+                _back = new byte[width * height * 4];
             }
 
             _frameNumber = 0;

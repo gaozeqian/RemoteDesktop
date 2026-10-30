@@ -39,11 +39,17 @@ public sealed partial class PartialFileLedger
     public const int DefaultMaxEntries = 1024;
 
     private readonly Lock _lock = new();
+
+    // Serialises the disk write and rejects stale snapshots. The snapshot is taken under _lock, but the write itself
+    // runs under _writeLock so a slow disk never blocks the in-memory bookkeeping of another transfer.
+    private readonly Lock _writeLock = new();
     private readonly Dictionary<string, LinkedListNode<string>> _paths = new(StringComparer.OrdinalIgnoreCase);
     private readonly LinkedList<string> _order = new();
     private readonly ILogger<PartialFileLedger> _logger;
     private readonly int _maxEntries;
     private bool _loaded;
+    private long _saveVersion;
+    private long _writtenVersion;
 
     public PartialFileLedger(PartialFileLedgerOptions options, ILogger<PartialFileLedger> logger)
     {
@@ -64,6 +70,8 @@ public sealed partial class PartialFileLedger
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(partialPath);
 
+        string[] snapshot;
+        long version;
         lock (_lock)
         {
             LoadIfNeeded();
@@ -78,8 +86,11 @@ public sealed partial class PartialFileLedger
                 DropOldest();
             }
 
-            Save();
+            version = ++_saveVersion;
+            snapshot = [.. _order];
         }
+
+        Save(snapshot, version);
     }
 
     /// <summary>Drops a partial file from the list: it was finished, discarded or deleted.</summary>
@@ -87,14 +98,22 @@ public sealed partial class PartialFileLedger
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(partialPath);
 
+        string[]? snapshot = null;
+        long version = 0;
         lock (_lock)
         {
             LoadIfNeeded();
             if (_paths.Remove(partialPath, out var node))
             {
                 _order.Remove(node);
-                Save();
+                version = ++_saveVersion;
+                snapshot = [.. _order];
             }
+        }
+
+        if (snapshot is not null)
+        {
+            Save(snapshot, version);
         }
     }
 
@@ -157,21 +176,31 @@ public sealed partial class PartialFileLedger
         }
     }
 
-    private void Save()
+    private void Save(string[] entries, long version)
     {
-        try
+        lock (_writeLock)
         {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LedgerPath)!);
-            var temporary = LedgerPath + ".tmp";
-            File.WriteAllLines(temporary, _order);
+            if (version <= _writtenVersion)
+            {
+                // A newer snapshot has already been written; this stale one must not overwrite it.
+                return;
+            }
 
-            // Written beside the file and moved into place: a list that is interrupted must not become half a list.
-            File.Move(temporary, LedgerPath, overwrite: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // The transfer itself is unaffected; the cost is that this file is not cleaned up later.
-            LogUnwritable(_logger, LedgerPath, ex.Message);
+            _writtenVersion = version;
+            try
+            {
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LedgerPath)!);
+                var temporary = LedgerPath + ".tmp";
+                File.WriteAllLines(temporary, entries);
+
+                // Written beside the file and moved into place: a list that is interrupted must not become half a list.
+                File.Move(temporary, LedgerPath, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The transfer itself is unaffected; the cost is that this file is not cleaned up later.
+                LogUnwritable(_logger, LedgerPath, ex.Message);
+            }
         }
     }
 

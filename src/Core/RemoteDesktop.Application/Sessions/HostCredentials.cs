@@ -59,8 +59,11 @@ public sealed class HostCredentials(TimeProvider? time = null)
         // through the same door as the one the interface shows, so a password that has aged out no longer opens
         // anything even if nobody has looked at the window since.
         var temporary = PasswordProof.Verify(proof, CurrentTemporaryPassword(), nonce, hostFingerprint, controllerFingerprint);
-        var fixedPassword = _fixedPassword;
-        var fixedMatch = fixedPassword is not null && PasswordProof.Verify(proof, fixedPassword, nonce, hostFingerprint, controllerFingerprint);
+
+        // The fixed password is also always evaluated, even when none is configured, so the timing of this method does
+        // not reveal whether the device has one. An empty string costs the same PBKDF2 work but can never match a
+        // well-formed proof, because the fixed password setter refuses an empty value.
+        var fixedMatch = PasswordProof.Verify(proof, _fixedPassword ?? string.Empty, nonce, hostFingerprint, controllerFingerprint);
         return temporary | fixedMatch;
     }
 

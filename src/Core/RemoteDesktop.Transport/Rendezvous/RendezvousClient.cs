@@ -91,9 +91,8 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                 backoff = TimeSpan.FromSeconds(1);
                 SetState(RendezvousState.Online);
 
-                // Two loops share the socket: the receive loop owns reads, the heartbeat loop owns the telemetry
-                // channel. Sends are still serialised by _sendLock, so a heartbeat cannot interleave with a connect
-                // request mid-frame.
+                // The receive loop owns reads; the heartbeat and session-end loops each own one outbound queue. Sends
+                // are still serialised by _sendLock, so a heartbeat cannot interleave with a connect request mid-frame.
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var receive = ReceiveLoopAsync(socket, connection.Token);
                 var heartbeat = TelemetryLoopAsync(socket, connection.Token);
@@ -207,7 +206,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         {
             await foreach (var report in _telemetry.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await WebSocketMessaging.SendAsync(socket, new ClientMessage { Telemetry = report }, cancellationToken).ConfigureAwait(false);
+                await SendLockedAsync(socket, new ClientMessage { Telemetry = report }, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
@@ -230,7 +229,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         {
             await foreach (var report in _sessionEnds.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await WebSocketMessaging.SendAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                await SendLockedAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
@@ -404,14 +403,29 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     private async Task SendAsync(IMessage message, CancellationToken cancellationToken)
     {
         var socket = _socket ?? throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.");
+        try
+        {
+            await SendLockedAsync(socket, message, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is WebSocketException or ObjectDisposedException)
+        {
+            // ObjectDisposedException: the reconnect loop cleared and released the socket between this method reading
+            // _socket and the send reaching it. Same answer as a lost connection.
+            throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.", ex);
+        }
+    }
+
+    /// <summary>
+    /// All sends — connect requests, heartbeats and session-end reports — go through this one lock. A
+    /// <see cref="ClientWebSocket"/> does not allow concurrent <see cref="WebSocket.SendAsync"/>, and the three loops
+    /// that write to the socket would otherwise interleave mid-frame.
+    /// </summary>
+    private async Task SendLockedAsync(WebSocket socket, IMessage message, CancellationToken cancellationToken)
+    {
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await WebSocketMessaging.SendAsync(socket, message, cancellationToken).ConfigureAwait(false);
-        }
-        catch (WebSocketException ex)
-        {
-            throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.", ex);
         }
         finally
         {
