@@ -4,7 +4,11 @@ namespace RemoteDesktop.Features.FileTransfer;
 
 /// <summary>Where the list of unfinished transfers is kept; empty means nothing is tracked or swept.</summary>
 /// <param name="Path">The file holding the list.</param>
-public sealed record PartialFileLedgerOptions(string Path)
+/// <param name="MaxEntries">
+/// How many partial files are tracked at once. A controller that abandons one attempt after another adds a record each
+/// time, so the list needs an upper bound; the newest records are the ones a resumed transfer can still use.
+/// </param>
+public sealed record PartialFileLedgerOptions(string Path, int MaxEntries = PartialFileLedger.DefaultMaxEntries)
 {
     /// <summary>Whether a list is worth keeping at all.</summary>
     public bool IsEnabled => !string.IsNullOrWhiteSpace(Path);
@@ -22,15 +26,23 @@ public sealed record PartialFileLedgerOptions(string Path)
 /// <see cref="PartialFileSweeper"/> for what acts on it.
 /// </para>
 /// <para>
-/// Writes go through a temporary file and a move, so a list that is interrupted is never half a list. Reading is
-/// best effort: a list that cannot be read costs the cleanup, not the transfers.
+/// The list is bounded: past <see cref="PartialFileLedgerOptions.MaxEntries"/> the oldest record is dropped, so a host
+/// cannot be made to keep — or rewrite — an ever longer file. Writing is a whole-file rewrite through a temporary file
+/// and a move, which keeps an interrupted write from leaving half a list behind and keeps the per-write cost at the
+/// cap rather than at the number of attempts ever made. Reading is best effort: a list that cannot be read costs the
+/// cleanup, not the transfers.
 /// </para>
 /// </remarks>
 public sealed partial class PartialFileLedger
 {
+    /// <summary>The number of records kept when the caller does not say otherwise.</summary>
+    public const int DefaultMaxEntries = 1024;
+
     private readonly Lock _lock = new();
-    private readonly HashSet<string> _paths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LinkedListNode<string>> _paths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly LinkedList<string> _order = new();
     private readonly ILogger<PartialFileLedger> _logger;
+    private readonly int _maxEntries;
     private bool _loaded;
 
     public PartialFileLedger(PartialFileLedgerOptions options, ILogger<PartialFileLedger> logger)
@@ -39,6 +51,7 @@ public sealed partial class PartialFileLedger
         ArgumentNullException.ThrowIfNull(logger);
 
         LedgerPath = options.Path;
+        _maxEntries = Math.Max(1, options.MaxEntries);
         _logger = logger;
     }
 
@@ -54,10 +67,18 @@ public sealed partial class PartialFileLedger
         lock (_lock)
         {
             LoadIfNeeded();
-            if (_paths.Add(partialPath))
+            if (_paths.ContainsKey(partialPath))
             {
-                Save();
+                return;
             }
+
+            _paths.Add(partialPath, _order.AddLast(partialPath));
+            while (_order.Count > _maxEntries)
+            {
+                DropOldest();
+            }
+
+            Save();
         }
     }
 
@@ -69,8 +90,9 @@ public sealed partial class PartialFileLedger
         lock (_lock)
         {
             LoadIfNeeded();
-            if (_paths.Remove(partialPath))
+            if (_paths.Remove(partialPath, out var node))
             {
+                _order.Remove(node);
                 Save();
             }
         }
@@ -82,8 +104,21 @@ public sealed partial class PartialFileLedger
         lock (_lock)
         {
             LoadIfNeeded();
-            return [.. _paths];
+            return [.. _order];
         }
+    }
+
+    private void DropOldest()
+    {
+        var oldest = _order.First;
+        if (oldest is null)
+        {
+            return;
+        }
+
+        _order.RemoveFirst();
+        _paths.Remove(oldest.Value);
+        LogEvicted(_logger, oldest.Value);
     }
 
     private void LoadIfNeeded()
@@ -103,10 +138,17 @@ public sealed partial class PartialFileLedger
 
             foreach (var line in File.ReadAllLines(LedgerPath))
             {
-                if (!string.IsNullOrWhiteSpace(line))
+                var path = line.Trim();
+                if (path.Length > 0 && !_paths.ContainsKey(path))
                 {
-                    _paths.Add(line.Trim());
+                    _paths.Add(path, _order.AddLast(path));
                 }
+            }
+
+            // A list written before the cap existed, or by hand, may be longer than this process will keep.
+            while (_order.Count > _maxEntries)
+            {
+                DropOldest();
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -121,7 +163,7 @@ public sealed partial class PartialFileLedger
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LedgerPath)!);
             var temporary = LedgerPath + ".tmp";
-            File.WriteAllLines(temporary, _paths);
+            File.WriteAllLines(temporary, _order);
 
             // Written beside the file and moved into place: a list that is interrupted must not become half a list.
             File.Move(temporary, LedgerPath, overwrite: true);
@@ -138,4 +180,7 @@ public sealed partial class PartialFileLedger
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The list of unfinished transfers at {Path} could not be written: {Reason}")]
     private static partial void LogUnwritable(ILogger logger, string path, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Stopped tracking the unfinished transfer {Path}: the list is full and it is the oldest record.")]
+    private static partial void LogEvicted(ILogger logger, string path);
 }

@@ -70,6 +70,39 @@ public sealed class PartialFileSweeperTests : IDisposable
         Assert.Empty(ledger.Entries());
     }
 
+    /// <summary>
+    /// A controller can abandon one attempt after another, each with a different size and time in its name. The list
+    /// must not grow with them: past the cap the oldest record goes, because that is the one a resumed transfer is
+    /// least likely to still want.
+    /// </summary>
+    [Fact]
+    public void The_list_keeps_the_newest_records_when_it_is_full()
+    {
+        var ledger = Ledger(maxEntries: 3);
+        foreach (var name in new[] { "a", "b", "c", "d" })
+        {
+            ledger.Record(Path.Combine(_folder, name + ".1-a.rdpart"));
+        }
+
+        Assert.Equal(
+            [
+                Path.Combine(_folder, "b.1-a.rdpart"),
+                Path.Combine(_folder, "c.1-a.rdpart"),
+                Path.Combine(_folder, "d.1-a.rdpart"),
+            ],
+            Ledger().Entries());
+    }
+
+    /// <summary>A list written before the cap existed — or by hand — is trimmed when it is read, not carried around.</summary>
+    [Fact]
+    public void A_list_longer_than_the_cap_is_trimmed_oldest_first_when_it_is_read()
+    {
+        var records = Enumerable.Range(0, 5).Select(i => Path.Combine(_folder, $"movie.mp4.{i}-a.rdpart")).ToArray();
+        System.IO.File.WriteAllLines(Path.Combine(_folder, "partial-files.log"), records);
+
+        Assert.Equal(records[^3..], Ledger(maxEntries: 3).Entries());
+    }
+
     /// <summary>The transfer itself must not be able to notice the list: a file it cannot write is not its problem.</summary>
     [Fact]
     public void A_list_that_cannot_be_written_costs_the_cleanup_and_nothing_else()
@@ -85,8 +118,8 @@ public sealed class PartialFileSweeperTests : IDisposable
         Assert.Single(ledger.Entries()); // it is still tracked in memory, which is all this process can do
     }
 
-    private PartialFileLedger Ledger() =>
-        new(new PartialFileLedgerOptions(Path.Combine(_folder, "partial-files.log")), NullLogger<PartialFileLedger>.Instance);
+    private PartialFileLedger Ledger(int maxEntries = PartialFileLedger.DefaultMaxEntries) =>
+        new(new PartialFileLedgerOptions(Path.Combine(_folder, "partial-files.log"), maxEntries), NullLogger<PartialFileLedger>.Instance);
 
     private string WriteFile(string path, string contents)
     {

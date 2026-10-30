@@ -7,8 +7,9 @@ namespace RemoteDesktop.Features.FileTransfer;
 /// Deletes the unfinished transfers nobody came back for.
 /// </summary>
 /// <remarks>
-/// Runs once, when the host starts: a session that begins when somebody logs in is soon enough for files that are
-/// counted in days, and it means no timer is left running on a machine that does not need one. A file that is being
+/// Sweeps when the host starts and then every <see cref="Interval"/>. Starting a session is still not held up by it —
+/// the first pass runs on a worker thread — but a machine that stays up for weeks no longer keeps abandoned parts
+/// until its next restart, which is what a list that only counted on startup amounted to. A file that is being
 /// written right now has a current modification time and is left alone, whatever the list says.
 /// </remarks>
 public sealed partial class PartialFileSweeper(
@@ -21,6 +22,12 @@ public sealed partial class PartialFileSweeper(
     /// file; not so long that a folder quietly collects them.
     /// </summary>
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// How often the sweep runs. A transfer that expires is removed within one interval of the retention time, and a
+    /// record whose file is gone is dropped within one as well.
+    /// </summary>
+    public static readonly TimeSpan Interval = TimeSpan.FromHours(6);
 
     /// <returns>How many files were removed.</returns>
     public int Sweep()
@@ -58,10 +65,39 @@ public sealed partial class PartialFileSweeper(
         return removed;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Off the startup path: starting a session should not wait for a directory walk.
-        return Task.Run(Sweep, stoppingToken);
+        using var timer = new PeriodicTimer(Interval, time);
+        do
+        {
+            try
+            {
+                // Off the startup path: starting a session should not wait for a directory walk.
+                await Task.Run(Sweep, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // One pass that fails is no reason to stop the next one; the list itself is untouched.
+                LogSweepFailed(logger, ex.Message);
+            }
+        }
+        while (await WaitAsync(timer, stoppingToken).ConfigureAwait(false));
+    }
+
+    private static async Task<bool> WaitAsync(PeriodicTimer timer, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Removed the unfinished transfer {Path}: nobody came back for it.")]
@@ -69,4 +105,7 @@ public sealed partial class PartialFileSweeper(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Kept the unfinished transfer {Path}: {Reason}")]
     private static partial void LogKept(ILogger logger, string path, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A sweep of the unfinished transfers failed: {Reason}")]
+    private static partial void LogSweepFailed(ILogger logger, string reason);
 }
