@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
 
@@ -87,7 +86,8 @@ public sealed partial class MetricScraper(
     private async Task<bool> ScrapeAsync(OpsNode node, CancellationToken cancellationToken)
     {
         var timestamp = time.GetUtcNow().ToUnixTimeMilliseconds();
-        if (NodeHttp.RefusalReason(node.BaseUrl, options) is { } refusal)
+        var token = NodeHttp.TokenFor(node, options);
+        if (NodeHttp.RefusalReason(node.BaseUrl, token, options) is { } refusal)
         {
             await RecordFailureAsync(node, timestamp, refusal, cancellationToken).ConfigureAwait(false);
             return false;
@@ -97,10 +97,7 @@ public sealed partial class MetricScraper(
         {
             using var client = httpClientFactory.CreateClient(ClientName);
             using var request = new HttpRequestMessage(HttpMethod.Get, node.BaseUrl.TrimEnd('/') + "/metrics");
-            if (!string.IsNullOrEmpty(options.NodeToken))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.NodeToken);
-            }
+            NodeHttp.ApplyAuthorization(request, token);
 
             using var response = await client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)

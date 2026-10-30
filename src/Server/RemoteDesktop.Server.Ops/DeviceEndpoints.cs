@@ -42,7 +42,8 @@ public static class DeviceEndpoints
                 return Results.NotFound(new { error = "node", message = "no enabled rendezvous node matches" });
             }
 
-            if (NodeHttp.RefusalReason(target.BaseUrl, options) is { } refusal)
+            var token = NodeHttp.TokenFor(target, options);
+            if (NodeHttp.RefusalReason(target.BaseUrl, token, options) is { } refusal)
             {
                 return Results.Json(
                     new { error = "node", message = refusal },
@@ -58,10 +59,7 @@ public static class DeviceEndpoints
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
                 target.BaseUrl.TrimEnd('/') + "/internal/v1/devices" + query);
-            if (!string.IsNullOrEmpty(options.NodeToken))
-            {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
-            }
+            NodeHttp.ApplyAuthorization(request, token);
 
             using var client = httpClientFactory.CreateClient(ClientName);
             HttpResponseMessage response;

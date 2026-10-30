@@ -50,6 +50,87 @@ public class NodeManagementTests(OpsHostFixture fixture) : IClassFixture<OpsHost
         }
     }
 
+    /// <summary>
+    /// One token per node is what makes a leaked console credential one node's problem. The value is returned once,
+    /// when it is created; the list only says one is set, because a secret a page can read again is a secret every
+    /// session has to protect.
+    /// </summary>
+    [Fact]
+    public async Task A_node_can_get_its_own_token_and_the_list_never_returns_it()
+    {
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
+            var name = "token-" + Guid.NewGuid().ToString("N")[..8];
+
+            using var create = new HttpRequestMessage(HttpMethod.Post, "/api/nodes")
+            {
+                Content = JsonContent.Create(new { name, role = "relay", baseUrl = "http://127.0.0.1:5083" }),
+            };
+            create.Headers.Add("X-Ops-CSRF", csrf);
+            var created = await client.SendAsync(create, Ct);
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var node = await created.Content.ReadFromJsonAsync<NodeDto>(Ct);
+            Assert.False(node!.HasOwnToken);
+
+            // An empty body asks for a generated one.
+            string issued;
+            using (var rotate = new HttpRequestMessage(HttpMethod.Post, $"/api/nodes/{node.Id}/token")
+            {
+                Content = JsonContent.Create(new { }),
+            })
+            {
+                rotate.Headers.Add("X-Ops-CSRF", csrf);
+                var response = await client.SendAsync(rotate, Ct);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                issued = (await response.Content.ReadFromJsonAsync<IssuedToken>(Ct))!.Token;
+
+                // 32 random bytes, base64url: 43 characters, no padding and nothing a header would choke on.
+                Assert.Equal(43, issued.Length);
+                Assert.False(issued.Contains('=', StringComparison.Ordinal));
+            }
+
+            var listed = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
+            Assert.True(Assert.Single(listed!, item => item.Id == node.Id).HasOwnToken);
+
+            // The token itself never comes back out of the API, not even base64-encoded inside a JSON field name.
+            using (var raw = await client.GetAsync("/api/nodes", Ct))
+            {
+                Assert.DoesNotContain(issued, await raw.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+            }
+
+            // A value that is too short to be a secret is refused rather than stored.
+            using (var shortToken = new HttpRequestMessage(HttpMethod.Post, $"/api/nodes/{node.Id}/token")
+            {
+                Content = JsonContent.Create(new { token = "short" }),
+            })
+            {
+                shortToken.Headers.Add("X-Ops-CSRF", csrf);
+                var refused = await client.SendAsync(shortToken, Ct);
+                Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            }
+
+            // Clearing it puts the node back on the deployment token.
+            using (var clear = new HttpRequestMessage(HttpMethod.Delete, $"/api/nodes/{node.Id}/token"))
+            {
+                clear.Headers.Add("X-Ops-CSRF", csrf);
+                Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(clear, Ct)).StatusCode);
+            }
+
+            listed = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
+            Assert.False(Assert.Single(listed!, item => item.Id == node.Id).HasOwnToken);
+
+            var audit = await client.GetFromJsonAsync<AuditList>("/api/audit?limit=100", Ct);
+            Assert.Contains(audit!.Items, item => item.Action == "node.token.set" && item.Target == name);
+            Assert.Contains(audit.Items, item => item.Action == "node.token.clear" && item.Target == name);
+
+            using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/nodes/{node.Id}");
+            delete.Headers.Add("X-Ops-CSRF", csrf);
+            Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(delete, Ct)).StatusCode);
+        }
+    }
+
     private async Task<(HttpClient Client, CookieContainer Cookies)> SignInAsync()
     {
         var (client, cookies) = fixture.CreateClient();
@@ -64,7 +145,9 @@ public class NodeManagementTests(OpsHostFixture fixture) : IClassFixture<OpsHost
         return (client, cookies);
     }
 
-    public sealed record NodeDto(string Id, string Name, string BaseUrl);
+    public sealed record NodeDto(string Id, string Name, string BaseUrl, bool HasOwnToken);
+
+    public sealed record IssuedToken(string NodeId, string Token, bool HasOwnToken);
 
     public sealed record LoginResponse(string? Status, string? Challenge);
 

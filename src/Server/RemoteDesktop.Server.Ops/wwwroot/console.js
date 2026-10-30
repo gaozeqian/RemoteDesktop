@@ -75,6 +75,9 @@ const el = {
   nodeDetailCard: document.getElementById("nodeDetailCard"),
   nodeDetailTitle: document.getElementById("nodeDetailTitle"),
   nodeDetailClose: document.getElementById("nodeDetailClose"),
+  nodeTokenState: document.getElementById("nodeTokenState"),
+  nodeTokenRotate: document.getElementById("nodeTokenRotate"),
+  nodeTokenClear: document.getElementById("nodeTokenClear"),
   nodeDetailInfo: document.getElementById("nodeDetailInfo"),
   nodeMetricTbody: document.getElementById("nodeMetricTbody"),
   nodeMetricsEmpty: document.getElementById("nodeMetricsEmpty"),
@@ -1489,6 +1492,9 @@ function renderNodes() {
   }
 }
 
+// The node the detail card is showing; the token buttons act on it.
+let nodeDetailNode = null;
+
 async function showNodeDetail(node) {
   el.nodeDetailCard.hidden = false;
   el.nodeDetailTitle.textContent = `节点详情 · ${node.name}`;
@@ -1501,6 +1507,9 @@ async function showNodeDetail(node) {
     el.nodeDetailInfo.textContent = "读取失败。";
     return;
   }
+
+  nodeDetailNode = payload.node;
+  renderNodeToken(payload.node);
 
   const info = payload.info;
   if (info) {
@@ -1534,6 +1543,69 @@ async function showNodeDetail(node) {
     row.append(name, value, when);
     el.nodeMetricTbody.append(row);
   }
+}
+
+function renderNodeToken(node) {
+  if (!node) {
+    return;
+  }
+
+  el.nodeTokenState.textContent = node.hasOwnToken
+    ? "该节点使用自己的令牌。"
+    : "该节点使用控制台的 Ops:NodeToken。";
+  el.nodeTokenRotate.textContent = node.hasOwnToken ? "重置令牌" : "生成独立令牌";
+  el.nodeTokenClear.hidden = !node.hasOwnToken;
+}
+
+async function rotateNodeToken() {
+  const node = nodeDetailNode;
+  if (!node) {
+    return;
+  }
+
+  if (!window.confirm(
+    node.hasOwnToken
+      ? `重新生成「${node.name}」的令牌？旧令牌立刻失效，节点在改好配置前会抓取失败。`
+      : `为「${node.name}」生成独立令牌？之后要把令牌填进该节点的配置里。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}/token`, {
+    method: "POST",
+    body: {},
+  });
+
+  if (status !== 200 || !payload || !payload.token) {
+    window.alert(payload && payload.message ? payload.message : "生成失败。");
+    return;
+  }
+
+  // Shown once, by design: there is no read-back endpoint, so this dialog is the only place it can be copied from.
+  window.prompt(
+    `「${node.name}」的令牌。填到该节点的 Rendezvous:NodeToken 或 Relay:NodeToken 后重启节点；关闭后不再显示：`,
+    payload.token);
+  await loadNodes();
+  renderNodeToken({ ...node, hasOwnToken: true });
+}
+
+async function clearNodeToken() {
+  const node = nodeDetailNode;
+  if (!node) {
+    return;
+  }
+
+  if (!window.confirm(`清除「${node.name}」的独立令牌？它会改回使用控制台的 Ops:NodeToken。`)) {
+    return;
+  }
+
+  const { status } = await api(`/api/nodes/${encodeURIComponent(node.id)}/token`, { method: "DELETE" });
+  if (status !== 204) {
+    window.alert("清除失败。");
+    return;
+  }
+
+  await loadNodes();
+  renderNodeToken({ ...node, hasOwnToken: false });
 }
 
 function formatMetricValue(value) {
@@ -1593,6 +1665,9 @@ async function deleteNode(node) {
 el.nodeDetailClose.addEventListener("click", () => {
   el.nodeDetailCard.hidden = true;
 });
+
+el.nodeTokenRotate.addEventListener("click", () => void rotateNodeToken());
+el.nodeTokenClear.addEventListener("click", () => void clearNodeToken());
 
 el.nodeForm.addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -183,6 +183,63 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         }
     }
 
+    /// <summary>
+    /// The scrape has to present the node's own secret when it has one, and the deployment's when it does not. The
+    /// header is asserted on the node side, because "the token is stored" is not the same claim as "the token is sent".
+    /// </summary>
+    [Fact]
+    public async Task The_scrape_presents_the_nodes_own_token_instead_of_the_deployment_token()
+    {
+        await using var node = await FakeNode.StartAsync();
+        var options = fixture.Services.GetRequiredService<OpsOptions>();
+        var previous = options.NodeToken;
+        options.NodeToken = "deployment-secret";
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            try
+            {
+                await RegisterAsync(client, cookies, node, token: "node-secret-0123456789");
+
+                await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+                Assert.Equal("Bearer node-secret-0123456789", Assert.Single(node.SeenAuthorizations));
+            }
+            finally
+            {
+                options.NodeToken = previous;
+            }
+        }
+    }
+
+    /// <summary>A node without its own token keeps authenticating with the deployment one: an upgrade changes nothing.</summary>
+    [Fact]
+    public async Task A_node_without_its_own_token_still_uses_the_deployment_token()
+    {
+        await using var node = await FakeNode.StartAsync();
+        var options = fixture.Services.GetRequiredService<OpsOptions>();
+        var previous = options.NodeToken;
+        options.NodeToken = "deployment-secret";
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            try
+            {
+                await RegisterAsync(client, cookies, node);
+
+                await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+                Assert.Equal("Bearer deployment-secret", Assert.Single(node.SeenAuthorizations));
+            }
+            finally
+            {
+                options.NodeToken = previous;
+            }
+        }
+    }
+
     private async Task<(HttpClient Client, CookieContainer Cookies)> SignInAsync()
     {
         var (client, cookies) = fixture.CreateClient();
@@ -201,15 +258,19 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         return (client, cookies);
     }
 
-    private async Task RegisterAsync(HttpClient client, CookieContainer cookies, FakeNode node)
+    private async Task RegisterAsync(HttpClient client, CookieContainer cookies, FakeNode node, string? token = null)
     {
-        var response = await CreateNodeAsync(client, cookies, node);
+        var response = await CreateNodeAsync(client, cookies, node, token);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var created = await response.Content.ReadFromJsonAsync<CreatedNode>(Ct);
         _created.Add(created!.Id);
     }
 
-    private static async Task<HttpResponseMessage> CreateNodeAsync(HttpClient client, CookieContainer cookies, FakeNode node)
+    private static async Task<HttpResponseMessage> CreateNodeAsync(
+        HttpClient client,
+        CookieContainer cookies,
+        FakeNode node,
+        string? token = null)
     {
         var csrf = cookies.GetCookies(client.BaseAddress!)["ops_csrf"]!.Value;
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/nodes")
@@ -220,6 +281,7 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
                 role = "relay",
                 baseUrl = node.BaseUrl,
                 region = "test",
+                token,
             }),
         };
         request.Headers.Add("X-Ops-CSRF", csrf);
@@ -248,6 +310,9 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
         public string Version { get; } = "9.9.9-test";
 
+        /// <summary>Every <c>Authorization</c> header the node saw on <c>/metrics</c>, in order.</summary>
+        public List<string?> SeenAuthorizations { get; } = [];
+
         public long StartedAtUnixMilliseconds { get; } = DateTimeOffset.UtcNow.AddMinutes(-3).ToUnixTimeMilliseconds();
 
         private long Bytes { get; set; }
@@ -263,8 +328,10 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
             var app = builder.Build();
             var node = new FakeNode(app);
 
-            app.MapGet("/metrics", () =>
+            app.MapGet("/metrics", (HttpContext context) =>
             {
+                node.SeenAuthorizations.Add(context.Request.Headers.Authorization);
+
                 if (node.Fail)
                 {
                     return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);

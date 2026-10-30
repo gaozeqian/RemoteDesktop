@@ -171,7 +171,8 @@ public static class ActionEndpoints
             return (ActionStates.Failed, "the rendezvous node is no longer registered");
         }
 
-        if (NodeHttp.RefusalReason(node.BaseUrl, options) is { } refusal)
+        var token = NodeHttp.TokenFor(node, options);
+        if (NodeHttp.RefusalReason(node.BaseUrl, token, options) is { } refusal)
         {
             return (ActionStates.Failed, refusal);
         }
@@ -188,10 +189,7 @@ public static class ActionEndpoints
         {
             Content = JsonContent.Create(body, options: OpsEventJson.Options),
         };
-        if (!string.IsNullOrEmpty(options.NodeToken))
-        {
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
-        }
+        NodeHttp.ApplyAuthorization(request, token);
 
         using var client = httpClientFactory.CreateClient(DeviceEndpoints.ClientName);
         using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);

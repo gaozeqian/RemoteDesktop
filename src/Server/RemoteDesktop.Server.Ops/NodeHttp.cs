@@ -1,4 +1,6 @@
+using System.Net.Http.Headers;
 using System.Text;
+using RemoteDesktop.Server.Ops.Storage;
 
 namespace RemoteDesktop.Server.Ops;
 
@@ -46,16 +48,53 @@ internal static class NodeHttp
         return HostMayReceiveToken(uri, allowedHosts);
     }
 
-    /// <summary>Why the node token must not be sent to this address, or <c>null</c> when it may be.</summary>
+    /// <summary>
+    /// The token that goes to this node: the one the node was given, or the deployment's when it has none.
+    /// </summary>
     /// <remarks>
-    /// One sentence, so the scrape failure, the node API's refusal and the action error all say the same thing. The two
-    /// reasons are kept apart on purpose: a plain-http address is a transport mistake, an unlisted host is a policy one.
+    /// A node's own token is what makes a leak one node's problem: the console can be told a different secret per
+    /// server, so a copied database or a read of one row does not open every node. Rows from before the feature, and
+    /// nodes an operator does not want to separate, keep using <c>Ops:NodeToken</c> — an upgrade changes nothing.
     /// </remarks>
+    public static string? TokenFor(OpsNode node, OpsOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(options);
+
+        return string.IsNullOrEmpty(node.Token) ? options.NodeToken : node.Token;
+    }
+
+    /// <summary>Presents the token on a request bound for a node, when there is one to present.</summary>
+    public static void ApplyAuthorization(HttpRequestMessage request, string? token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
+    }
+
+    /// <summary>Why the deployment's node token must not be sent to this address.</summary>
     public static string? RefusalReason(string baseUrl, OpsOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        if (string.IsNullOrEmpty(options.NodeToken))
+        return RefusalReason(baseUrl, options.NodeToken, options);
+    }
+
+    /// <summary>Why <paramref name="token"/> must not be sent to this address, or <c>null</c> when it may be.</summary>
+    /// <remarks>
+    /// One sentence, so the scrape failure, the node API's refusal and the action error all say the same thing. The two
+    /// reasons are kept apart on purpose: a plain-http address is a transport mistake, an unlisted host is a policy one.
+    /// The allowlist applies to a node's own token exactly as it does to the deployment's — a per-node secret is not a
+    /// licence to send it somewhere else.
+    /// </remarks>
+    public static string? RefusalReason(string baseUrl, string? token, OpsOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrEmpty(token))
         {
             return null;
         }
@@ -65,7 +104,7 @@ internal static class NodeHttp
             return "the node address is not an absolute URL";
         }
 
-        if (TokenCanTravelTo(baseUrl, options.NodeToken, options.AllowInsecureNodeHttp, options.NodeTokenHosts))
+        if (TokenCanTravelTo(baseUrl, token, options.AllowInsecureNodeHttp, options.NodeTokenHosts))
         {
             return null;
         }

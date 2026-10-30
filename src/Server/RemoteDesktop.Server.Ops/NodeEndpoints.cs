@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Storage;
@@ -5,8 +6,17 @@ using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Server.Ops;
 
-/// <summary>What the node form posts.</summary>
-public sealed record CreateNodeRequest(string? Name, string? Role, string? BaseUrl, string? Region);
+/// <summary>What the node form posts. <paramref name="Token"/> is optional: without it the node uses the deployment token.</summary>
+public sealed record CreateNodeRequest(string? Name, string? Role, string? BaseUrl, string? Region, string? Token);
+
+/// <summary>
+/// A token for one node. An empty <paramref name="Token"/> asks the console to generate one.
+/// </summary>
+/// <remarks>
+/// The value may be handed back to the operator here and only here; there is no read-back endpoint, because a secret
+/// that can be read again is a secret the console has to protect from every session that can read a page.
+/// </remarks>
+public sealed record RotateNodeTokenRequest(string? Token);
 
 /// <summary>The fields the node table can change. Both optional so a partial edit cannot blank a column.</summary>
 public sealed record UpdateNodeRequest(bool? Enabled, string? BaseUrl);
@@ -104,7 +114,13 @@ public static class NodeEndpoints
                 return Results.BadRequest(new { error = "baseUrl", message = "baseUrl must be an absolute http(s) URL" });
             }
 
-            if (NodeHttp.RefusalReason(baseUrl, options) is { } refusal)
+            var token = string.IsNullOrWhiteSpace(request.Token) ? null : request.Token.Trim();
+            if (token is not null && !IsUsableToken(token))
+            {
+                return Results.BadRequest(new { error = "token", message = TokenRequirements });
+            }
+
+            if (NodeHttp.RefusalReason(baseUrl, token ?? options.NodeToken, options) is { } refusal)
             {
                 return Results.BadRequest(new { error = "baseUrl", message = refusal });
             }
@@ -124,7 +140,8 @@ public static class NodeEndpoints
                 Enabled: true,
                 LastScrapeAt: null,
                 LastScrapeOk: null,
-                time.GetUtcNow().ToUnixTimeMilliseconds());
+                time.GetUtcNow().ToUnixTimeMilliseconds(),
+                Token: token);
 
             await store.CreateNodeAsync(node, cancellationToken).ConfigureAwait(false);
             await AuditAsync(store, context, "node.create", node.Name, $"registered {role} at {baseUrl}", time, cancellationToken)
@@ -160,7 +177,8 @@ public static class NodeEndpoints
                     return Results.BadRequest(new { error = "baseUrl", message = "baseUrl must be an absolute http(s) URL" });
                 }
 
-                if (NodeHttp.RefusalReason(normalized, options) is { } refusal)
+                // Checked against the token this node actually uses: the deployment's, or its own.
+                if (NodeHttp.RefusalReason(normalized, NodeHttp.TokenFor(node, options), options) is { } refusal)
                 {
                     return Results.BadRequest(new { error = "baseUrl", message = refusal });
                 }
@@ -185,6 +203,78 @@ public static class NodeEndpoints
             }
 
             await AuditAsync(store, context, "node.update", node.Name, string.Join("; ", changes), time, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.NoContent();
+        }).RequireAuthorization(OpsAuth.AdminPolicy);
+
+        // The only response that ever carries a node's token. Generated when the request leaves it empty; checked
+        // against the node's address first, because rotating a secret onto a plain-http public address would just be a
+        // slower way of publishing it.
+        group.MapPost("/{id}/token", async (
+            string id,
+            RotateNodeTokenRequest request,
+            HttpContext context,
+            OpsStore store,
+            OpsOptions options,
+            TimeProvider time,
+            CancellationToken cancellationToken) =>
+        {
+            var node = await store.FindNodeAsync(id, cancellationToken).ConfigureAwait(false);
+            if (node is null)
+            {
+                return Results.NotFound();
+            }
+
+            var supplied = string.IsNullOrWhiteSpace(request.Token) ? null : request.Token.Trim();
+            if (supplied is not null && !IsUsableToken(supplied))
+            {
+                return Results.BadRequest(new { error = "token", message = TokenRequirements });
+            }
+
+            var token = supplied ?? NewToken();
+            if (NodeHttp.RefusalReason(node.BaseUrl, token, options) is { } refusal)
+            {
+                return Results.BadRequest(new { error = "baseUrl", message = refusal });
+            }
+
+            if (!await store.SetNodeTokenAsync(id, token, cancellationToken).ConfigureAwait(false))
+            {
+                return Results.NotFound();
+            }
+
+            await AuditAsync(
+                store,
+                context,
+                "node.token.set",
+                node.Name,
+                supplied is null ? "generated a token for this node" : "set a token for this node",
+                time,
+                cancellationToken).ConfigureAwait(false);
+
+            return Results.Ok(new { nodeId = id, token, hasOwnToken = true });
+        }).RequireAuthorization(OpsAuth.AdminPolicy);
+
+        // Clears the node's own token; it goes back to the deployment's, which is what an operator wants when a node
+        // is being retired from separate credentials rather than deleted.
+        group.MapDelete("/{id}/token", async (
+            string id,
+            HttpContext context,
+            OpsStore store,
+            TimeProvider time,
+            CancellationToken cancellationToken) =>
+        {
+            var node = await store.FindNodeAsync(id, cancellationToken).ConfigureAwait(false);
+            if (node is null)
+            {
+                return Results.NotFound();
+            }
+
+            if (!await store.SetNodeTokenAsync(id, null, cancellationToken).ConfigureAwait(false))
+            {
+                return Results.NotFound();
+            }
+
+            await AuditAsync(store, context, "node.token.clear", node.Name, "falls back to Ops:NodeToken", time, cancellationToken)
                 .ConfigureAwait(false);
             return Results.NoContent();
         }).RequireAuthorization(OpsAuth.AdminPolicy);
@@ -223,6 +313,9 @@ public static class NodeEndpoints
         enabled = node.Enabled,
         lastScrapeAt = node.LastScrapeAt,
         lastScrapeOk = node.LastScrapeOk,
+
+        // Whether the node has its own secret, never the secret: the value is returned once, when it is created.
+        hasOwnToken = !string.IsNullOrEmpty(node.Token),
     };
 
     private static async Task<(NodeInfo? Info, string? Error)> FetchInfoAsync(
@@ -231,16 +324,14 @@ public static class NodeEndpoints
         OpsOptions options,
         CancellationToken cancellationToken)
     {
-        if (NodeHttp.RefusalReason(node.BaseUrl, options) is { } refusal)
+        var token = NodeHttp.TokenFor(node, options);
+        if (NodeHttp.RefusalReason(node.BaseUrl, token, options) is { } refusal)
         {
             return (null, refusal);
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, node.BaseUrl.TrimEnd('/') + "/internal/v1/info");
-        if (!string.IsNullOrEmpty(options.NodeToken))
-        {
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
-        }
+        NodeHttp.ApplyAuthorization(request, token);
 
         using var client = httpClientFactory.CreateClient(DeviceEndpoints.ClientName);
         HttpResponseMessage response;
@@ -275,6 +366,24 @@ public static class NodeEndpoints
             }
         }
     }
+
+    /// <summary>
+    /// What a token has to look like. Printable ASCII with no spaces keeps it a valid header value; 16 characters is
+    /// the shortest anything here will accept, and the console generates 43.
+    /// </summary>
+    private const string TokenRequirements =
+        "token must be 16 to 512 printable ASCII characters with no spaces";
+
+    private static bool IsUsableToken(string token) =>
+        token.Length is >= 16 and <= 512
+        && token.All(character => character is >= '!' and <= '~');
+
+    /// <summary>32 random bytes, base64url without padding: 43 characters, no header-hostile symbols.</summary>
+    private static string NewToken() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 
     private static string? CanonicalRole(string? role)
     {

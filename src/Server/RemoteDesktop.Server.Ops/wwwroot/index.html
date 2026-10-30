@@ -406,6 +406,18 @@
             </div>
           </div>
           <div id="nodeDetailInfo" class="muted"></div>
+
+          <div class="token-panel">
+            <div class="toolbar">
+              <strong>独立令牌</strong>
+              <span id="nodeTokenState" class="muted"></span>
+              <button class="small" type="button" id="nodeTokenRotate">生成独立令牌</button>
+              <button class="small danger" type="button" id="nodeTokenClear" hidden>清除</button>
+            </div>
+            <p class="muted">生成后把令牌填到该节点的 <code>Rendezvous:NodeToken</code> 或 <code>Relay:NodeToken</code>
+              并重启节点；控制台只在生成时显示一次。重置会立刻让旧令牌失效，节点在改好配置前抓取会失败。</p>
+          </div>
+
           <table class="data-table">
             <thead><tr><th>指标</th><th>最新值</th><th>采样时间</th></tr></thead>
             <tbody id="nodeMetricTbody"></tbody>

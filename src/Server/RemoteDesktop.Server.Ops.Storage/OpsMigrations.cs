@@ -91,5 +91,10 @@ public static class OpsMigrations
         // ops_silence (matcher_json, starts_at, ends_at, created_by) since the first version, waiting for the feature;
         // an operator reading the list needs the reason next to the window, and a reason is not a matcher.
         new(6, "ALTER TABLE ops_silence ADD COLUMN reason TEXT;"),
+
+        // 7 — one token per node, so a leaked console-side credential is one node's, not every node's. Null keeps the
+        // deployment-wide Ops:NodeToken, which is what every existing row gets: an upgrade must not silently stop
+        // authenticating against machines nobody has touched.
+        new(7, "ALTER TABLE ops_node ADD COLUMN token TEXT;"),
     ];
 }

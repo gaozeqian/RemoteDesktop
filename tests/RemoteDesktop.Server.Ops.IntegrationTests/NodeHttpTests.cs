@@ -1,5 +1,6 @@
 using RemoteDesktop.Server.Ops;
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.Server.Ops.Storage;
 
 namespace RemoteDesktop.Server.Ops.IntegrationTests;
 
@@ -85,6 +86,45 @@ public class NodeHttpTests
 
         Assert.Equal(["node.example.com"], options.NodeTokenHosts);
     }
+
+    /// <summary>A node's own token wins; the deployment token is what every node without one keeps using.</summary>
+    [Fact]
+    public void The_node_token_is_preferred_and_the_deployment_token_is_the_fallback()
+    {
+        var options = Options(token: "deployment-secret");
+
+        Assert.Equal("node-secret", NodeHttp.TokenFor(Node("https://node.example.com", "node-secret"), options));
+        Assert.Equal("deployment-secret", NodeHttp.TokenFor(Node("https://node.example.com", token: null), options));
+        Assert.Equal("deployment-secret", NodeHttp.TokenFor(Node("https://node.example.com", string.Empty), options));
+    }
+
+    /// <summary>
+    /// A per-node secret is not a licence to send it anywhere: the address rules apply to whichever token is attached,
+    /// including a deployment that configured no shared token at all.
+    /// </summary>
+    [Fact]
+    public void A_node_token_is_refused_on_the_addresses_a_deployment_token_is_refused_on()
+    {
+        var noDeploymentToken = Options(token: string.Empty);
+        var listed = Options(token: string.Empty, hosts: ["node.example.com"]);
+
+        Assert.NotNull(NodeHttp.RefusalReason("http://node.example.com:5080", "node-secret", noDeploymentToken));
+        Assert.Null(NodeHttp.RefusalReason("http://127.0.0.1:5080", "node-secret", noDeploymentToken));
+        Assert.NotNull(NodeHttp.RefusalReason("https://elsewhere.example.com:5080", "node-secret", listed));
+        Assert.Null(NodeHttp.RefusalReason("https://node.example.com:5080", "node-secret", listed));
+    }
+
+    private static OpsNode Node(string baseUrl, string? token) => new(
+        Id: "node-1",
+        Name: "node",
+        Role: "relay",
+        BaseUrl: baseUrl,
+        Region: null,
+        Enabled: true,
+        LastScrapeAt: null,
+        LastScrapeOk: null,
+        CreatedAt: 0,
+        Token: token);
 
     private static OpsOptions Options(string token, List<string>? hosts = null) => new()
     {
