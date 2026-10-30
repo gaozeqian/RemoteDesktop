@@ -4,14 +4,13 @@ namespace RemoteDesktop.Protocol;
 /// Peers exchange versions on the control channel. Same major = compatible; minor additions are negotiated as capabilities.
 /// </summary>
 /// <remarks>
-/// The major was raised to 2 when the password proof started deriving its key with PBKDF2 instead of using the
-/// password as the key directly. The two are not interoperable, and a peer that cannot do the new one should say so:
-/// without the bump, an old controller meeting a new host would be told its password was wrong, which is both untrue
-/// and enough to spend its rate-limit budget.
+/// The major was raised to 3 when the challenge/HMAC proof was replaced by SRP-6a. The two are not interoperable, and
+/// a peer that cannot do the new one must say so rather than be told its password was wrong: that is untrue, spends
+/// its rate-limit budget and, before PAKE, encouraged a fallback to the weaker exchange.
 /// </remarks>
 public readonly record struct ProtocolVersion(ushort Major, ushort Minor)
 {
-    public static ProtocolVersion Current { get; } = new(2, 0);
+    public static ProtocolVersion Current { get; } = new(3, 0);
 
     public bool IsCompatibleWith(ProtocolVersion other) => Major == other.Major;
 

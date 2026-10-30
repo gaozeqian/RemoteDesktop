@@ -161,7 +161,7 @@ SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需�
 
 | 属性 | 默认 | 说明 |
 |---|---|---|
-| `RENDEZVOUSURL` | `http://0.0.0.0:5080` | 信令监听的地址。给了证书会自动变成 `https://` |
+| `RENDEZVOUSURL` | `http://127.0.0.1:5080` | 信令监听的地址；默认只监听回环。给了证书会自动变成 `https://`。公网明文监听必须同时设置 `Rendezvous:AllowInsecureSignaling=true` |
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `DATABASEPROVIDER` | `auto` | 设备代码存在哪：`auto` / `none` / `postgres` / `sqlite`。`auto` = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库 |
@@ -347,8 +347,9 @@ dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 
 
 ```jsonc
 {
-  "Urls": "http://0.0.0.0:5080",                // 信令监听地址，WebSocket 挂在 /ws，健康检查在 /health
+  "Urls": "http://127.0.0.1:5080",              // 默认只监听回环；公网请用 https，或显式允许明文
   "Rendezvous": {
+    "AllowInsecureSignaling": false,            // 只在隔离的明文实验网里设为 true
     "ReflectorPort": 5081,                      // UDP 地址反射端口：告诉双方彼此看到的公网地址
     "RelayEndpoint": "你的服务器公网地址:5082",   // 必须写客户端能连到的地址，不能是 0.0.0.0 或 127.0.0.1
     "RelaySharedKey": "<和 Relay 相同的长随机串>", // 生产环境必须换掉开发默认值（appsettings.Development.json 里是明文的开发密钥）
@@ -682,7 +683,7 @@ netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in actio
 ### 9. 健康检查
 
 ```bash
-# Windows / macOS 包默认走 HTTP：
+# Windows / macOS 包默认只在回环上走 HTTP：
 curl http://127.0.0.1:5080/health      # 或浏览器打开，返回 200 即正常（不需要认证）
 # Linux 包默认自签 HTTPS（RD_TLS=generate），对自签证书要加 -k：
 curl -k https://127.0.0.1:5080/health

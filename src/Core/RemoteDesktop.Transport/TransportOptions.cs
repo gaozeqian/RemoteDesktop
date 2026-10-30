@@ -10,6 +10,13 @@ public sealed class TransportOptions
     public Uri RendezvousUri { get; set; } = new("ws://127.0.0.1:5080/ws");
 
     /// <summary>
+    /// Allows plain <c>ws://</c> to a non-loopback server. It is off by default because signaling carries device
+    /// codes and relay tickets; deployments that deliberately keep signaling on an isolated plaintext network can
+    /// turn it on after deciding that risk is acceptable.
+    /// </summary>
+    public bool AllowInsecureSignaling { get; set; }
+
+    /// <summary>
     /// A server certificate to pin for a <c>wss://</c> signaling connection, as a PEM or DER file. Empty means the
     /// platform trust store decides, which is right for a certificate from a public authority.
     /// </summary>
@@ -60,6 +67,12 @@ public sealed class TransportOptions
         // The parser fills in /ws for an address typed without a path and refuses any other path. Storing the parsed
         // form means the connection uses the path the server actually maps, whichever spelling the operator used.
         RendezvousUri = parsed.Value;
+
+        if (RendezvousUri.Scheme == "ws" && !RendezvousUri.IsLoopback && !AllowInsecureSignaling)
+        {
+            throw new InvalidOperationException(
+                $"Transport:RendezvousUri uses plain ws:// to non-loopback host '{RendezvousUri.Host}'. Signaling carries device codes and relay tickets; use wss:// (or set Transport:AllowInsecureSignaling=true only for an isolated plaintext network).");
+        }
 
         // A pin left behind after the address is changed to ws:// is harmless: there is no TLS to validate. It is only
         // read when the address is wss://, and a missing/broken file there is a startup error, not a silent fallback.

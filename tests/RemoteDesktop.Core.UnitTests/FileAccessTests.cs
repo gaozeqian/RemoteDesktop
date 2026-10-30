@@ -150,6 +150,40 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(FileError.NotAllowed, ex.Error);
     }
 
+    /// <summary>
+    /// The check that closes the check/use race is the one made on the opened handle, not the one made on its spelling
+    /// before the open. This exercises that half directly with an outside file that a swapped link could have produced.
+    /// </summary>
+    [Fact]
+    public void A_handle_that_really_points_outside_the_root_is_refused_after_the_open()
+    {
+        var outside = Directory.CreateTempSubdirectory("rd-handle-outside-").FullName;
+        var root = Directory.CreateTempSubdirectory("rd-handle-root-").FullName;
+        var secret = Path.Combine(outside, "secret.txt");
+        File.WriteAllText(secret, "x");
+
+        var policy = new FileAccessPolicy([root]);
+        using var opened = File.OpenRead(secret);
+
+        var ex = Assert.Throws<FileOperationException>(() => policy.ValidateOpenedFile(opened.SafeFileHandle));
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+    }
+
+    [Fact]
+    public void A_verified_handle_can_be_read_after_the_path_is_gone()
+    {
+        var root = Directory.CreateTempSubdirectory("rd-handle-inside-").FullName;
+        var path = Path.Combine(root, "file.txt");
+        File.WriteAllText(path, "content");
+
+        var policy = new FileAccessPolicy([root]);
+        using var opened = policy.OpenRead(path);
+        File.Delete(path);
+
+        using var reader = new StreamReader(opened);
+        Assert.Equal("content", reader.ReadToEnd());
+    }
+
     [Theory]
     [InlineData("report.txt")]
     [InlineData("name with spaces.docx")]

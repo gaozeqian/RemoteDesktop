@@ -112,11 +112,26 @@ public class TransportOptionsTests
     [InlineData("wss://rd.example.com/", "wss://rd.example.com/ws")]
     public void An_address_without_the_signaling_path_gets_it(string address, string expected)
     {
-        var options = new TransportOptions { RendezvousUri = new Uri(address) };
+        var options = new TransportOptions { RendezvousUri = new Uri(address), AllowInsecureSignaling = true };
 
         options.Validate();
 
         Assert.Equal(expected, options.RendezvousUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Remote_plaintext_signaling_needs_an_explicit_opt_in()
+    {
+        var options = new TransportOptions { RendezvousUri = new Uri("ws://rd.example.com:5080/ws") };
+
+        var error = Assert.Throws<InvalidOperationException>(options.Validate);
+        Assert.Contains("wss://", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Loopback_plaintext_signaling_remains_the_safe_local_default()
+    {
+        new TransportOptions { RendezvousUri = new Uri("ws://127.0.0.1:5080/ws") }.Validate();
     }
 
     [Fact]

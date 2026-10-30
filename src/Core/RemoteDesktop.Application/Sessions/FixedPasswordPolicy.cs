@@ -14,7 +14,7 @@ public static class FixedPasswordPolicy
     /// Raised from 6 to 8 after an offline-attack measurement: at 600k PBKDF2 rounds a 6-character password of
     /// digits is cracked in seconds on a GPU, and even lowercase+digits in minutes. Eight characters is still only a
     /// floor, not a recommendation — a fixed password should be long and mixed, because it is the long-lived key to
-    /// an unattended machine (see docs/design/README.md, the "密码证明不是 PAKE" section).
+    /// an unattended machine (see docs/design/README.md, the SRP/PAKE section).
     /// </remarks>
     public const int MinimumLength = 8;
 

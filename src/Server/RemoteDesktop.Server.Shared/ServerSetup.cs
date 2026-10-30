@@ -276,6 +276,15 @@ public static class ServerSetup
             rendezvous["Urls"] = urls;
         }
 
+        // A freshly configured server listens on loopback unless the operator chose a public plaintext address.
+        // Record that choice explicitly so the server's default-deny check does not make an existing deployment stop
+        // after this upgrade, while a hand-written public http:// address still has to opt in itself.
+        var effectiveUrls = Text(rendezvous, "Urls");
+        rendezvousSection["AllowInsecureSignaling"] =
+            Uri.TryCreate(effectiveUrls, UriKind.Absolute, out var configuredUrl)
+            && configuredUrl.Scheme == Uri.UriSchemeHttp
+            && !configuredUrl.IsLoopback;
+
         if (endpoint is not null)
         {
             rendezvousSection["RelayEndpoint"] = endpoint;
@@ -1167,7 +1176,7 @@ public static class ServerSetup
             }
 
             var current = string.IsNullOrWhiteSpace(existingUrls)
-                ? $"http://0.0.0.0:{DefaultSignalingPort}"
+                ? $"http://127.0.0.1:{DefaultSignalingPort}"
                 : existingUrls;
             if (!current.StartsWith("http://", StringComparison.Ordinal)
                 && !current.StartsWith("https://", StringComparison.Ordinal))
@@ -1181,7 +1190,9 @@ public static class ServerSetup
         var urls = Expand(configured);
         if (IsAuto(urls))
         {
-            urls = $"http://0.0.0.0:{DefaultSignalingPort}";
+            // The secure default: a server whose operator did not choose an interface is reachable only from this
+            // machine. A public listener is an explicit choice (https://, or http:// plus AllowInsecureSignaling).
+            urls = $"http://127.0.0.1:{DefaultSignalingPort}";
         }
 
         if (!urls.StartsWith("http://", StringComparison.Ordinal)

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using RemoteDesktop.Application.Security;
 using RemoteDesktop.Domain;
 
@@ -6,6 +7,9 @@ namespace RemoteDesktop.Application.Sessions;
 /// <summary>What a controller must know to connect to this device, and what it may do once connected.</summary>
 public sealed class HostCredentials(TimeProvider? time = null)
 {
+    /// <summary>The temporary and fixed password slots every protocol-v3 challenge has, configured or not.</summary>
+    public const int CredentialSlotCount = 2;
+
     /// <summary>
     /// How long the temporary password stays the same before the next look at it replaces it.
     /// </summary>
@@ -53,18 +57,17 @@ public sealed class HostCredentials(TimeProvider? time = null)
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    public bool Verify(ReadOnlySpan<byte> proof, ReadOnlySpan<byte> nonce, string hostFingerprint, string controllerFingerprint)
+    /// <summary>
+    /// Starts an SRP exchange for both credential slots. The fixed slot always gets a candidate, with a fresh random
+    /// value when no fixed password is configured, so the shape and cost do not reveal whether one exists.
+    /// </summary>
+    public IReadOnlyList<HostPasswordChallenge> BeginAuthentication(string hostFingerprint, string controllerFingerprint)
     {
-        // Evaluate both so the time taken does not reveal which password is configured. The temporary one is read
-        // through the same door as the one the interface shows, so a password that has aged out no longer opens
-        // anything even if nobody has looked at the window since.
-        var temporary = PasswordProof.Verify(proof, CurrentTemporaryPassword(), nonce, hostFingerprint, controllerFingerprint);
-
-        // The fixed password is also always evaluated, even when none is configured, so the timing of this method does
-        // not reveal whether the device has one. An empty string costs the same PBKDF2 work but can never match a
-        // well-formed proof, because the fixed password setter refuses an empty value.
-        var fixedMatch = PasswordProof.Verify(proof, _fixedPassword ?? string.Empty, nonce, hostFingerprint, controllerFingerprint);
-        return temporary | fixedMatch;
+        // Read the temporary password through the same door as the interface: an aged-out value must no longer open
+        // anything even if nobody has looked at the window.
+        var temporary = CurrentTemporaryPassword();
+        var fixedPassword = _fixedPassword ?? Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        return PasswordAuthenticator.CreateChallenges([temporary, fixedPassword], hostFingerprint, controllerFingerprint);
     }
 
     private string CurrentTemporaryPassword()

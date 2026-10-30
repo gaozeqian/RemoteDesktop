@@ -36,6 +36,13 @@ public sealed partial class UdpRelay : IDisposable
     private readonly Dictionary<IPEndPoint, Pairing> _endpoints = [];
     private DateTimeOffset _nextCleanup;
 
+    // The receive loop is unauthenticated and public on UDP. Logging every bad ticket makes a trivial packet flood a
+    // disk and alert flood, so rejects are counted and a summary is written at most once a minute.
+    private static readonly TimeSpan RejectedBindLogInterval = TimeSpan.FromMinutes(1);
+    private DateTimeOffset _nextRejectedBindLog;
+    private long _rejectedBinds;
+    private long _suppressedRejectedBindLogs;
+
     // Exported numbers. The receive loop owns the tables above and runs on one thread; these five are read from an HTTP
     // thread, so they are touched only through Interlocked/Volatile and never while holding a reference to a pairing.
     private long _bytesToController;
@@ -189,7 +196,7 @@ public sealed partial class UdpRelay : IDisposable
         var ticket = RelayTicket.Validate(ticketBytes, _key, now);
         if (ticket is null)
         {
-            LogRejectedBind(_logger, from);
+            RecordRejectedBind(from, now);
             return BindResult.Ignored;
         }
 
@@ -366,6 +373,21 @@ public sealed partial class UdpRelay : IDisposable
 
     public void Dispose() => _socket.Dispose();
 
+    private void RecordRejectedBind(IPEndPoint from, DateTimeOffset now)
+    {
+        _rejectedBinds++;
+        if (now < _nextRejectedBindLog)
+        {
+            _suppressedRejectedBindLogs++;
+            return;
+        }
+
+        LogRejectedBind(_logger, from, _rejectedBinds, _suppressedRejectedBindLogs);
+        _nextRejectedBindLog = now + RejectedBindLogInterval;
+        _rejectedBinds = 0;
+        _suppressedRejectedBindLogs = 0;
+    }
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: the token did not match this address.")]
     private static partial void LogRejectedCookie(ILogger logger, IPEndPoint endPoint);
 
@@ -375,8 +397,8 @@ public sealed partial class UdpRelay : IDisposable
     [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId}: {Role} moved from {Previous} to {Current}.")]
     private static partial void LogRebind(ILogger logger, Guid sessionId, RelayRole role, IPEndPoint previous, IPEndPoint current);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: invalid or expired ticket.")]
-    private static partial void LogRejectedBind(ILogger logger, IPEndPoint endPoint);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected {Count} relay bind(s) since the last summary (most recently from {EndPoint}: invalid or expired ticket); {Suppressed} further summaries were suppressed.")]
+    private static partial void LogRejectedBind(ILogger logger, IPEndPoint endPoint, long count, long suppressed);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId} paired: {Controller} <-> {Host}.")]
     private static partial void LogPaired(ILogger logger, Guid sessionId, IPEndPoint controller, IPEndPoint host);

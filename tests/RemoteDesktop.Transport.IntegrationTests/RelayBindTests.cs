@@ -82,6 +82,28 @@ public class RelayBindTests
         Assert.Equal(0, relay.Relay.ActivePairings);
     }
 
+    [Fact]
+    public async Task Invalid_tickets_are_summarized_instead_of_logging_every_packet()
+    {
+        var logger = new CountingLogger<UdpRelay>();
+        await using var relay = await TestRelay.StartAsync(logger: logger);
+        var invalid = new RelayTicket(Guid.NewGuid(), relay.Now.AddMinutes(2)).Sign(Enumerable.Repeat((byte)0x5a, 32).ToArray());
+        var packet = UdpControlPacket.CreateRelayBind((byte)RelayRole.Controller, [], invalid);
+
+        for (var i = 0; i < 20; i++)
+        {
+            await relay.SendAsync(packet);
+        }
+
+        Assert.True(await WaitUntilAsync(() => logger.Warnings >= 1, TimeSpan.FromSeconds(5)), "one summary is written");
+        Assert.Equal(1, logger.Warnings);
+
+        relay.Advance(TimeSpan.FromMinutes(1) + TimeSpan.FromSeconds(1));
+        await relay.SendAsync(packet);
+
+        Assert.True(await WaitUntilAsync(() => logger.Warnings == 2, TimeSpan.FromSeconds(5)), "the next window writes another summary");
+    }
+
     /// <summary>A relay of its own on loopback, with a ticket this test signed and a clock it controls.</summary>
     private sealed class TestRelay : IAsyncDisposable
     {
@@ -112,7 +134,7 @@ public class RelayBindTests
 
         public IPEndPoint ClientEndPoint => (IPEndPoint)_client.Client.LocalEndPoint!;
 
-        public static Task<TestRelay> StartAsync(TimeSpan? cleanupInterval = null)
+        public static Task<TestRelay> StartAsync(TimeSpan? cleanupInterval = null, Microsoft.Extensions.Logging.ILogger<UdpRelay>? logger = null)
         {
             var time = new FakeTimeProvider();
             var relay = new UdpRelay(
@@ -122,7 +144,7 @@ public class RelayBindTests
                 time,
                 new NoopOpsEventSink(),
                 "relay-test",
-                NullLogger<UdpRelay>.Instance,
+                logger ?? NullLogger<UdpRelay>.Instance,
                 cleanupInterval);
             var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
             var ticket = new RelayTicket(Guid.NewGuid(), time.GetUtcNow() + TimeSpan.FromMinutes(2)).Sign(Key);
@@ -149,6 +171,9 @@ public class RelayBindTests
                 UdpControlPacket.TryParse(answer, out var type, out _) &&
                 type == UdpControlPacketType.RelayBindAck;
         }
+
+        public async Task SendAsync(byte[] request) =>
+            _ = await _client.SendAsync(request, Relay.LocalEndPoint, Ct);
 
         public async Task<byte[]> ExchangeAsync(byte[] request, bool expectAnswer = true)
         {
@@ -194,6 +219,31 @@ public class RelayBindTests
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+}
+
+internal sealed class CountingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+{
+    private int _warnings;
+
+    public int Warnings => Volatile.Read(ref _warnings);
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        Microsoft.Extensions.Logging.LogLevel logLevel,
+        Microsoft.Extensions.Logging.EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+        {
+            Interlocked.Increment(ref _warnings);
+        }
+    }
 }
 
 /// <summary>The token itself, away from any socket: what it is bound to and how long it lives.</summary>

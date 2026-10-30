@@ -19,7 +19,7 @@
   or both, and upgrading one never touches the other.
 
 .EXAMPLE
-  # Development build, servers reachable on this machine's name and on all interfaces
+  # Development build; signaling listens on loopback until an address is chosen at install time
   .\build\installer\windows\server\Build-ServerInstaller.ps1
 
 .EXAMPLE
@@ -48,8 +48,9 @@ param(
 
     # The address the rendezvous server binds to (http:// or https://), baked into the settings template the installer
     # ships and used as the default of the RENDEZVOUSURL property. This is what the server listens on, not what clients
-    # are told to use. Empty leaves whatever the publish output already has in place.
-    [string]$RendezvousUrl = 'http://0.0.0.0:5080',
+    # are told to use. Empty leaves whatever the publish output already has in place. The default is loopback; a public
+    # deployment passes https:// explicitly (or opts into insecure plaintext at install time).
+    [string]$RendezvousUrl = 'http://127.0.0.1:5080',
 
     [string]$Configuration = 'Release',
 
@@ -96,6 +97,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Generated directories only. Some hardened hosts redirect Remove-Item to the recycle bin, where deleting a directory
+# tree fails; that must not stop a package build after a successful publish.
+function Remove-GeneratedDirectory([string]$Path) {
+    if (Test-Path -LiteralPath $Path) {
+        [System.IO.Directory]::Delete($Path, $true)
+    }
+}
 
 # $PSScriptRoot is empty inside parameter defaults on Windows PowerShell 5.1 (it works in PowerShell 6 and later), so
 # every path that means "next to this script" is resolved here instead. Running a release build with the PowerShell
@@ -494,7 +503,7 @@ function Invoke-Signing {
 
 Write-Host 'Publishing the servers...'
 if (Test-Path $PublishDirectory) {
-    if (-not $KeepPublishOutput) { Remove-Item -Recurse -Force $PublishDirectory }
+    if (-not $KeepPublishOutput) { Remove-GeneratedDirectory $PublishDirectory }
 }
 New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 
@@ -574,6 +583,13 @@ signaling will not start:
   msiexec /i <msi> TLSCERTIFICATEPATH=C:\certs\rd.pfx [TLSCERTIFICATEPASSWORD=<password>]
 "@
 }
+elseif ($defaultRendezvousUrl -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:|/)') {
+    Write-Warning @"
+This installer binds signaling to $defaultRendezvousUrl, so only this machine can reach it. For a public or LAN
+deployment install with TLS and an externally reachable address:
+  msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080 TLSCERTIFICATEPATH=C:\certs\rd.pfx
+"@
+}
 
 $version = Get-ProductVersion
 
@@ -617,7 +633,7 @@ if (-not $KeepSymbols) {
     # Remove-Item through the pipeline with -Recurse throws InputObjectNotBound on Windows PowerShell 5.1; passing the
     # path explicitly works on both 5.1 and 7. The scripts support both because a release build often runs in the
     # PowerShell that ships with Windows.
-    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { [System.IO.File]::Delete($_.FullName) }
 }
 
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and

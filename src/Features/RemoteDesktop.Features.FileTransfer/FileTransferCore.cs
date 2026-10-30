@@ -81,50 +81,67 @@ public static class FileSender
 
         await using (file.ConfigureAwait(false))
         {
-            if (file.Length < size)
-            {
-                throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-            }
+            return await SendOpenAsync(wire, file, size, startOffset, progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-            var hash = new XxHash64();
-            var buffer = ArrayPool<byte>.Shared.Rent(FileChunkFrame.ChunkSize);
-            try
+    /// <summary>
+    /// Sends an already opened file. The caller owns and disposes <paramref name="file"/>; the host uses this overload
+    /// after <see cref="FileAccessPolicy.OpenRead"/> has verified the file behind the handle, so a link swapped after
+    /// the path check cannot turn the transfer into a read outside the shared roots.
+    /// </summary>
+    public static async Task<ulong> SendOpenAsync(Stream wire, FileStream file, long size, long startOffset, Action<long>? progress, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(wire);
+        ArgumentNullException.ThrowIfNull(file);
+        if (startOffset < 0 || startOffset > size)
+        {
+            throw new FileOperationException(FileError.Changed, "The requested start is beyond the end of the file.");
+        }
+
+        if (file.Length < size)
+        {
+            throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
+        }
+
+        var hash = new XxHash64();
+        var buffer = ArrayPool<byte>.Shared.Rent(FileChunkFrame.ChunkSize);
+        try
+        {
+            // The part the receiver already has still belongs in the hash.
+            for (var remaining = startOffset; remaining > 0;)
             {
-                // The part the receiver already has still belongs in the hash.
-                for (var remaining = startOffset; remaining > 0;)
+                var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
                 {
-                    var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-                    }
-
-                    hash.Append(buffer.AsSpan(0, read));
-                    remaining -= read;
+                    throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
                 }
 
-                var sent = startOffset;
+                hash.Append(buffer.AsSpan(0, read));
+                remaining -= read;
+            }
+
+            var sent = startOffset;
+            progress?.Invoke(sent);
+            while (sent < size)
+            {
+                var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(FileChunkFrame.ChunkSize, size - sent)), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
+                }
+
+                hash.Append(buffer.AsSpan(0, read));
+                await FileChunkFrame.WriteAsync(wire, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                sent += read;
                 progress?.Invoke(sent);
-                while (sent < size)
-                {
-                    var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(FileChunkFrame.ChunkSize, size - sent)), cancellationToken).ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-                    }
-
-                    hash.Append(buffer.AsSpan(0, read));
-                    await FileChunkFrame.WriteAsync(wire, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    sent += read;
-                    progress?.Invoke(sent);
-                }
-
-                return hash.GetCurrentHashAsUInt64();
             }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
+
+            return hash.GetCurrentHashAsUInt64();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }
@@ -147,14 +164,17 @@ public static class FileReceiver
         long startOffset,
         Action<long>? progress,
         CancellationToken cancellationToken,
-        Func<Frame, FileOperationException?>? interpretControl = null)
+        Func<Frame, FileOperationException?>? interpretControl = null,
+        FileAccessPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(wire);
 
         FileStream file;
         try
         {
-            file = new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous);
+            file = policy is null
+                ? new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous)
+                : policy.OpenWrite(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete);
         }
         catch (UnauthorizedAccessException ex)
         {

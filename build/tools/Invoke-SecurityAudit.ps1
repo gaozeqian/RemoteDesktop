@@ -105,6 +105,9 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
     if ($Url.StartsWith('https://')) {
         Add-Ok "$Where 信令走 TLS（$Url）。"
     }
+    elseif ($Url.StartsWith('http://') -and (Test-IsLoopbackUrl $Url)) {
+        Add-Ok "$Where 的明文信令只监听回环（$Url），公网无法访问。"
+    }
     elseif ($Url.StartsWith('http://')) {
         Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的 TLS 一节。"
     }
@@ -236,11 +239,22 @@ foreach ($entry in $settingsToCheck) {
     $settings = Read-Settings -Path $entry.Path
     if ($null -eq $settings) { exit 3 }
 
-    # 中继共享密钥：Rendezvous 里叫 RelaySharedKey，Relay 里叫 SharedKey。
+    # 中继共享密钥：Rendezvous 里叫 RelaySharedKey，Relay 里叫 SharedKey。信令没有配置 RelayEndpoint 时
+    # 根本不会签发中继票据，空密钥不是暴露面；Relay 进程本身仍然必须配置它才能启动。
     $relayKey = $null
-    if ($settings.PSObject.Properties['Rendezvous'] -and $settings.Rendezvous.PSObject.Properties['RelaySharedKey'] -and $settings.Rendezvous.RelaySharedKey) { $relayKey = [string]$settings.Rendezvous.RelaySharedKey }
+    $relayDisabled = $false
+    if ($settings.PSObject.Properties['Rendezvous']) {
+        if ($settings.Rendezvous.PSObject.Properties['RelaySharedKey'] -and $settings.Rendezvous.RelaySharedKey) { $relayKey = [string]$settings.Rendezvous.RelaySharedKey }
+        $relayEndpoint = if ($settings.Rendezvous.PSObject.Properties['RelayEndpoint']) { [string]$settings.Rendezvous.RelayEndpoint } else { '' }
+        $relayDisabled = [string]::IsNullOrWhiteSpace($relayEndpoint)
+    }
     if ($settings.PSObject.Properties['Relay'] -and $settings.Relay.PSObject.Properties['SharedKey'] -and $settings.Relay.SharedKey) { $relayKey = [string]$settings.Relay.SharedKey }
-    Test-WeakRelayKey -Key $relayKey -Where $entry.Role
+    if ($relayDisabled) {
+        Add-Ok "$($entry.Role) 没有配置中继端点，不需要签署中继票据。"
+    }
+    else {
+        Test-WeakRelayKey -Key $relayKey -Where $entry.Role
+    }
 
     # 信令监听地址。
     if ($settings.PSObject.Properties['Urls']) { Test-SignalingUrl -Url ([string]$settings.Urls) -Where $entry.Role }

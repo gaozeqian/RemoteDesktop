@@ -471,8 +471,17 @@ public sealed class ServerSetupTests : IDisposable
     {
         var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "auto" });
 
-        Assert.Equal("http://0.0.0.0:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Equal("http://127.0.0.1:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.False(bool.Parse(Configuration(ServerSetup.RendezvousFolder)["Rendezvous:AllowInsecureSignaling"]!));
         Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void An_explicit_public_plaintext_address_is_recorded_as_an_opt_in()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        Assert.True(bool.Parse(Configuration(ServerSetup.RendezvousFolder)["Rendezvous:AllowInsecureSignaling"]!));
     }
 
     /// <summary>
@@ -1084,4 +1093,25 @@ public sealed class ServerSetupTests : IDisposable
     private T Read<T>(string folder, string section)
         where T : new() =>
         Configuration(folder).GetSection(section).Get<T>() ?? new T();
+}
+
+/// <summary>The signaling listener itself refuses to expose plaintext beyond loopback unless the deployment opted in.</summary>
+public class RendezvousListeningPolicyTests
+{
+    [Fact]
+    public void Loopback_plaintext_is_the_default_local_listener() =>
+        RendezvousOptions.ValidateListeningUrls("http://127.0.0.1:5080", allowInsecureSignaling: false);
+
+    [Fact]
+    public void Public_plaintext_requires_an_explicit_opt_in()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => RendezvousOptions.ValidateListeningUrls("http://0.0.0.0:5080", allowInsecureSignaling: false));
+
+        RendezvousOptions.ValidateListeningUrls("http://0.0.0.0:5080", allowInsecureSignaling: true);
+    }
+
+    [Fact]
+    public void Public_tls_needs_no_opt_in() =>
+        RendezvousOptions.ValidateListeningUrls("https://0.0.0.0:5080", allowInsecureSignaling: false);
 }

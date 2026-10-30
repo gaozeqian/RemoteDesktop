@@ -8,7 +8,7 @@ namespace RemoteDesktop.Features.FileTransfer;
 /// once <c>..</c> and friends are resolved. Access beyond that is up to the operating system, since the files are
 /// reached with the rights of the logged-in user.
 /// </summary>
-public sealed class FileAccessPolicy
+public sealed partial class FileAccessPolicy
 {
     private const int MaxPathLength = 32_000;
     private const int MaxNameLength = 255;
@@ -100,17 +100,6 @@ public sealed class FileAccessPolicy
             throw new FileOperationException(FileError.InvalidPath, "The path is not valid.", ex);
         }
 
-        // A UNC path is not a local file: opening one makes Windows authenticate to the named server as this user.
-        // With no roots configured the file browser otherwise accepts \\attacker\share\x and hands the remote side a
-        // way to collect the logged-in user's NetNTLM hash (or reach shares on the internal network). A deployment
-        // that really means to share a network folder configures that UNC path as a root; everything outside it is
-        // refused like any other path outside a root.
-        if (IsWindows && full.StartsWith(@"\\", StringComparison.Ordinal) &&
-            !_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal)))
-        {
-            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
-        }
-
         if (IsWindows && full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsReserved))
         {
             throw Invalid("The path contains a reserved device name.");
@@ -119,13 +108,35 @@ public sealed class FileAccessPolicy
         var resolved = ResolveFinalTarget(full);
 
         // Judged on the resolved path, not the spelling: a symbolic link pointing into /proc would otherwise be a way
-        // straight past this check.
-        if (!IsWindows && UnixKernelPaths.Any(kernel => IsSameOrInside(resolved, kernel)))
+        // straight past this check. The same boundary is checked again on the opened handle by OpenRead/OpenWrite,
+        // because a link can be swapped between this check and the actual open.
+        EnsureLocationAllowed(resolved);
+        return full;
+    }
+
+    /// <summary>
+    /// Applies the parts of the policy that depend on where a path really leads: kernel interfaces, network shares
+    /// and the configured roots. Both the pre-open spelling and the post-open handle target go through here.
+    /// </summary>
+    private void EnsureLocationAllowed(string path)
+    {
+        // A UNC path is not a local file: opening one makes Windows authenticate to the named server as this user.
+        // With no roots configured the file browser otherwise accepts \\attacker\share\x and hands the remote side a
+        // way to collect the logged-in user's NetNTLM hash (or reach shares on the internal network). A deployment
+        // that really means to share a network folder configures that UNC path as a root; everything outside it is
+        // refused like any other path outside a root.
+        if (IsWindows && path.StartsWith(@"\\", StringComparison.Ordinal) &&
+            !_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal)))
+        {
+            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+        }
+
+        if (!IsWindows && UnixKernelPaths.Any(kernel => IsSameOrInside(path, kernel)))
         {
             throw Invalid("That location is a kernel interface, not a file.");
         }
 
-        if (_allowedRoots.Length > 0)
+        if (_allowedRoots.Length > 0 && !_allowedRoots.Any(root => IsSameOrInside(path, root)))
         {
             // A path may sit inside a root as a string yet resolve, through a symbolic link or junction, to somewhere
             // outside it. The string check alone would let a planted link turn a "shared" path into an escape: follow
@@ -134,13 +145,8 @@ public sealed class FileAccessPolicy
             // root that itself lives behind a link still matches the paths beneath it. Without that, a genuinely
             // shared folder is refused as "not shared" (macOS keeps /var as a link to /private/var, and every
             // temporary path begins there).
-            if (!_allowedRoots.Any(root => IsSameOrInside(resolved, root)))
-            {
-                throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
-            }
+            throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
         }
-
-        return full;
     }
 
     /// <summary>

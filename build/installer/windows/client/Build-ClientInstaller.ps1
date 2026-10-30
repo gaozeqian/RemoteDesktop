@@ -102,6 +102,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Generated directories only. Remove-Item is intentionally avoided here: some hardened hosts redirect it to the
+# recycle bin, which fails for a directory tree and would make an otherwise clean package build stop.
+function Remove-GeneratedDirectory([string]$Path) {
+    if (Test-Path -LiteralPath $Path) {
+        [System.IO.Directory]::Delete($Path, $true)
+    }
+}
 Set-StrictMode -Version Latest
 
 # $PSScriptRoot is empty inside parameter defaults on Windows PowerShell 5.1 (it works in PowerShell 6 and later), so
@@ -521,7 +529,7 @@ function Invoke-Signing {
 
 Write-Host 'Publishing the applications...'
 if (Test-Path $PublishDirectory) {
-    if (-not $KeepPublishOutput) { Remove-Item -Recurse -Force $PublishDirectory }
+    if (-not $KeepPublishOutput) { Remove-GeneratedDirectory $PublishDirectory }
 }
 New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 
@@ -535,7 +543,7 @@ New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 # The two folders are the SDK's artifacts layout, which Directory.Build.props points at the repository root: the shape
 # is artifacts/<kind>/<project> and not <project>/<kind>, which is the whole point of that setting.
 foreach ($kind in 'obj', 'bin') {
-    Remove-Item (Join-Path $repoRoot "artifacts\$kind\RemoteDesktop.SessionAgent") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-GeneratedDirectory (Join-Path $repoRoot "artifacts\$kind\RemoteDesktop.SessionAgent")
 }
 
 Push-Location $repoRoot
@@ -645,7 +653,7 @@ if (-not $KeepSymbols) {
     # Remove-Item through the pipeline with -Recurse throws InputObjectNotBound on Windows PowerShell 5.1; passing the
     # path explicitly works on both 5.1 and 7. The scripts support both because a release build often runs in the
     # PowerShell that ships with Windows.
-    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { [System.IO.File]::Delete($_.FullName) }
 }
 
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and

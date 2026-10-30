@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using Google.Protobuf;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -260,22 +259,54 @@ public sealed partial class HostSessionService(
             return null;
         }
 
-        var nonce = RandomNumberGenerator.GetBytes(PasswordProof.NonceSize);
-        await ControlMessages.WriteAsync(control, new ControlMessage
+        // Both slots are always challenged: the fixed slot gets a random dummy when no fixed password exists, so the
+        // wire shape and the amount of work do not reveal whether the device is set up for unattended access.
+        var challenges = credentials.BeginAuthentication(connection.LocalFingerprint, connection.RemoteFingerprint);
+        var authChallenge = new AuthChallenge
         {
-            AuthChallenge = new AuthChallenge
+            ProtocolMajor = ProtocolVersion.Current.Major,
+            ProtocolMinor = ProtocolVersion.Current.Minor,
+        };
+        foreach (var challenge in challenges)
+        {
+            authChallenge.Credentials.Add(new SrpChallenge
             {
-                Nonce = ByteString.CopyFrom(nonce),
-                ProtocolMajor = ProtocolVersion.Current.Major,
-                ProtocolMinor = ProtocolVersion.Current.Minor,
-            },
-        }, cancellationToken).ConfigureAwait(false);
+                Salt = ByteString.CopyFrom(challenge.Salt),
+                ServerPublic = ByteString.CopyFrom(challenge.ServerPublic),
+            });
+        }
+
+        await ControlMessages.WriteAsync(control, new ControlMessage { AuthChallenge = authChallenge }, cancellationToken)
+            .ConfigureAwait(false);
 
         var response = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthResponse, cancellationToken)
             .ConfigureAwait(false)).AuthResponse;
 
-        // Fingerprints come from the pinned TLS certificates, binding the proof to this very connection.
-        if (!credentials.Verify(response.Proof.Span, nonce, connection.LocalFingerprint, connection.RemoteFingerprint))
+        int? matched = null;
+        byte[] serverEvidence = [];
+        if (response.Credentials.Count == challenges.Count)
+        {
+            // Verify every slot rather than stopping at the first match: the time taken must not say which credential
+            // was used, and a client supplying an equal temporary and fixed password still produces two responses.
+            for (var index = 0; index < challenges.Count; index++)
+            {
+                var credential = response.Credentials[index];
+                if (PasswordAuthenticator.VerifyHost(
+                        challenges[index],
+                        credential.ClientPublic.Span,
+                        credential.ClientEvidence.Span,
+                        out var evidence))
+                {
+                    matched ??= index;
+                    if (index == matched)
+                    {
+                        serverEvidence = evidence;
+                    }
+                }
+            }
+        }
+
+        if (matched is null)
         {
             limiter.RecordFailure(controller);
             LogBadPassword(logger, controller);
@@ -296,6 +327,8 @@ public sealed partial class HostSessionService(
                 Accepted = true,
                 Mode = ControlMessages.ToMessage(grant.Mode),
                 GrantedPermissions = (uint)grant.Permissions,
+                ServerEvidence = ByteString.CopyFrom(serverEvidence),
+                CredentialIndex = (uint)matched.Value,
             },
         }, cancellationToken).ConfigureAwait(false);
 

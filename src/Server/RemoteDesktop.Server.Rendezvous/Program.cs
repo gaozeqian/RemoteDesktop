@@ -15,6 +15,12 @@ var builder = WebApplication.CreateBuilder(args);
 // the shipped defaults. On Linux and macOS the service already runs with the live settings as its working directory.
 ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.RendezvousFolder);
 
+// A public plaintext signaling listener is a deployment mistake, not a supported default. The check reads the same
+// Urls Kestrel will bind, and runs before the host is built so the failure is a sentence rather than a live endpoint.
+RendezvousOptions.ValidateListeningUrls(
+    builder.Configuration["Urls"],
+    builder.Configuration.GetValue("Rendezvous:AllowInsecureSignaling", false));
+
 // Runs as a console app, under systemd on Linux, or as a Windows service (sc.exe create ...). Registered only for
 // the platform it is on: both calls are no-ops elsewhere, but naming one that cannot apply says the wrong thing to
 // whoever reads this next.

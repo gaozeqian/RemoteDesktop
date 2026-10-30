@@ -38,16 +38,33 @@ message Hello {
   string session_id = 5;
 }
 
+// One SRP-6a challenge. The server creates one candidate for every password slot it supports, including a random
+// dummy for a disabled fixed password, so the message does not reveal which credentials are configured.
+message SrpChallenge {
+  bytes salt = 1;
+  bytes server_public = 2;
+}
+
 // Host -> controller.
 message AuthChallenge {
+  // Retained for wire compatibility. Version 3 authenticates with the SRP credentials below; this field is not used.
   bytes nonce = 1;
   uint32 protocol_major = 2;
   uint32 protocol_minor = 3;
+  repeated SrpChallenge credentials = 4;
 }
 
-// Controller -> host: HMAC over the nonce and both certificate fingerprints (see PasswordProof).
+// One client response, in the same order as AuthChallenge.credentials.
+message SrpResponse {
+  bytes client_public = 1;
+  bytes client_evidence = 2;
+}
+
+// Controller -> host.
 message AuthResponse {
+  // Retained for wire compatibility. Version 3 sends the SRP responses below; this field is not used.
   bytes proof = 1;
+  repeated SrpResponse credentials = 2;
 }
 
 enum AuthFailure {
@@ -63,6 +80,11 @@ message AuthResult {
   AuthFailure failure = 2;
   SessionModeMessage mode = 3;
   uint32 granted_permissions = 4;
+  // The host's SRP evidence (M2) for the matched credential. The controller must verify it or the host is not
+  // authenticated, even though its TLS certificate fingerprint matched what signaling supplied.
+  bytes server_evidence = 5;
+  // Index into AuthChallenge.credentials that matched.
+  uint32 credential_index = 6;
 }
 
 message Ping {

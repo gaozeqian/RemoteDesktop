@@ -27,6 +27,12 @@ public sealed class RendezvousOptions
     /// <summary>Base64 HMAC key shared with the relay.</summary>
     public string RelaySharedKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Allows the signaling listener to bind plain HTTP on a non-loopback address. Off by default: device codes, IP
+    /// candidates and relay tickets would otherwise be readable and replayable on the path.
+    /// </summary>
+    public bool AllowInsecureSignaling { get; set; }
+
     public TimeSpan RelayTicketLifetime { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
@@ -111,6 +117,33 @@ public sealed class RendezvousOptions
     /// the monitoring's own network. See docs/ops/README.md.
     /// </remarks>
     public bool MetricsEnabled { get; set; }
+
+    /// <summary>
+    /// Refuses a public plaintext listener unless the deployment explicitly opted in. Kestrel's URL list is outside
+    /// this options section, so the entry point passes it here before the server starts.
+    /// </summary>
+    public static void ValidateListeningUrls(string? urls, bool allowInsecureSignaling)
+    {
+        if (string.IsNullOrWhiteSpace(urls))
+        {
+            return;
+        }
+
+        foreach (var value in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                || uri.Scheme is not ("http" or "https"))
+            {
+                throw new InvalidOperationException($"Urls must contain absolute http:// or https:// addresses (got '{value}').");
+            }
+
+            if (uri.Scheme == "http" && !uri.IsLoopback && !allowInsecureSignaling)
+            {
+                throw new InvalidOperationException(
+                    $"Urls exposes signaling as plain HTTP on '{value}'. Use https:// (or set Rendezvous:AllowInsecureSignaling=true only for an isolated plaintext network).");
+            }
+        }
+    }
 
     /// <summary>
     /// Checks the settings the server cannot work without. Called when the options are first used (ValidateOnStart), so

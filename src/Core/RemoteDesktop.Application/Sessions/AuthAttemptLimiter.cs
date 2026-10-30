@@ -3,31 +3,24 @@ using RemoteDesktop.Domain;
 namespace RemoteDesktop.Application.Sessions;
 
 /// <summary>
-/// Limits online password guessing: a few failures lock out one controller device for a while, and a burst of
-/// failures from many devices (an attacker rotating identities) locks out everyone briefly.
+/// Limits online password guessing per controller device. There is deliberately no global failure budget: an
+/// unauthenticated caller can rotate device identities, so a global lock would let it deny every legitimate
+/// controller without ever knowing a password. Concurrency is bounded separately by connection admission.
 /// </summary>
 public sealed class AuthAttemptLimiter(TimeProvider time)
 {
     public const int MaxFailuresPerDevice = 5;
-    public const int MaxFailuresGlobal = 20;
 
     public static readonly TimeSpan DeviceWindow = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan GlobalWindow = TimeSpan.FromMinutes(1);
 
     private readonly Dictionary<DeviceId, Window> _devices = [];
     private readonly Lock _lock = new();
-    private Window _global;
 
     public bool IsBlocked(DeviceId device)
     {
         var now = time.GetUtcNow();
         lock (_lock)
         {
-            if (Current(ref _global, now, GlobalWindow).Failures >= MaxFailuresGlobal)
-            {
-                return true;
-            }
-
             return _devices.TryGetValue(device, out var window) && Current(ref window, now, DeviceWindow).Failures >= MaxFailuresPerDevice;
         }
     }
@@ -37,8 +30,6 @@ public sealed class AuthAttemptLimiter(TimeProvider time)
         var now = time.GetUtcNow();
         lock (_lock)
         {
-            Current(ref _global, now, GlobalWindow).Failures++;
-
             _devices.TryGetValue(device, out var window);
             Current(ref window, now, DeviceWindow).Failures++;
             _devices[device] = window;

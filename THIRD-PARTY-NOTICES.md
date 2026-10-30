@@ -27,6 +27,7 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | Avalonia.Themes.Fluent | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
 | Avalonia.Win32 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
 | Avalonia.X11 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| BouncyCastle.Cryptography | 2.7.0 | MIT | https://www.bouncycastle.org/stable/nuget/csharp/website |
 | CommunityToolkit.Mvvm | 8.4.2 | MIT | https://github.com/CommunityToolkit/dotnet |
 | Concentus | 2.2.2 | 见项目主页 | https://github.com/lostromb/concentus |
 | FFmpeg.AutoGen | 8.0.0 | 见项目主页 | https://github.com/Ruslan-B/FFmpeg.AutoGen |
@@ -89,7 +90,7 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | System.Diagnostics.EventLog | 10.0.13 | MIT | https://dot.net/ |
 | System.IO.Hashing | 8.0.0 | MIT | https://dot.net/ |
 | System.Numerics.Tensors | 9.0.0 | MIT | https://dot.net/ |
-| System.Security.Cryptography.ProtectedData | 10.0.12 | MIT | https://dot.net/ |
+| System.Security.Cryptography.ProtectedData | 10.0.13 | MIT | https://dot.net/ |
 | System.ServiceProcess.ServiceController | 10.0.13 | MIT | https://dot.net/ |
 | Tmds.DBus.Protocol | 0.95.1 | MIT | https://www.nuget.org/packages/Tmds.DBus.Protocol |
 | Vortice.Direct3D11 | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.Direct3D11 |

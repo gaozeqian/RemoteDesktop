@@ -85,49 +85,51 @@ public sealed partial class FileTransferModule(
     private async Task DownloadAsync(Stream stream, DownloadRequest request, SessionContext session, CancellationToken cancellationToken)
     {
         string path;
-        FileInfo info;
+        FileStream file;
+        long size;
+        DateTimeOffset modified;
         try
         {
             path = policy.Normalize(request.Path);
-            info = new FileInfo(path);
-            if (!info.Exists)
-            {
-                throw Directory.Exists(path)
-                    ? new FileOperationException(FileError.InvalidPath, "That is a folder; download its files one by one.")
-                    : new FileOperationException(FileError.NotFound, "The file does not exist.");
-            }
+            // The handle is verified against the roots after it is open, then used for both the size and every byte
+            // sent. A link swapped between the path check and this open cannot redirect the transfer.
+            file = policy.OpenRead(path);
+            size = file.Length;
+            modified = new DateTimeOffset(File.GetLastWriteTimeUtc(path));
         }
-        catch (FileOperationException ex)
+        catch (Exception ex) when (ex is FileOperationException or IOException or UnauthorizedAccessException)
         {
-            await RespondAsync(stream, Failure(ex), cancellationToken).ConfigureAwait(false);
+            var failure = ex as FileOperationException ?? new FileOperationException(FileError.Io, "The file cannot be read.", ex);
+            await RespondAsync(stream, Failure(failure), cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        var size = info.Length;
-        var modified = info.LastWriteTimeUtc;
-        await RespondAsync(stream, new FileResponse
+        await using (file.ConfigureAwait(false))
         {
-            DownloadAccepted = new DownloadAccepted { Status = Ok(), Size = (ulong)size, ModifiedUnixMs = new DateTimeOffset(modified).ToUnixTimeMilliseconds() },
-        }, cancellationToken).ConfigureAwait(false);
+            await RespondAsync(stream, new FileResponse
+            {
+                DownloadAccepted = new DownloadAccepted { Status = Ok(), Size = (ulong)size, ModifiedUnixMs = modified.ToUnixTimeMilliseconds() },
+            }, cancellationToken).ConfigureAwait(false);
 
-        // The receiver decides where to continue, based on what it already has.
-        var start = await ProtobufFrames.ReadAsync(stream, FileRequest.Parser, MaxRequestBytes, cancellationToken).ConfigureAwait(false);
-        if (start?.BodyCase != FileRequest.BodyOneofCase.Start)
-        {
-            return; // skipped by the controller's conflict policy, or it gave up
-        }
+            // The receiver decides where to continue, based on what it already has.
+            var start = await ProtobufFrames.ReadAsync(stream, FileRequest.Parser, MaxRequestBytes, cancellationToken).ConfigureAwait(false);
+            if (start?.BodyCase != FileRequest.BodyOneofCase.Start)
+            {
+                return; // skipped by the controller's conflict policy, or it gave up
+            }
 
-        LogTransfer(logger, session.Id, "download", path, size, (long)start.Start.Offset);
-        try
-        {
-            var hash = await FileSender.SendAsync(stream, path, size, (long)start.Start.Offset, null, cancellationToken).ConfigureAwait(false);
-            await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = Ok(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
-            LogTransferDone(logger, session.Id, "download", path);
-        }
-        catch (FileOperationException ex)
-        {
-            await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = StatusOf(ex) } }, cancellationToken).ConfigureAwait(false);
-            LogTransferFailed(logger, session.Id, "download", path, ex.Message);
+            LogTransfer(logger, session.Id, "download", path, size, (long)start.Start.Offset);
+            try
+            {
+                var hash = await FileSender.SendOpenAsync(stream, file, size, (long)start.Start.Offset, null, cancellationToken).ConfigureAwait(false);
+                await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = Ok(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
+                LogTransferDone(logger, session.Id, "download", path);
+            }
+            catch (FileOperationException ex)
+            {
+                await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = StatusOf(ex) } }, cancellationToken).ConfigureAwait(false);
+                LogTransferFailed(logger, session.Id, "download", path, ex.Message);
+            }
         }
     }
 
@@ -210,7 +212,7 @@ public sealed partial class FileTransferModule(
 
         try
         {
-            var hash = await FileReceiver.ReceiveAsync(stream, partial, size, offset, null, cancellationToken).ConfigureAwait(false);
+            var hash = await FileReceiver.ReceiveAsync(stream, partial, size, offset, null, cancellationToken, policy: policy).ConfigureAwait(false);
             var finish = await ProtobufFrames.ReadAsync(stream, FileRequest.Parser, MaxRequestBytes, cancellationToken).ConfigureAwait(false);
             if (finish?.BodyCase != FileRequest.BodyOneofCase.Finish)
             {
@@ -227,7 +229,7 @@ public sealed partial class FileTransferModule(
                 return;
             }
 
-            Finalize(partial, ref finalPath, overwrite, modified);
+            finalPath = await FinalizeAsync(partial, finalPath, overwrite, modified, cancellationToken).ConfigureAwait(false);
             ledger?.Forget(partial); // the file has a name now; there is nothing left to finish
             await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = Ok(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
             LogTransferDone(logger, session.Id, "upload", finalPath);
@@ -239,25 +241,46 @@ public sealed partial class FileTransferModule(
         }
     }
 
-    // Moving the finished partial into place is what makes the file appear, so a half-received file is never visible under its name.
-    private static void Finalize(string partial, ref string finalPath, bool overwrite, DateTimeOffset modified)
+    /// <summary>
+    /// Copies the verified partial into a destination opened and checked under the policy. This deliberately does not
+    /// use <see cref="File.Move(string, string, bool)"/>: a path-based rename can still be redirected by a link that
+    /// is swapped after Normalize. A handle cannot, so the bytes can only land in a file whose real target passed the
+    /// root check. The partial is removed only after the copy is complete.
+    /// </summary>
+    private async Task<string> FinalizeAsync(string partial, string finalPath, bool overwrite, DateTimeOffset modified, CancellationToken cancellationToken)
     {
-        try
+        await using var source = policy.OpenRead(partial);
+        FileStream? destination = null;
+        for (var attempt = 0; destination is null; attempt++)
         {
-            File.Move(partial, finalPath, overwrite);
-        }
-        catch (IOException) when (!overwrite && File.Exists(finalPath))
-        {
-            // Somebody created that name in the meantime: keep both.
-            finalPath = PartialFile.FreeName(finalPath);
-            File.Move(partial, finalPath, overwrite: false);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            throw new FileOperationException(FileError.AccessDenied, "The file could not be put in place.", ex);
+            try
+            {
+                // OpenOrCreate is used for overwrite because Create would truncate before the handle could be checked;
+                // the truncation happens below, only after ValidateOpenedFile has accepted the real target.
+                destination = policy.OpenWrite(finalPath, overwrite ? FileMode.OpenOrCreate : FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            }
+            catch (IOException) when (!overwrite && attempt < 100 && File.Exists(finalPath))
+            {
+                // Somebody created that name in the meantime: keep both and try the next free name.
+                finalPath = PartialFile.FreeName(finalPath);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                throw new FileOperationException(FileError.AccessDenied, "The file could not be put in place.", ex);
+            }
         }
 
+        await using (destination.ConfigureAwait(false))
+        {
+            destination.SetLength(0);
+            source.Position = 0;
+            await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        File.Delete(partial);
         FileTimestamps.TrySetLastWriteTime(finalPath, modified);
+        return finalPath;
     }
 
     private static FileResponse List(LocalFileOperations operations, string path)
