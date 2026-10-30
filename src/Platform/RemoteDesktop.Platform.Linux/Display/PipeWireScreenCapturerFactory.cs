@@ -14,16 +14,17 @@ namespace RemoteDesktop.Platform.Linux.Display;
 /// here is the part that is about screens: deciding which of the granted streams is the screen that was asked for.
 /// </para>
 /// <para>
-/// The two lists do not use the same units. The compositor describes a screen in device pixels, which is what
-/// <see cref="DisplayInfo.Bounds"/> carries; the portal describes the same screen in the units the compositor lays
-/// windows out in, which are scaled. The scale is therefore applied to the portal's position before the two are
-/// compared — without it, a screen at any scale other than one would never be found, and the ordinary single-screen
-/// desktop would still work by falling through to the only stream there is.
+/// Which stream is which is decided in <see cref="PortalDisplayMatch"/>, in the compositor's own units. What is left
+/// here is the consequence: the capture format is pinned to the shared screen's real size, and the display that goes
+/// on the wire is that screen rather than the one that was asked for. A desktop that shares one monitor while the
+/// controller picks another therefore shows the shared one at its own size instead of answering a format request with
+/// frames nobody can copy.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
 public sealed partial class PipeWireScreenCapturerFactory(
     PortalGrant grant,
+    IDisplayEnumerator desktop,
     ILoggerFactory loggerFactory,
     ILogger<PipeWireScreenCapturerFactory> logger) : IScreenCapturerFactory
 {
@@ -37,46 +38,34 @@ public sealed partial class PipeWireScreenCapturerFactory(
             throw new InvalidOperationException("The desktop granted no screens to share.");
         }
 
-        var screen = Match(display, screens);
-        var descriptor = grant.DuplicateRemoteDescriptor();
+        // Which granted stream is this screen, and what the desktop says that screen's size is. The second half is
+        // what the capture format is pinned to: a stream of a monitor that was not asked for still has to be captured
+        // at its own size, or the frames arrive with a stride the copier rejects.
+        var (screen, actual) = PortalDisplayMatch.Resolve(display, screens, desktop.GetDisplays());
 
-        LogStarting(logger, display.Id, screen.NodeId, display.Bounds.Width, display.Bounds.Height);
+        if (!string.Equals(actual.Id, display.Id, StringComparison.Ordinal))
+        {
+            // Said once per switch, because "why am I looking at the other monitor" is the question this answers.
+            LogSubstituted(logger, display.Id, actual.Id, actual.Bounds.Width, actual.Bounds.Height);
+        }
+
+        var descriptor = grant.DuplicateRemoteDescriptor();
+        LogStarting(logger, actual.Id, screen.NodeId, actual.Bounds.Width, actual.Bounds.Height);
 
         return new PipeWireScreenCapturer(
             descriptor,
             screen.NodeId,
-            display,
-            display.Bounds.Width,
-            display.Bounds.Height,
+            actual,
+            actual.Bounds.Width,
+            actual.Bounds.Height,
             loggerFactory.CreateLogger<PipeWireScreenCapturer>());
-    }
-
-    private static SharedScreen Match(DisplayInfo display, IReadOnlyList<SharedScreen> screens)
-    {
-        var scale = display.Scale <= 0 ? 1.0 : display.Scale;
-
-        foreach (var screen in screens)
-        {
-            var x = (int)Math.Round(screen.X * scale);
-            var y = (int)Math.Round(screen.Y * scale);
-
-            if (x == display.Bounds.X && y == display.Bounds.Y)
-            {
-                return screen;
-            }
-        }
-
-        if (screens.Count == 1)
-        {
-            // One screen was granted and one was asked for; they are the same screen whatever the arithmetic says.
-            // This is the ordinary case, and the alternative is refusing to capture over a rounding difference.
-            return screens[0];
-        }
-
-        throw new InvalidOperationException(
-            $"The desktop granted {screens.Count} screens and none of them is '{display.Id}'.");
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Capturing '{Display}' from PipeWire node {Node} at {Width}x{Height}.")]
     private static partial void LogStarting(ILogger logger, string display, uint node, int width, int height);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "The desktop is sharing '{Actual}' ({Width}x{Height}), not the requested '{Requested}'; the stream is capped at the shared screen's size and announced as that screen.")]
+    private static partial void LogSubstituted(ILogger logger, string requested, string actual, int width, int height);
 }

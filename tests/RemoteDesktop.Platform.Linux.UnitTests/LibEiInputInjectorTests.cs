@@ -72,6 +72,7 @@ public sealed class LibEiInputInjectorTests
 
         var capturers = new PipeWireScreenCapturerFactory(
             grant,
+            displays,
             NullLoggerFactory.Instance,
             NullLogger<PipeWireScreenCapturerFactory>.Instance);
 

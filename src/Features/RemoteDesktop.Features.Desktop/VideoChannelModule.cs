@@ -166,7 +166,10 @@ public sealed partial class VideoChannelModule(
 
                 if (listChanged && encoder is not null)
                 {
-                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
+                    // The capturer's display, not the requested one: a host that had to substitute another screen (a
+                    // Wayland desktop shares only what the operator picked) announces the screen it is really sending,
+                    // so the toolbar and the picture cannot disagree.
+                    await SendStreamInfoAsync(channel, capturer.Display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
                 }
 
                 // Pacing comes from the capture itself (it blocks until the screen changes, at most at the refresh
@@ -239,7 +242,10 @@ public sealed partial class VideoChannelModule(
                 {
                     encoder?.Dispose();
                     (encoder, bitrate) = CreateEncoder(latest.Width, latest.Height, frameRate, preference, allowHardware, sessionId);
-                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
+                    // The capturer's display, not the requested one: a host that had to substitute another screen (a
+                    // Wayland desktop shares only what the operator picked) announces the screen it is really sending,
+                    // so the toolbar and the picture cannot disagree.
+                    await SendStreamInfoAsync(channel, capturer.Display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
                     stream.KeyFrameRequested = true;
                 }
 
