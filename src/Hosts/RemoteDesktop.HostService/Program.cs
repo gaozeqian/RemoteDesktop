@@ -151,7 +151,9 @@ builder.Logging.ClearProviders().AddSerilog(
     new LoggerConfiguration()
         .MinimumLevel.Information()
         .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
-        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, shared: true, flushToDiskInterval: TimeSpan.FromSeconds(1), formatProvider: CultureInfo.InvariantCulture)
+        // Only this process writes this file, so the regular sink works and its periodic flush keeps the log on
+        // disk while the service runs — the shared sink would ignore the flush interval entirely.
+        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, flushToDiskInterval: TimeSpan.FromSeconds(1), formatProvider: CultureInfo.InvariantCulture)
         .CreateLogger(),
     dispose: true);
 

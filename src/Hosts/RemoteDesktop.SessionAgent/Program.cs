@@ -44,10 +44,13 @@ var desktop = builder.Configuration["desktop"] ?? "user";
 var logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.File(
-        Path.Combine(dataDirectory, "logs", "agent-.log"),
+        // One file per desktop kind: a user agent runs for the life of the session, and two agents writing one
+        // file would need the shared sink — which ignores flushToDiskInterval, leaving a stuck stream with no log
+        // on disk. Separate files keep the regular sink, whose periodic flush makes the encoder/capture lines
+        // readable while the agent is still running.
+        Path.Combine(dataDirectory, "logs", $"agent-{desktop}-.log"),
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 7,
-        shared: true,
         // A long-lived agent writes little; without an interval the sink holds lines in its buffer and a stuck
         // stream leaves no log behind to diagnose. Flush every second so the encoder/capture lines are on disk.
         flushToDiskInterval: TimeSpan.FromSeconds(1),
