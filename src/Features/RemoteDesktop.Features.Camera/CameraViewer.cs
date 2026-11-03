@@ -48,6 +48,9 @@ public sealed partial class CameraViewer : IAsyncDisposable
 {
     private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
+
+    /// <summary>The decoder has been fed for this long without producing a picture: it has lost sync and must be rebuilt.</summary>
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
@@ -66,6 +69,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private byte[] _front = [];
     private byte[] _back = [];
     private long _frameNumber;
+    private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
     private volatile string? _failure;
 
@@ -299,6 +303,18 @@ public sealed partial class CameraViewer : IAsyncDisposable
                 _waitingForKeyFrame = false;
                 if (picture is null)
                 {
+                    // The host is feeding non-key frames but the decoder stopped producing pictures: it has lost
+                    // sync and is silently dropping everything. A camera never idles the way a desktop does, so this
+                    // is a genuine stall rather than an unchanged screen; rebuild the decoder (this loop is its only
+                    // owner) instead of leaving the watchdog to wait forever for a key frame it will never request.
+                    if (Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    {
+                        LogDecoderStalled(_logger);
+                        RebuildDecoder();
+                        _waitingForKeyFrame = true;
+                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
@@ -315,6 +331,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     }
                 }
 
+                Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
                 windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
                 windowFrames++;
                 latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
@@ -406,7 +423,25 @@ public sealed partial class CameraViewer : IAsyncDisposable
             Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _decoder.Name);
         }
 
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
         _waitingForKeyFrame = true;
+    }
+
+    /// <summary>
+    /// Replaces the decoder with a fresh one for the current stream. Called from the receive loop (the decoder's only
+    /// owner) when the decoder keeps being fed yet stops producing pictures, so a lone key frame is not mistaken for
+    /// a fixed stream.
+    /// </summary>
+    private void RebuildDecoder()
+    {
+        if (Details is not { } details)
+        {
+            return;
+        }
+
+        _decoder?.Dispose();
+        _decoder = _codecs.CreateDecoder(VideoCodec.H264, details.Width, details.Height);
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
     }
 
     private async ValueTask WriteAsync(CameraRequest message, CancellationToken cancellationToken)
@@ -428,6 +463,9 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Decoding failed ({Reason}); requested a key frame.")]
     private static partial void LogDecodeFailed(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The camera decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
+    private static partial void LogDecoderStalled(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Camera stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
