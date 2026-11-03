@@ -208,6 +208,16 @@ public sealed partial class HostSessionService(
             {
                 LogHandshakeFailed(logger, connection.RemoteDevice, ex.Message);
             }
+#pragma warning disable CA1031 // This task is started and forgotten: nothing awaits it, so an exception escaping would go unobserved.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                // A connection torn down mid-handshake (ObjectDisposedException) or a handler that failed in a way
+                // nobody listed above. The controller is not answered - the failure is on this side and its nature is
+                // unknown - but the connection and the control channel are closed by the disposals around this
+                // block, which is what the controller sees as a refused session.
+                LogSessionFailed(logger, connection.RemoteDevice, ex);
+            }
             finally
             {
                 if (control is not null)
@@ -647,6 +657,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Session {SessionId}: {Channel} channel failed.")]
     private static partial void LogChannelFailed(ILogger logger, SessionId sessionId, ChannelType channel, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Serving {Controller} failed unexpectedly; the connection is closed.")]
+    private static partial void LogSessionFailed(ILogger logger, DeviceId controller, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: the {Handler} handler threw; the session proceeds.")]
     private static partial void LogSessionEventFailed(ILogger logger, SessionId sessionId, string handler, Exception exception);

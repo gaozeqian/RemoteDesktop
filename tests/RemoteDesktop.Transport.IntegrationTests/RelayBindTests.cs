@@ -104,6 +104,32 @@ public class RelayBindTests
         Assert.True(await WaitUntilAsync(() => logger.Warnings == 2, TimeSpan.FromSeconds(5)), "the next window writes another summary");
     }
 
+    [Fact]
+    public async Task Tokens_that_do_not_match_are_summarized_too_not_logged_per_packet()
+    {
+        // Anyone with a valid ticket (every registered device can ask for one) can repeat a wrong token for free.
+        var logger = new CountingLogger<UdpRelay>();
+        await using var relay = await TestRelay.StartAsync(logger: logger);
+        var elsewhere = RelayCookie.Compute(Key, relay.Ticket, (byte)RelayRole.Controller, new IPEndPoint(IPAddress.Parse("10.1.2.3"), 4000), relay.Now);
+        var packet = UdpControlPacket.CreateRelayBind((byte)RelayRole.Controller, elsewhere, relay.Ticket);
+
+        for (var i = 0; i < 20; i++)
+        {
+            await relay.SendAsync(packet);
+        }
+
+        Assert.True(await WaitUntilAsync(() => logger.Warnings >= 1, TimeSpan.FromSeconds(5)), "one summary is written");
+
+        // Let the relay get through the rest of the burst, then check that none of it produced a line of its own.
+        await Task.Delay(TimeSpan.FromMilliseconds(300), Ct);
+        Assert.Equal(1, logger.Warnings);
+
+        relay.Advance(TimeSpan.FromMinutes(1) + TimeSpan.FromSeconds(1));
+        await relay.SendAsync(packet);
+
+        Assert.True(await WaitUntilAsync(() => logger.Warnings == 2, TimeSpan.FromSeconds(5)), "the next window writes another summary");
+    }
+
     /// <summary>A relay of its own on loopback, with a ticket this test signed and a clock it controls.</summary>
     private sealed class TestRelay : IAsyncDisposable
     {

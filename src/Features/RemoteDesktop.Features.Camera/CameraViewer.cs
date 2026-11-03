@@ -51,6 +51,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     /// <summary>The decoder has been fed for this long without producing a picture: it has lost sync and must be rebuilt.</summary>
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>Non-key frames in a row that must come back without a picture (besides <see cref="StallTimeout"/>) before the decoder is rebuilt.</summary>
+    private const int SilentFramesBeforeRebuild = 3;
+
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
@@ -72,6 +76,9 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
     private volatile string? _failure;
+
+    // Non-key frames in a row that produced no picture; only the receive loop touches it.
+    private int _silentFrames;
 
     private CameraViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
@@ -307,7 +314,12 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     // sync and is silently dropping everything. A camera never idles the way a desktop does, so this
                     // is a genuine stall rather than an unchanged screen; rebuild the decoder (this loop is its only
                     // owner) instead of leaving the watchdog to wait forever for a key frame it will never request.
-                    if (Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    //
+                    // Only a run of non-key frames counts: a decoder may legitimately answer nothing for a unit that
+                    // carries just parameter sets, and rebuilding on that would throw away the SPS/PPS it just learned.
+                    if (!encoded.IsKeyFrame
+                        && ++_silentFrames >= SilentFramesBeforeRebuild
+                        && Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
                     {
                         LogDecoderStalled(_logger);
                         RebuildDecoder();
@@ -317,6 +329,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
                     continue;
                 }
+
+                _silentFrames = 0;
 
                 using (picture)
                 {
@@ -411,6 +425,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
         // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream.
         _decoder?.Dispose();
         _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
+        _silentFrames = 0;
         lock (_frameLock)
         {
             if (_front.Length != width * height * 4)
@@ -434,14 +449,33 @@ public sealed partial class CameraViewer : IAsyncDisposable
     /// </summary>
     private void RebuildDecoder()
     {
+        // Whatever happens, start counting again: a rebuild that failed must not be retried on the very next frame.
+        _silentFrames = 0;
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+
         if (Details is not { } details)
         {
             return;
         }
 
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, details.Width, details.Height);
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+        // The new decoder comes first: if creating it fails, the old one is still a decoder and the caller's key frame
+        // request gives it a chance, where a disposed one in _decoder would end the whole viewer on the next frame.
+        IVideoDecoder fresh;
+        try
+        {
+            fresh = _codecs.CreateDecoder(VideoCodec.H264, details.Width, details.Height);
+        }
+#pragma warning disable CA1031 // Any backend failure leaves the old decoder in place.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogDecoderRebuildFailed(_logger, ex);
+            return;
+        }
+
+        var old = _decoder;
+        _decoder = fresh;
+        old?.Dispose();
     }
 
     private async ValueTask WriteAsync(CameraRequest message, CancellationToken cancellationToken)
@@ -466,6 +500,9 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The camera decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
     private static partial void LogDecoderStalled(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A new camera decoder could not be created; keeping the old one and requesting a key frame.")]
+    private static partial void LogDecoderRebuildFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Camera stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);

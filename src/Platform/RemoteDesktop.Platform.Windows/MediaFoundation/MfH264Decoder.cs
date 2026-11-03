@@ -71,7 +71,17 @@ internal sealed class MfH264Decoder : IVideoDecoder
             {
             }
 
-            _transform.ProcessInput(0, sample, 0);
+            // A sibling catch clause does not see an exception thrown from inside this one, so the retry carries its
+            // own: a decoder that refuses the unit twice has rejected the bitstream, which the caller answers with a
+            // key frame request rather than by closing the stream.
+            try
+            {
+                _transform.ProcessInput(0, sample, 0);
+            }
+            catch (SharpGenException retryEx)
+            {
+                throw new InvalidDataException("The decoder rejected the bitstream.", retryEx);
+            }
         }
         catch (SharpGenException ex)
         {

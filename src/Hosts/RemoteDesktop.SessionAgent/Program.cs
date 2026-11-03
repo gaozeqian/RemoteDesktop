@@ -60,7 +60,14 @@ var logger = new LoggerConfiguration()
 builder.Logging.ClearProviders().AddSerilog(logger, dispose: true);
 
 using var stop = new CancellationTokenSource();
-AppDomain.CurrentDomain.UnhandledException += (_, e) => logger.Fatal(e.ExceptionObject as Exception, "Unhandled exception in the agent.");
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+{
+    logger.Fatal(e.ExceptionObject as Exception, "Unhandled exception in the agent.");
+
+    // The runtime tears the process down as soon as this handler returns, and the file sink flushes only once a
+    // second: the line that explains the crash would be the one still in the buffer. Disposing the logger writes it.
+    logger.Dispose();
+};
 
 AgentLink link;
 try

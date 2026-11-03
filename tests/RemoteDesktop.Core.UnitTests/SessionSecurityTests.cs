@@ -175,4 +175,64 @@ public class AuthAttemptLimiterTests
         Assert.False(limiter.IsBlocked(new DeviceId(999_999_999)));
     }
 
+    [Fact]
+    public void The_table_stays_bounded_and_a_locked_out_device_keeps_its_lock_under_identity_rotation()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var locked = new DeviceId(111_111_111);
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice; i++)
+        {
+            limiter.RecordFailure(locked);
+        }
+
+        // Far more one-failure identities than the table holds: the ones nobody has locked out are the ones dropped.
+        for (var i = 0; i < AuthAttemptLimiter.MaxTrackedDevices * 2; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(1));
+            limiter.RecordFailure(new DeviceId(400_000_000 + i));
+        }
+
+        Assert.True(limiter.IsBlocked(locked));
+        Assert.False(limiter.IsBlocked(new DeviceId(999_999_999)));
+    }
+
+    [Fact]
+    public void Expired_entries_are_dropped_without_waiting_for_the_table_to_fill()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice; i++)
+        {
+            limiter.RecordFailure(device);
+        }
+
+        _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromMinutes(2));
+        limiter.RecordFailure(new DeviceId(222_222_222));
+
+        // Its window is over, so a single new failure starts a fresh count rather than meeting the old five.
+        limiter.RecordFailure(device);
+        Assert.False(limiter.IsBlocked(device));
+    }
+
+    [Fact]
+    public void Unknown_devices_are_refused_while_every_slot_is_a_locked_out_device_and_released_when_they_age_out()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        for (var d = 0; d < AuthAttemptLimiter.MaxTrackedDevices; d++)
+        {
+            for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice; i++)
+            {
+                limiter.RecordFailure(new DeviceId(500_000_000 + d));
+            }
+        }
+
+        var newcomer = new DeviceId(999_999_999);
+        limiter.RecordFailure(newcomer);
+
+        // Forgetting the newcomer's failure would hand it unlimited guesses, so it is refused instead.
+        Assert.True(limiter.IsBlocked(newcomer));
+
+        _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromMinutes(2));
+        Assert.False(limiter.IsBlocked(newcomer));
+    }
 }

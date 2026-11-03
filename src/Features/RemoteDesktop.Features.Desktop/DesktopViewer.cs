@@ -26,6 +26,12 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     /// <summary>No picture for this long and a key frame is asked for: the stream may simply have lost sync.</summary>
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// Non-key frames in a row that must come back without a picture before the decoder is judged out of sync (on top
+    /// of <see cref="StallTimeout"/>). One quiet answer is ordinary; a run of them while the host keeps sending is not.
+    /// </summary>
+    private const int SilentFramesBeforeRebuild = 3;
+
     /// <summary>A key frame asked for and not answered for this long: what is on screen is old, not just unchanged.</summary>
     private static readonly TimeSpan StallAlarm = TimeSpan.FromSeconds(4);
 
@@ -51,6 +57,9 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
     private volatile bool _stalled;
+
+    // Non-key frames in a row that produced no picture; only the receive loop touches it.
+    private int _silentFrames;
 
     private DesktopViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
@@ -238,7 +247,13 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     // sync and is silently dropping everything. Asking for one key frame only hides the problem
                     // until the next stall, so rebuild the decoder right here (this loop is its only owner) instead
                     // of leaving the watchdog to wait out the 30 s backoff.
-                    if (Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    //
+                    // Only a run of non-key frames counts. A decoder may legitimately answer nothing for a unit that
+                    // carries just parameter sets, or while it wants more input; a rebuild on the strength of one of
+                    // those would throw away the SPS/PPS it just learned and leave the next picture undecodable.
+                    if (!encoded.IsKeyFrame
+                        && ++_silentFrames >= SilentFramesBeforeRebuild
+                        && Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
                     {
                         LogDecoderStalled(_logger);
                         RebuildDecoder();
@@ -248,6 +263,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
                     continue;
                 }
+
+                _silentFrames = 0;
 
                 using (picture)
                 {
@@ -395,14 +412,34 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     /// </summary>
     private void RebuildDecoder()
     {
+        // Whatever happens, start counting again: a rebuild that failed must not be retried on the very next frame.
+        _silentFrames = 0;
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+
         if (StreamInfo is not { } info)
         {
             return;
         }
 
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, info.Width, info.Height);
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+        // The new decoder comes first. Creating it can fail in backend-specific ways (no hardware decoder left, a
+        // device that was lost); the old one is then still a decoder, and the caller's key frame request gives it a
+        // chance, where a disposed one in _decoder would end the whole viewer on the next frame.
+        IVideoDecoder fresh;
+        try
+        {
+            fresh = _codecs.CreateDecoder(VideoCodec.H264, info.Width, info.Height);
+        }
+#pragma warning disable CA1031 // Any backend failure leaves the old decoder in place.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogDecoderRebuildFailed(_logger, ex);
+            return;
+        }
+
+        var old = _decoder;
+        _decoder = fresh;
+        old?.Dispose();
     }
 
     private void OnStreamInfo(VideoStreamInfo info)
@@ -419,6 +456,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         // fed the new one, even at the same resolution.
         _decoder?.Dispose();
         _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
+        _silentFrames = 0;
 
         lock (_frameLock)
         {
@@ -456,6 +494,9 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
     private static partial void LogDecoderStalled(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A new decoder could not be created; keeping the old one and requesting a key frame.")]
+    private static partial void LogDecoderRebuildFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Remote desktop stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
