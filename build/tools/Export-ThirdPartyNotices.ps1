@@ -133,5 +133,9 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 $table = $rows | ForEach-Object { "| $($_.Id) | $($_.Version) | $($_.License) | $($_.Url) |" }
 
 $content = @($header) + $table + @('')
-Set-Content -Path $OutputPath -Value $content -Encoding utf8
+# The encoding is spelled out instead of "Set-Content -Encoding utf8": that value means UTF-8 *with* a BOM in Windows
+# PowerShell 5.1 but *without* one in PowerShell 7, so the same script produced a different first byte on a developer
+# machine than on the CI runner (pwsh), and the "notices are current" check failed on a file nobody had changed. The BOM
+# is kept so the Chinese text still opens correctly in Windows editors that guess the code page.
+[System.IO.File]::WriteAllLines($OutputPath, [string[]]$content, [System.Text.UTF8Encoding]::new($true))
 Write-Host "Wrote $OutputPath ($($rows.Count) packages)."
