@@ -234,6 +234,18 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 _waitingForKeyFrame = false;
                 if (picture is null)
                 {
+                    // The host is feeding non-key frames but the decoder stopped producing pictures: it has lost
+                    // sync and is silently dropping everything. Asking for one key frame only hides the problem
+                    // until the next stall, so rebuild the decoder right here (this loop is its only owner) instead
+                    // of leaving the watchdog to wait out the 30 s backoff.
+                    if (Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    {
+                        LogDecoderStalled(_logger);
+                        RebuildDecoder();
+                        _waitingForKeyFrame = true;
+                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
@@ -376,6 +388,23 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     private const long MaxPixels = 7680L * 4320;
 
+    /// <summary>
+    /// Replaces the decoder with a fresh one for the current stream. Called from the receive loop (the decoder's only
+    /// owner) when the decoder keeps being fed yet stops producing pictures, so a lone key frame is not mistaken for
+    /// a fixed stream.
+    /// </summary>
+    private void RebuildDecoder()
+    {
+        if (StreamInfo is not { } info)
+        {
+            return;
+        }
+
+        _decoder?.Dispose();
+        _decoder = _codecs.CreateDecoder(VideoCodec.H264, info.Width, info.Height);
+        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+    }
+
     private void OnStreamInfo(VideoStreamInfo info)
     {
         var width = (int)info.Width;
@@ -424,6 +453,9 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Decoding failed ({Reason}); requested a key frame.")]
     private static partial void LogDecodeFailed(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
+    private static partial void LogDecoderStalled(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Remote desktop stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);

@@ -151,7 +151,7 @@ builder.Logging.ClearProviders().AddSerilog(
     new LoggerConfiguration()
         .MinimumLevel.Information()
         .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
-        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, shared: true, formatProvider: CultureInfo.InvariantCulture)
+        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, shared: true, flushToDiskInterval: TimeSpan.FromSeconds(1), formatProvider: CultureInfo.InvariantCulture)
         .CreateLogger(),
     dispose: true);
 

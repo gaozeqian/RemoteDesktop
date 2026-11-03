@@ -48,6 +48,9 @@ var logger = new LoggerConfiguration()
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 7,
         shared: true,
+        // A long-lived agent writes little; without an interval the sink holds lines in its buffer and a stuck
+        // stream leaves no log behind to diagnose. Flush every second so the encoder/capture lines are on disk.
+        flushToDiskInterval: TimeSpan.FromSeconds(1),
         formatProvider: CultureInfo.InvariantCulture,
         outputTemplate: $"{{Timestamp:HH:mm:ss.fff}} [{{Level:u3}}] [agent {Environment.ProcessId}/{desktop}] {{Message:lj}}{{NewLine}}{{Exception}}")
     .CreateLogger();
