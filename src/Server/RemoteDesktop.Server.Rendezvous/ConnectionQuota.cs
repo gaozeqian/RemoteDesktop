@@ -33,6 +33,7 @@ public sealed class ConnectionQuota
     /// <returns><c>false</c> when the caller is over a quota and the connection must be refused.</returns>
     public bool TryOpen(IPAddress? address)
     {
+        address = Normalize(address);
         if (Interlocked.Increment(ref _open) > _options.MaxConnections)
         {
             Interlocked.Decrement(ref _open);
@@ -57,11 +58,45 @@ public sealed class ConnectionQuota
     /// <summary>Gives back a slot taken by <see cref="TryOpen"/>. Every successful open is closed exactly once.</summary>
     public void Close(IPAddress? address)
     {
+        address = Normalize(address);
         Interlocked.Decrement(ref _open);
         if (address is not null)
         {
             Release(address);
         }
+    }
+
+    /// <summary>
+    /// The key a caller is counted under. An IPv4-mapped IPv6 address is the same host as its IPv4 form, and an IPv6
+    /// network hands every subscriber a whole /64, so counting each address separately would let one machine rotate
+    /// through as many "sources" as it likes. Opening and closing use the same key, so a slot is always given back to
+    /// the entry it was taken from.
+    /// </summary>
+    internal static IPAddress? Normalize(IPAddress? address)
+    {
+        if (address is null)
+        {
+            return null;
+        }
+
+        if (address.IsIPv4MappedToIPv6)
+        {
+            return address.MapToIPv4();
+        }
+
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return address;
+        }
+
+        Span<byte> bytes = stackalloc byte[16];
+        if (!address.TryWriteBytes(bytes, out _))
+        {
+            return address;
+        }
+
+        bytes[8..].Clear();
+        return new IPAddress(bytes);
     }
 
     private void Release(IPAddress address)

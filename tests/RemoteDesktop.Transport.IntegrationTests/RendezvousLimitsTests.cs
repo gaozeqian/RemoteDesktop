@@ -155,6 +155,39 @@ public class ConnectionQuotaTests
         Assert.True(quota.TryOpen(address));
     }
 
+    [Fact]
+    public void Addresses_in_one_ipv6_subnet_share_a_limit()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 2);
+
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::1")));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2:aaaa:bbbb:cccc:dddd")));
+
+        // A third address of the same /64 is the same subscriber; a different /64 is not.
+        Assert.False(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::99")));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:3::1")));
+    }
+
+    [Fact]
+    public void An_ipv4_mapped_address_counts_as_the_ipv4_address()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 1);
+
+        Assert.True(quota.TryOpen(IPAddress.Parse("10.0.0.1")));
+        Assert.False(quota.TryOpen(IPAddress.Parse("10.0.0.1").MapToIPv6()));
+    }
+
+    [Fact]
+    public void Closing_through_another_spelling_of_the_same_source_gives_the_slot_back()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 1);
+        var opened = IPAddress.Parse("2001:db8:1:2::1");
+
+        Assert.True(quota.TryOpen(opened));
+        quota.Close(IPAddress.Parse("2001:db8:1:2::1"));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::2")));
+    }
+
     private static ConnectionQuota Quota(int maxConnections, int perAddress) =>
         new(Options.Create(new RendezvousOptions { MaxConnections = maxConnections, MaxConnectionsPerAddress = perAddress }));
 }

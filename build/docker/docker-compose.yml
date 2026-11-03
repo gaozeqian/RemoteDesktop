@@ -70,6 +70,13 @@ services:
         VERSION: ${REMOTEDESKTOP_VERSION:-dev}
     image: remotedesktop/rendezvous:${REMOTEDESKTOP_VERSION:-dev}
     environment:
+      # The listener has to be reachable from outside the container (the published port, Caddy and the ops console all
+      # arrive over the container network), so it cannot keep the loopback default. Plain HTTP on a non-loopback address
+      # needs the explicit opt-in below. That is safe here only because exposure is decided by `ports:` — loopback on
+      # the host unless RENDEZVOUS_BIND_IP says otherwise — so put TLS in front (docker-compose.tls.yml or
+      # docker-compose.selfsigned.yml) before publishing it beyond a trusted network.
+      Urls: http://0.0.0.0:5080
+      Rendezvous__AllowInsecureSignaling: "true"
       # The address handed to clients for relayed connections. It must be reachable by the clients, so 127.0.0.1
       # only works when everything runs on the same machine.
       Rendezvous__RelayEndpoint: ${RELAY_PUBLIC_ENDPOINT:?set RELAY_PUBLIC_ENDPOINT, for example 203.0.113.10:5082}

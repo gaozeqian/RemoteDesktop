@@ -280,10 +280,8 @@ public static class ServerSetup
         // Record that choice explicitly so the server's default-deny check does not make an existing deployment stop
         // after this upgrade, while a hand-written public http:// address still has to opt in itself.
         var effectiveUrls = Text(rendezvous, "Urls");
-        rendezvousSection["AllowInsecureSignaling"] =
-            Uri.TryCreate(effectiveUrls, UriKind.Absolute, out var configuredUrl)
-            && configuredUrl.Scheme == Uri.UriSchemeHttp
-            && !configuredUrl.IsLoopback;
+        // Urls can hold several addresses and wildcard hosts; any public plaintext one is an opt-in.
+        rendezvousSection["AllowInsecureSignaling"] = ListeningUrl.HasPublicPlaintext(effectiveUrls);
 
         if (endpoint is not null)
         {

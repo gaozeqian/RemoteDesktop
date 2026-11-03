@@ -1,3 +1,4 @@
+using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Server.Storage;
 
 namespace RemoteDesktop.Server.Rendezvous;
@@ -129,10 +130,10 @@ public sealed class RendezvousOptions
             return;
         }
 
-        foreach (var value in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var value in ListeningUrl.Split(urls))
         {
-            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-                || uri.Scheme is not ("http" or "https"))
+            // Wildcard hosts (http://*:5080, http://+:5080) are valid for Kestrel and mean every interface.
+            if (!ListeningUrl.TryParse(value, out var uri))
             {
                 throw new InvalidOperationException($"Urls must contain absolute http:// or https:// addresses (got '{value}').");
             }

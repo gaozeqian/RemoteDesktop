@@ -1114,4 +1114,29 @@ public class RendezvousListeningPolicyTests
     [Fact]
     public void Public_tls_needs_no_opt_in() =>
         RendezvousOptions.ValidateListeningUrls("https://0.0.0.0:5080", allowInsecureSignaling: false);
+
+    [Theory]
+    [InlineData("http://*:5080")]
+    [InlineData("http://+:5080")]
+    [InlineData("https://127.0.0.1:5443;http://0.0.0.0:5082")]
+    public void Wildcard_hosts_and_address_lists_are_judged_like_any_other_public_address(string urls)
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => RendezvousOptions.ValidateListeningUrls(urls, allowInsecureSignaling: false));
+
+        RendezvousOptions.ValidateListeningUrls(urls, allowInsecureSignaling: true);
+    }
+
+    [Fact]
+    public void A_list_of_loopback_and_tls_addresses_needs_no_opt_in() =>
+        RendezvousOptions.ValidateListeningUrls("http://127.0.0.1:5080;https://*:5443", allowInsecureSignaling: false);
+
+    [Theory]
+    [InlineData("http://0.0.0.0:5080;https://0.0.0.0:5443", true)]
+    [InlineData("http://*:5080", true)]
+    [InlineData("http://127.0.0.1:5080", false)]
+    [InlineData("https://0.0.0.0:5443", false)]
+    [InlineData("", false)]
+    public void The_installer_records_an_opt_in_for_any_public_plaintext_address(string urls, bool expected) =>
+        Assert.Equal(expected, ListeningUrl.HasPublicPlaintext(urls));
 }

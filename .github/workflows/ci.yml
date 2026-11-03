@@ -5,7 +5,7 @@ on:
     branches: [master]
   pull_request:
 
-# Nothing in this workflow writes to the repository: the three jobs read the checkout, upload test reports, and stop.
+# Nothing in this workflow writes to the repository: the jobs read the checkout, upload test reports, and stop.
 # The job that publishes a release is in release.yml, and it asks for contents: write itself.
 permissions:
   contents: read
@@ -196,6 +196,8 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name rd-rendezvous \
+            -e Urls=http://0.0.0.0:5080 \
+            -e Rendezvous__AllowInsecureSignaling=true \
             -e Rendezvous__RelayEndpoint="$RELAY_PUBLIC_ENDPOINT" \
             -e Rendezvous__RelaySharedKey="$RELAY_SHARED_KEY" \
             -e Rendezvous__NodeToken="$NODE_TOKEN" \
