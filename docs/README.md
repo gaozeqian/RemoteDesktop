@@ -1,6 +1,6 @@
 # Remote Desktop 文档中心
 
-技术文档的入口。**四份正文加一份归档**，一个目录一份完整文档，按读者分：
+技术文档的入口。**四份正文**，一个目录一份完整文档，按读者分：
 
 | 我要…… | 打开 |
 |---|---|
@@ -8,7 +8,6 @@
 | 改代码 | [`design/`](design/README.md) |
 | 部署与运维 | [`ops/`](ops/README.md) |
 | 把产品搬到新平台 | [`ports/`](ports/README.md) |
-| 查"当时为什么这么定" | [`reviews/`](reviews/README.md) |
 | 写或改文档 | [`STYLE.md`](STYLE.md) |
 
 这份清单是**唯一的一份**。不要在别处重列文档清单——手工维护的第二份索引必然与这份分叉，这个仓库已经发生过
@@ -37,20 +36,6 @@
 **给要把产品搬到某个平台的人。** 两个移植（macOS / Linux）已全部完成，这份文档记的是**结论**：定下了什么、
 每个平台有哪些绕不过去的硬约束、哪些地方**还没验证过**。实测过程（命令与输出）不在文档里——
 需要复现某条结论时去 git 历史里找。
-
-## 评审快照（`reviews/`）
-
-**不是现行约定**，是某一次评审在当时看到的东西，冻结不改。查"当时为什么这么定"时看这里；
-写新代码时**不要**以它为准。每份评审的主题、日期和"结论现在在哪 / 修了没有"都在
-[`reviews/README.md`](reviews/README.md) 的归档表里，这里只列链接（状态摘要只维护那一处，避免两边分叉）：
-
-* [Windows 安装包评审（2026-10-26）](reviews/windows-installer-review-2026-10-26.md)
-* [macOS 安装包评审（2026-10-25）](reviews/macos-installer-review-2026-10-25.md)
-* [客户端 UI 与产品图标评审（2026-10-18）](reviews/ui-and-icon-review-2026-10-18.md)
-* [客户端 UI 跨平台一致性评审（2026-10-17）](reviews/ui-consistency-review-2026-10-17.md)
-* [目录结构评审（2026-10-16）](reviews/repo-structure-review-2026-10-16.md)
-* [安全审查报告（2026-10-12）](reviews/security-review-2026-10-12.md)
-* [macOS 移植评审（2026-10-13）](reviews/macos-port-review-2026-10-13.md)
 
 ## 规则与索引（本目录）
 

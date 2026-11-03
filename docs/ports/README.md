@@ -9,7 +9,7 @@
 > **实测过程不在这里。** 当年那些命令、输出、逐条探针记录（约 1300 行）已从文档中移除——
 > 需要复现某条结论时，去 git 历史里找 `docs/ports/macos-port-plan.md` 与 `docs/ports/linux-port-plan.md`
 > （合并成本文件之前的两份移植计划）的最后一版。这里只留结论和它成立的理由。
-> 一次性的评审意见在 [`docs/reviews/`](../reviews/)；功能与平台能力对照见 [使用说明](../usage/README.md)。
+> 功能与平台能力对照见 [使用说明](../usage/README.md)。
 
 ## 1. 三平台对照
 

@@ -208,11 +208,10 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 
 ## 📄 文档
 
-文档的规范在 [`docs/STYLE.md`](docs/STYLE.md)：放哪、叫什么、怎么写、什么时候更新。三条最常被违反的：
+文档的规范在 [`docs/STYLE.md`](docs/STYLE.md)：放哪、叫什么、怎么写、什么时候更新。两条最常被违反的：
 
 1. **新文档要进索引**（[`docs/README.md`](docs/README.md)）。索引只有一份，漏加会让 `dotnet test` 变红。
-2. **评审是快照，不是规范。** 一次评审的结论进 `docs/reviews/`；其中被采纳的部分才写进规范类文档。
-3. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
+2. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
 
 能机器判断的部分已经是断言（`tests/RemoteDesktop.Architecture.UnitTests/DocumentationTests.cs`）：必备文件、
 一个文件一个 H1、`docs/` 下没有孤儿文档、相对链接可解析、文件命名规范。**格式**（空行、缩进、代码块标注）

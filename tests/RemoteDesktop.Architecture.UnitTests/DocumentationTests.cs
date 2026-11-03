@@ -178,9 +178,8 @@ public class DocumentationTests
     }
 
     /// <summary>
-    /// docs/STYLE.md §3. docs/ and the script trees are lower-case kebab-case; docs/reviews/ additionally names its
-    /// snapshots after their subject and date; the repository root and .github/ are the two places where the name is
-    /// fixed by GitHub rather than by us.
+    /// docs/STYLE.md §3. docs/ and the script trees are lower-case kebab-case; the repository root and .github/ are
+    /// the two places where the name is fixed by GitHub rather than by us.
     /// </summary>
     [Fact]
     public void Document_file_names_follow_the_conventions()
@@ -191,25 +190,6 @@ public class DocumentationTests
             .ToArray();
 
         AssertNoOffenders(offenders, "documents whose name does not follow docs/STYLE.md §3:");
-    }
-
-    /// <summary>
-    /// A review is a snapshot, and snapshots live together — see docs/reviews/README.md. Naming is what makes it
-    /// possible to tell one apart from the living documents around it. The dated form is matched explicitly: the
-    /// generic kebab-case rule in <see cref="Document_file_names_follow_the_conventions"/> cannot tell
-    /// "foo-review-2026-11-01.md" outside docs/reviews/ from an ordinary document, so without the date alternative
-    /// here a misplaced dated review would slip past both tests.
-    /// </summary>
-    [Fact]
-    public void Reviews_are_archived_under_docs_reviews()
-    {
-        var misplaced = MarkdownDocuments()
-            .Select(Relative)
-            .Where(relative => Regex.IsMatch(Path.GetFileName(relative), @"-review(-\d{4}-\d{2}-\d{2})?\.md$"))
-            .Where(relative => !relative.StartsWith("docs/reviews/", StringComparison.Ordinal))
-            .ToArray();
-
-        AssertNoOffenders(misplaced, "review snapshots outside docs/reviews/:");
     }
 
     /// <summary>
@@ -265,13 +245,6 @@ public class DocumentationTests
         if (!relative.Contains('/'))
         {
             return RootDocumentNames.Contains(name);
-        }
-
-        if (relative.StartsWith("docs/reviews/", StringComparison.Ordinal))
-        {
-            // Dated names only: docs/STYLE.md §3 — no "-2"/"-3" ordinals, and same-day rounds of one subject are
-            // combined into a single file instead of getting one file per round.
-            return Regex.IsMatch(name, @"^[a-z0-9]+(-[a-z0-9]+)*-review-\d{4}-\d{2}-\d{2}\.md$");
         }
 
         return Regex.IsMatch(name, @"^[a-z0-9]+(-[a-z0-9]+)*\.md$");
