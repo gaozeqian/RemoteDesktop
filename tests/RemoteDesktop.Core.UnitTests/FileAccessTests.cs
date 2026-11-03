@@ -169,6 +169,59 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(FileError.NotAllowed, ex.Error);
     }
 
+    /// <summary>
+    /// A UNC path is refused from its spelling alone. Resolving it first would already ask the named server about the
+    /// path (an SMB connection authenticated as the logged-in user), so the refusal has to come before any lookup.
+    /// </summary>
+    [Theory]
+    [InlineData(@"\\attacker.invalid\share\x")]
+    [InlineData(@"\\attacker.invalid\share\sub\..\x")]
+    public void A_network_share_is_refused_without_looking_at_it(string path)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+
+        var ex = Assert.Throws<FileOperationException>(() => Open.Normalize(path));
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+        Assert.Contains("Network shares", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_network_share_other_than_the_configured_one_is_refused()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+
+        // The host names do not exist: resolving the configured root fails at once and keeps its spelling, and the
+        // candidates below are refused from their spelling without a lookup.
+        var policy = new FileAccessPolicy([@"\\configured.invalid\share"]);
+        foreach (var other in new[] { @"\\attacker.invalid\share\x", @"\\configured.invalid\other\x" })
+        {
+            var ex = Assert.Throws<FileOperationException>(() => policy.Normalize(other));
+            Assert.Equal(FileError.NotAllowed, ex.Error);
+        }
+    }
+
+    [Fact]
+    public void Creating_a_file_that_exists_says_so()
+    {
+        var root = Directory.CreateTempSubdirectory("rd-exists-").FullName;
+        try
+        {
+            var path = Path.Combine(root, "taken.txt");
+            File.WriteAllText(path, "mine");
+
+            var ex = Assert.Throws<FileOperationException>(() =>
+                new FileAccessPolicy([root]).OpenWrite(path, FileMode.CreateNew, FileAccess.Write, FileShare.None));
+
+            // A caller that can pick another name needs to tell this apart from a failing disk.
+            Assert.Equal(FileError.AlreadyExists, ex.Error);
+            Assert.Equal("mine", File.ReadAllText(path));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void A_verified_handle_can_be_read_after_the_path_is_gone()
     {
@@ -391,6 +444,55 @@ public sealed class PartialFileTests : IDisposable
         Assert.NotEqual(a, PartialFile.PathFor(@"C:\x\f.bin", 101, time));
         Assert.NotEqual(a, PartialFile.PathFor(@"C:\x\f.bin", 100, time.AddMilliseconds(1)));
         Assert.Equal(a, PartialFile.PathFor(@"C:\x\f.bin", 100, time));
+    }
+
+    [Fact]
+    public void A_name_that_fits_keeps_its_partial_name_exactly()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(_root, new string('a', 200) + ".bin");
+
+        // Partials written by earlier versions have to stay resumable, so a name that fits is never rewritten.
+        Assert.Equal($"{path}.100-{time.ToUnixTimeMilliseconds():x}{PartialFile.Extension}", PartialFile.PathFor(path, 100, time));
+    }
+
+    [Fact]
+    public void A_name_too_long_for_the_suffix_gets_a_shortened_but_stable_partial_name()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var first = Path.Combine(_root, new string('a', 255));
+        var second = Path.Combine(_root, new string('a', 254) + "b");
+
+        var partial = PartialFile.PathFor(first, long.MaxValue, time);
+
+        Assert.True(Path.GetFileName(partial).Length <= 255, "The partial's own name must be a name the filesystem accepts.");
+        Assert.Equal(_root, Path.GetDirectoryName(partial));
+        Assert.EndsWith($".{long.MaxValue}-{time.ToUnixTimeMilliseconds():x}{PartialFile.Extension}", partial, StringComparison.Ordinal);
+        Assert.Equal(partial, PartialFile.PathFor(first, long.MaxValue, time));
+        Assert.NotEqual(partial, PartialFile.PathFor(second, long.MaxValue, time));
+
+        // The result can really be created.
+        File.WriteAllText(partial, "x");
+        Assert.True(File.Exists(partial));
+    }
+
+    [Fact]
+    public void Shortening_a_partial_name_never_cuts_a_surrogate_pair()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(_root, string.Concat(Enumerable.Repeat("\U0001F600", 120)));
+
+        // A size with one more digit moves the cut by one character, so one of the two lands inside a pair.
+        foreach (var size in new[] { 1L, 10L })
+        {
+            var name = Path.GetFileName(PartialFile.PathFor(path, size, time));
+
+            Assert.True(name.Length <= 255);
+            for (var i = 0; i < name.Length; i++)
+            {
+                Assert.Equal(char.IsHighSurrogate(name[i]), i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]));
+            }
+        }
     }
 
     [Fact]

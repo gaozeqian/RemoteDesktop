@@ -14,8 +14,34 @@ public static class PartialFile
     /// The partial file for a transfer that will end up at <paramref name="finalPath"/>. Size and modification time are
     /// part of the name, so a partial of an older version of the file is never continued by mistake.
     /// </summary>
-    public static string PathFor(string finalPath, long size, DateTimeOffset modified) =>
-        $"{finalPath}.{size}-{modified.ToUnixTimeMilliseconds():x}{Extension}";
+    /// <remarks>
+    /// The suffix adds up to about 40 characters, so a file whose own name is already near the 255-character limit
+    /// would get a partial name no filesystem accepts. Such a name is shortened, deterministically and with a hash of
+    /// the full name in it so two long names that start alike still get different partials; every name that fits is
+    /// left exactly as it was, which keeps partials from earlier versions resumable.
+    /// </remarks>
+    public static string PathFor(string finalPath, long size, DateTimeOffset modified)
+    {
+        var suffix = $".{size}-{modified.ToUnixTimeMilliseconds():x}{Extension}";
+        var name = Path.GetFileName(finalPath);
+        if (name.Length + suffix.Length <= MaxFileNameLength)
+        {
+            return finalPath + suffix;
+        }
+
+        var tag = $"~{XxHash64.HashToUInt64(System.Text.Encoding.UTF8.GetBytes(name)):x16}";
+        var keep = MaxFileNameLength - suffix.Length - tag.Length;
+        if (keep > 0 && char.IsHighSurrogate(name[keep - 1]))
+        {
+            keep--; // never cut a surrogate pair in half
+        }
+
+        var directory = finalPath[..^name.Length];
+        return directory + name[..Math.Max(keep, 0)] + tag + suffix;
+    }
+
+    /// <summary>The longest file name the filesystems here accept, in characters.</summary>
+    private const int MaxFileNameLength = 255;
 
     /// <summary>Whether <paramref name="directory"/>'s drive has room for <paramref name="bytes"/> more; true when that cannot be told.</summary>
     public static bool HasRoomFor(string directory, long bytes)
@@ -202,6 +228,13 @@ public static class FileReceiver
                 for (var remaining = startOffset; remaining > 0;)
                 {
                     var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        // The partial was longer a moment ago (Length was checked above) and is shorter now: somebody
+                        // else is truncating it. Without this the loop would ask for the same bytes for ever.
+                        throw new FileOperationException(FileError.Changed, "The partial file became shorter during the transfer.");
+                    }
+
                     hash.Append(buffer.AsSpan(0, read));
                     remaining -= read;
                 }

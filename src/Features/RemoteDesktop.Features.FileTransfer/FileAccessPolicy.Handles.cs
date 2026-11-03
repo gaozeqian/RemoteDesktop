@@ -49,9 +49,13 @@ public sealed partial class FileAccessPolicy
         EnsureLocationAllowed(TrimTrailingSeparator(Path.GetFullPath(actual)));
     }
 
+    /// <summary>Runs after the path has passed <see cref="Normalize"/> and before it is opened: the window a link swap needs. Tests only.</summary>
+    internal Action? AfterNormalizeForTests { get; set; }
+
     private FileStream OpenVerified(string path, FileMode mode, FileAccess access, FileShare share)
     {
         var full = Normalize(path);
+        AfterNormalizeForTests?.Invoke();
         SafeFileHandle handle;
         try
         {
@@ -70,6 +74,12 @@ public sealed partial class FileAccessPolicy
         {
             throw new FileOperationException(FileError.NotFound, "The file does not exist.", ex);
         }
+        catch (IOException ex) when (mode == FileMode.CreateNew && (File.Exists(full) || Directory.Exists(full)))
+        {
+            // CreateNew failing on a name that is there means somebody else got it first. Callers that can pick another
+            // name (a rename-on-conflict upload) need to tell this apart from a disk that is broken or full.
+            throw new FileOperationException(FileError.AlreadyExists, "A file with that name already exists.", ex);
+        }
         catch (IOException ex)
         {
             throw new FileOperationException(FileError.Io, $"The file cannot be opened: {ex.Message}", ex);
@@ -82,8 +92,41 @@ public sealed partial class FileAccessPolicy
         }
         catch
         {
+            // CreateNew means this call made the file. If the handle turned out to lead outside the policy (a link was
+            // swapped in after Normalize), the empty file it made out there is ours to take back.
+            var stray = mode == FileMode.CreateNew ? EmptyFileLocation(handle) : null;
             handle.Dispose();
+            if (stray is not null)
+            {
+                TryDelete(stray);
+            }
+
             throw;
+        }
+    }
+
+    /// <summary>Where the file behind <paramref name="handle"/> really is, if it is still empty; <c>null</c> when that cannot be told.</summary>
+    private static string? EmptyFileLocation(SafeFileHandle handle)
+    {
+        try
+        {
+            return !handle.IsInvalid && !handle.IsClosed && RandomAccess.GetLength(handle) == 0 ? FinalPathOf(handle) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: an empty stray file is untidy, not a reason to hide the refusal that led here.
         }
     }
 

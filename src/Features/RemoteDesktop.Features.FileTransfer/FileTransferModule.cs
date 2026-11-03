@@ -152,6 +152,14 @@ public sealed partial class FileTransferModule(
             return;
         }
 
+        // The size is the other computer's to announce. Cast unchecked, anything above long.MaxValue turns negative,
+        // which skips the free-space check below and then "receives" an empty file.
+        if (request.Size > long.MaxValue)
+        {
+            await RespondAsync(stream, Failure(new FileOperationException(FileError.InvalidPath, "The announced file size is not valid.")), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var size = (long)request.Size;
         DateTimeOffset modified;
         try
@@ -201,7 +209,10 @@ public sealed partial class FileTransferModule(
             offset = 0;
         }
 
-        if (!PartialFile.HasRoomFor(directory, size - offset))
+        // The partial is turned into the final file by copying it (see FinalizeAsync), so for a moment both exist:
+        // what is still to arrive plus a second copy of the whole. Asking now fails before the transfer, not after it.
+        var needed = size > long.MaxValue / 2 ? long.MaxValue : (2 * size) - offset;
+        if (!PartialFile.HasRoomFor(directory, needed))
         {
             await RespondAsync(stream, Failure(new FileOperationException(FileError.Io, "There is not enough free space at the destination.")), cancellationToken).ConfigureAwait(false);
             return;
@@ -230,7 +241,6 @@ public sealed partial class FileTransferModule(
             }
 
             finalPath = await FinalizeAsync(partial, finalPath, overwrite, modified, cancellationToken).ConfigureAwait(false);
-            ledger?.Forget(partial); // the file has a name now; there is nothing left to finish
             await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = Ok(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
             LogTransferDone(logger, session.Id, "upload", finalPath);
         }
@@ -242,45 +252,143 @@ public sealed partial class FileTransferModule(
     }
 
     /// <summary>
-    /// Copies the verified partial into a destination opened and checked under the policy. This deliberately does not
-    /// use <see cref="File.Move(string, string, bool)"/>: a path-based rename can still be redirected by a link that
-    /// is swapped after Normalize. A handle cannot, so the bytes can only land in a file whose real target passed the
-    /// root check. The partial is removed only after the copy is complete.
+    /// Turns the verified partial into the final file. Every byte is copied into a file opened and checked under the
+    /// policy: a handle cannot be redirected, so the bytes can only land in a file whose real target passed the root
+    /// check, which a path-based rename cannot promise (a link swapped after Normalize would redirect it).
     /// </summary>
+    /// <remarks>
+    /// A failure leaves the partial in place so the transfer can be finished later, and leaves nothing half-written
+    /// under the final name. Replacing an existing file goes through a temporary file next to it, so a disk that
+    /// fills up or a session that ends in the middle never costs the user the file that was there.
+    /// </remarks>
+    /// <exception cref="FileOperationException">The file could not be put in place (disk full, access denied, name taken too often).</exception>
     private async Task<string> FinalizeAsync(string partial, string finalPath, bool overwrite, DateTimeOffset modified, CancellationToken cancellationToken)
     {
+        try
+        {
+            finalPath = overwrite
+                ? await ReplaceAsync(partial, finalPath, cancellationToken).ConfigureAwait(false)
+                : await CreateAsync(partial, finalPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new FileOperationException(FileError.AccessDenied, "The file could not be put in place.", ex);
+        }
+        catch (IOException ex)
+        {
+            // A full disk surfaces here as a plain IOException; without the conversion it would escape the upload's
+            // error reporting and the controller would only see the channel close.
+            throw new FileOperationException(FileError.Io, $"The file could not be put in place: {ex.Message}", ex);
+        }
+
+        // The file is in place; the partial has done its job. If it cannot be removed it stays on the ledger and the
+        // sweeper takes it later, which is no reason to report a finished transfer as failed.
+        try
+        {
+            File.Delete(partial);
+            ledger?.Forget(partial);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogPartialKept(logger, partial, ex.Message);
+        }
+
+        FileTimestamps.TrySetLastWriteTime(finalPath, modified);
+        return finalPath;
+    }
+
+    /// <summary>Copies the partial to a name that is not taken, moving to the next free name if somebody takes it first.</summary>
+    private async Task<string> CreateAsync(string partial, string finalPath, CancellationToken cancellationToken)
+    {
         await using var source = policy.OpenRead(partial);
-        FileStream? destination = null;
-        for (var attempt = 0; destination is null; attempt++)
+        FileStream destination;
+        for (var attempt = 0; ; attempt++)
         {
             try
             {
-                // OpenOrCreate is used for overwrite because Create would truncate before the handle could be checked;
-                // the truncation happens below, only after ValidateOpenedFile has accepted the real target.
-                destination = policy.OpenWrite(finalPath, overwrite ? FileMode.OpenOrCreate : FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                destination = policy.OpenWrite(finalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                break;
             }
-            catch (IOException) when (!overwrite && attempt < 100 && File.Exists(finalPath))
+            catch (FileOperationException ex) when (ex.Error == FileError.AlreadyExists && attempt < 100)
             {
                 // Somebody created that name in the meantime: keep both and try the next free name.
                 finalPath = PartialFile.FreeName(finalPath);
             }
-            catch (UnauthorizedAccessException ex)
-            {
-                throw new FileOperationException(FileError.AccessDenied, "The file could not be put in place.", ex);
-            }
         }
 
+        try
+        {
+            await CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // CreateNew made this file, so it is ours to remove: a half-written file under the final name would pass
+            // for the real one.
+            TryDelete(finalPath);
+            throw;
+        }
+
+        return finalPath;
+    }
+
+    /// <summary>Copies the partial to a temporary file in the same folder and then swaps it over <paramref name="finalPath"/>.</summary>
+    private async Task<string> ReplaceAsync(string partial, string finalPath, CancellationToken cancellationToken)
+    {
+        var temporary = Path.Combine(Path.GetDirectoryName(finalPath) ?? string.Empty, $".rd-{Guid.NewGuid():N}{PartialFile.Extension}");
+
+        // Written down before the first byte, like the partial itself: a process killed in the middle leaves a file
+        // nobody would otherwise find again.
+        ledger?.Record(temporary);
+        try
+        {
+            await using (var source = policy.OpenRead(partial))
+            {
+                var destination = policy.OpenWrite(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
+            }
+
+            // The swap is by path, so the name is judged once more right before it is taken over. The bytes themselves
+            // were written through a verified handle in this folder; what remains is the instant between this check and
+            // the rename, which only a process that can already rewrite the shared folder could use.
+            policy.Normalize(finalPath);
+            File.Move(temporary, finalPath, overwrite: true);
+        }
+        catch
+        {
+            // Still on the ledger if it could not be removed, so the sweeper gets another go at it.
+            if (TryDelete(temporary))
+            {
+                ledger?.Forget(temporary);
+            }
+
+            throw;
+        }
+
+        ledger?.Forget(temporary);
+        return finalPath;
+    }
+
+    private static async Task CopyAsync(Stream source, FileStream destination, CancellationToken cancellationToken)
+    {
         await using (destination.ConfigureAwait(false))
         {
-            destination.SetLength(0);
-            source.Position = 0;
             await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
             await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
 
-        File.Delete(partial);
-        FileTimestamps.TrySetLastWriteTime(finalPath, modified);
-        return finalPath;
+    private static bool TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: the error that got us here is the one worth reporting.
+            return false;
+        }
     }
 
     private static FileResponse List(LocalFileOperations operations, string path)
@@ -345,6 +453,9 @@ public sealed partial class FileTransferModule(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: {Operation} of {Path} finished.")]
     private static partial void LogTransferDone(ILogger logger, SessionId sessionId, string operation, string path);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Kept the finished upload's partial file {Path}: {Reason}")]
+    private static partial void LogPartialKept(ILogger logger, string path, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: {Operation} of {Path} failed: {Reason}")]
     private static partial void LogTransferFailed(ILogger logger, SessionId sessionId, string operation, string path, string reason);

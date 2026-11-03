@@ -105,6 +105,10 @@ public sealed partial class FileAccessPolicy
             throw Invalid("The path contains a reserved device name.");
         }
 
+        // Before anything touches the filesystem: resolving a path asks the operating system about each segment, and
+        // for a UNC path that is a connection (with the user's credentials) to whatever server the path names.
+        RefuseUnconfiguredNetworkShare(full);
+
         var resolved = ResolveFinalTarget(full);
 
         // Judged on the resolved path, not the spelling: a symbolic link pointing into /proc would otherwise be a way
@@ -112,6 +116,28 @@ public sealed partial class FileAccessPolicy
         // because a link can be swapped between this check and the actual open.
         EnsureLocationAllowed(resolved);
         return full;
+    }
+
+    /// <summary>
+    /// Refuses a UNC path unless a configured root lives on the same <c>\\server\share</c>, using nothing but the
+    /// spelling. This has to run before <see cref="ResolveFinalTarget"/>: the check in
+    /// <see cref="EnsureLocationAllowed"/> judges the resolved path, and by then the resolution walk has already asked
+    /// the named server about the path (an SMB connection authenticated as the logged-in user), which is the very
+    /// NetNTLM exposure the refusal exists to prevent.
+    /// </summary>
+    private void RefuseUnconfiguredNetworkShare(string full)
+    {
+        if (!IsWindows || !full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var share = Path.GetPathRoot(full);
+        if (!_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal) &&
+                string.Equals(Path.GetPathRoot(root), share, PathComparison)))
+        {
+            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+        }
     }
 
     /// <summary>
@@ -177,6 +203,15 @@ public sealed partial class FileAccessPolicy
             // land through one. Judging the spelling in hand is as close to an answer as exists, and it keeps the
             // walk finite; an escape through a cycle is still caught, because the cycle has to point at the outside
             // spelling to matter and that spelling resolves normally.
+            return full;
+        }
+
+        // A link whose target is a network share is not followed any further: walking the target would ask that server
+        // about every segment, and the server was named by whoever planted the link. The spelling is returned as it
+        // is, which EnsureLocationAllowed then refuses (or accepts only inside a configured UNC root), and the handle
+        // check after the open still sees where the file really is.
+        if (depth > 0 && IsWindows && full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
             return full;
         }
 
