@@ -7,7 +7,8 @@
   them, then restarts the services so they take effect. Anything you leave out is left alone.
 
   It runs the same configuration step the installer does (Rendezvous\RemoteDesktop.Server.Rendezvous.exe
-  --configure-system), so the two cannot drift apart, and what it did is appended to server-setup.log in this folder.
+  --configure-system), so the two cannot drift apart, and what it did is appended to server-setup.log in
+  the settings folder (%ProgramData%\Remote Desktop Server), not the install folder.
 
 .EXAMPLE
   # Keep device codes across restarts, which is the one setting whose default has the worst consequence: without it
@@ -143,7 +144,7 @@ if (-not $isElevated) {
 
 & $rendezvous @arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "The configuration step failed with exit code $LASTEXITCODE. Nothing was changed if it said so; server-setup.log in $installDirectory has the details."
+    throw "The configuration step failed with exit code $LASTEXITCODE. Nothing was changed if it said so; server-setup.log in $configDirectory has the details."
 }
 
 Write-Host "Settings written. What it did is appended to $(Join-Path $configDirectory 'server-setup.log')."

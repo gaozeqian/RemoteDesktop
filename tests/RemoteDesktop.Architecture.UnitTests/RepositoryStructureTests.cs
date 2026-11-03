@@ -78,7 +78,7 @@ public class RepositoryStructureTests
         AssertNoOffenders(offenders, ".cs files named after a type they do not declare, nor after a concept they group:");
     }
 
-    /// <summary>Shell scripts are kebab-case, as every one of the thirteen already is (build/README.md).</summary>
+    /// <summary>Shell scripts under build/ and native/ are kebab-case (build/README.md).</summary>
     [Fact]
     public void Shell_scripts_are_kebab_case()
     {

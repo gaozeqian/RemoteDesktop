@@ -27,8 +27,9 @@ Windows 侧不需要编译出来的辅助库：它对系统 API 的调用是 C# 
 | shell 脚本 | kebab-case | `build-native.sh`、`fetch-libmsquic.sh` |
 
 `rd_` 前缀是为了让这些符号在 `nm` 输出和崩溃日志里一眼能认出来（导出的函数是 `rd_capture_*`、
-`rd_clipboard_*` 这类）。脚本的 kebab-case 与 `build/` 下一致，见 [`build/README.md`](../build/README.md)；
-两条都由 `tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 断言。
+`rd_clipboard_*` 这类）。脚本的 kebab-case 与 `build/` 下一致，见 [`build/README.md`](../build/README.md)。
+这两条里**只有脚本命名**由 `tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 断言
+（`build/` 与 `native/` 下的 `.sh` 必须是 kebab-case）；`.m` / `.h` 的 `rd_` 前缀与 snake_case 靠约定和评审，没有测试。
 
 ## 两份 `fetch-libmsquic.sh` 长得不一样，是有意的
 

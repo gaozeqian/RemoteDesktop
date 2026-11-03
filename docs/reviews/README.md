@@ -19,13 +19,13 @@
 
 | 文件 | 主题 | 日期 | 它的结论现在在哪 |
 |---|---|---|---|
-| [`windows-installer-review-2026-10-26.md`](windows-installer-review-2026-10-26.md) | Windows 三个安装包（client / host / server：Rendezvous + Relay + Ops）的打包、升级、签名与安装后生命周期 | 2026-10-26 | 待修复；现行做法以 `build/README.md`、`docs/ops/README.md`、`build/signing/README.md` 为准 |
-| [`macos-installer-review-2026-10-25.md`](macos-installer-review-2026-10-25.md) | macOS 三个安装包（client / host / server）的打包、签名、公证与安装后生命周期 | 2026-10-25 | 评审后的修复见 `CHANGELOG.md` 的"macOS 安装包安装期配置 / 评审修复"；现行做法以 `build/README.md`、`docs/ops/README.md`、`build/signing/README.md` 为准 |
-| [`ui-and-icon-review-2026-10-18.md`](ui-and-icon-review-2026-10-18.md) | 客户端 UI 与产品图标：macOS 26 与 Windows 11 两轮实机逐屏（含亮色外观）+ 图标资产/打包核对 | 2026-10-18 | R1/R2/R4/R7/R10、W1–W8 已修复；图标栅格（R3）与 R5/R6/R9、W9–W10 待决定 |
-| [`ui-consistency-review-2026-10-17.md`](ui-consistency-review-2026-10-17.md) | 客户端 UI 跨平台一致性：视图/样式盘点 + 平台驱动差异逐项核对 | 2026-10-17 | 三处文案缺陷（U1–U3）与一处限制告知缺口（U4）待修复；现行事实以 [`docs/usage/README.md`](../usage/README.md) 为准 |
-| [`repo-structure-review-2026-10-16.md`](repo-structure-review-2026-10-16.md) | 目录结构：同一天三轮（跨平台规范核对 → 第一轮修复的落地核验 → 逐目录逐文件全量普查） | 2026-10-16 | 约定进 `CONTRIBUTING.md` 与 `build/README.md`；六条断言进 `RepositoryStructureTests` |
-| [`security-review-2026-10-12.md`](security-review-2026-10-12.md) | 安全审计：逐项定级与对抗性实测 | 2026-10-12 | 规范性结论并入 [`docs/design/README.md`](../design/README.md) §3 |
-| [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md) | macOS 移植的架构与技术选型评估 | 2026-10-13 | 后续做法见 [`docs/ports/README.md`](../ports/README.md) |
+| [`windows-installer-review-2026-10-26.md`](windows-installer-review-2026-10-26.md) | Windows 三个安装包（client / host / server：Rendezvous + Relay + Ops）的打包、升级、签名与安装后生命周期 | 2026-10-26 | W1–W12 已修复（见 `CHANGELOG.md` 的 `[未发布]` 下 Added 与 Fixed 两处的"Windows 安装包评审"）；现行做法以 `build/README.md`、`docs/ops/README.md`、`build/signing/README.md` 为准 |
+| [`macos-installer-review-2026-10-25.md`](macos-installer-review-2026-10-25.md) | macOS 三个安装包（client / host / server）的打包、签名、公证与安装后生命周期 | 2026-10-25 | 评审后的修复见 `CHANGELOG.md` 的 `[未发布]` 下 Added 的"macOS 安装包安装期配置"与 Fixed 的"macOS 安装包评审"；现行做法以 `build/README.md`、`docs/ops/README.md`、`build/signing/README.md` 为准 |
+| [`ui-and-icon-review-2026-10-18.md`](ui-and-icon-review-2026-10-18.md) | 客户端 UI 与产品图标：macOS 26 与 Windows 11 两轮实机逐屏（含亮色外观）+ 图标资产/打包核对 | 2026-10-18 | R1/R2/R4/R7/R10、W1–W8 已修复；R5/W9（四段版本号）已解决，R6、R9 已改，W10 定为有意保留；只剩图标栅格（R3）待设计决定 |
+| [`ui-consistency-review-2026-10-17.md`](ui-consistency-review-2026-10-17.md) | 客户端 UI 跨平台一致性：视图/样式盘点 + 平台驱动差异逐项核对 | 2026-10-17 | 三处文案缺陷（U1–U3）与一处限制告知缺口（U4）已修复；现行事实以 [`docs/usage/README.md`](../usage/README.md) 为准 |
+| [`repo-structure-review-2026-10-16.md`](repo-structure-review-2026-10-16.md) | 目录结构：同一天三轮（跨平台规范核对 → 第一轮修复的落地核验 → 逐目录逐文件全量普查） | 2026-10-16 | 约定进 `CONTRIBUTING.md` 与 `build/README.md`；当时的六条约定进了 `RepositoryStructureTests`（该文件现有 7 个测试）；第八节留给下一轮的 A-7（`THIRD-PARTY-NOTICES.md` 过期检查）后来已加进 CI |
+| [`security-review-2026-10-12.md`](security-review-2026-10-12.md) | 安全审计：逐项定级与对抗性实测 | 2026-10-12 | 规范性结论并入 [`docs/design/README.md`](../design/README.md) §3；其中 #4"密码证明不是 PAKE"已由 SRP-6a 解决（见 `CHANGELOG.md` 的"上线前加固"），全局认证失败锁与对应的限流结论也已不再成立 |
+| [`macos-port-review-2026-10-13.md`](macos-port-review-2026-10-13.md) | macOS 移植的架构与技术选型评估 | 2026-10-13 | 后续做法见 [`docs/ports/README.md`](../ports/README.md)；建议①（`ILoginItem` 不带平台特性）已落实，建议②（原生互操作面按域拆分）仍未做 |
 
 同一主题的多轮评审**合订成一份**（`repo-structure-review-2026-10-16.md` 里按轮分节），
 不为每一轮单开一个文件——一轮一个文件只会让归档变成一串读不出差别的名字。

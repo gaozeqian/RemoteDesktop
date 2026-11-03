@@ -2,8 +2,9 @@
 
 给**要改代码的人**：系统怎么分层、线协议长什么样、安全边界画在哪。
 
-三块内容读法不同：**§1 分层**决定你把代码放哪；**§2 协议**是跨端契约，改动要两端一起动；**§3 安全**是
-"保护了什么、还没保护什么"的清单，其中"还没有做的事"一节是读这份文档最该看的地方。
+三块主要内容读法不同：**§1 分层**决定你把代码放哪；**§2 协议**是跨端契约，改动要两端一起动；**§3 安全**是
+"保护了什么、还没保护什么"的清单，其中"还没有做的事"一节是读这份文档最该看的地方。§4 讲运维监控台的构成，
+§5 讲客户端本机存的"最近设备列表"。
 
 依赖规则不是靠自觉：`tests/RemoteDesktop.Architecture.UnitTests` 会在违反时让构建变红。
 
@@ -17,24 +18,26 @@
 依赖流向**只能由外向内**。内层绝对不能引用外层的类型或接口。
 
 ```text
-Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/Hosts
-           ↑
-        Signaling (独立契约)
+Domain ← Abstractions ← Protocol ← Transport ← Application ← Features ← Hosts
+            ↑     ↑                    ↑
+      Platform.*  Media             Signaling（独立契约，无内部依赖）
 ```
 
-*说明：`Platform.*` 和 `Media` 等具体实现层只依赖 `Abstractions` 提供的接口（以及 `Domain` 的实体），
-不依赖其他业务逻辑层。`Signaling` 为了保证服务端不引入任何客户端依赖，是一个完全独立的协议包。*
+*说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 和 `Media` 等具体实现层只依赖 `Abstractions` 提供的接口
+（以及 `Domain` 的实体），不依赖其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`。
+`Features.Desktop` 与 `Features.Camera` 引用 `Media`；宿主（`Client`、`HostService`、`SessionAgent`）除了
+`Application` 与各 `Features.*`，还直接引用 `Media` 和 `Platform.*`，在启动时把它们接起来。`Signaling` 为了保证
+服务端不引入任何客户端依赖，是一个完全独立的协议包——`Transport` 与 `Server.Shared` 引用它，它不引用任何人。*
 
-**平台层不只一个。** `Platform.Windows`、`Platform.MacOS`、`Platform.Linux` 各自实现同一批端口，
-`Platform.Posix` 放两个类 Unix 系统语义相同的部分（PTY、0600 文件密钥库、用户上下文守卫）。
-宿主在启动时按操作系统选一个，业务代码一行都不用知道自己在哪个平台上。
+**平台层不只一个。** `Platform.Windows`、`Platform.MacOS`、`Platform.Linux` 各自实现同一批端口，其中 Linux 与
+macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按操作系统选一个，业务代码一行都不用知道自己在哪个平台上。
 
 ### 核心业务层 (Inner Core)
 
 * **`RemoteDesktop.Domain`**: 最内层。定义核心领域模型与业务规则。包含设备身份、权限校验模型
   (`AccessGrant` - 控制读写或观看模式)、连接会话实体等。完全独立，不依赖任何库。
 * **`RemoteDesktop.Abstractions`**: 定义了由外层（尤其是平台层）必须实现的所有"端口"（Ports/Interfaces）。
-  包括：屏幕采集器、输入注入器、硬件编解码器、音频采集设备、PTY(终端)工厂、剪贴板读写器、密钥持久化等接口。
+  包括：屏幕采集器、输入注入器、硬件编解码器、音频采集设备、PTY(终端)宿主与会话（`IPtyHost` / `IPtySession`）、剪贴板读写器、密钥持久化等接口。
 
 ### 通信协议层 (Communication)
 
@@ -47,9 +50,9 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 
 ### 网络与应用逻辑层 (Middle Layer)
 
-* **`RemoteDesktop.Transport`**: 网络连接基建。负责 QUIC 对端连接池管理、证书指纹绑定校验、NAT 地址反射与
+* **`RemoteDesktop.Transport`**: 网络连接基建。负责 QUIC 对端连接与监听（`QuicPeerConnector` / `QuicPeerListener`）、证书指纹绑定校验、NAT 地址反射与
   打洞探测、中继回退逻辑，以及 Rendezvous 的客户端实现。
-* **`RemoteDesktop.Application`**: 会话生命周期与鉴权。实现密码验证（HMAC）、失败限流机制，并定义所有
+* **`RemoteDesktop.Application`**: 会话生命周期与鉴权。实现基于 SRP-6a 的密码认证（`PasswordAuthenticator`）、失败限流机制（`AuthAttemptLimiter`），并定义所有
   功能模块接入的契约 (`IFeatureModule`) 和信道路由分发器 (`ChannelDispatcher`)。
 
 ### 功能特性层 (Features)
@@ -60,7 +63,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 * **`FileTransfer`**: 文件管理器（断点续传、文件校验、限速管理）。
 * **`Terminal`**: 远程终端（纯文本交互和 VT 序列解析；终端本身由平台层提供——Windows 是 ConPTY，
   macOS 与 Linux 是共享 `Posix` 层的 PTY）。
-* **`Camera`**: 摄像头画面劫持与推送。
+* **`Camera`**: 摄像头采集与推送（经被控端授权，使用中被控端有提示）。
 
 ### 具体实现层 (Implementations & Platforms)
 
@@ -86,13 +89,22 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features/
 * **`RemoteDesktop.HostService`**: （被控端核心）守护进程：注册设备、鉴权、分发通道、对接信令服务器。
   **形态按平台不同**——Windows 上它是 LocalSystem 服务并把屏幕/输入转发给 Agent；Linux 上它是一个跑在
   图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方；macOS 上它是 host 包里的
-  `Remote Desktop Host.app`（`LSUIElement`，无窗口，装在 `Library/Application Support` 而不是“应用程序”），
-  同样自己采集和注入。
+  `Remote Desktop Host.app`，同样自己采集和注入（见下面"macOS 采用单进程宿主模型"）。
 * **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）
   创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有
   Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
-* **`RemoteDesktop.Server.*`**: 包含 Rendezvous（信令协调）和 Relay（流量中继）服务器。
-  可以部署在 Linux/Docker 上。Rendezvous 还引用 `RemoteDesktop.Server.Storage`（见下）。
+* **`RemoteDesktop.Server.*`**: 服务端，可以部署在 Windows、Linux（含 Docker）和 macOS 上。它不引用
+  `Abstractions`、`Protocol`、`Transport`、`Application`、`Features`、`Media`、`Platform` 和各宿主（架构测试保证），
+  与客户端只共享 `Signaling` 契约。项目分工如下：
+  * `Server.Shared`：服务端公共契约与配置步骤——`RelayTicket`、`RelayCookie`、`OpsEvent`、`NodeTokenGuard`、
+    `ServerSetup` 等；引用 `Signaling`。
+  * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared`；Rendezvous 还引用
+    `Server.Storage`（见下）。
+  * `Server.Storage`：设备注册表的持久化，没有项目依赖。
+  * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见 §4。依赖只向内：`Ops.Core` →
+    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者；三者都**不**引用 `Server.Storage`
+    （`The_console_layers_only_point_inwards` 断言）。
+  * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared`。
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的一个
@@ -161,7 +173,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 ### 信令层 (Signaling)
 
-信令用于让控制端和被控端发现彼此、交换公钥指纹、并协商 NAT 穿透方案。信令服务器本身
+信令用于让控制端和被控端发现彼此、交换证书指纹、并协商 NAT 穿透方案。信令服务器本身
 **不接触加密后的桌面画面和按键**。
 
 * **协议**：WebSocket (`ws://` 或 `wss://`)
@@ -171,13 +183,19 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 **核心流程**：
 
-1. **上线注册**：被控端连上 WebSocket 后发送 `Register`，包含其设备 ID 派生出的公钥指纹。服务器返回
-   `RegisterChallenge` 要求设备签名，验签通过后服务器回复 `Registered` 并分配短时连接密码。
+1. **上线注册**：WebSocket 打开后，服务器先发 `RegisterChallenge`（随机 nonce）；设备回 `Register`，带自己的
+   证书、用证书私钥对 nonce 做的 ECDSA-P256 签名，以及声明的 `client_capabilities`（服务器只向声明过某项能力的设备
+   发对应的消息）。验签通过后，服务器从证书推出指纹，回复 `Registered`：设备代码（`device_id`）和 UDP 地址反射端口
+   （`reflector_port`）。连接密码不经过服务器，由被控端本机生成。
 2. **状态查询**：控制端可发送 `PresenceQuery`，询问一组设备是否在线。
-3. **发起连接**：控制端发送 `ConnectRequest`，提供目标设备 ID 和自己的信息（IP/端口/中继支持等）。
-4. **握手转发**：服务器将请求转化为 `IncomingConnection` 转发给被控端；被控端接受后返回 `ConnectAccept`。
-5. **打洞与中继票据**：信令服务器为双方交换内网/公网 IP 列表（用于 NAT 打洞），并颁发
-   **中继票据 (Relay Ticket)**，以备直连失败时使用。
+3. **发起连接**：控制端发送 `ConnectRequest`，提供 `request_id`、目标设备代码和自己的候选地址（`candidates`）。
+4. **握手转发**：服务器将请求转化为 `IncomingConnection`（含控制端指纹、候选地址、中继信息和服务器签发的
+   `session_id`）转发给被控端；被控端接受后返回 `ConnectAccept`（带自己的候选地址），拒绝则返回 `ConnectReject`。
+5. **打洞与中继票据**：服务器把被控端的指纹、候选地址和中继信息用 `ConnectReady` 交给控制端（用于 NAT 打洞），
+   中继信息里带**中继票据 (Relay Ticket)**，以备直连失败时使用；目标不在线、被拒绝或超时则回 `ConnectFailed`
+   （带 `FailureReason`）。
+6. **遥测与管理**（可选）：设备可用 `TelemetryReport` / `SessionEndedReport` 上报会话质量与结束事实（见 §4），
+   服务器可经 `AdminCommand` 下发管理动作（如断开会话，仅对声明了该能力的设备）。
 
 ### 传输层 (Transport)
 
@@ -203,24 +221,36 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   * 3: `Input` (鼠标、键盘事件)
   * 4: `Clipboard` (文本、图片剪贴板双向同步)
   * 5: `FileTransfer` (文件传输块)
-  * 6: `Terminal` (ConPTY 字符流与大小重置命令)
+  * 6: `Terminal` (PTY 字符流与大小重置命令；Windows 是 ConPTY，macOS/Linux 是 POSIX PTY)
   * 7: `Camera` (远程摄像头数据帧)
 
-* **帧格式 (Wire Format)**：每一个应用层消息（除特定的视频或音频原始流外）都使用统一的结构包装（大端序）：
+* **帧格式 (Wire Format)**：每一个应用层消息都使用统一的帧头包装（大端序）：
 
 ```text
 [ uint32 payload_length ]  (4 bytes)
 [ uint16 message_type ]    (2 bytes)
-[ payload (protobuf) ]     (变长)
+[ payload ]                (变长；单帧上限 16 MiB，超出按协议错误处理)
 ```
+
+  `payload` 是 protobuf 还是原始字节由通道和 `message_type` 决定：Protobuf 信封的 `message_type` 为 1；视频帧（2，
+  `[flags u8][采集时间 µs i64][Annex-B 访问单元]`）、音频帧（3，Opus 包）、文件块（4）、终端数据（5）直接承载原始字节，
+  省掉一次 protobuf 拷贝。
 
 * **Protobuf 定义**：所有应用层消息结构定义在 `src/Core/RemoteDesktop.Protocol/*.proto` 目录下。
 
-**鉴权过程**：
+**鉴权过程**（协议主版本 3，SRP-6a，实现见 `PasswordAuthenticator`）：
 
-1. 在 `Control` 信道建立后，控制端必须立刻发送鉴权请求。
-2. 密码**绝不明文传输**，而是使用 `HMAC(密码派生密钥, nonce ‖ 双方证书指纹)` 证明自己持有正确的连接密码。
-3. 验证通过后，被控端依据策略（如是否为仅观看模式）开放其他信道的数据收发权限。
+1. 在 `Control` 信道建立后，控制端必须立刻发送 `Hello`（协议版本、会话模式、请求的权限）。
+2. 被控端回 `AuthChallenge`：每个口令槽（临时密码、固定密码）一个 `SrpChallenge`（salt 与服务器公值 B）。固定密码
+   未配置时该槽用随机假口令，消息形状不暴露它是否存在。
+3. 控制端回 `AuthResponse`：每个槽一个 `SrpResponse`（客户端公值 A 与证据 M1）。密码**绝不明文传输**，双方
+   证书指纹进入 SRP identity。
+4. 被控端回 `AuthResult`：是否通过、失败原因（`AuthFailure`）、授予的权限、匹配的槽下标 `credential_index`，以及
+   服务器证据 M2。控制端必须验证 M2，否则被控端未被认证。
+5. 验证通过后，被控端依据策略（如是否为仅观看模式）开放其他信道的数据收发权限。
+
+`AuthChallenge.nonce` 与 `AuthResponse.proof` 是为线格式兼容保留的字段，版本 3 不再使用。协议主版本不同的对端
+会被明确拒绝（`INCOMPATIBLE_VERSION`），而不是被告知"密码错误"。
 
 ## 3. 安全边界
 
@@ -295,7 +325,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **观看模式**强制只读，与请求和策略无关；没有屏幕权限时，输入和剪贴板一并去掉。
 * 被控端可以随时把某个会话降级为"仅观看"或收回摄像头：相关通道立刻被取消，控制端只是被通知（界面跟着变），
   执行不依赖它。
-* **同时最多 16 个会话**（`HostSessionService.MaxSessions`）。每个会话都要占用这台机器的内存直到断开，而知道
+* **同时最多 16 个会话**（`HostSessionService` 的内部常量 `MaxSessions`，不可配置）。每个会话都要占用这台机器的内存直到断开，而知道
   密码就能走到这一步，所以没有上限时，一个人就能一直开会话直到机器撑不住。平时从手机和笔记本各连一个，
   离这个数还很远。
 * 摄像头作为常规远程功能，默认随控制会话开放（`HostPolicy`）；观看模式下强制不开放。
@@ -313,7 +343,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 | 输入 | `ControlInput` | 观看模式下被控端拒绝该通道 |
 | 剪贴板 | `Clipboard` | 只同步会话期间的**变化**；观看模式不开放 |
 | 音频 | `Audio` | 只送被控端正在播放的声音 |
-| 文件 | `FileTransfer` | 以**登录用户**身份执行；路径过 `FileAccessPolicy`；可选根目录限制；内容读写打开后按文件句柄复核真实目标，复用该句柄传输 |
+| 文件 | `FileTransfer` | 以**登录用户**身份执行；路径过 `FileAccessPolicy`；内容读写打开后按文件句柄复核真实目标，复用该句柄传输。根目录限制只是 `FileAccessPolicy` 的能力：当前版本没有任何宿主传入策略，不可配置，所以默认不限制 |
 | 终端 | `Terminal` | 只能选被控端列出的 shell 名字；并发上限 8；shell 随会话结束 |
 | 摄像头 | `Camera` | 作为常规功能开放；观看模式不开放；被控端可单会话关停；使用中被控端有提示 |
 
@@ -322,7 +352,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **文件和终端绝不以 SYSTEM 运行**：它们在会话 Agent 里跑，且 `IUserContextGuard` 在进程身份是 SYSTEM 时
   直接拒绝（登录界面 / 锁屏 / UAC 桌面的 Agent 就是 SYSTEM）。所以锁屏状态下连上来的人不能借机读整块磁盘。
 * **文件路径**：必须是绝对路径，拒绝设备路径（`\\.\`、`\\?\`）、NTFS 备用数据流、`CON`/`NUL` 等保留名，
-  `..` 先解析再判断是否越出允许的根目录。没传根目录时，能访问的就是登录用户自己有权访问的东西。
+  `..` 先解析再判断是否越出允许的根目录。当前宿主都没有传根目录，所以能访问的就是登录用户自己有权访问的东西。
 * **文件完整性**：目标文件夹里出现完整文件之前，内容一直写在 `<目标名>.<大小>-<修改时间>.rdpart` 里，
   校验（xxHash64）通过才改名，所以目标名下不会出现写了一半的文件。
 * **残片不会永远留着**：被控端把残片记在一份清单里，超过 7 天没人续传的会被删除（`PartialFileSweeper`）。
@@ -332,8 +362,10 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   关标签、断连接、Agent 退出都会一起结束。终端**不记录键入内容**（只记录打开/退出/关闭）。
 * **终端里的剪贴板**：控制端的复制粘贴是本地行为；被控端程序发来的 OSC 52（让终端写系统剪贴板）被刻意忽略，
   否则被控端上的程序就能写控制端的剪贴板。
-* **审计**：文件的新建/重命名/删除/上传/下载、终端的打开/退出、摄像头的打开/关闭都写进 Agent 日志，
-  带真实会话 ID；不记录文件内容，也不记录终端输入。
+* **审计**：文件的新建/重命名/删除/上传/下载、终端的打开/退出、摄像头的打开/关闭都写进日志，带真实会话 ID；
+  不记录文件内容，也不记录终端输入。日志落点随平台不同：Windows 上是会话 Agent 的日志
+  （`agent-user-*.log` / `agent-secure-*.log`），Linux 与 macOS 没有 Agent，这些功能由 `HostService` 自己承载，
+  写进它的 `service-*.log`；独立运行的客户端没有文件日志。
 
 ### 本机的进程边界
 
@@ -341,8 +373,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   Agent 在交互会话里以**登录用户**运行；只有登录界面 / UAC 时服务才换成 SYSTEM 令牌的 Agent，
   而那时上表的功能全部拒绝。
 * **UIPI 突破机制 (UIAccess)**：为了能够远程操作"任务管理器"或管理员权限的窗口而不被系统卡住鼠标，
-  `SessionAgent` 开启了 `uiAccess="true"`。这意味着该 Agent 必须具有合法的代码签名并安装在安全的系统目录
-  (Program Files) 中，由 SYSTEM 权限的 HostService 拉起。
+  安装包里的 `SessionAgent` 开启了 `uiAccess="true"`（只有 `-p:UiAccessAgent=true` 的安装包构建才用
+  `app.uiaccess.manifest`，默认构建是 `uiAccess="false"`）。这意味着该 Agent 必须具有合法的代码签名并安装在安全的
+  系统目录 (Program Files) 中，由 SYSTEM 权限的 HostService 拉起。
 * **服务 ↔ Agent 命名管道**：ACL 只允许启动 Agent 的那个用户，并且校验连接方的进程 ID 就是它启动的进程。
 * **界面 ↔ 服务控制管道**：ACL 允许本机已认证用户（界面是普通用户进程）。这条管道的命令是读状态、
   刷新临时密码、把某个会话降级为仅观看、断开某个会话、开关摄像头同意。
@@ -401,10 +434,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   地址在登记、改地址、抓取与执行管理动作时都被拒绝），所以公网部署应当把它设上；不设时仍按"https 或回环"放行。
   每节点令牌可以给单个节点单独配密钥，但**默认仍是部署级**：没配独立令牌的节点共用 `Ops:NodeToken`，因此泄露
   一份节点配置仍可能暴露其余节点，直到它们都换成各自的令牌。
-* **PAKE 降低的是离线爆破面，不是口令熵**：认证已从挑战—HMAC 迁到 SRP-6a。被动窃听者拿不到可离线验证的
-  verifier；能主动冒充被控端的一方每次握手最多只能试一个口令，且仍受失败限流和信令访问控制约束。
-  但低熵固定密码仍会被在线猜测，所以固定密码要足够长、信令必须加密，也不要把临时密码给不信任的人。
-  这套实现依赖 BouncyCastle 的 SRP 代码，不自行实现群运算；协议主版本已升到 3，旧客户端会被明确拒绝，
+* **PAKE 降低的是离线爆破面，不是口令熵**：机制见"连接与身份"。低熵固定密码仍会被在线猜测（每次握手最多试
+  一个口令，且受失败限流和信令访问控制约束），所以固定密码要足够长、信令必须加密，也不要把临时密码给不信任的人。
+  这套实现依赖 BouncyCastle 的 SRP 代码，不自行实现群运算；协议主版本是 3，旧客户端会被明确拒绝，
   不会降级回旧的弱交换。
 * **没有账号体系**：只有"设备代码 + 密码"这一个因素，没有二次验证，也没有跨设备的登录审计中心。
 * **本机用户之间不做区分**：任何已登录的本机用户都能通过控制管道读到设备代码和临时密码、开关摄像头同意。
@@ -413,16 +445,21 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   登录的管理员自己的客户端界面失效**，而在无头机器上（这个产品的常见用法）根本没有控制台用户，
   于是又退回原样。换句话说，问题不是"怎么实现"，而是"一台机器的设备代码和密码属于谁"——
   这需要产品决定，代码里没有替它做决定。
-* **许可文本里的主体信息要换成你自己的**：仓库根的 `LICENSE` 是专有 EULA，方括号里的公司名称、联系方式和
-  司法管辖区是留给"换个人/换主体来发布"的闸门——**只要里面还有方括号占位符，打包脚本就拒绝出包**
-  （当前内容是完整的，见 [安装包与打包](../ops/README.md)）。改这个文件就够了，构建会把它转成安装向导的许可页。
 * **URL 协议只在 Windows 与 Linux 上注册**：`remotedesktop://` 会打开客户端并填入设备代码，但**不自动连接**——
   链接来自本项目控制不了的地方，密码和"连接"必须由人给。macOS 还差一步：LaunchServices 用 Apple Event
   （`kAEGetURL`）投递 URL，原生辅助库没有导出这条通道，所以那边点链接不会有反应。
-* **卸载不清理用户数据**：MSI 卸载默认保留 `%ProgramData%\RemoteDesktop`（设备身份 + 日志），
-  `msiexec /x ... REMOVEDATA=1` 才会删；客户端在 `%AppData%` 下的身份文件 MSI 不管。
 * **没有做长时间对抗性测试**：握手洪泛上限、限流窗口这些数字是按常见情况选的，没有在真实攻击流量下压过。
 * **没有独立的第三方审计**：上面每一条都能在代码里对上，但都出自同一个实现者视角。
+
+### 已知限制与部署须知
+
+下面几条不是"还没做的功能"，而是使用和发布时要心里有数的事实：
+
+* **许可文本里的主体信息要换成你自己的**：仓库根的 `LICENSE` 是专有 EULA，方括号里的公司名称、联系方式和
+  司法管辖区是留给"换个人/换主体来发布"的闸门——**只要里面还有方括号占位符，打包脚本就拒绝出包**
+  （当前内容是完整的，见 [部署与运维](../ops/README.md) 的"安装包怎么构建（三平台）"）。改这个文件就够了，构建会把它转成安装向导的许可页。
+* **卸载不清理用户数据**：MSI 卸载默认保留 `%ProgramData%\RemoteDesktop`（设备身份 + 日志），
+  `msiexec /x ... REMOVEDATA=1` 才会删；客户端在 `%AppData%` 下的身份文件 MSI 不管。
 
 ### 怎么验证这些说法
 
@@ -432,4 +469,267 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   摄像头同意与收回、会话隔离、**信令走 TLS**（含"不受信任的证书会被拒"）、连接配额与注册限流、
   中继两步绑定、`/health` 反映数据库。
 * 真机验证记录见 [`CHANGELOG.md`](../../CHANGELOG.md) 与 [平台移植总览](../ports/README.md)。
-* **仍然没有第三方审阅**：上面每一条都能在代码里对上，也都由测试盯着，但盯着的还是同一个人写的那套假设。
+* 测试盯着的是同一个实现者的那套假设，这一点见"还没有做的事"最后一条（没有独立的第三方审计）。
+
+## 4. 运维监控台
+
+给**要改监控台代码、或想理解它为什么这样**的人。怎么装、怎么让总览出现数字见 [部署与运维](../ops/README.md) 的"运维监控台（可选）"，这里只讲构成与设计。
+
+### 定位与边界
+
+第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：控制台宕机、重启、升级，
+不影响任何一次远程连接。
+
+**做什么**：节点健康与全部已抓取指标、节点版本/uptime、在线设备、会话、告警（含比值规则）、审计，浅色/深色主题。
+
+**不做什么**（有意不做）：日志聚合、远程命令执行、存画面/剪贴板/文件内容、替代 Prometheus/Grafana。
+
+### 为什么独立成一个进程
+
+1. 控制台要跨节点聚合，而信令是无状态横向扩展的——UI 和库塞进去等于给信令加一个必须跨实例一致的状态。
+2. 信令在连接建立路径上，管理面的一次错误查询、一次库锁，都不该有机会影响握手。
+3. 认证面独立：后台账号被盗不该等于信令被接管。
+
+### 三条边界
+
+| 边界 | 方向 | 协议 | 用途 |
+|---|---|---|---|
+| 指标 | 控制台 → 节点 | Prometheus 文本 | 数字、趋势 |
+| 对象查询 / 管理 | 控制台 → 节点 | JSON `/internal/v1`，Bearer | 设备列表、断开会话、封禁 |
+| 事件 | 节点 → 控制台 | JSON 批量 POST，HMAC | 会话事实 |
+
+### 数据从哪来（范围合同）
+
+每块面板都要能指到来源，指不到的就不做。**"服务器没有这个数"是常态，不是缺陷**：
+
+| 面板 | 来源 | 状态 |
+|---|---|---|
+| 在线设备 | `remotedesktop_devices_online` gauge | 有 |
+| 中继带宽 / 流量图 | Relay 字节计数器求速率 | 有 |
+| 活跃会话 | Relay 配对/关闭事件 + 客户端会话结束/心跳，`source` 分开计数 | 有 |
+| 链路类型 / 平台分布 | 客户端心跳（被控端报平台） | 有（心跳默认关） |
+| 会话 RTT | 客户端心跳（控制端测） | 有 |
+| 丢包 / 码率 | **无来源** | 不做，显示"—" |
+| 文件传输任务 / 审计 | **无来源** | 不做 |
+| 设备列表 | `/internal/v1/devices` | 有（代码、注册时间、最后活跃、在线、封禁） |
+
+**丢包与码率为什么没有**：.NET 的 QUIC API 不暴露每连接的丢包统计，编码器的码率是设置值不是吞吐量。
+两列保持"—"。想填只能改传输层去做字节计数或读 MsQuic 的 native 统计。
+
+### 代码落位与依赖
+
+| 项目 | 职责 |
+|---|---|
+| `RemoteDesktop.Server.Ops` | Web 宿主：端点、认证、静态页、后台任务 |
+| `RemoteDesktop.Server.Ops.Core` | 纯逻辑：Prometheus 解析、会话投影、规则求值、TOTP、审计链 |
+| `RemoteDesktop.Server.Ops.Storage` | 表结构、方言、读写 |
+| `RemoteDesktop.Server.Gateway` | 控制台的 HTTPS 入口：只监听 HTTPS，经 YARP 固定转发到回环上的控制台 |
+| `RemoteDesktop.Server.Ops.UnitTests` / `.IntegrationTests` | 纯逻辑单测 / 真宿主 + 假节点 |
+
+两条强制的依赖规则（架构测试兜底）：`Ops.Core` 只依赖 BCL + `Server.Shared`（契约），不碰 Storage/宿主/ASP.NET；
+`Ops.Storage` 不依赖宿主。**不引用 `Server.Storage`**：设备注册表是信令服务的库，控制台经内部 API 拿设备数据，
+不直连对方数据库。
+
+### 事件与投影
+
+* 信封 `{ v, eventId, node, kind, occurredAt, correlationId, payload }`；`eventId` 唯一（重放无害），`correlationId`
+  由服务端生成——**绝不用客户端的 `RequestId`**（可被构造，能撞别人的时间线）。
+* 事件是事实（`ops_event`），会话是投影（`ops_session`），同事务写；投影可由事件重放重建。
+* `source ∈ {relay, signaling, client}` 是诚实性字段：不把三者加成一个"活跃会话总数"。
+* **会话结束由客户端上报**：信令新增 `ClientMessage.session_ended`（字段 7），两端各报一次，控制台按同一个
+  `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
+  中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
+
+### 数据模型
+
+基线表 + 迁移（`ops_schema_version` 只前进，当前版本 7）：v1 基线；v2 加 `ops_session.platform / version`；v3 加
+`ops_session.client_session_id` 与 `ops_admin_action` 表；v4 加通知重试时间 `ops_notification_attempt.last_attempt_at`
+与单次 TOTP 时间步 `ops_admin_user.last_totp_step`；v5 把 PostgreSQL 的实数列改成 `DOUBLE PRECISION`（SQLite 的
+`REAL` 本来就是 8 字节，v5 在 SQLite 上是记录版本的空操作）；v6 给 `ops_silence` 加 `reason`（静默表本身从 v1 基线就在）；
+v7 给 `ops_node` 加 `token`（每节点令牌，空值沿用部署级 `Ops:NodeToken`）。时间统一存 Unix 毫秒，SQLite 与
+PostgreSQL 共用一份 DDL。
+
+核心表：`ops_node`（节点）、`ops_metric_sample` / `_catalog` / `_rollup`（指标）、`ops_event` / `ops_session`
+（事实与投影）、`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_notification_channel` /
+`ops_notification_attempt`（通知通道与投递记录）、`ops_silence`（静默）、`ops_admin_user` / `_session`（账号）、
+`ops_audit_log`（哈希链审计）、`ops_admin_action`（两段式复核）、`ops_lease`（单实例租约）、
+`ops_schema_version`（迁移版本）。
+
+### 控制台的认证与安全
+
+| 项 | 决定 |
+|---|---|
+| 口令 | PBKDF2-HMAC-SHA256，60 万次迭代，16 字节盐，32 字节输出 |
+| 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开；验证通过的时间步写入 `last_totp_step`，同一个码不能再次登录 |
+| 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时；改密、重置 TOTP、停用或删除账号都会撤销该账号的全部会话 |
+| 角色 | `viewer` 只读 / `operator` 确认告警、发起动作 / `admin` 改规则、管账号、批准动作、看审计 |
+| CSRF | 双提交 Cookie + `X-Ops-CSRF`，`SameSite=Strict` |
+| 审计 | `SHA256(prev_hash ‖ 字段)` 哈希链，`/api/audit/verify` 报第一条不一致 |
+| 管理动作 | 两段式：发起（operator）+ 批准（admin），发起人不能批准自己的 |
+
+### 告警
+
+规则是**结构化列，不是表达式**：`single`（单指标）、`ratio`（两指标比值）、`scrape`（抓取失败）、
+`session.rtt`、`session.direct`（直连率）。`forSeconds` 状态机——条件持续满足才开，抖动一次不叫人；
+去重键保证同一对象同时只有一条未恢复告警。
+
+通知有两条通道，开/恢复各发一次：Webhook（`Ops:Notifications:WebhookUrl`）与邮件（`Ops:Notifications:Smtp`）。
+两条通道**各自**在 `ops_notification_attempt` 里记一行，失败各自按 1/2/4/8 分钟退避重试、最多 5 次，彼此不影响；
+一条通道挂着不会让另一条重发。
+
+**静默**（告警页「静默 1 小时」或 `POST /api/silences`）只压通知：告警照常打开、恢复、认领，照常写审计。
+范围可以是某条规则、某个节点（抓取失败类）或两者；窗口结束需要重新触发一次才会再通知——被跳过的消息不会补发。
+静默的创建与解除都是管理员动作，各写一条审计。
+
+### 已知边界与未做
+
+* 丢包 / 码率：无来源（见上）。
+* 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。通道目前就这两条。
+* 节点鉴权可以每节点一份令牌（见 [部署与运维](../ops/README.md) 的"每节点令牌"），但**默认仍是部署级**：没设独立令牌的节点共用 `Ops:NodeToken`，
+  泄露一个节点的配置仍会暴露其余节点。全部换完后可以把 `Ops:NodeToken` 留空，只有回环调用能直连节点。
+  `Ops:NodeTokenHosts` 仍决定令牌能发往哪些主机（见 [部署与运维](../ops/README.md) 的"关键配置"表）。
+* 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，
+  未做 SignalR backplane。
+* **历史靠清理任务收敛，不是无限保留**：指标样本、事件、会话与已恢复告警按 `Ops:Retention:*` 每小时删除一次
+  （见 [部署与运维](../ops/README.md) 的"数据保留"），过期管理员会话每轮都删；**打开中的告警与审计哈希链不动**。
+  清理只保证库不会无限长——备份、归档与磁盘容量仍是运维自己的事：样本是每次抓取（默认 10 秒）、每个指标各存一条，
+  默认只留 30 天（`SampleDays`），把它设为 `0` 会让样本一直累积。
+* Windows 侧控制台是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
+  手工 `sc.exe create` 仍然可行，但不是安装包的做法。
+
+## 5. 客户端本机存储（最近设备列表）
+
+> **2026-10-10 决定：不做账号体系。** 下面关于"账号体系上线后"的部分因此不会发生，留在这里是因为它记录了
+> 当前数据格式为什么长这样（条目里没有密码、时间字段的合并规则、墓碑、`accountId` 参数），
+> 以及万一将来改变主意时已经踩过的坑。清单同步、`SyncedRecentDevicesStore`、服务端的 `account_devices` 表都不实现。
+
+本节说明"最近连接过的设备"这个列表今天存在哪里、为什么这么存，以及**账号体系上线后**要把它搬到
+服务器时，哪些决定必须现在做、哪些坑必须提前避开。今天没有账号，也没有同步——这里描述的是已经落地的
+数据格式和明确留出的接口。
+
+### 今天怎么存
+
+客户端把列表放在数据目录下的 `recent_devices.json`（默认 `%AppData%\RemoteDesktop\`，由 `DataDirectory`
+配置决定；运维视角见 [部署与运维](../ops/README.md) 的"客户端本机的存储"）。结构是带版本号的：
+
+```json
+{
+  "Version": 1,
+  "Devices": [
+    {
+      "DeviceId": "123 456 789",
+      "Alias": "办公室台式机",
+      "LastConnectedUtc": "2026-10-07T02:11:04.5120000+00:00",
+      "UpdatedAtUtc": "2026-10-07T02:11:04.5120000+00:00",
+      "DeletedAtUtc": null
+    }
+  ]
+}
+```
+
+读写由 `IRecentDevicesStore` / `RecentDevicesStore`（`src/Hosts/RemoteDesktop.Client/Storage/`）负责，界面只
+通过接口访问它——这个接口就是将来接同步时的缝，见下文。
+
+几处与旧格式不同的地方：
+
+* **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会再留下一个截断的文件，也就不会出现
+  "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
+* **读不出来的文件会被让开**：解析失败或版本比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>`
+  保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
+* **旧格式会被迁移**：早期文件是一个裸数组，条目里还带着明文 `SavedPassword`。读到这种文件时，密码被搬进
+  系统保护的密钥库，文件当场重写成上面的带版本结构——升级即把明文从磁盘上拿掉，而不是等用户下次改点什么。
+
+### 密码为什么不进列表
+
+`RecentDeviceEntry` 里**没有**密码字段，这是刻意的，三条理由：
+
+1. **跨机器没有意义**。密码用 DPAPI 以 `CurrentUser` 作用域加密，换一台机器根本解不开，同步过去也是废数据。
+2. **服务器不该看到它**。本文 §3 把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
+   把设备密码放上去，等于要求用户相信一个我们明确假设不可信的组件。
+3. **它是本机的事**。"记住密码"是这台机器上的便利，不是账号的属性。
+
+所以密码存在 `ISecretStore`（客户端是 DPAPI，`secrets/` 目录）里，名字为 `recent-device-<设备代码>`，
+由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。`UpdatePasswordAsync(id, null)` 会
+**删除**密钥——这条路径以前在 API 上是缺失的，"取消勾选记住密码"因此永远清不掉已存的密码。
+
+将来如果产品坚持要"新机器登录后自动带上密码"，唯一可接受的形态是：客户端用账号口令派生密钥（Argon2id）
+做端到端加密，服务器只存不透明密文。因为密码不在条目里，这个决定**不需要改动数据格式**就能后加。
+
+### 字段语义与合并规则
+
+账号同步一上线，"两台机器上的同一份列表怎么合"就必须有确定答案。三个时间字段就是为它准备的：
+
+| 字段 | 含义 | 合并规则 |
+|---|---|---|
+| `LastConnectedUtc` | 最后一次连上这台设备的时间 | 取两边**较晚**的值。这是各机器的观测，不是编辑 |
+| `UpdatedAtUtc` | 用户最后一次**改这个条目**的时间（改别名、或删除） | 较晚者胜。连接行为不动它 |
+| `DeletedAtUtc` | 用户删除它的时间；null 表示还在列表里 | 非空即视为删除；与对方的 `UpdatedAtUtc` 比较，较晚者胜 |
+
+注意 `LastConnectedUtc` 用的是取最大值而不是"最后写入者胜"：连接是观测，谁先谁后无所谓，晚的那次才是事实。
+把连接的写入也当成编辑（顺带推进 `UpdatedAtUtc`）会让"在 A 机改名"被"在 B 机连接"无声覆盖。
+
+**墓碑**（`DeletedAtUtc`）是删除必须软删的原因：在 A 机上删掉设备，如果只是从文件里拿掉，B 机的副本会在
+下次同步时把它原样送回来，用户会觉得"删不掉"。带时间戳的墓碑让删除可以被合并、被传播，合并完再清理。
+在没有同步的今天，墓碑只是留在文件里、被 `GetAllAsync` 过滤掉——所以现在删掉的设备**看起来**是没了。
+连上同一个设备会让它复活（`DeletedAtUtc` 清空、`UpdatedAtUtc` 推进），不会出现"删过一次就再也回不来"。
+
+### 账号作用域
+
+`RecentDevicesStore` 的构造函数接受一个可选的 `accountId`：
+
+* 不传（今天的情况）：列表在 `dataDirectory/recent_devices.json`，密钥名 `recent-device-<设备代码>`。
+* 传入：列表在 `dataDirectory/accounts/<accountId>/recent_devices.json`，密钥名带账号前缀。
+
+这样同一个 Windows 用户登录两个账号时，两份列表和两套记住的密码互不串扰。现在就把这个参数留出来，是因为
+它的成本是零；等到有了账号再改，已经写下的数据就要迁移。`accountId` 来自服务器，所以构造时会校验它不含
+路径分隔符和 `..`——它必须只是一个名字，不能决定文件写到哪儿。
+
+### 账号体系上线时怎么接
+
+**客户端**：`MainWindowViewModel` 依赖的是接口，不是具体类型，所以换实现不用动界面。预期是在中间加一层：
+
+```text
+IRecentDevicesStore
+  └─ SyncedRecentDevicesStore(本地: RecentDevicesStore, 远端: IAccountDeviceListClient)
+       读：本地立即返回，后台按 UpdatedAtUtc 合并
+       写：本地先落（离线可用）+ 入队推送
+```
+
+能这么接的前提正是"条目里没有密码"——同步层搬运 `RecentDeviceEntry` 这件事本身就不可能泄漏密码。
+
+**服务端**：设备代码已经持久化（Rendezvous 经 `RemoteDesktop.Server.Storage`，裸 SQL + 启动时
+`EnsureSchemaAsync`；按 `Rendezvous:Database:Provider` 选 PostgreSQL 或 SQLite，没配则回退内存），
+映射在 `device_registrations` 里，新表直接引用它的 `device_id`：
+
+```sql
+CREATE TABLE IF NOT EXISTS account_devices (
+    account_id        BIGINT NOT NULL,
+    device_id         BIGINT NOT NULL,      -- 对应 device_registrations.device_id
+    alias             TEXT,
+    last_connected_at TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL,
+    deleted_at        TIMESTAMPTZ,
+    PRIMARY KEY (account_id, device_id)
+);
+```
+
+沿用既有的写法（裸 SQL、启动建表、`Rendezvous:Database` 配置），不要为这一张表引入 EF Core。
+
+两点别低估：
+
+* **账号体系本身的工作量远大于列表同步**。现在的 Rendezvous 对客户端只有 `/ws` 信令和 `/health`，没有注册、
+  登录、令牌、吊销、找回中的任何一样。还要决定设备证书怎么绑定到账号——最自然的做法是设备证书注册进账号，
+  这样设备开机不需要输账号密码。
+* **设备代码会失效**。它绑定证书指纹，设备重装就是新指纹、新代码。列表里的旧条目会变成死链接，不能假设
+  `device_id` 永远有效。界面现在显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"
+  和"当前离线"的回答故意完全相同（见本文 §3「部署者必须自己做的事」里关于在线状态查询的一段），所以界面只能说这么多，
+  "该设备可能已重新注册"的提示只在有证据时（连接返回"对方设备不在线"）出现。
+  **这三态只存在内存里，不写进 `recent_devices.json`**：它是机器的观测值而不是用户意图，写进去只会给将来的
+  账号同步增加一条需要合并的字段。合并规则因此完全不受影响。
+
+### 现在有意不做的
+
+* 不引入 EF Core，不写客户端同步框架：一个接口、一种格式、一组时间字段就够了。
+* 不把 `DeviceId` 换成 GUID 之类的"分布式友好"标识：服务端已经用 `device_id BIGINT UNIQUE` 关联好了。
+* 不清理墓碑：合并规则需要它们。等同步真正落地时再定保留期（比如超过 N 天的墓碑可以丢弃）。
+* **不做密码同步**，也不为此预留字段。

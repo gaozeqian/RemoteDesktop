@@ -274,7 +274,7 @@ options_file="$SERVER_DIR/setup-options"
 } > "$options_file"
 
 # Notarization requires every executable in the payload to be signed with a Developer ID Application identity and to
-# use the hardened runtime. Signing only the outer .pkg is not enough: the three apphosts and the ~40 native libraries
+# use the hardened runtime. Signing only the outer .pkg is not enough: the four apphosts and the ~40 native libraries
 # beside each one would still be ad-hoc, and the notary service rejects the whole submission. This is the step the
 # old package did not have, which is why --notarize could never have worked for the server.
 if [[ "$DISTRIBUTION" == "1" && -n "$APP_IDENTITY" ]]; then

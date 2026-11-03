@@ -4,7 +4,7 @@
 打包脚本的内部细节见 §八，客户端本机存了什么见 §九。
 
 > 运维监控台（节点健康、会话、告警、审计）已经可用：怎么装、怎么让总览出现数字见 §二 10，
-> 它的构成与设计见 §十一。
+> 它的构成与设计见 [系统设计](../design/README.md) 的"运维监控台"一节（§十一 是指向那里的入口）。
 
 被控端与服务端各自需要什么系统见 §一；功能怎么用、哪些平台支持什么见 [使用说明](../usage/README.md)；
 "部署者必须自己做的事"（换共享密钥、信令上 TLS、装包签名）见 [系统设计](../design/README.md) §3。
@@ -29,7 +29,7 @@
 
 | 机器 | 需要什么 |
 |---|---|
-| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082 |
+| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明），或 macOS（arm64）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082；要从别的电脑访问运维监控台，再开放网关的 TCP 5443 |
 | 被控端（Windows） | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
 | 被控端（Linux） | **Ubuntu 26.04+**（x64，FFmpeg 8 的 soname 固定）或有 Wayland 会话与 portal 的同等发行版；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
 | 控制端 | Windows 11 / Windows Server 2022+（x64），或 **Ubuntu 26.04+**（x64） |
@@ -51,7 +51,12 @@
 
 ## 二、部署服务器
 
-### 1a. 服务端：Debian 包（Linux）
+### 1. 服务端安装包（三平台）
+
+三个平台各有一个服务端安装包，装的都是同样四个程序（信令 Rendezvous、中继 Relay、监控台 Ops、Ops 的 HTTPS 网关
+Gateway）：Linux 是 Debian 包，Windows 是 MSI，macOS 是 `.pkg`。下面按平台分节。
+
+#### Linux：Debian 包
 
 ```sh
 build/installer/linux/server/build-deb.sh
@@ -63,7 +68,7 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 
 包把四个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops,Gateway}`，四个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
-升级不会覆盖运维改过的东西。Windows 现在也把 live settings 放在 `%ProgramData%\Remote Desktop Server`，
+升级不会覆盖运维改过的东西。Windows 也把生效中的设置放在 `%ProgramData%\Remote Desktop Server`，
 三平台在这一点上一致。
 
 安装过程会问两组问题（`dpkg -i` 也会问，不只是 `apt install`）：
@@ -105,10 +110,11 @@ curl http://127.0.0.1:5090/health
 `/etc/default/remotedesktop-server` 仍是高级设置与非交互安装的入口（监听地址、中继地址、共享密钥、
 防火墙开关，以及数据库/TLS 问题的预置值）；交互式改数据库或 TLS 请用 `dpkg-reconfigure`。
 
-`postinst` **只在 ufw 处于 active 时**才加防火墙规则，不动 nftables/iptables；purge 时只删除安装时加过
-的那三条（用数据目录里的标记判断）。
+**防火墙默认不动。** `postinst` 只有在 `/etc/default/remotedesktop-server` 里设了 `RD_OPEN_FIREWALL="1"`（默认
+`0`）**并且** ufw 处于 active 时，才放行 5080/tcp、5081/udp、5082/udp、5443/tcp 四条规则，不动 nftables/iptables；
+purge 时只删除安装时加过的那四条（用数据目录里的标记判断）。所以装完后别的机器连不上，先检查防火墙有没有放行。
 
-### 1b. 服务端：安装包（Windows）
+#### Windows：MSI
 
 不想手工发布 + `sc.exe` + `netsh`（也就是下面 2、3、6、8 节那些步骤）的话，用仓库里的服务端安装包。
 
@@ -146,22 +152,12 @@ msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
 `https://0.0.0.0:5443` 对外提供 HTTPS；指定 `GATEWAYLISTEN` 可改监听地址。安装时会自动把本机信令/中继登记为
 两个节点并打开信令的 `/metrics`，新装环境不需要手工添加节点。本机节点固定使用回环地址（`https://127.0.0.1:5080` /
 `http://127.0.0.1:5083`）；没有配置 `Ops:NodeToken` 时，服务端的 `/metrics` 和 `/internal/*` 只接受回环调用，
-用机器名或局域网地址访问会返回 401。**它没有默认账号**，装完要自己建第一个管理员（见 §二 10）：
-
-```powershell
-& "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
-Restart-Service RemoteDesktopOps
-```
-
-**以上命令要在“管理员 PowerShell”里执行。** 第一条管理员命令要读写 `%ProgramData%` 下只有
-SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需要管理员令牌；普通窗口会报
-“无法打开计算机“.”上的 RemoteDesktopOps 服务”。第一条默认读写
-`%ProgramData%\Remote Desktop Server\Ops\appsettings.json`，和服务是同一份配置；需要指到别处时加
-`--config-directory`。
+用机器名或局域网地址访问会返回 401。**它没有默认账号**，装完要自己建第一个管理员——命令见 §二 10 的"启动"与"首个管理员"（Windows 要在管理员
+PowerShell 里执行）。
 
 | 属性 | 默认 | 说明 |
 |---|---|---|
-| `RENDEZVOUSURL` | `http://127.0.0.1:5080` | 信令监听的地址；默认只监听回环。给了证书会自动变成 `https://`。公网明文监听必须同时设置 `Rendezvous:AllowInsecureSignaling=true` |
+| `RENDEZVOUSURL` | `http://127.0.0.1:5080` | 信令监听的地址；默认只监听回环。给了证书会自动变成 `https://`。公网明文监听需要 `Rendezvous:AllowInsecureSignaling=true`：用安装包或 `--configure-system` 配置时会按生效的地址自动写入，只有手工编辑 `appsettings.json` 才要自己设 |
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `DATABASEPROVIDER` | `auto` | 设备代码存在哪：`auto` / `none` / `postgres` / `sqlite`。`auto` = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库 |
@@ -169,13 +165,15 @@ SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需�
 | `POSTGRESCONNECTIONSTRING` | `auto` | PostgreSQL 连接串。`auto` 或空 = 不用 PostgreSQL，由 `DATABASEPROVIDER` 决定 |
 | `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到 `%ProgramData%\Remote Desktop Server\tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.cmd -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `TLSCERTIFICATEHOSTNAME` | 机器名 | 生成证书时写进 SAN 的 DNS 名/IP，逗号分隔。客户端用域名或 NAT 地址访问时必须填，否则即使信任了证书也会名称不匹配 |
-| `NOFIREWALL` | `0` | 设成 `1` 就不加那三条防火墙规则 |
+| `GATEWAYLISTEN` | `https://0.0.0.0:5443` | Ops HTTPS 网关的监听地址，必须是不带路径的 `https://` 地址 |
+| `GATEWAYHOSTNAME` | 空 | 给网关证书追加的 IP/DNS 名，逗号分隔；本机 IPv4 已自动包含 |
+| `NOFIREWALL` | `0` | 设成 `1` 就不加防火墙规则（信令、反射、中继三条，外加网关的 TCP 5443 那一条） |
 | `REMOVEDATA` | `0` | 卸载时设成 `1` 才删除 `%ProgramData%\Remote Desktop Server` 下的数据库、设置与生成的证书 |
 
 **这些属性只在第一次安装时生效。** 升级/同版本重装会保留 ProgramData 下的现有设置（与 Linux/macOS 的
 “升级不重新询问”一致）；要改请用 `Set-ServerConfiguration.cmd`（见“装完之后改配置”）。
 
-四件必须知道的事：
+三件必须知道的事：
 
 - **安装包默认用 SQLite，装完就能用。** 不填连接串时设备代码存在本机的
   `%ProgramData%\Remote Desktop Server\rendezvous.db`，重启、升级都不变。**这个文件要备份**：删掉它等于
@@ -183,15 +181,15 @@ SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需�
   要回到内存模式（每次重启换码）用 `DATABASEPROVIDER=none`。
 - **中继装在另一台机器上时**，那把自动生成的密钥要抄过去：两边都传 `RELAYSHAREDKEY=<同一个值>`，
   或者把 `Rendezvous:RelaySharedKey` 的值填进那台的 `Relay\appsettings.json`。
-- **改了端口就要自己改防火墙规则**：三条规则是按 5080/5081/5082 开的，`RENDEZVOUSURL` 或中继端口改了
-  它们就对不上。
+- **改了端口就要自己改防火墙规则**：四条规则是按 5080/tcp、5081/udp、5082/udp 和网关的 5443/tcp 开的，
+  `RENDEZVOUSURL`、中继端口或 `GATEWAYLISTEN` 改了它们就对不上。
 
 升级：同版本号重装即可，**`%ProgramData%\Remote Desktop Server` 下的设置、数据库和证书都保留**，
 手改过的值和已经生成的密钥不会被包内默认值覆盖。
 卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；默认保留 ProgramData 下的数据与生成的证书
 （重装后设备码不变）。要连同数据与证书一起删除：`msiexec /x ... /qn REMOVEDATA=1`。
 
-#### macOS
+#### macOS：.pkg
 
 ```bash
 build/installer/macos/server/make-pkg.sh --configuration Release
@@ -211,11 +209,12 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 
 ```bash
 sudo installer -pkg <文件>.pkg -target /
-curl http://127.0.0.1:5080/health      # 返回 Healthy 即两个网络服务器都活着
+curl http://127.0.0.1:5080/health      # 返回 Healthy 即信令服务器活着（含数据库）
+curl http://127.0.0.1:5083/health      # 中继的 HTTP 面（回环）
 curl http://127.0.0.1:5090/health      # 监控台
-sudo -u _remotedesktop /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin
-sudo launchctl kickstart -k system/com.remotedesktop.ops
 ```
+
+装完同样要自己建第一个管理员，见 §二 10（macOS 必须用 `_remotedesktop` 账号运行那条命令）。
 
 **安装时选择配置（与 Linux 的 debconf 对应）。** `.pkg` 由安装器里的自定义面板收集答案，和 Linux 安装时
 问的是同一组问题：
@@ -250,13 +249,13 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 **三件与 Windows 不同的事**：
 
 - **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
-  别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082。
+  别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082；要从别的电脑访问监控台，再放通网关的 TCP 5443。
 - **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist、安装目录、
   文档目录与安装回执；`--keep-settings` 可只删程序）。`_remotedesktop` 账号与组会留下，和 Linux 上
   `remotedesktop` 账号的处理一致——重装后同一份数据仍然属于它。
 - **改配置**：安装目录里的 `configure-server.sh`，与 Windows 的 `Set-ServerConfiguration.cmd` 一一对应 ——
-  同样的选项，跑的是同一个 `--configure-system` 步骤；它现在会重启**三个**守护进程（数据库 provider 与
-  监控台共享）。
+  同样的选项，跑的是同一个 `--configure-system` 步骤；它会重启**四个**守护进程（信令、中继、监控台与网关；
+  数据库 provider 与监控台共享）。
 
 > 两个平台的服务器是**同一份可执行文件**、同一个 `--configure-system` 步骤，所以写出来的
 > `appsettings.json` 与生成的中继密钥完全一致：换平台不需要换配置方式。
@@ -265,12 +264,12 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 > `/usr/local/share/doc/remotedesktop-server/signaling.crt`——生成的证书、PEM 或 `.pfx` 都一样，
 > 客户端/被控端安装器可以直接选它；Ops 控制台也用这份 PEM 固定信令证书（`.pfx` 带口令，不能直接当 pin）。
 
-### 装完之后改配置
+#### 装完之后改配置（Windows）
 
 安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
 
 - **`Set-ServerConfiguration.cmd`** —— 推荐的路子。在**管理员**命令提示符或 PowerShell 里给它想改的项即可，
-  没给的保持不动；它写完之后会登记/更新监控台的本机节点，然后重启三个服务让设置生效：
+  没给的保持不动；它写完之后会登记/更新监控台的本机节点，然后重启四个服务（信令、中继、监控台、网关）让设置生效：
 
   ```powershell
   cd "C:\Program Files\Remote Desktop Server"
@@ -291,7 +290,7 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
   `%ProgramData%\Remote Desktop Server\` 下 —— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留；目录只有 SYSTEM 与 Administrators 能读。
 
-### 数据库怎么选
+#### 数据库怎么选
 
 设备代码（那 9 位数字）是无人值守访问的地址，它必须活过重启。两种存法：
 
@@ -320,6 +319,8 @@ macOS `/usr/local/remotedesktop-server/var/rendezvous.db`、Linux `/var/lib/remo
 # 2. 导出、导入。created_at / last_seen_at 是 TEXT，原样搬即可。
 psql "$PG" -c "\copy device_registrations TO 'devices.csv' CSV HEADER"
 sqlite3 rendezvous.db ".mode csv" ".import --skip 1 devices.csv device_registrations"
+#    revoked_at 没有封禁时导出为空字段；保险起见把空串还原成 NULL（代码以 revoked_at IS NOT NULL 判断封禁）：
+sqlite3 rendezvous.db "UPDATE device_registrations SET revoked_at = NULL WHERE revoked_at = '';"
 # 3. 重启信令服务，curl 它的 /health（HTTP 或自签 HTTPS 加 -k）应为 Healthy。
 ```
 
@@ -329,9 +330,12 @@ sqlite3 rendezvous.db ".mode csv" ".import --skip 1 devices.csv device_registrat
 dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Rendezvous
 dotnet publish src/Server/RemoteDesktop.Server.Relay      -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Relay
 dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Ops
+dotnet publish src/Server/RemoteDesktop.Server.Gateway    -c Release -r win-x64 --self-contained true -o artifacts/app/windows/server/Gateway
 ```
 
-四个服务端各自一个子目录，因为它们是四个程序，装在同一台机器上时目录不能混。
+四个服务端各自一个子目录，因为它们是四个程序，装在同一台机器上时目录不能混。Gateway 只是监控台的 HTTPS 入口，
+不装监控台就不需要它；它的 `ReverseProxy` 路由、Kestrel 证书和监听地址由 `--configure-system` 写入，手工部署时要自己
+写这些设置，所以要网关请优先用服务端安装包。
 `build/installer/windows/server/Build-ServerInstaller.ps1` 用的就是这个布局（见它的 `$PublishDirectory` 与
 `-o (Join-Path $PublishDirectory $server.Folder)`），包里的 `Set-ServerConfiguration.cmd`/`.ps1`、`how-to-configure.txt`
 与信令/中继的两份 `appsettings.json` 也在这一层；控制台自己那份在 `Ops\appsettings.json`。
@@ -347,15 +351,15 @@ dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 
 
 ```jsonc
 {
-  "Urls": "http://127.0.0.1:5080",              // 默认只监听回环；公网请用 https，或显式允许明文
+  "Urls": "http://127.0.0.1:5080",              // 默认只监听回环；公网请用 https，或显式允许明文。支持 *、+ 通配主机名和分号分隔的多个地址
   "Rendezvous": {
     "AllowInsecureSignaling": false,            // 只在隔离的明文实验网里设为 true
     "ReflectorPort": 5081,                      // UDP 地址反射端口：告诉双方彼此看到的公网地址
-    "RelayEndpoint": "你的服务器公网地址:5082",   // 必须写客户端能连到的地址，不能是 0.0.0.0 或 127.0.0.1
+    "RelayEndpoint": "203.0.113.10:5082",        // 必须是客户端能连到的 IP:端口，不能是域名，也不能是 0.0.0.0 或 127.0.0.1
     "RelaySharedKey": "<和 Relay 相同的长随机串>", // 生产环境必须换掉开发默认值（appsettings.Development.json 里是明文的开发密钥）
     "RelayTicketLifetime": "00:02:00",
     "ConnectTimeout": "00:00:20",
-    "MetricsEnabled": false                     // 打开后在 /metrics 暴露 Prometheus 指标；默认关闭，用法见"健康检查"一节
+    "MetricsEnabled": false                     // 打开后在 /metrics 暴露 Prometheus 指标（仍需 NodeToken 或回环）；默认关闭，用法见"健康检查"一节
   }
 }
 ```
@@ -374,6 +378,16 @@ dotnet publish src/Server/RemoteDesktop.Server.Ops        -c Release -r win-x64 
 
 密钥用一条命令生成：`openssl rand -base64 48`。**两边必须一致**；不一致时中继会拒绝所有票据，
 而客户端只会看到"连不上"（被控端日志里会有中继相关的失败）。
+
+上面的示例只列了最常改的几项。其余设置：
+
+| 设置 | 默认 | 说明 |
+|---|---|---|
+| `Rendezvous:Database:Provider` / `ConnectionString` / `Path` | 未设置 | 设备代码存哪：`none` / `postgres` / `sqlite`；`postgres` 填 `ConnectionString`，`sqlite` 填 `Path`。没写 `Provider` 时仍会读旧键 `Rendezvous:PostgresConnectionString` 与 `ConnectionStrings:Postgres`，所以已装机器升级后设备代码不变；都没有就退回内存（见"数据库怎么选"） |
+| `Rendezvous:PresenceEnabled` | `true` | 是否回答在线状态查询；关掉后客户端的状态灯显示"未知" |
+| `Rendezvous:NodeToken` / `Relay:NodeToken` | 空 | 控制台访问 `/metrics` 与 `/internal/*` 的 Bearer；空 = 只接受回环调用。三处同值，见"内部 API 与 NODE_TOKEN" |
+| `Rendezvous:Name` / `Relay:Name` | `rendezvous` / `relay` | 控制台节点列表里这台服务器的名字 |
+| `Relay:HttpEndpoint` | `http://127.0.0.1:5083` | 中继的 HTTP 面（`/health`、`/metrics`、`/internal/v1/info`），默认只在回环 |
 
 ### 4. 生产环境：信令必须走 TLS
 
@@ -488,7 +502,8 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 
 ### 6. 作为服务运行
 
-以**管理员** PowerShell 执行（两个可执行文件都能直接作为 Windows 服务运行，同一份文件也能当控制台程序跑）：
+以**管理员** PowerShell 执行（四个服务端可执行文件都能直接作为 Windows 服务运行，同一份文件也能当控制台程序跑；
+下面只演示信令与中继两个，监控台 `RemoteDesktopOps` 同理）：
 
 ```powershell
 sc.exe create RemoteDesktopRendezvous binPath= "\"C:\rd\rendezvous\RemoteDesktop.Server.Rendezvous.exe\"" start= auto
@@ -500,7 +515,8 @@ sc.exe start RemoteDesktopRelay
 ```
 
 - 作为服务运行时日志走**Windows 事件日志**（"应用程序"日志，来源是服务名），配置文件仍读可执行文件旁边的 `appsettings.json`。
-- 想同时看控制台输出，就以控制台方式运行（`.\RemoteDesktop.Server.Rendezvous.exe`），日志打到标准输出。
+- 想看控制台输出，就先停掉服务，再直接运行可执行文件（`.\RemoteDesktop.Server.Rendezvous.exe`），日志打到标准输出。
+- 手工 `sc.exe` 部署不带 Gateway（见上面 §二 2 的说明）；用安装包的话四个服务都由 MSI 注册。
 - Linux 用 systemd 单元调用同样的可执行文件即可（`Restart=always`）；服务生命周期那一层在非 Windows 上是空操作。
 
 ### 7. 用 Docker 部署（Linux 服务器首选）
@@ -535,7 +551,9 @@ Ops 时使用的 Docker 宿主机 IPv4 地址（有 NAT 时填 NAT 地址），�
 
 #### 公网：用 TLS overlay
 
-默认 compose 把信令发布在 `127.0.0.1:5080`，公网客户端连不到它。公网部署用 Caddy overlay 终止 TLS：
+容器里的信令监听 `http://0.0.0.0:5080`（compose 里的 `Urls`，并显式设了 `Rendezvous__AllowInsecureSignaling`），
+这样发布端口、Caddy 和监控台才连得到它；真正的暴露范围由 `ports:` 决定——默认 compose 把信令发布在
+`127.0.0.1:5080`，公网客户端连不到它。公网部署用 Caddy overlay 终止 TLS：
 
 ```bash
 export RENDEZVOUS_DOMAIN=rd.example.com   # 写进 .env 也可以
@@ -555,14 +573,32 @@ RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
 ```
 
 客户端用 `ws://<服务器>:5080/ws`。这是**明文**：设备码、在线状态、谁在连谁以及中继票据都在线上可读。不要把它
-用在公网；公网请用上一节的 TLS overlay。
+用在公网；公网请用上一节的 TLS overlay。把信令发布到可信网络之外之前，要先加上 TLS overlay 或下面的 selfsigned overlay。
+
+#### 局域网：自签 TLS（selfsigned overlay）
+
+没有公网域名、但要让局域网里的客户端走 `wss://` 时，用 `docker-compose.selfsigned.yml`：信令在 5080 直接提供 TLS，
+并另开一个只给监控台用的内部明文口 5082/tcp（监控台按服务名访问，不必信任自签证书；中继的 5082/udp 不受影响）。
+
+```bash
+export TLS_CERT_PATH=../signing/certificates/rd.lan.pfx   # 用 build/signing/New-ServerCertificate.ps1 生成
+export TLS_CERT_PASSWORD=...
+export RENDEZVOUS_BIND_IP=0.0.0.0
+export OPS_GATEWAY_IP=192.168.1.10                        # 同时启用监控台时需要
+docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-compose.ops.yml up -d --build
+```
+
+`.pfx` 以只读方式挂进容器，而容器以 UID 1654 运行；仓库脚本生成的证书是 0600，要给该用户读权限，又不能让所有人
+可读：`setfacl -m u:1654:r-- <.pfx>`（证书重新生成后再来一次）。监听地址可用 `RENDEZVOUS_URLS` 覆盖，默认
+`https://0.0.0.0:5080;http://0.0.0.0:5082`。启用监控台时把 `OPS_RENDEZVOUS_NODE_URL` 设为 `http://rendezvous:5082`。
 
 #### 端口与防火墙
 
 - `5080/tcp`：信令 + `/health`，默认只绑回环；TLS overlay 通过 Caddy 暴露 443。
 - `5081/udp`：地址反射。**必须放通**，否则直连打洞拿不到自己的公网地址。
 - `5082/udp`：中继。**必须放通**，否则直连失败的连接没有退路。
-- `5443/tcp`：加载 `docker-compose.ops.yml` 后的 Ops HTTPS 网关。Ops 的 5090 不再发布到宿主机。
+- `5443/tcp`：加载 `docker-compose.ops.yml` 后的 Ops HTTPS 网关（宿主机端口用 `OPS_GATEWAY_PORT` 改，默认 5443；
+  监听的网卡用 `OPS_GATEWAY_BIND_IP`）。Ops 的 5090 不再发布到宿主机。
 - 中继的 HTTP 面（`/health`、`/metrics`，见 `Relay:HttpEndpoint`）默认只在容器内回环，不对外发布。
 - Docker 通过自己的 iptables 链发布 `ports:`，常见配置下 **ufw 不会拦住这些端口**。要限制 5080/5443，用
   Compose 的绑定地址（`RENDEZVOUS_BIND_IP`、`OPS_GATEWAY_BIND_IP`）或 DOCKER-USER 规则，不要只依赖 ufw。
@@ -611,7 +647,7 @@ docker compose -f docker-compose.yml -f docker-compose.ops.yml \
   -noout -subject -ext subjectAltName -fingerprint -sha256
 ```
 
-把导出的公钥按本节前面的三平台步骤安装到每台运维电脑。证书有效期三年；在到期前 30 天内重启 gateway 容器即可
+把导出的公钥按 §二 10「在运维电脑上信任证书」的步骤安装到每台运维电脑。证书有效期三年；在到期前 30 天内重启 gateway 容器即可
 重新签发。`OPS_GATEWAY_IP`、`OPS_GATEWAY_DNS` 或网络配置改变后，也需要删除证书卷并重新生成，然后重新分发证书：
 
 ```bash
@@ -628,7 +664,7 @@ relay        http://relay:5083
 ```
 
 可用 `OPS_RENDEZVOUS_NODE_URL` / `OPS_RELAY_NODE_URL` 覆盖；用 `docker-compose.selfsigned.yml` 时把前者设为
-`http://rendezvous:5082`（内部明文口）。因为 Compose 网络是隔离的，overlay 同时显式开启
+`http://rendezvous:5082`（内部明文口，见上一节）。因为 Compose 网络是隔离的，overlay 同时显式开启
 `Ops:AllowInsecureNodeHttp`，允许节点令牌在该内部 HTTP 网络上传输；这仍是默认关闭的公网安全边界。
 
 `OPS_INGEST_KEY` 是节点与控制台共享的 HMAC 密钥（Base64，至少 32 字节），不设置 overlay 不会启动。Ops 只信任
@@ -648,6 +684,9 @@ Docker bridge 网段，否则其他容器可以伪造 `X-Forwarded-For`。会话
   `Rendezvous__Database__Path=/data/rendezvous.db`，给 `rendezvous` 挂一个 `/data` 卷，并删掉 `postgres` 服务、
   `Rendezvous__Database__ConnectionString` 与 `depends_on`。镜像里的 `/data` 属于运行用户（UID 1654），新建的
   命名卷会继承它，所以直接可用。**不要**同时起两个 Rendezvous 容器连 SQLite——两个文件会给同一台设备发不同的码。
+  这个做法**与监控台 overlay 不兼容**：`docker-compose.ops.yml` 里 `ops` 的数据库是 PostgreSQL（`Ops__Database__*`）
+  并且 `depends_on` 了 `postgres`。要同时用两者，就保留 PostgreSQL；只想要 SQLite，则不加载 ops overlay，或自己改
+  ops 的 `Ops__Database__*` 并去掉它的 `depends_on: postgres`。
 - PostgreSQL 与 SQLite 之间切换会重发所有设备码，除非按“数据库怎么选”一节的步骤搬数据。
 
 #### 健康检查与日志
@@ -678,6 +717,8 @@ docker compose up -d --build
 netsh advfirewall firewall add rule name="RemoteDesktop Rendezvous" dir=in action=allow protocol=TCP localport=5080
 netsh advfirewall firewall add rule name="RemoteDesktop Reflect"    dir=in action=allow protocol=UDP localport=5081
 netsh advfirewall firewall add rule name="RemoteDesktop Relay"      dir=in action=allow protocol=UDP localport=5082
+# 只有要从别的电脑访问监控台（Ops HTTPS 网关）时才需要：
+netsh advfirewall firewall add rule name="RemoteDesktop Ops Gateway" dir=in action=allow protocol=TCP localport=5443
 ```
 
 ### 9. 健康检查
@@ -695,13 +736,17 @@ curl -k https://127.0.0.1:5080/health
 `rate()` 出图）。
 
 默认关闭，而且关闭时这个路径**根本没有挂载**，访问返回 404：这些数字本身就说明了这台服务器上现在有多少台
-设备、拒绝了多少请求，公网上谁都能读到，是运营者自己的信息，所以打开是一个有意的动作。打开后应当配一个只有
-自己的监控能到的入口，例如不动 `Urls`、让 Prometheus 从本机或内网抓 `http://127.0.0.1:5080/metrics`
-（反向代理只转发 `/ws` 和 `/health` 时，`/metrics` 自然到不了公网），或者用防火墙只放行监控的来源地址：
+设备、拒绝了多少请求，是运营者自己的信息，所以打开是一个有意的动作。打开后 `/metrics` 仍受 `NodeToken` 保护
+（与 `/internal/*` 同一套规则）：没配 `Rendezvous:NodeToken` 时只接受回环调用，配了就要求
+`Authorization: Bearer <NodeToken>`。因此 Prometheus 在本机抓取时不用带凭据；从别的机器抓取则必须配 token，
+并建议再用防火墙只放行监控的来源地址。反向代理只转发 `/ws` 和 `/health` 时，`/metrics` 自然到不了公网。
 
 ```yaml
 scrape_configs:
   - job_name: remotedesktop
+    # 非本机的 Prometheus 才需要下面两行；token 与 Rendezvous:NodeToken 同值
+    # authorization:
+    #   credentials: "<NodeToken>"
     static_configs:
       - targets: ["127.0.0.1:5080"]
 ```
@@ -749,17 +794,17 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 Restart-Service RemoteDesktopOps
 ```
 
-Docker 用可选的 ops overlay（见 §二 7）：
+Windows 这两条命令都要在“管理员 PowerShell”里执行：管理员命令要读写 `%ProgramData%` 下只有
+SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需要管理员令牌；普通窗口会报
+“无法打开计算机“.”上的 RemoteDesktopOps 服务”。命令默认读写
+`%ProgramData%\Remote Desktop Server\Ops\appsettings.json`，和服务是同一份配置；需要指到别处时加
+`--config-directory`。
 
-```bash
-cd build/docker
-export OPS_GATEWAY_IP=192.168.1.10   # required by the overlay; use the host address administrators reach
-docker compose -f docker-compose.yml -f docker-compose.ops.yml run --rm -it ops --create-admin admin
-```
+Docker 用可选的 ops overlay，建管理员的命令见 §二 7 的"监控台（可选）"。
 
 #### 首个管理员
 
-没有默认口令、没有网页初始化入口。`--create-admin <用户名>` 交互式设口令，打印 TOTP 密钥与 `otpauth://` URI，
+没有默认口令、没有网页初始化入口。`--create-admin <用户名>` 交互式设口令（至少 12 位），打印 TOTP 密钥与 `otpauth://` URI，
 导入验证器即可。**密钥只显示这一次**；丢失后用 `--reset-totp <用户名>` 重置（或让另一位管理员在控制台重置），
 不需要再建一个账号。口令之后还要过 TOTP 二次验证才能登录（`Ops:RequireTotp=true` 默认开着，别关）。
 
@@ -787,15 +832,17 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 |---|---|---|
 | `Ops:Listen` | `http://127.0.0.1:5090` | 控制台自身的 Kestrel 监听地址；保持回环，对外只经过 Gateway |
 | `Gateway:Listen` | `https://0.0.0.0:5443` | 安装包内置的 HTTPS Gateway 监听地址；证书自动生成并包含本机 IPv4 IP SAN |
-| `Gateway:Upstream` | `http://127.0.0.1:5090` | Gateway 的固定回环上游；安装步骤每次都会重写，避免被改成任意外部代理 |
+| `Gateway:Upstream` | `http://127.0.0.1:5090` | 仅供参考，**Gateway 不读它**（`Program.cs` 只读 `Gateway:Listen` 与 `ReverseProxy`），改它不会改变转发目标。真正的上游是 `ReverseProxy:Clusters:ops:Destinations:loopback:Address`；安装步骤每次都会把它重写成回环地址，避免被改成任意外部代理 |
 | `GATEWAYHOSTNAME` / `--gateway-hostname` | 空 | 安装参数：给生成证书追加 IP/DNS；本机 IPv4 已自动包含 |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |
-| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值。**节点自己的令牌优先**（见「每节点令牌」），这个键是没设独立令牌的节点的默认值 |
+| `Ops:NodeToken` | 空 | 控制台调节点内部 API 的 Bearer；空 = 节点只接受回环调用。必须与 `Rendezvous:NodeToken`、`Relay:NodeToken` 同值（规则见 §二 7"内部 API 与 NODE_TOKEN"）。**节点自己的令牌优先**（见「每节点令牌」），这个键是没设独立令牌的节点的默认值 |
 | `Ops:AllowInsecureNodeHttp` | `false` | 允许节点令牌经非回环明文 HTTP 发送；仅用于 Compose 等隔离网络，公网节点保持关闭 |
 | `Ops:NodeTokenHosts` | 空 | 节点令牌只允许发往这些主机（裸主机名或 IP，不带协议/端口/路径；回环始终允许）。空 = 沿用"https 或回环"的规则。节点地址由管理员在控制台填写，填了这个列表后，即使管理员会话被拿走也无法把令牌引到列表外的地址 |
-| `Ops:NodeCertificatePath` | 安装包在 TLS 时写入 | 调节点时只信任这张公钥证书，并跳过主机名校验：Linux/macOS 安装包写入本机信令公钥（本机节点用 `127.0.0.1`，证书未必包含它）。这是全局设置——登记了用另一张证书的远程节点时，删掉此键改走系统信任库 |
+| `Ops:NodeCertificatePath` | 安装包在 TLS 时写入 | 调节点时只信任这张公钥证书，并跳过主机名校验：三个平台的服务端安装包在信令用 TLS 时都会写入本机信令公钥（本机节点用 `127.0.0.1`，证书未必包含它）。这是全局设置——登记了用另一张证书的远程节点时，删掉此键改走系统信任库 |
+| `Ops:SessionLifetime` | `08:00:00` | 管理员会话的有效期（TimeSpan，必须大于 0） |
 | `Ops:ScrapeIntervalSeconds` | `10` | 多久抓一次节点指标 |
+| `Ops:ScrapeTimeoutSeconds` | `5` | 单次抓取的超时 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则 |
 | `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
 | `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知。失败后按 1/2/4/8 分钟重试，最多 5 次 |
@@ -804,13 +851,12 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:Notifications:Smtp:From` / `To` | 空 | 信封与头部的发件人；收件人可用逗号或分号分隔多个 |
 | `Ops:Notifications:Smtp:Username` / `Password` | 空 | 中继需要认证时填写；支持 AUTH PLAIN 与 AUTH LOGIN。**口令只写进 AUTH 交换**，不进日志、不进审计、不进投递记录 |
 | `Ops:TrustedProxies` | 空 | 可信反向代理的 IP 或 CIDR 列表；只有这里的代理写来的 `X-Forwarded-For` / `X-Forwarded-Proto` 会被采信。见“反向代理” |
-| `Ops:Retention:SampleDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `30` / `90` / `180` | 指标样本、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。审计日志不自动删除 |
+| `Ops:Retention:SampleDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `30` / `90` / `180` | 指标样本、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。审计日志不自动删除（见"数据保留"） |
 | `Ops:Retention:IntervalMinutes` | `60` | 清理任务间隔 |
 | `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
 
 > 内部 API 的 token 不是 `Ops` 段独有的：控制台读 `Ops:NodeToken`，信令读 `Rendezvous:NodeToken`，中继读
-> `Relay:NodeToken`。三处必须同值；只设 `Ops:NodeToken` 时，跨机或容器里的控制台会 401（同机回环仍然可用，
-> 但那是回环豁免，不是 token 生效）。Docker 的基础 compose 已经把同一个 `NODE_TOKEN` 传给两个节点。
+> `Relay:NodeToken`，三处必须同值，规则见 §二 7 的"内部 API 与 NODE_TOKEN"。
 
 #### 每节点令牌（可选）
 
@@ -940,8 +986,8 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 #### 数据保留
 
-控制台每小时清理一次过期历史：默认保留 30 天指标样本、30 天事件、90 天会话、180 天已恢复告警，并删除过期的
-管理员会话。打开中的告警永远不会被删除。`Ops:Retention:*` 可以按部署调整；设为 `0` 表示不清理那一类。
+控制台每小时清理一次过期历史（保留天数和关闭方式见上面配置表里的 `Ops:Retention:*`），并删除过期的管理员会话。
+打开中的告警永远不会被删除。
 **审计日志（`ops_audit_log`）是有哈希链的，不自动删除**——需要更长的保留期就备份数据库，或定期整库归档。
 
 #### 让总览出现数字：三件事缺一不可
@@ -969,7 +1015,7 @@ sudo security add-trusted-cert -d -r trustRoot \
 - **断开会话 / 封禁设备**要两个人：一个发起、一个批准，发起人不能批准自己的动作；两步各留一条审计。
 - 断开会话需要被控端开着 `Telemetry:Enabled`（否则控制台不知道被控端所知的会话 id）。
 - 审计日志是哈希链，`审计日志 → 校验链` 能指出第一条被改动的记录。
-- 构成与设计见 §十一。
+- 构成与设计见 [系统设计](../design/README.md) 的"运维监控台"一节。
 
 ## 三、自动化发布到 GitHub Releases
 
@@ -989,13 +1035,13 @@ sudo security add-trusted-cert -d -r trustRoot \
 |---|---|---|
 | `RemoteDesktop-Client-Windows-x64-<tag>.msi` | Windows | 控制端；同一个包也装被控端服务与会话 Agent（一台机器两种角色都要时用它） |
 | `RemoteDesktop-Host-Windows-x64-<tag>.msi` | Windows | 被控端：只有服务与会话 Agent，没有客户端窗口 |
-| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（Rendezvous + Relay + Ops） |
+| `RemoteDesktop-Server-Windows-x64-<tag>.msi` | Windows | 服务端（Rendezvous + Relay + Ops + Gateway） |
 | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | macOS | 控制端（同一个 `.app` 也能被控，但不会自动启动） |
 | `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | macOS | 被控端：独立的 `Remote Desktop Host.app`（无窗口，装在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”）+ 登录项 |
-| `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端（Rendezvous + Relay + Ops） |
+| `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` | macOS | 服务端（Rendezvous + Relay + Ops + Gateway） |
 | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | Linux | 控制端 |
 | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | Linux | 被控端 |
-| `RemoteDesktop-Server-Linux-amd64-<tag>.deb` | Linux | 服务端（Rendezvous + Relay + Ops） |
+| `RemoteDesktop-Server-Linux-amd64-<tag>.deb` | Linux | 服务端（Rendezvous + Relay + Ops + Gateway） |
 
 命名约定（角色词一律写全；架构词各平台用自己的说法，Linux 那个与包内 `Architecture` 字段同源）见
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的"构建产物布局"。
@@ -1046,8 +1092,9 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 配了：这个地址会被编进客户端安装包，下载的人装完就能连上你的服务器，不用自己填。
 
-**不配也完全可以发布**：出的包不内置地址（客户端默认连本机），装完后在客户端里用「修改服务器地址」填自己的
-服务器就行——它会同时写给客户端和被控端服务，并重启两边。客户端连不上时界面会直接显示"○ 未连接服务器
+**不配也完全可以发布**：出的包不内置地址（客户端默认连本机），装完后在客户端的「高级设置 → 服务器与托管」里点「修改」，
+填自己的服务器地址再点「保存并重启生效」就行（被控端以后台服务托管时可用）——地址会交给被控端服务写入并重启它，
+客户端随后重启。客户端连不上时界面会直接显示"○ 未连接服务器
 （当前地址）"以及去哪儿改，所以不是一个不声不响的坏包。
 
 本软件公网和内网都要用，服务器地址往往是**部署的时候**才定的，所以"不内置"是正常选择，不是漏配。
@@ -1148,14 +1195,13 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://
    `Transport:RendezvousCertificatePath`，指向 `%ProgramData%\RemoteDesktop\certificates\signaling.cer`。
 2. **服务器在不在**：在服务器上 `curl http://127.0.0.1:5080/health`，在客户端这台机器上
    `curl http://<服务器>:5080/health`（把地址换成 5080 端口的 http 形式）。连不上就是网络或防火墙问题。
-3. **改了配置要重启服务**：`Restart-Service RemoteDesktopHost`（配置只在启动时读一次）。
-4. **看日志**：`C:\ProgramData\RemoteDesktop\logs\service-<日期>.log`。
-   `Rendezvous connection lost: Unable to connect to the remote server` 就是在说"连不上信令服务器"。
-5. **服务根本没起来**（`Get-Service RemoteDesktopHost` 显示已停止，或者客户端说"无法联系后台服务"）：
-   先看同目录下的 `startup-error.log` —— 配置读不出来时，服务会在启动前把原因写在这里并以退出码 3 结束，
-   而不是留下一个没人看得懂的崩溃。客户端对应的文件是 `%AppData%\RemoteDesktop\crash.log`，
+3. **服务起来了吗**：`Get-Service RemoteDesktopHost`。显示已停止，或者客户端说"无法联系后台服务"，先看同目录下的
+   `C:\ProgramData\RemoteDesktop\logs\startup-error.log` —— 配置读不出来时，服务会在启动前把原因写在这里并以
+   退出码 3 结束，而不是留下一个没人看得懂的崩溃。客户端对应的文件是 `%AppData%\RemoteDesktop\crash.log`，
    同时会在屏幕上弹一个说明原因的对话框。
-6. 服务起来了吗：`Get-Service RemoteDesktopHost`。
+4. **改了配置要重启服务**：`Restart-Service RemoteDesktopHost`（配置只在启动时读一次）。
+5. **看日志**：`C:\ProgramData\RemoteDesktop\logs\service-<日期>.log`。
+   `Rendezvous connection lost: Unable to connect to the remote server` 就是在说"连不上信令服务器"。
 
 ### 4. 升级与卸载
 
@@ -1237,7 +1283,7 @@ build/installer/linux/host/build-deb.sh     # 允许被别人控制
 - `wss://` + 自签证书：把服务端 `/etc/remotedesktop-server/tls/signaling.crt` 拷到本机，安装时填写
   它的路径；包把它装进 `/usr/local/share/ca-certificates/` 并运行 `update-ca-certificates`。
 
-构包时仍可用 `RD_RENDEZVOUS_URI` / `RD_SERVER_CERTIFICATE` 把站点默认值烤进包（见 §六），安装问题会
+构包时仍可用 `RD_RENDEZVOUS_URI` / `RD_SERVER_CERTIFICATE` 把站点默认值烤进包（见 §八 的 Linux 一节），安装问题会
 以它为默认值。非交互安装可以预先写答案：
 
 ```sh
@@ -1279,7 +1325,8 @@ sudo apt install ./RemoteDesktop-Host-Linux-amd64-<版本>.deb
 
 装完之后：
 
-- 客户端出现在应用菜单里（`remotedesktop`）。
+- 客户端出现在应用菜单里（`remotedesktop`）；装完第一次打开会显示 9 位设备代码和临时密码——两台机器互相输入对方
+  的代码和密码即可连接。
 - 被控端是一条 `systemd --user` 服务，安装时对**所有用户**启用。安装时已有图形会话的用户会**立即启动**
   该服务；没有会话（容器、无头镜像、还没有人登录）时，随用户下次登录启动。
   启动本身不会弹 portal 对话框——对话框在第一次有人连接并请求控制权限时才出现。
@@ -1332,20 +1379,17 @@ journalctl --user -u app-RemoteDesktopHost.service -f
 > 单元名反推应用 ID（这里是 `RemoteDesktopHost`），摄像头权限按这个 ID 记账，包里还要有同名
 > `RemoteDesktopHost.desktop`。改单元名等于换了应用身份，已经授予的摄像头权限会失效。
 
-- 装完第一次打开客户端，会显示 9 位设备代码和临时密码——两台机器互相输入对方的代码和密码即可连接。
-
 ### 4. 第一次连接会弹两个对话框（摄像头权限是另一次授权）
 
 第一次共享屏幕时，桌面会问一次"允许共享哪块屏"，**答过就记住了**（restore token 存在
 `~/.local/share/RemoteDesktop/secrets`）。第一次要控制时还会再问一次，而且**每次连接都会问**——
 portal 不允许远程桌面会话持久化，这是它的规定而不是本程序的取舍。
 
-所以一台无人值守的 Linux 机器可以**被观看**，但**没人坐在跟前就没法被操作**。要无人值守地操作，
-只能用 Windows 的被控端。
+所以一台无人值守的 Linux 机器只能被观看，不能被操作（见上面 §五 3 的"无人值守"说明）。
 
 控制对话框里要打开"允许远程交互"再点"分享"；只点"分享"而没有打开它，键鼠不会被授权。控制端会一直显示
 当前状态：对话框弹出期间显示"已请求被控端授权控制"，被拒绝或对话框被关掉后显示"被控端未允许控制：当前
-只能观看"并带"重试授权"按钮。被拒绝后宿主不会立刻重复弹窗（默认退避 30 秒），点"重试授权"会立即再请求
+只能观看"并带"重试授权"按钮。被拒绝后宿主不会立刻重复弹窗（固定退避 30 秒，不可配置），点"重试授权"会立即再请求
 一次，不必重新连接。这个状态来自宿主控制通道的 `InputAccessChanged`，因此即使控制端和被控端不在同一台
 机器上，操作者也能知道该去被控端点什么。
 
@@ -1375,7 +1419,7 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 1. **有没有 portal**：`ls /usr/share/xdg-desktop-portal/portals`。没有 portal 就什么都共享不了，
    这是被控端唯一的入口。
 2. **是不是 Wayland 会话**：只在 Wayland 上验证过。
-3. **日志里有没有"合成器没有描述指针"**：那意味着光标位置不会实时更新，画面本身正常。
+3. **日志里有没有 `The compositor is not describing the pointer`**：那意味着光标位置不会实时更新，画面本身正常。
 4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。
 
 ## 六、部署客户端 / 被控端（.pkg，macOS）
@@ -1422,9 +1466,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 ```
 
 设备码在 `~/Library/Application Support/RemoteDesktop/logs/` 的日志里，搜索
-`Registered with the rendezvous server as`。服务器地址由安装器写在
-`/Library/Application Support/RemoteDesktop/appsettings.json` 的 `Transport:RendezvousUri`，
-每用户的 `~/Library/Application Support/RemoteDesktop/appsettings.json` 可以覆盖它。
+`Registered with the rendezvous server as`。
 
 **安装**：双击 `.pkg`，或 `sudo installer -pkg <文件>.pkg -target /`。需要**管理员权限**（装到 `/Applications`）。
 
@@ -1445,11 +1487,13 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600）；只做一次无人值守安装时，安装完成后
 应删除该文件，避免密码长期留在磁盘上。
 
-地址写在 **`/Library/Application Support/RemoteDesktop/appsettings.json`**（root:wheel，0644）——它不在
-签名过的 `.app` 里，因为改 bundle 内的文件会让签名失效、连带丢掉 TCC 授权。当前用户自己的
-`~/Library/Application Support/RemoteDesktop/appsettings.json` 优先级更高（client 的设置页写的就是这份）。
+服务器地址（`Transport:RendezvousUri`，默认 `ws://127.0.0.1:5080/ws`）写在
+**`/Library/Application Support/RemoteDesktop/appsettings.json`**（root:wheel，0644）——它不在签名过的 `.app` 里，
+因为改 bundle 内的文件会让签名失效、连带丢掉 TCC 授权。当前用户自己的
+`~/Library/Application Support/RemoteDesktop/appsettings.json` 优先级更高（client 的设置页写的就是这份，host
+也可以手工改这份来覆盖，改完 `launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host`）。
 
-三件必须知道的事：
+五件必须知道的事：
 
 - **包默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
   "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
@@ -1489,22 +1533,18 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
   卸载 client 只需删 `/Applications/Remote Desktop.app` 并
   `sudo pkgutil --forget com.remotedesktop.client`；若在应用里开过登录项，先在应用里关掉。
 
-服务器地址：安装器写入 `/Library/Application Support/RemoteDesktop/appsettings.json` 的
-`Transport:RendezvousUri`（默认 `ws://127.0.0.1:5080/ws`）；host 的每用户文件
-`~/Library/Application Support/RemoteDesktop/appsettings.json` 可以覆盖它，改完 kickstart。
-client 也可以直接在界面里改。
-
 > **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
 > （见 [平台移植总览](../ports/README.md) 的"最低系统版本"）。`.pkg` 只面向 Apple Silicon（arm64）。
 
 ## 七、运行期注意事项
 
 - **摄像头**作为常规功能随控制会话开放；观看模式下不开放。
-- **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。**Linux 例外**：固定密码能让连接通过认证，但 Wayland portal 仍要求每次控制有人当场授权，所以无人值守只能观看，不能操作。
+- **临时密码**可以随时刷新；**固定密码**适合无人值守，由平台自己的密钥库持久化存储（Windows 是 DPAPI，macOS 是 Keychain，Linux 是 0600 文件），无需现场人员即可随时远程接入，可在被控端界面的"高级设置 → 安全"中随时开启、修改或关闭。**Linux 例外**：固定密码能让连接通过认证，但 Wayland portal 仍要求每次控制有人当场授权，所以无人值守只能观看（见 §五 3）。
 - **中继带宽**：直连打洞成功时不走中继。`RelayEndpoint` 配错会让所有连接都失败。
 - **多台服务器**：目前 Rendezvous 不共享状态，设备要连到同一台服务器才能互相发现。
-- **日志**：服务器是标准输出（服务方式运行时进 Windows 事件日志或用 `--console` 重定向）；被控端在
-  `%ProgramData%\RemoteDesktop\logs`；客户端没有文件日志，问题看界面提示。
+- **日志**：服务端程序只写标准输出（Windows 服务方式运行时进事件日志，Linux/macOS 见 §十二 的日志表）；Windows
+  被控端在 `%ProgramData%\RemoteDesktop\logs`；客户端没有常规文件日志，只有崩溃时写的 `crash.log`，其余问题看
+  界面提示。
 
 ## 八、安装包怎么构建（三平台）
 
@@ -1556,7 +1596,7 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 设备码在服务的日志里：`%ProgramData%\RemoteDesktop\logs\service-<日期>.log`，搜索
 `Registered with the rendezvous server as`。host 没有 UI 可以显示它。
 
-服务端有**自己的**安装包，装的是另一套东西（Rendezvous + Relay + Ops），和这两个包互不影响：
+服务端有**自己的**安装包，装的是另一套东西（Rendezvous + Relay + Ops + Gateway），和这两个包互不影响：
 
 ```powershell
 .\build\installer\windows\server\Build-ServerInstaller.ps1
@@ -1572,16 +1612,17 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 几个容易踩的地方：
 
 - **包内容检查不是可选的。** 见下面那条 WiX 陷阱——它就是为了在包"看着正常但什么都没做"时喊出来。
-- **许可页**：界面用 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成），许可页显示仓库根 `LICENSE` 里的专有 EULA，
-  构建时由 `installer/New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
+- **许可页**：界面用 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成），client / host 包在选目录之后多一页「服务器连接」
+  （host 再多一页「无人值守设置」），server 包多一页「服务器设置」；许可页显示仓库根 `LICENSE` 里的专有 EULA，
+  构建时由 `build/installer/New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
   该文件里若还有**【方括号】占位符**，打包脚本会拒绝出包——那是留给"换个人/换主体来发布"时的闸门，
   不是待办事项（当前内容是完整的）。
 - `-KeepSymbols` 把 PDB 也打进安装包（默认不打，省掉约三分之二的体积）；需要从别的机器解析堆栈时才有用。
 - **签名是自动的**，细节见 [`build/signing/README.md`](../../build/signing/README.md)。
 - 安装时把服务器地址写进 `%ProgramData%\RemoteDesktop\appsettings.json`；这个文件不在 MSI 的文件表里，
-  升级时**不会被覆盖**，所以就地改过的地址会保留。安装命令行的 `RENDEZVOUSURI` 只在**第一次安装**时生效；
-  要改已装好的机器，用客户端的「修改服务器地址」（host 包用命令行 `--configure-system`）。
-  静默首装可以给：`msiexec /i ... /qn RENDEZVOUSURI=ws://rd.example.com:5080/ws`。
+  升级时**不会被覆盖**，所以就地改过的地址会保留。安装命令行的 `RENDEZVOUSURI` 只在**第一次安装**，或图形界面
+  升级时在连接页改过值的情况下生效（见 §四 4）；要改已装好的机器，用客户端的「高级设置 → 服务器与托管 → 修改」
+  （host 包用命令行 `--configure-system`）。静默首装的命令见 §四 2。
 
 > **WiX 版本陷阱。** 安装包用的是 WiX v5（v6 起商业使用要付 OSMF 费用，v5 已停止社区支持）。
 > 改动 `build/installer/windows/client` 时注意：**WiX 5.0.2 会把不含组件的 Fragment 静默丢掉**，
@@ -1606,7 +1647,7 @@ build/installer/macos/client/make-pkg.sh --configuration Release
 # 被控端 .pkg：独立的 Remote Desktop Host.app（LSUIElement，无窗口）+ 登录时自动启动的 LaunchAgent
 build/installer/macos/host/make-pkg.sh --configuration Release
 
-# 服务端 .pkg（信令、中继与监控台 + 三个 launchd 守护进程，装到 /usr/local/remotedesktop-server）
+# 服务端 .pkg（信令、中继、监控台与 HTTPS 网关 + 四个 launchd 守护进程，装到 /usr/local/remotedesktop-server）
 build/installer/macos/server/make-pkg.sh --configuration Release
 ```
 
@@ -1620,11 +1661,11 @@ Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提�
 - **安装面板是编出来的**：`native/macos/build-installer-plugin.sh` 用 `clang` 编译
   `native/macos/rd_installer_plugin.m`，三个 make-pkg 都会调用它，并用 `productbuild --plugins` 放进产品归档。
   它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
-- **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（三个 apphost 与原生库）
+- **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（四个 apphost 与原生库）
   执行 `codesign --options runtime --timestamp`，apphost 带
   `build/installer/macos/server/entitlements.plist` 的 JIT 权限。只签外层 `.pkg` 无法通过公证。
 - **一次性密码不进包**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`。安装期答案由
-  面板或 `install-answers.plist` 提供，见 §六 的 macOS 服务端一节。
+  面板或 `install-answers.plist` 提供，见 §二 1 的 macOS 一节。
 
 ### Linux（`.deb`）
 
@@ -1633,7 +1674,7 @@ Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提�
 ```bash
 build/installer/linux/client/build-deb.sh   # 用来控制别人
 build/installer/linux/host/build-deb.sh     # 允许被别人控制
-build/installer/linux/server/build-deb.sh   # 信令与中继服务器
+build/installer/linux/server/build-deb.sh   # 信令、中继、监控台与网关
 ```
 
 `libmsquic` 随包放在可执行文件旁，所以装出来的包不需要设 `LD_LIBRARY_PATH`。安装与服务管理见 §五。
@@ -1661,140 +1702,16 @@ build/installer/linux/client/build-deb.sh
 
 ## 九、客户端本机的存储（设备列表）
 
-> **2026-10-10 决定：不做账号体系。** 下面关于"账号体系上线后"的部分因此不会发生，留在这里是因为它记录了
-> 当前数据格式为什么长这样（条目里没有密码、时间字段的合并规则、墓碑、`accountId` 参数），
-> 以及万一将来改变主意时已经踩过的坑。清单同步、`SyncedRecentDevicesStore`、服务端的 `account_devices` 表都不实现。
+客户端把"最近连接过的设备"放在数据目录下的 `recent_devices.json`（Windows 默认 `%AppData%\RemoteDesktop\`，Linux
+`~/.local/share/RemoteDesktop/`，macOS `~/Library/Application Support/RemoteDesktop/`），运维上只需要知道这几件事：
 
-这份文档说明"最近连接过的设备"这个列表今天存在哪里、为什么这么存，以及**账号体系上线后**要把它搬到
-服务器时，哪些决定必须现在做、哪些坑必须提前避开。今天没有账号，也没有同步——这里描述的是已经落地的
-数据格式和明确留出的接口。
-
-### 今天怎么存
-
-客户端把列表放在数据目录下的 `recent_devices.json`（默认 `%AppData%\RemoteDesktop\`，由 `DataDirectory`
-配置决定）。结构是带版本号的：
-
-```json
-{
-  "Version": 1,
-  "Devices": [
-    {
-      "DeviceId": "123 456 789",
-      "Alias": "办公室台式机",
-      "LastConnectedUtc": "2026-10-07T02:11:04.5120000+00:00",
-      "UpdatedAtUtc": "2026-10-07T02:11:04.5120000+00:00",
-      "DeletedAtUtc": null
-    }
-  ]
-}
-```
-
-读写由 `IRecentDevicesStore` / `RecentDevicesStore`（`src/Hosts/RemoteDesktop.Client/Storage/`）负责，界面只
-通过接口访问它——这个接口就是将来接同步时的缝，见下文。
-
-几处与旧格式不同的地方：
-
-- **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会再留下一个截断的文件，也就不会出现
-  "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
-- **读不出来的文件会被让开**：解析失败或版本比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>`
-  保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
-- **旧格式会被迁移**：早期文件是一个裸数组，条目里还带着明文 `SavedPassword`。读到这种文件时，密码被搬进
-  系统保护的密钥库，文件当场重写成上面的带版本结构——升级即把明文从磁盘上拿掉，而不是等用户下次改点什么。
-
-### 密码为什么不进列表
-
-`RecentDeviceEntry` 里**没有**密码字段，这是刻意的，三条理由：
-
-1. **跨机器没有意义**。密码用 DPAPI 以 `CurrentUser` 作用域加密，换一台机器根本解不开，同步过去也是废数据。
-2. **服务器不该看到它**。`docs/design/README.md` 把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
-   把设备密码放上去，等于要求用户相信一个我们明确假设不可信的组件。
-3. **它是本机的事**。"记住密码"是这台机器上的便利，不是账号的属性。
-
-所以密码存在 `ISecretStore`（客户端是 DPAPI，`secrets/` 目录）里，名字为 `recent-device-<设备代码>`，
-由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。`UpdatePasswordAsync(id, null)` 会
-**删除**密钥——这条路径以前在 API 上是缺失的，"取消勾选记住密码"因此永远清不掉已存的密码。
-
-将来如果产品坚持要"新机器登录后自动带上密码"，唯一可接受的形态是：客户端用账号口令派生密钥（Argon2id）
-做端到端加密，服务器只存不透明密文。因为密码不在条目里，这个决定**不需要改动数据格式**就能后加。
-
-### 字段语义与合并规则
-
-账号同步一上线，"两台机器上的同一份列表怎么合"就必须有确定答案。三个时间字段就是为它准备的：
-
-| 字段 | 含义 | 合并规则 |
-|---|---|---|
-| `LastConnectedUtc` | 最后一次连上这台设备的时间 | 取两边**较晚**的值。这是各机器的观测，不是编辑 |
-| `UpdatedAtUtc` | 用户最后一次**改这个条目**的时间（改别名、或删除） | 较晚者胜。连接行为不动它 |
-| `DeletedAtUtc` | 用户删除它的时间；null 表示还在列表里 | 非空即视为删除；与对方的 `UpdatedAtUtc` 比较，较晚者胜 |
-
-注意 `LastConnectedUtc` 用的是取最大值而不是"最后写入者胜"：连接是观测，谁先谁后无所谓，晚的那次才是事实。
-把连接的写入也当成编辑（顺带推进 `UpdatedAtUtc`）会让"在 A 机改名"被"在 B 机连接"无声覆盖。
-
-**墓碑**（`DeletedAtUtc`）是删除必须软删的原因：在 A 机上删掉设备，如果只是从文件里拿掉，B 机的副本会在
-下次同步时把它原样送回来，用户会觉得"删不掉"。带时间戳的墓碑让删除可以被合并、被传播，合并完再清理。
-在没有同步的今天，墓碑只是留在文件里、被 `GetAllAsync` 过滤掉——所以现在删掉的设备**看起来**是没了。
-连上同一个设备会让它复活（`DeletedAtUtc` 清空、`UpdatedAtUtc` 推进），不会出现"删过一次就再也回不来"。
-
-### 账号作用域
-
-`RecentDevicesStore` 的构造函数接受一个可选的 `accountId`：
-
-- 不传（今天的情况）：列表在 `dataDirectory/recent_devices.json`，密钥名 `recent-device-<设备代码>`。
-- 传入：列表在 `dataDirectory/accounts/<accountId>/recent_devices.json`，密钥名带账号前缀。
-
-这样同一个 Windows 用户登录两个账号时，两份列表和两套记住的密码互不串扰。现在就把这个参数留出来，是因为
-它的成本是零；等到有了账号再改，已经写下的数据就要迁移。`accountId` 来自服务器，所以构造时会校验它不含
-路径分隔符和 `..`——它必须只是一个名字，不能决定文件写到哪儿。
-
-### 账号体系上线时怎么接
-
-**客户端**：`MainWindowViewModel` 依赖的是接口，不是具体类型，所以换实现不用动界面。预期是在中间加一层：
-
-```text
-IRecentDevicesStore
-  └─ SyncedRecentDevicesStore(本地: RecentDevicesStore, 远端: IAccountDeviceListClient)
-       读：本地立即返回，后台按 UpdatedAtUtc 合并
-       写：本地先落（离线可用）+ 入队推送
-```
-
-能这么接的前提正是"条目里没有密码"——同步层搬运 `RecentDeviceEntry` 这件事本身就不可能泄漏密码。
-
-**服务端**：设备代码已经持久化（Rendezvous 经 `RemoteDesktop.Server.Storage`，裸 SQL + 启动时
-`EnsureSchemaAsync`；按 `Rendezvous:Database:Provider` 选 PostgreSQL 或 SQLite，没配则回退内存），
-映射在 `device_registrations` 里，新表直接引用它的 `device_id`：
-
-```sql
-CREATE TABLE IF NOT EXISTS account_devices (
-    account_id        BIGINT NOT NULL,
-    device_id         BIGINT NOT NULL,      -- 对应 device_registrations.device_id
-    alias             TEXT,
-    last_connected_at TIMESTAMPTZ,
-    updated_at        TIMESTAMPTZ NOT NULL,
-    deleted_at        TIMESTAMPTZ,
-    PRIMARY KEY (account_id, device_id)
-);
-```
-
-沿用既有的写法（裸 SQL、启动建表、`Rendezvous:Database` 配置），不要为这一张表引入 EF Core。
-
-两点别低估：
-
-- **账号体系本身的工作量远大于列表同步**。现在的 Rendezvous 对客户端只有 `/ws` 信令和 `/health`，没有注册、
-  登录、令牌、吊销、找回中的任何一样。还要决定设备证书怎么绑定到账号——最自然的做法是设备证书注册进账号，
-  这样设备开机不需要输账号密码。
-- **设备代码会失效**。它绑定证书指纹，设备重装就是新指纹、新代码。列表里的旧条目会变成死链接，不能假设
-  `device_id` 永远有效。界面现在显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"
-  和"当前离线"的回答故意完全相同（见 `docs/design/README.md` 的在线状态查询一段），所以界面只能说这么多，
-  "该设备可能已重新注册"的提示只在有证据时（连接返回"对方设备不在线"）出现。
-  **这三态只存在内存里，不写进 `recent_devices.json`**：它是机器的观测值而不是用户意图，写进去只会给将来的
-  账号同步增加一条需要合并的字段。合并规则因此完全不受影响。
-
-### 现在有意不做的
-
-- 不引入 EF Core，不写客户端同步框架：一个接口、一种格式、一组时间字段就够了。
-- 不把 `DeviceId` 换成 GUID 之类的"分布式友好"标识：服务端已经用 `device_id BIGINT UNIQUE` 关联好了。
-- 不清理墓碑：合并规则需要它们。等同步真正落地时再定保留期（比如超过 N 天的墓碑可以丢弃）。
-- **不做密码同步**，也不为此预留字段。
+- **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在系统密钥库里（Windows 是 DPAPI），换一台
+  机器不会跟着走。备份这个文件就是备份设备列表，密码需要重新输入。
+- **写入是原子的**（先写 `recent_devices.json.tmp` 再替换），中途崩溃不会留下截断的文件。解析失败，或文件版本比
+  程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回。
+- **旧格式会自动迁移**：早期的裸数组文件（条目里带明文密码）在第一次读到时，密码被搬进密钥库，文件重写成带版本的结构。
+- 没有账号体系，也没有跨机器同步。数据格式、合并规则和"为什么不放密码"见 [系统设计](../design/README.md) 的
+  "客户端本机存储"一节。
 
 ## 十、故障速查
 
@@ -1804,17 +1721,17 @@ CREATE TABLE IF NOT EXISTS account_devices (
 remotedesktop --self-check
 ```
 
-每一项都是只读、不弹对话框，所以在一台还没授权过、甚至起不来的机器上照样能跑；有必需项不通过时退出码
+它不弹对话框、不改任何设置（唯一的写入是在数据目录里建一个 `.writable` 探测文件并马上删掉），所以在一台还没授权过、甚至起不来的机器上照样能跑；有必需项不通过时退出码
 是 1。它答不上来的（连不上服务器、连上了但画面不动、服务没起来）再看下面。
 
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
 | Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | ① 本机节点被登记成机器名/IP：没有 NodeToken 时 `/metrics` 与 `/internal/*` 只授权回环调用，非回环访问得到 401；② 地址已经是 `127.0.0.1` 且信令用 TLS：证书 SAN 里没有 `127.0.0.1`（Debian/Ubuntu 把主机名映射到 127.0.1.1），又没有配 `Ops:NodeCertificatePath`，握手报名称不匹配 | ① 在节点管理页「改地址」改回 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；远程节点配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝）；② 在 `Ops/appsettings.json` 的 `Ops` 段加 `"NodeCertificatePath": "/etc/remotedesktop-server/tls/signaling.crt"` 后重启 `remotedesktop-ops`；新 server 包由安装脚本自动 pin，新生成的证书也带 `127.0.0.1` |
-| 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级动作 `SyncLocalNodes` 会同步两个密钥；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
+| 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级时的配置步骤（`--configure-system`）会把两边对齐到同一把密钥（已有的保留）；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
 | 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
-| 日志里成片 "Throttled ... from {地址}" | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |
+| 日志里成片 "Throttled registrations from {地址}"（连接请求、在线状态查询的限流日志则带设备代码） | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |
 | 两台机器都有代码，但连接超时 | 双方都连到服务器了，但打洞和中继都不通 | 检查 `RelayEndpoint` 是否为客户端可达地址、UDP 5081/5082 是否放通；先试 `--Transport:ForceRelay true` 判断是不是打洞问题 |
 | 连接提示"密码错误" | 密码过期（临时密码刷新过）或被限流 | 在被控端界面刷新密码重试；同一控制端 5 分钟内失败 5 次会被锁 5 分钟 |
 | 能看到画面但键盘鼠标没反应 | 会话是"观看模式" | 连接时不要勾"观看模式"；被控端也可以把会话降级为仅观看 |
@@ -1823,128 +1740,13 @@ remotedesktop --self-check
 | 日志出现 "QUIC is not supported on this system" | Windows 10 缺 Schannel 的 TLS 1.3；或 Linux 上开发运行时找不到 libmsquic | Windows：升级到 Windows 11 / Server 2022+，或换 OpenSSL 版 msquic.dll。Linux：装 `.deb` 的话是随包带的，开发运行时用 `native/linux/fetch-libmsquic.sh` 再设 `LD_LIBRARY_PATH` |
 | Linux：控制端每次连接都要重新同意 | portal 不允许远程桌面会话持久化 | 这是规定，不是配置项。无人值守只能靠 Windows 被控端 |
 | Linux：剪贴板不同步 | 桌面没有授予剪贴板（和键盘鼠标在同一次授权里，点"拒绝"就没有）；或内容超过 8 MB | 看一眼被控端日志：授予失败会有 "did not grant control"。超大内容会被丢弃而不是截断 |
-| Linux：摄像头列表是空的 | 两种可能：机器上确实没有摄像头（portal 的 `IsCameraPresent` 答 false），或者授权被拒了 | 被控端日志里会有 "did not grant access to the cameras"。这条路径**没有被验证过**——见 [平台移植总览](../ports/README.md) 的"未验证项" |
+| Linux：摄像头列表是空的 | 两种可能：机器上确实没有摄像头（portal 的 `IsCameraPresent` 答 false），或者授权被拒了 | 被控端日志里会有 "did not grant access to the cameras"。后台宿主弹不出 portal 的摄像头授权框，要在被控端显式允许一次（见 §五 4）。采集链路已在真机验证，但**授权被拒时的行为没有声明验证过**——见 [平台移植总览](../ports/README.md) 的"未验证与已知缺口" |
 | Linux：光标位置不更新 | 合成器没有送光标元数据 | 画面本身正常；被控端日志会警告一次 |
 
 ## 十一、运维监控台设计
 
-给**要改监控台代码、或想理解它为什么这样**的人。怎么装、怎么让总览出现数字见 §二 10，这里只讲构成与设计。
-
-### 定位与边界
-
-第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：控制台宕机、重启、升级，
-不影响任何一次远程连接。
-
-**做什么**：节点健康与全部已抓取指标、节点版本/uptime、在线设备、会话、告警（含比值规则）、审计，浅色/深色主题。
-
-**不做什么**（有意不做）：日志聚合、远程命令执行、存画面/剪贴板/文件内容、替代 Prometheus/Grafana。
-
-### 为什么独立成一个进程
-
-1. 控制台要跨节点聚合，而信令是无状态横向扩展的——UI 和库塞进去等于给信令加一个必须跨实例一致的状态。
-2. 信令在连接建立路径上，管理面的一次错误查询、一次库锁，都不该有机会影响握手。
-3. 认证面独立：后台账号被盗不该等于信令被接管。
-
-### 三条边界
-
-| 边界 | 方向 | 协议 | 用途 |
-|---|---|---|---|
-| 指标 | 控制台 → 节点 | Prometheus 文本 | 数字、趋势 |
-| 对象查询 / 管理 | 控制台 → 节点 | JSON `/internal/v1`，Bearer | 设备列表、断开会话、封禁 |
-| 事件 | 节点 → 控制台 | JSON 批量 POST，HMAC | 会话事实 |
-
-### 数据从哪来（范围合同）
-
-每块面板都要能指到来源，指不到的就不做。**"服务器没有这个数"是常态，不是缺陷**：
-
-| 面板 | 来源 | 状态 |
-|---|---|---|
-| 在线设备 | `remotedesktop_devices_online` gauge | 有 |
-| 中继带宽 / 流量图 | Relay 字节计数器求速率 | 有 |
-| 活跃会话 | Relay 配对/关闭事件 + 客户端会话结束/心跳，`source` 分开计数 | 有 |
-| 链路类型 / 平台分布 | 客户端心跳（被控端报平台） | 有（心跳默认关） |
-| 会话 RTT | 客户端心跳（控制端测） | 有 |
-| 丢包 / 码率 | **无来源** | 不做，显示"—" |
-| 文件传输任务 / 审计 | **无来源** | 不做 |
-| 设备列表 | `/internal/v1/devices` | 有（代码、注册时间、最后活跃、在线、封禁） |
-
-**丢包与码率为什么没有**：.NET 的 QUIC API 不暴露每连接的丢包统计，编码器的码率是设置值不是吞吐量。
-两列保持"—"。想填只能改传输层去做字节计数或读 MsQuic 的 native 统计。
-
-### 代码落位与依赖
-
-| 项目 | 职责 |
-|---|---|
-| `RemoteDesktop.Server.Ops` | Web 宿主：端点、认证、静态页、后台任务 |
-| `RemoteDesktop.Server.Ops.Core` | 纯逻辑：Prometheus 解析、会话投影、规则求值、TOTP、审计链 |
-| `RemoteDesktop.Server.Ops.Storage` | 表结构、方言、读写 |
-| `RemoteDesktop.Server.Ops.UnitTests` / `.IntegrationTests` | 纯逻辑单测 / 真宿主 + 假节点 |
-
-两条强制的依赖规则（架构测试兜底）：`Ops.Core` 只依赖 BCL + `Server.Shared`（契约），不碰 Storage/宿主/ASP.NET；
-`Ops.Storage` 不依赖宿主。**不引用 `Server.Storage`**：设备注册表是信令服务的库，控制台经内部 API 拿设备数据，
-不直连对方数据库。
-
-### 事件与投影
-
-- 信封 `{ v, eventId, node, kind, occurredAt, correlationId, payload }`；`eventId` 唯一（重放无害），`correlationId`
-  由服务端生成——**绝不用客户端的 `RequestId`**（可被构造，能撞别人的时间线）。
-- 事件是事实（`ops_event`），会话是投影（`ops_session`），同事务写；投影可由事件重放重建。
-- `source ∈ {relay, signaling, client}` 是诚实性字段：不把三者加成一个"活跃会话总数"。
-- **会话结束由客户端上报**：信令新增 `ClientMessage.session_ended`（字段 7），两端各报一次，控制台按同一个
-  `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
-  中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
-
-### 数据模型
-
-基线表 + 迁移（`ops_schema_version` 只前进）：v1 基线；v2 加 `ops_session.platform / version`；v3 加
-`ops_session.client_session_id` 与 `ops_admin_action` 表；v4 加通知重试时间 `ops_notification_attempt.last_attempt_at`
-与单次 TOTP 时间步 `ops_admin_user.last_totp_step`；v5 把 PostgreSQL 的实数列改成 `DOUBLE PRECISION`（SQLite 的
-`REAL` 本来就是 8 字节，v5 在 SQLite 上是记录版本的空操作）。时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL。
-
-核心表：`ops_node`（节点）、`ops_metric_sample` / `_catalog`（指标）、`ops_event` / `ops_session`（事实与投影）、
-`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_admin_user` / `_session`（账号）、`ops_audit_log`（哈希链审计）、
-`ops_admin_action`（两段式复核）、`ops_lease`（单实例租约）。
-
-### 认证与安全
-
-| 项 | 决定 |
-|---|---|
-| 口令 | PBKDF2-HMAC-SHA256，60 万次迭代，16 字节盐，32 字节输出 |
-| 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开；验证通过的时间步写入 `last_totp_step`，同一个码不能再次登录 |
-| 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时；改密、重置 TOTP、停用或删除账号都会撤销该账号的全部会话 |
-| 角色 | `viewer` 只读 / `operator` 确认告警、发起动作 / `admin` 改规则、管账号、批准动作、看审计 |
-| CSRF | 双提交 Cookie + `X-Ops-CSRF`，`SameSite=Strict` |
-| 审计 | `SHA256(prev_hash ‖ 字段)` 哈希链，`/api/audit/verify` 报第一条不一致 |
-| 管理动作 | 两段式：发起（operator）+ 批准（admin），发起人不能批准自己的 |
-
-### 告警
-
-规则是**结构化列，不是表达式**：`single`（单指标）、`ratio`（两指标比值）、`scrape`（抓取失败）、
-`session.rtt`、`session.direct`（直连率）。`forSeconds` 状态机——条件持续满足才开，抖动一次不叫人；
-去重键保证同一对象同时只有一条未恢复告警。
-
-通知有两条通道，开/恢复各发一次：Webhook（`Ops:Notifications:WebhookUrl`）与邮件（`Ops:Notifications:Smtp`）。
-两条通道**各自**在 `ops_notification_attempt` 里记一行，失败各自按 1/2/4/8 分钟退避重试、最多 5 次，彼此不影响；
-一条通道挂着不会让另一条重发。
-
-**静默**（告警页「静默 1 小时」或 `POST /api/silences`）只压通知：告警照常打开、恢复、认领，照常写审计。
-范围可以是某条规则、某个节点（抓取失败类）或两者；窗口结束需要重新触发一次才会再通知——被跳过的消息不会补发。
-静默的创建与解除都是管理员动作，各写一条审计。
-
-### 已知边界与未做
-
-- 丢包 / 码率：无来源（见上）。
-- 通知有 Webhook 与 SMTP 两条通道，各自独立重试与去重；静默按"规则 / 节点 / 两者"生效。通道目前就这两条。
-- 节点鉴权可以每节点一份令牌（见「每节点令牌」），但**默认仍是部署级**：没设独立令牌的节点共用 `Ops:NodeToken`，
-  泄露一个节点的配置仍会暴露其余节点。全部换完后可以把 `Ops:NodeToken` 留空，只有回环调用能直连节点。
-  `Ops:NodeTokenHosts` 仍决定令牌能发往哪些主机（见上面的配置表）。
-- 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟，
-  未做 SignalR backplane。
-- **历史靠清理任务收敛，不是无限保留**：指标样本、事件、会话与已恢复告警按 `Ops:Retention:*` 每小时删除一次
-  （见本文件「数据保留」一节），过期管理员会话每轮都删；**打开中的告警与审计哈希链不动**。清理只保证库不会
-  无限长——备份、归档与磁盘容量仍是运维自己的事：每个节点每 10 秒一条样本，十几个节点的部署一年就是数千万行。
-- Windows 侧控制台现在是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
-  手工 `sc.exe create` 仍然可行，但不是安装包的做法。
+监控台的构成、数据来源、事件与投影、数据模型、认证与告警等设计内容在 [系统设计](../design/README.md) 的
+"运维监控台"一节。怎么安装、怎么让总览出现数字，见本文 §二 10。
 
 ## 十二、上线前真机验收
 
@@ -1959,7 +1761,7 @@ V1–V3 是目前唯一没法在 CI 里跑的三项；V4–V8 按需抽查，结
 | V4 | macOS | 公证与 Gatekeeper 放行 | P1 |
 | V5 | Linux | 摄像头授权 / VA-API 硬编 / X11 会话 | P1 |
 | V6 | Windows | 摄像头首帧黑屏（复现记录） | P2 |
-| V7 | 服务器 | QUIC listener 泄漏观察 | P2 |
+| V7 | 被控端 | QUIC listener 泄漏观察 | P2 |
 | V8 | 服务器 | 控制台新功能抽查（独立令牌 / 静默 / 邮件） | P2 |
 
 **日志在哪。** 失败时先看这张表，不要先重建环境。
@@ -1967,8 +1769,8 @@ V1–V3 是目前唯一没法在 CI 里跑的三项；V4–V8 按需抽查，结
 | 组件 | Windows | Linux | macOS |
 |---|---|---|---|
 | 客户端崩溃 | `%APPDATA%\RemoteDesktop\crash.log` | `~/.local/share/RemoteDesktop/crash.log` | `~/Library/Application Support/RemoteDesktop/crash.log` |
-| 被控端服务 | `%ProgramData%\RemoteDesktop\logs\service-*.log`、`agent-*.log`、`startup-error.log` | `journalctl --user -u app-RemoteDesktopHost`，同一份文件日志在 `~/.local/share/RemoteDesktop/logs/` | `~/Library/Application Support/RemoteDesktop/logs/service-*.log` |
-| 服务端 | 三个服务 `RemoteDesktopRendezvous` / `RemoteDesktopRelay` / `RemoteDesktopOps`；**没有文件日志**，排错要停服务后以控制台方式运行同一份设置 | `journalctl -u remotedesktop-{rendezvous,relay,ops,gateway}`，文件在 `/var/log/remotedesktop-server/` | `/usr/local/remotedesktop-server/logs/{rendezvous,relay,ops,gateway}.log` |
+| 被控端服务 | `%ProgramData%\RemoteDesktop\logs\service-*.log`（保留 14 天）、`agent-user-*.log` / `agent-secure-*.log`（用户桌面与登录/UAC 桌面各一份，保留 7 天，每秒落盘）、`startup-error.log` | `journalctl --user -u app-RemoteDesktopHost`，同一份文件日志在 `~/.local/share/RemoteDesktop/logs/` | `~/Library/Application Support/RemoteDesktop/logs/service-*.log` |
+| 服务端 | 四个服务 `RemoteDesktopRendezvous` / `RemoteDesktopRelay` / `RemoteDesktopOps` / `RemoteDesktopGateway`；**没有文件日志**，排错要停服务后以控制台方式运行同一份设置 | `journalctl -u remotedesktop-{rendezvous,relay,ops,gateway}`（只进 journal；`/var/log/remotedesktop-server/` 由安装包创建并允许服务写入，但目前没有程序往里写文件） | `/usr/local/remotedesktop-server/logs/{rendezvous,relay,ops,gateway}.log` |
 
 ### V1 · Windows：服务托管与 SessionAgent（P0）
 
@@ -1987,7 +1789,7 @@ Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, User
 "后台服务"，且"本机控制端代码"与主页的设备代码是两个不同的值。
 
 **失败看哪里**：`%ProgramData%\RemoteDesktop\logs\service-*.log`（服务起不来、起不了 agent）；同目录的
-`agent-*.log`（agent 起来了但连不上服务或接管会话失败）；`startup-error.log`（设置读不出来时服务直接退出）。
+`agent-user-*.log`（用户桌面的 agent 起来了但连不上服务或接管会话失败；登录/UAC 桌面的在 `agent-secure-*.log`）；`startup-error.log`（设置读不出来时服务直接退出）。
 服务被系统拒绝启动时另外看 `Get-WinEvent -LogName System -MaxEvents 50` 里的 Service Control Manager 条目。
 
 **实测结论（2026-10-30，Hyper-V 被控端 VM + 本机控制端）**：服务以 `LocalSystem` 运行、`RemoteDesktop.SessionAgent`
@@ -2009,7 +1811,7 @@ ls -l /usr/local/remotedesktop-server/Ops/appsettings.json
 grep -c UserName /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
 ```
 
-**预期**：`UniqueID` / `PrimaryGroupID` 落在 300–499；`NFSHomeDirectory` 是 `/usr/local/remotedesktop-server/var`；
+**预期**：`UniqueID` / `PrimaryGroupID` ≥ 300（安装脚本从 300 起找空位）；`NFSHomeDirectory` 是 `/usr/local/remotedesktop-server/var`；
 `UserShell` 是 `/usr/bin/false`；`ps` 的 user 是 `_remotedesktop`；`var` 是 `drwx------ _remotedesktop _remotedesktop`；
 `appsettings.json` 是 `-rw-r----- root _remotedesktop`；最后一条输出 `1`。
 
@@ -2120,31 +1922,32 @@ echo "$XDG_SESSION_TYPE"
 **预期**：20 次都在 2 秒内出图。历史上出现过一次 1280×720 首帧全黑、随后正常，至今没有稳定复现路径；这份记录的价值
 是下一次能对上具体的机器、摄像头与次数。
 
-**证据**：`%ProgramData%\RemoteDesktop\logs\agent-*.log` 里同一时刻的摄像头行
+**证据**：`%ProgramData%\RemoteDesktop\logs\agent-user-*.log` 里同一时刻的摄像头行
 （`Select-String -Path <log> -Pattern camera`），加一张黑帧截图与时间点。
 
-### V7 · 服务器：QUIC listener 泄漏（P2，观察）
+### V7 · 被控端：QUIC listener 泄漏（P2，观察）
 
-**背景**：每次入站连接会新建一个 `QuicListener`，.NET/MsQuic 侧有一个已知的原生泄漏（约 1.2 MB/次，已报上游；
-1.0.0 只限制了并发 32）。这一条不是通过/失败，而是长期部署的体检。
+**背景**：被控端每准备一次入站连接就会新建一个 `QuicListener`（`QuicPeerListener`），.NET/MsQuic 侧有一个已知的
+原生泄漏（约 1.2 MB/次，已报上游；1.0.0 只限制了并发 32）。信令服务器走 WebSocket，不跑 QuicListener，不受影响，
+所以要量的是**被控端的 `RemoteDesktop.HostService` 进程**。这一条不是通过/失败，而是长期开机的体检。
 
 **做法**：服务稳定后取基线，正常使用一天后再取一次，同时记下当天的入站连接量。
 
 ```bash
-# Linux / macOS
-ps -o rss= -p $(pgrep -f RemoteDesktop.Server.Rendezvous)
+# Linux / macOS（在运行被控端的那台机器上）
+ps -o rss= -p $(pgrep -f RemoteDesktop.HostService)
 ```
 
 ```powershell
 # Windows
-[math]::Round((Get-Process RemoteDesktop.Server.Rendezvous).WorkingSet64 / 1MB)
+[math]::Round((Get-Process RemoteDesktop.HostService).WorkingSet64 / 1MB)
 ```
 
 **判据**：RSS 增长与连接数大致线性、每个连接超过 1 MB 时记下来。没有连接也持续增长，说明是另一类问题，按上面的
 日志继续查。
 
-**失败看哪里**：Linux `journalctl -u remotedesktop-rendezvous`；macOS
-`/usr/local/remotedesktop-server/logs/rendezvous.log`；Windows 服务端没有文件日志，需要停服务后以控制台方式运行。
+**失败看哪里**：Windows `%ProgramData%\RemoteDesktop\logs\service-*.log`；Linux
+`journalctl --user -u app-RemoteDesktopHost`；macOS `~/Library/Application Support/RemoteDesktop/logs/service-*.log`。
 
 ### V8 · 控制台：独立令牌、静默与邮件（P2，抽查）
 

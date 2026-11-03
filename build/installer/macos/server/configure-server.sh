@@ -3,7 +3,7 @@
 # Changes what the installed servers are configured with, after the installation.
 #
 # The installer asks for these once, when the package is built. This is the way back in: give it the settings you want
-# to change and it writes them, then restarts the two launchd jobs so they take effect. Anything you leave out is left
+# to change and it writes them, then restarts the four launchd jobs (rendezvous, relay, ops, gateway) so they take effect. Anything you leave out is left
 # alone.
 #
 # It runs the same configuration step the package's postinstall runs

@@ -4,7 +4,9 @@
 
 ## [未发布]
 
-### Security — 上线前加固
+### Security
+
+**上线前加固**
 
 - **密码认证迁移到 SRP-6a**：替换原来的挑战—HMAC 证明，使用 BouncyCastle 的 RFC 5054 3072 位群实现，双方证书
   指纹绑定到 SRP identity。被动监听者不再能拿到可离线爆破的 verifier，被控端返回服务器证据（M2）实现双向认证。
@@ -17,63 +19,7 @@
   通过已校验的目标句柄复制，不再用可被链接重定向的路径重命名。
 - **中继无效票据日志限流**：公网 UDP 上每个无效票据不再写一条 Warning；改为每分钟汇总一次并记录被抑制的数量。
 
-### Fixed — Linux 多显示器：按被共享的那块屏幕的尺寸采集
-
-- **请求另一块显示器时画面尺寸对不上**：portal 只能共享操作员勾选的屏幕，而采集格式此前被钉在"请求的那块"的
-  尺寸上。一旦实际流是另一块显示器（分辨率不同），拷贝会因为步幅不匹配而丢帧，表现为黑屏或卡住。现在匹配在
-  合成器的**逻辑坐标**里做（容忍 1–2 px 的分数缩放进位），并把端口流的真实尺寸用于采集与编码。
-- **只有一块流时按它自己的尺寸与身份采集**：采集器与对端宣告的显示器都换成实际被共享的那块，指针、工具栏和画面
-  不再各说各话；切换时写一条 warning 说明"请求的是 X、共享的是 Y"。
-- **共享多块而请求的不在其中时明确报错**：错误信息列出已共享的尺寸，不再拿别的显示器冒充请求的那块。
-- **视频流信息改宣告采集器的显示器**（`capturer.Display`），而不是最初请求的 id。
-
-### Added — 每节点令牌
-
-- **控制台可以给单个节点配自己的令牌**：`POST /api/nodes/{id}/token`（管理员，写审计）生成或接受一个令牌并
-  只返回这一次，`DELETE` 清除并退回部署级 `Ops:NodeToken`。节点详情里多了「生成独立令牌 / 重置 / 清除」。
-  节点自己的令牌优先，没设的节点继续用部署级令牌——升级不改变任何现有行为。
-- **抓取、设备代理、管理动作与节点详情都按节点的令牌发请求**：此前四处各写一遍 `options.NodeToken`，现在统一
-  走 `NodeHttp.TokenFor` / `ApplyAuthorization`，出口规则（`Ops:NodeTokenHosts`、https 或回环）对每一条令牌
-  一视同仁。
-- **节点 API 只说有没有令牌，不说是什么**：`hasOwnToken` 是响应里唯一的令牌相关字段；令牌明文存在控制台库里，
-  与 `Ops:NodeToken` 存在配置文件同理。
-- **schema v7**：`ops_node` 增加 `token` 列，旧行是 `NULL`，即继续使用部署级令牌。
-
-### Added — 告警的邮件通知与静默
-
-- **邮件通知**：新增 `Ops:Notifications:Smtp:*`，在 Webhook 之外多一条通道。SMTP 客户端是自己写的——STARTTLS、
-  AUTH PLAIN/LOGIN、DATA 的点转义、非 ASCII 主题的 RFC 2047——没有引入新依赖。口令只写进 AUTH 交换，不进日志、
-  审计与投递记录。
-- **两条通道各自重试**：`ops_notification_attempt` 按通道分行，Webhook 挂着不会让邮件重发，反之亦然；退避与
-  去重沿用原有规则。一条通道的失败不会阻塞另一条。
-- **静默**：告警页可直接「静默 1 小时」，`GET/POST/DELETE /api/silences` 支持按规则、按节点或两者组合。静默
-  只压通知：告警照常打开、恢复、写审计；被压掉的转换不会在窗口结束后补发。创建与解除都是管理员动作，各写审计。
-- **schema v6**：`ops_silence` 表从 1.0.0 起就在基线里（matcher_json / starts_at / ends_at / created_by），本次
-  只补 `reason` 列，因此是 `ALTER TABLE` 而不是建表。
-
-### Added — `remotedesktop://` 链接带入设备代码
-
-- **链接只带设备代码，不自动连接**：`remotedesktop://connect?code=902226105` 与 `remotedesktop://902226105`
-  两种写法，容忍空格、连字符与百分号编码。链接来自浏览器、聊天消息或邮件，所以密码由人输入、"连接"由人点；
-  解析器里没有存放密码的位置，`?password=` 之类参数被忽略。
-- **第二次启动把链接交给已打开的窗口**：控制端身份在信令里每设备只保留一个会话，开出第二个窗口会让两个进程
-  每秒互踢。第一个客户端占一条每用户命名管道，带链接的启动把 URL 写进去后退出；不带链接的启动行为不变，
-  只是不会拿到那条管道。
-- **Windows 与 Linux 注册协议**：MSI 在 `HKLM\Software\Classes\remotedesktop` 写下 `URL Protocol` 与
-  `shell\open\command`（卸载即删，包内容测试会打开 MSI 核对这两行），`.desktop` 增加
-  `MimeType=x-scheme-handler/remotedesktop` 与 `%u`。**macOS 未做**：LaunchServices 走 Apple Event
-  （`kAEGetURL`），原生辅助库还没有这条通道。
-
-### Changed — 客户端界面的遗留观察项收尾
-
-- **固定密码区块的"关闭"改为"删除"**（评审 R6）：它本来就是删除已保存的固定密码，现在按钮名、ToolTip 与
-  无障碍名称说的是同一件事；使用文档的"修改或关闭"随之改为"修改或删除"，并写明删除后只能用临时密码连接。
-- **终端在浅色主题下保持深色定为有意保留**（W10）：ANSI 16 色按深色背景设定，浅底会失去对比；这条现在写在
-  使用文档的终端一节，不再作为待决定项。
-- **其余观察项关闭**：四段版本号（R5/W9）在版本收敛时已改为三段 `ProductVersion.Display`；隐藏文件整行
-  半透明（R9）随 W8 改为只淡化图标与文件名。只剩图标栅格（R3）待设计决定。
-
-### Security — macOS 服务端不再以 root 运行
+**macOS 服务端不再以 root 运行**
 
 - **四个守护进程改为专用账号 `_remotedesktop`**：plist 增加 `UserName`/`GroupName`；postinstall 创建隐藏账号
   （UID/GID 从 300 起找空位、`/usr/bin/false`、无自己的家目录），把 `var/`（数据库与 DataProtection 密钥环）
@@ -87,7 +33,7 @@
 - **首个管理员改用服务账号创建**：`sudo -u _remotedesktop ... --create-admin`；用 root 建会让 SQLite 的
   `-wal`/`-shm` 归 root，监控台之后写不进去。macOS 的卸载不清除 `_remotedesktop` 账号，与 Linux 一致。
 
-### Security — 节点令牌的出站白名单
+**节点令牌的出站白名单**
 
 - **管理员可以把节点指向任意地址，令牌会跟着去**：新增 `Ops:NodeTokenHosts`（裸主机名或 IP）。填了之后，
   节点令牌只能发往列表内的主机，回环始终允许（安装包登记的本机节点不受影响）；列表外的地址在登记、改地址、
@@ -95,24 +41,52 @@
 - **四处拒绝共用同一句原因**：`NodeHttp.RefusalReason` 统一"明文 HTTP"与"主机不在白名单"两种拒绝的措辞，
   抓取失败、节点详情、设备代理与动作失败不再各写一份。
 
-### Fixed — 控制端一次性请求没有超时
+**文件传输沙箱与信令入口的加固**
 
-- **被控端接受通道后不回答，界面会一直等下去**：文件面板的列目录/改名/删除、终端的列出 shell 与打开、摄像头
-  列表与打开、文件传输的接受与最终校验，现在都通过新增的 `RequestTimeout` 等第一个应答，上限 30 秒。超时给出
-  "被控端没有及时响应"而不是让文件面板、终端窗口或摄像头列表挂到会话结束。传输的数据阶段、终端输出与摄像头
-  画面仍只受调用方的取消令牌约束（见 `docs/design/README.md` 的"还没有做的事"）。
-- **摄像头打开的 30 秒超时改用同一套机制**：窗口仍把它显示为"摄像头权限未授予"的提示，但不再靠
-  `OperationCanceledException` 识别超时——用户主动取消与对端沉默不再混为一谈。
+- **`\服务器\共享\…` 在拒绝之前就被探测**：被控端的文件传输沙箱先逐段检查路径是否存在，之后才拒绝网络共享。Windows 上控制端发来 UNC 路径时，这一步已经向对方服务器发起 SMB 连接并做 NetNTLM 认证，当前用户的哈希在被拒绝之前就泄露了。现在 UNC 路径仅凭字符串就会被拒绝（除非已配置同一 `\服务器\共享` 的根目录），指向网络共享的链接目标同样不再被逐段探测。
+- **信令 `Urls` 的明文检查与 Kestrel 的解析对齐**：`http://*:5080`、`http://+:5080` 这类通配写法以前会被报成"不是合法地址"，分号分隔的多个地址也会让安装器把 `AllowInsecureSignaling` 写成 `false`，升级后原本能用的部署起不来。现在通配主机按"所有网卡"处理，列表里任何一个公网明文地址都需要（也会被记录为）显式放行。
+- **每地址连接数限制按 IPv6 /64 归并**：以前每个 IPv6 地址单独计数，同一个 /64 内的一台机器可以用无数个地址绕开每地址上限，把全局连接数占满；IPv4 映射地址也被当成另一个来源。现在映射地址按 IPv4 计，IPv6 按 /64 计。
 
-### Fixed — 未完成传输的清单无界增长
+### Added
 
-- **清单随请求无限增长，每次写入重写整个文件**：`PartialFileLedger` 现在最多保留 1024 条
-  （`PartialFileLedgerOptions.MaxEntries` 可调），超出时丢弃最旧的记录；读取旧版或手工写下的超长清单同样先
-  裁到上限。文件大小、内存占用与单次写入成本因此都有上界，不再是"每次上传重写一遍整张列表"。
-- **残片清扫只在进程启动时跑一次**：`PartialFileSweeper` 改为启动时扫一遍、之后每 6 小时一轮，长期开机的
-  被控端不会把 7 天前放弃的 `.rdpart` 留到下次重启。
+**每节点令牌**
 
-### Added — Docker Ops HTTPS 网关
+- **控制台可以给单个节点配自己的令牌**：`POST /api/nodes/{id}/token`（管理员，写审计）生成或接受一个令牌并
+  只返回这一次，`DELETE` 清除并退回部署级 `Ops:NodeToken`。节点详情里多了「生成独立令牌 / 重置 / 清除」。
+  节点自己的令牌优先，没设的节点继续用部署级令牌——升级不改变任何现有行为。
+- **抓取、设备代理、管理动作与节点详情都按节点的令牌发请求**：此前四处各写一遍 `options.NodeToken`，现在统一
+  走 `NodeHttp.TokenFor` / `ApplyAuthorization`，出口规则（`Ops:NodeTokenHosts`、https 或回环）对每一条令牌
+  一视同仁。
+- **节点 API 只说有没有令牌，不说是什么**：`hasOwnToken` 是响应里唯一的令牌相关字段；令牌明文存在控制台库里，
+  与 `Ops:NodeToken` 存在配置文件同理。
+- **schema v7**：`ops_node` 增加 `token` 列，旧行是 `NULL`，即继续使用部署级令牌。
+
+**告警的邮件通知与静默**
+
+- **邮件通知**：新增 `Ops:Notifications:Smtp:*`，在 Webhook 之外多一条通道。SMTP 客户端是自己写的——STARTTLS、
+  AUTH PLAIN/LOGIN、DATA 的点转义、非 ASCII 主题的 RFC 2047——没有引入新依赖。口令只写进 AUTH 交换，不进日志、
+  审计与投递记录。
+- **两条通道各自重试**：`ops_notification_attempt` 按通道分行，Webhook 挂着不会让邮件重发，反之亦然；退避与
+  去重沿用原有规则。一条通道的失败不会阻塞另一条。
+- **静默**：告警页可直接「静默 1 小时」，`GET/POST/DELETE /api/silences` 支持按规则、按节点或两者组合。静默
+  只压通知：告警照常打开、恢复、写审计；被压掉的转换不会在窗口结束后补发。创建与解除都是管理员动作，各写审计。
+- **schema v6**：`ops_silence` 表从 1.0.0 起就在基线里（matcher_json / starts_at / ends_at / created_by），本次
+  只补 `reason` 列，因此是 `ALTER TABLE` 而不是建表。
+
+**`remotedesktop://` 链接带入设备代码**
+
+- **链接只带设备代码，不自动连接**：`remotedesktop://connect?code=902226105` 与 `remotedesktop://902226105`
+  两种写法，容忍空格、连字符与百分号编码。链接来自浏览器、聊天消息或邮件，所以密码由人输入、"连接"由人点；
+  解析器里没有存放密码的位置，`?password=` 之类参数被忽略。
+- **第二次启动把链接交给已打开的窗口**：控制端身份在信令里每设备只保留一个会话，开出第二个窗口会让两个进程
+  每秒互踢。第一个客户端占一条每用户命名管道，带链接的启动把 URL 写进去后退出；不带链接的启动行为不变，
+  只是不会拿到那条管道。
+- **Windows 与 Linux 注册协议**：MSI 在 `HKLM\Software\Classes\remotedesktop` 写下 `URL Protocol` 与
+  `shell\open\command`（卸载即删，包内容测试会打开 MSI 核对这两行），`.desktop` 增加
+  `MimeType=x-scheme-handler/remotedesktop` 与 `%u`。**macOS 未做**：LaunchServices 走 Apple Event
+  （`kAEGetURL`），原生辅助库还没有这条通道。
+
+**Docker Ops HTTPS 网关**
 
 - **Docker Ops 访问方式与安装包对齐**：新增 `Dockerfile.gateway` 与 ops overlay 的 `gateway` 服务，默认监听
   `https://0.0.0.0:5443` 并转发到内部 `http://ops:5090`；Ops 不再发布宿主机 5090，只有 Gateway 的 5443 对外。
@@ -123,32 +97,7 @@
 - **文档与配置**：`.env.example` 增加 Gateway 地址、端口、绑定接口和子网；Docker 文档补充证书导出、指纹校验、
   续签与防火墙说明。
 
-### Fixed — 控制台看不见本机节点
-
-- **Linux 包没有让控制台固定本机信令证书**：本机节点固定登记为 `https://127.0.0.1:5080`，而生成的证书 SAN 只含
-  机器名与本机 IPv4（Debian/Ubuntu 上主机名解析到 `127.0.1.1`），控制台按系统信任校验时报名称不匹配，节点管理
-  显示「抓取失败」、设备管理为空。`postinst` 现在把公钥路径传给 `--ops-node-certificate-path`：生成证书用
-  `tls/signaling.crt`，自带 PEM 用复制到 `tls/custom` 的那份；明文 HTTP 清空 pin，PKCS#12 不留 pin（无法在没有口令
-  的情况下读出公钥）。Windows 与 macOS 安装器一直这么做，只有 Linux 少了这一步。
-- **自签证书不含回环地址**：`SelfSignedCertificate` 的 SAN 现在始终包含 `127.0.0.1`，用回环地址访问本机信令或
-  Gateway 的客户端不再因为名称不匹配而拒绝证书；已经签发的证书不会重建，由上面那条 pin 覆盖。
-
-### Fixed — 远程画面卡住
-
-- **画面卡住后永不恢复**：采集循环遇到非预期异常（设备移除、驱动重置、后端自身报错）时不再静默结束或对同一个
-  已失效的 duplication/device 无限重试，而是报告 `IsFaulted` 并由共享采集重建整个采集器；重建本身失败也记日志，
-  不再有"看起来像静态桌面"的静默路径。
-- **重连后还是同一张旧图**：共享采集在空闲停止时丢弃它留下的最新一帧，并为下一个订阅者重建采集器；订阅者的第一帧
-  若比订阅时刻早 2 秒以上直接丢弃。此前重连拿到的是上一会话冻结前的那张图，并被当作新流的首帧 IDR 发出。
-- **空闲期间的画面变化被吞掉**：无人订阅时不再丢弃已取到的帧（DXGI 只交付"自上次取帧以来的变化"，丢掉即永久丢失）。
-- **首帧超时每秒重建一次显卡设备**：静止桌面上的首帧重建限制为 3 次，之后等画面真正变化，不再每秒新建 device 与
-  duplication。
-- **被控端无帧看门狗**：`VideoChannelModule` 在"2 秒没有帧且采集器自报故障"时重建采集、丢掉旧图并要求关键帧，日志
-  带 session id（此前视频链路日志既无 session id，也无法区分"桌面静止"和"采集坏了"）。
-- **控制端停流不可见**：`DesktopViewer` 在 2 秒没有新画面时请求关键帧（2/4/8/16/30 秒退避，静止桌面不会刷 IDR），
-  请求超过 4 秒仍无回应即判定画面已过期，窗口顶部明示"被控端已停止回应画面请求"，不再用旧像素假装正常。
-
-### Added — 运维监控台评审修复
+**运维监控台评审修复**
 
 - **账号管理页与命令行**：管理员可在控制台新建 viewer/operator/admin、改口令、重置 TOTP、停用/启用和
   删除账号；每种操作立即撤销该账号的全部会话，最后一个可用管理员不能被停用或删除，管理员也不能停用或
@@ -163,46 +112,7 @@
 - **后台任务租约与动作恢复**：抓取、告警求值、清理和动作恢复通过 `ops_lease` 只让一个实例工作；处于
   `approved` 超过 `Ops:ActionStaleSeconds` 的动作由恢复任务标记失败并写审计，进程崩溃不再留下永久卡住的动作。
 
-### Fixed — 运维监控台评审
-
-- **后台服务异常会停掉整个控制台**：告警求值与指标抓取现在逐轮、逐节点捕获异常并继续；启动时校验
-  Webhook URL 与节点证书路径（`Ops:NodeCertificatePath`），并设置 `BackgroundServiceExceptionBehavior=Ignore`
-  作为兜底。
-- **并发 ingest 丢失会话投影**：`AppendEventsAsync` 的读-合并-写现在由进程内串行门保护，避免 PostgreSQL
-  读已提交下后写覆盖前写，也避免 SQLite 同时写导致 500。
-- **TOTP 可重放**：验证通过的时间步写入 `last_totp_step`，同一六位码在 ±30 秒窗口内不能再次登录。
-- **Setup CLI 路径与服务不一致**：Windows 默认读 ProgramData、Linux 默认读 `/etc/remotedesktop-server/Ops`、
-  macOS 读安装目录；配置目录不存在时给出说明而不是堆栈；服务与 CLI 共用 `OpsDatabaseSettings.ResolvePath`
-  解析相对路径、展开环境变量、trim provider，空展开按缺失处理。`--create-admin` 不再静默落到已安装的生产库。
-- **审计链可能因 CLI 与服务并发写而分叉**：`AppendAuditAsync` 现在在同一数据库事务内读前一条并写入，
-  SQLite 用 `BEGIN IMMEDIATE`、PostgreSQL 用 advisory lock。
-- **登录限流容量可被填满导致全站登录锁定**：表满时淘汰最旧的未锁定项，不再锁定未知 key；另加按来源地址的
-  宽预算，挡住跨用户名喷洒。
-- **节点响应无大小上限**：`/metrics`、设备列表与动作错误响应最多读取 8 MB（错误文本 64 KB），超限按失败处理；
-  设备代理对超时和非法 JSON 返回 502 而不是 500。
-- **PostgreSQL 的 `REAL` 只有 4 字节**：基线改为 `DOUBLE PRECISION`，v5 迁移修正已有库。
-- **ingest 不校验 `OccurredAt`**：拒绝 7 天以前或 5 分钟以后的事件，避免错误时钟污染会话时间线。
-- **会话分页同毫秒漏页**：游标改为 `(timestamp, id)`，API 返回 `nextBeforeId`。
-
-### Fixed — 服务端安装
-
-- **默认安装后 Ops 会话监控为空**：原生 Windows / Linux / macOS 服务端的共享安装步骤现在自动生成独立的
-  32 字节 Ops HMAC 密钥，并写入 Rendezvous 与 Relay 的 `OpsEvents` 以及控制台的 `Ops:Ingest:Keys`；升级会
-  补齐旧安装缺失的一侧而不轮换已有密钥。多机 Relay 可用 `--ops-events-endpoint` 和 `RD_OPS_INGEST_KEY`
-  指向中央控制台。自定义 KeyId、额外接收密钥和 Endpoint 保持不变；同一 KeyId 对应不同密钥时安装明确失败。
-
-### Fixed — 运维监控台数据接入
-
-- **节点指标只采不展**：节点管理页新增「详情」，展示节点版本、启动时间、运行时长和该节点全部最新指标；新增
-  `/api/metrics` 目录供告警规则选择。Windows 升级现在同样开启信令 `/metrics`；macOS/Linux TLS 本机节点统一
-  用回环地址，Linux 升级同步节点地址，避免无 `NodeToken` 时的 401。
-- **Docker 节点不再手工登记**：Ops 容器启动前幂等登记 `rendezvous` / `relay`；Compose 显式开启
-  `Ops:AllowInsecureNodeHttp` 以允许令牌在隔离网络内明文传输，公网默认仍拒绝。
-- **告警规则补比值与校验**：UI 增加 `ratio` 和指标选择器；保存 `single`/`ratio` 时校验指标确实被抓取过，
-  避免拼写错误静默失效。
-- **链路占比不再把“无数据”当成 0**：只统计收到过客户端心跳的会话，`session.direct` 规则同样受益。
-
-### Added — Linux 安装包按部署配置
+**Linux 安装包按部署配置**
 
 - **服务端 .deb 安装时选择数据库与 TLS**：debconf 询问 SQLite / PostgreSQL（含连接串）/ 仅内存，以及
   自签证书 / 已有证书（PKCS#12 或 PEM + `.key`）/ 明文 HTTP；`generate` 还可以填写客户端将使用的 DNS
@@ -227,7 +137,175 @@
   登记本机的 rendezvous/relay 地址；生成的证书同时导入系统信任库，安装还传 `--metrics-enabled`。新装环境
   的设备管理页与节点状态不再需要手工添加节点或打开指标。
 
-### Fixed — Linux 安装包评审
+**macOS 安装包安装期配置**
+
+- **自定义 Installer 面板**：新增 `native/macos/rd_installer_plugin.m`（代码构建视图，无 nib）与
+  `native/macos/build-installer-plugin.sh`，三个 `.pkg` 用 `productbuild --plugins` 内置一页配置面板。
+  服务端在安装时选择 SQLite / PostgreSQL（含连接串）与 TLS（不用 / 生成自签名 / 已有证书），
+  客户端与被控端在安装时填写信令地址并导入自签名服务器证书——与 Linux 的 debconf 问题对齐。
+- **安装期答案文件**：无人值守安装可把同样的键写到
+  `/Library/Application Support/RemoteDesktop/install-answers.plist`（root:wheel，0600）；答案先由
+  `preinstall` 从用户可写的 `/var/tmp` 移到 root 副本，`postinstall` 用完即删。
+- **整机级配置层**：macOS 的安装器把 `Transport:RendezvousUri` 写到
+  `/Library/Application Support/RemoteDesktop/appsettings.json`（签名过的 `.app` 内文件不能改），
+  client 与 host 按"随包默认 → 整机 → 用户 → 环境/命令行"的顺序读取；host 同时补上
+  `ContentRootPath = AppContext.BaseDirectory`，bundle 内的 appsettings 现在真的会被读到。
+- **服务端证书导出与证书固定**：自签名证书生成后复制到
+  `/usr/local/share/doc/remotedesktop-server/signaling.crt`；Ops 控制台通过 `Ops:NodeCertificatePath`
+  **只信任这一张证书**，客户端/被控端安装器选择同一份 PEM/DER 后也写入
+  `Transport:RendezvousCertificatePath` 做证书固定。安装脚本不修改系统钥匙串——macOS 会以
+  "no user interaction was possible" 拒绝 postinstall 的信任设置。Ops 的 pin 始终指向导出的公开 PEM：
+  选"已有证书"时 Kestrel 路径常是带口令的 `.pfx`，控制台无法直接加载，写进去会让它启动失败。
+- **host 安装时设置无人值守密码**：被控端配置页新增密码与确认栏（至少 8 位），postinstall 以当前登录
+  用户的身份把密码写进该用户的登录钥匙串并启动 host；留空表示不设置，升级时留空保留现有密码。密码通过
+  一个 0600 的临时文件交给 `--set-fixed-password-file`，不出现在 argv、日志或进程列表里，结束即删除。
+  没有图形会话时无法确定写入哪个用户的钥匙串，postinstall 会提示登录后手工执行 `--set-fixed-password`。
+- **host 卸载脚本**：安装到 `/Library/Application Support/RemoteDesktop/uninstall-host.sh`，
+  停登录项、删 plist、`.app` 与安装回执。
+
+**Windows 安装包评审**
+
+- **client/host 安装程序的服务器连接页**：安装时询问 `RENDEZVOUSURI`；地址为 `wss://` 时可选服务器证书（PEM/DER 公钥），
+  静默安装用 `SERVERCERTIFICATEPATH`。安装器只把公钥导出到
+  `%ProgramData%\RemoteDesktop\certificates\signaling.cer` 并写 `Transport:RendezvousCertificatePath` 固定它；`ws://`
+  或公开 CA 证书时留空。与 macOS 的 pin 行为一致，不修改系统信任库；host 的连接页后面仍是无人值守密码页。
+- **图形界面升级会带出当前地址/证书**：修改后随安装应用；静默升级不运行界面，因此保留现有地址、证书和设备身份。
+  连接页只在全新安装和 major upgrade 出现；修复/维护安装不显示它，也不会重写 live 设置。
+- **安装/升级/卸载冒烟测试**：`build/installer/windows/Test-InstallerUpgrade.ps1` 在 CI 与 release 的 Windows
+  job 上安装三个 MSI、修改 live 设置、模拟旧布局，再用带新 ProductCode/PackageCode 的同版本副本触发真实
+  major upgrade，验证迁移、设置保留与 `REMOVEDATA=1` 卸载清理；另外安装一次带自签名证书的 `wss://` client/host，
+  检查公钥被导出并固定到设置、卸载时随 `REMOVEDATA=1` 删除。
+- **client/host 安装包的自定义动作 DLL**：net48、x64，负责首次升级迁移与固定密码文件；与 server 包一样由
+  包内容测试检查 SfxCA 位数和 `CustomAction.config`。
+
+### Changed
+
+**客户端界面的遗留观察项收尾**
+
+- **固定密码区块的"关闭"改为"删除"**（评审 R6）：它本来就是删除已保存的固定密码，现在按钮名、ToolTip 与
+  无障碍名称说的是同一件事；使用文档的"修改或关闭"随之改为"修改或删除"，并写明删除后只能用临时密码连接。
+- **终端在浅色主题下保持深色定为有意保留**（W10）：ANSI 16 色按深色背景设定，浅底会失去对比；这条现在写在
+  使用文档的终端一节，不再作为待决定项。
+- **其余观察项关闭**：四段版本号（R5/W9）在版本收敛时已改为三段 `ProductVersion.Display`；隐藏文件整行
+  半透明（R9）随 W8 改为只淡化图标与文件名。只剩图标栅格（R3）待设计决定。
+
+### Fixed
+
+**Docker 部署：信令监听改回容器外可达**
+
+- **默认 compose 部署连不上信令**：信令默认监听改为回环后，容器里没有任何地方覆盖 `Urls`，宿主机的端口映射、Caddy 和监控台访问的 `rendezvous:5080` 全部连不上，而容器内的健康检查仍然显示正常。`docker-compose.yml` 现在为 rendezvous 设置 `Urls=http://0.0.0.0:5080` 并显式放行 `AllowInsecureSignaling`，CI 的冒烟用例同步修改；暴露范围仍由 `ports:` 与 `RENDEZVOUS_BIND_IP` 决定，发布到可信网络之外要叠加 tls 或 selfsigned overlay。selfsigned overlay 里的 `http://0.0.0.0:5082` 以前同样会因缺少放行而无法启动。
+
+**文件传输的落盘与边界处理**
+
+- 修复上传收尾阶段磁盘写满时，控制端收不到任何结果、只看到通道被关闭的问题：现在会收到"文件无法放到位"的失败响应，残留的半截目标文件会被删除，`.rdpart` 保留以便续传。
+- 修复覆盖已有文件时先截断再复制，中途失败会丢失原文件的问题：现在先写入同目录的临时文件，写完再替换，失败时原文件保持不变。上传前的空间预检相应改为要求容纳"待接收数据 + 一份完整副本"。
+- 修复"接收期间同名文件被他人创建"时，重命名策略不会自动改为 `名称 (1)`、整个上传在传完后失败的问题。
+- 修复控制端声明的文件大小超过 `long.MaxValue` 时变为负数、绕过空间检查并得到空文件的问题，现在直接拒绝。
+- 修复文件名接近 255 字符时，加上 `.{大小}-{时间}.rdpart` 后缀的续传文件名超出文件系统限制、上传失败的问题：过长的续传文件名会被确定性地缩短（带全名哈希），未超长的名称保持不变，旧的续传文件仍可继续。
+- 修复恢复接收时，续传文件在读取过程中被截断会导致无限空转的问题。
+- 修复链接在路径检查与打开之间被替换为指向共享目录之外时，会在目录外留下一个空文件的问题。
+
+**解码器自愈与会话收尾的健壮性**
+
+- 控制端解码器静默丢帧的判定更保守：只有连续 3 个非关键帧都没有出画面、并且已超过 2 秒，才重建解码器；解码器对仅含参数集的关键帧返回空不再被误判为失步，也就不会丢掉刚学到的 SPS/PPS。桌面与摄像头一致。
+- 重建解码器时先创建新的再替换旧的：创建失败（硬件解码器丢失等）会保留旧解码器并继续请求关键帧，不再因为旧解码器已被释放而关闭整个画面。Windows 的 H.264 解码器在排空输出后重试仍被拒绝时，也改为请求关键帧，不再退出画面。
+- 被控端 Agent 遇到未处理异常时，先把致命错误日志落盘再退出，不再因为每秒一次的刷盘间隔丢掉导致崩溃的那一行。
+- 被控端处理连接的后台任务增加兜底异常处理：握手期间连接被释放等意外异常会记录警告并关闭连接，不再成为无人观察的任务异常。
+- 密码尝试限制表不再整表扫描：过期项按分钟摊销清理，并设 10000 个设备的上限；表满时优先淘汰未被锁定的最旧设备，已锁定设备的锁不会被身份轮换冲掉。
+- 中继对 token 不匹配、cookie 错误、会话表已满的拒绝同样按分钟合并为一条摘要日志，不再每个包一行 Warning；摘要中分别列出各类拒绝的数量。
+
+**Linux 多显示器：按被共享的那块屏幕的尺寸采集**
+
+- **请求另一块显示器时画面尺寸对不上**：portal 只能共享操作员勾选的屏幕，而采集格式此前被钉在"请求的那块"的
+  尺寸上。一旦实际流是另一块显示器（分辨率不同），拷贝会因为步幅不匹配而丢帧，表现为黑屏或卡住。现在匹配在
+  合成器的**逻辑坐标**里做（容忍 1–2 px 的分数缩放进位），并把端口流的真实尺寸用于采集与编码。
+- **只有一块流时按它自己的尺寸与身份采集**：采集器与对端宣告的显示器都换成实际被共享的那块，指针、工具栏和画面
+  不再各说各话；切换时写一条 warning 说明"请求的是 X、共享的是 Y"。
+- **共享多块而请求的不在其中时明确报错**：错误信息列出已共享的尺寸，不再拿别的显示器冒充请求的那块。
+- **视频流信息改宣告采集器的显示器**（`capturer.Display`），而不是最初请求的 id。
+
+**控制端一次性请求没有超时**
+
+- **被控端接受通道后不回答，界面会一直等下去**：文件面板的列目录/改名/删除、终端的列出 shell 与打开、摄像头
+  列表与打开、文件传输的接受与最终校验，现在都通过新增的 `RequestTimeout` 等第一个应答，上限 30 秒。超时给出
+  "被控端没有及时响应"而不是让文件面板、终端窗口或摄像头列表挂到会话结束。传输的数据阶段、终端输出与摄像头
+  画面仍只受调用方的取消令牌约束（见 `docs/design/README.md` 的"还没有做的事"）。
+- **摄像头打开的 30 秒超时改用同一套机制**：窗口仍把它显示为"摄像头权限未授予"的提示，但不再靠
+  `OperationCanceledException` 识别超时——用户主动取消与对端沉默不再混为一谈。
+
+**未完成传输的清单无界增长**
+
+- **清单随请求无限增长，每次写入重写整个文件**：`PartialFileLedger` 现在最多保留 1024 条
+  （`PartialFileLedgerOptions.MaxEntries` 可调），超出时丢弃最旧的记录；读取旧版或手工写下的超长清单同样先
+  裁到上限。文件大小、内存占用与单次写入成本因此都有上界，不再是"每次上传重写一遍整张列表"。
+- **残片清扫只在进程启动时跑一次**：`PartialFileSweeper` 改为启动时扫一遍、之后每 6 小时一轮，长期开机的
+  被控端不会把 7 天前放弃的 `.rdpart` 留到下次重启。
+
+**控制台看不见本机节点**
+
+- **Linux 包没有让控制台固定本机信令证书**：本机节点固定登记为 `https://127.0.0.1:5080`，而生成的证书 SAN 只含
+  机器名与本机 IPv4（Debian/Ubuntu 上主机名解析到 `127.0.1.1`），控制台按系统信任校验时报名称不匹配，节点管理
+  显示「抓取失败」、设备管理为空。`postinst` 现在把公钥路径传给 `--ops-node-certificate-path`：生成证书用
+  `tls/signaling.crt`，自带 PEM 用复制到 `tls/custom` 的那份；明文 HTTP 清空 pin，PKCS#12 不留 pin（无法在没有口令
+  的情况下读出公钥）。Windows 与 macOS 安装器一直这么做，只有 Linux 少了这一步。
+- **自签证书不含回环地址**：`SelfSignedCertificate` 的 SAN 现在始终包含 `127.0.0.1`，用回环地址访问本机信令或
+  Gateway 的客户端不再因为名称不匹配而拒绝证书；已经签发的证书不会重建，由上面那条 pin 覆盖。
+
+**远程画面卡住**
+
+- **画面卡住后永不恢复**：采集循环遇到非预期异常（设备移除、驱动重置、后端自身报错）时不再静默结束或对同一个
+  已失效的 duplication/device 无限重试，而是报告 `IsFaulted` 并由共享采集重建整个采集器；重建本身失败也记日志，
+  不再有"看起来像静态桌面"的静默路径。
+- **重连后还是同一张旧图**：共享采集在空闲停止时丢弃它留下的最新一帧，并为下一个订阅者重建采集器；订阅者的第一帧
+  若比订阅时刻早 2 秒以上直接丢弃。此前重连拿到的是上一会话冻结前的那张图，并被当作新流的首帧 IDR 发出。
+- **空闲期间的画面变化被吞掉**：无人订阅时不再丢弃已取到的帧（DXGI 只交付"自上次取帧以来的变化"，丢掉即永久丢失）。
+- **首帧超时每秒重建一次显卡设备**：静止桌面上的首帧重建限制为 3 次，之后等画面真正变化，不再每秒新建 device 与
+  duplication。
+- **被控端无帧看门狗**：`VideoChannelModule` 在"2 秒没有帧且采集器自报故障"时重建采集、丢掉旧图并要求关键帧，日志
+  带 session id（此前视频链路日志既无 session id，也无法区分"桌面静止"和"采集坏了"）。
+- **控制端停流不可见**：`DesktopViewer` 在 2 秒没有新画面时请求关键帧（2/4/8/16/30 秒退避，静止桌面不会刷 IDR），
+  请求超过 4 秒仍无回应即判定画面已过期，窗口顶部明示"被控端已停止回应画面请求"，不再用旧像素假装正常。
+
+**运维监控台评审**
+
+- **后台服务异常会停掉整个控制台**：告警求值与指标抓取现在逐轮、逐节点捕获异常并继续；启动时校验
+  Webhook URL 与节点证书路径（`Ops:NodeCertificatePath`），并设置 `BackgroundServiceExceptionBehavior=Ignore`
+  作为兜底。
+- **并发 ingest 丢失会话投影**：`AppendEventsAsync` 的读-合并-写现在由进程内串行门保护，避免 PostgreSQL
+  读已提交下后写覆盖前写，也避免 SQLite 同时写导致 500。
+- **TOTP 可重放**：验证通过的时间步写入 `last_totp_step`，同一六位码在 ±30 秒窗口内不能再次登录。
+- **Setup CLI 路径与服务不一致**：Windows 默认读 ProgramData、Linux 默认读 `/etc/remotedesktop-server/Ops`、
+  macOS 读安装目录；配置目录不存在时给出说明而不是堆栈；服务与 CLI 共用 `OpsDatabaseSettings.ResolvePath`
+  解析相对路径、展开环境变量、trim provider，空展开按缺失处理。`--create-admin` 不再静默落到已安装的生产库。
+- **审计链可能因 CLI 与服务并发写而分叉**：`AppendAuditAsync` 现在在同一数据库事务内读前一条并写入，
+  SQLite 用 `BEGIN IMMEDIATE`、PostgreSQL 用 advisory lock。
+- **登录限流容量可被填满导致全站登录锁定**：表满时淘汰最旧的未锁定项，不再锁定未知 key；另加按来源地址的
+  宽预算，挡住跨用户名喷洒。
+- **节点响应无大小上限**：`/metrics`、设备列表与动作错误响应最多读取 8 MB（错误文本 64 KB），超限按失败处理；
+  设备代理对超时和非法 JSON 返回 502 而不是 500。
+- **PostgreSQL 的 `REAL` 只有 4 字节**：基线改为 `DOUBLE PRECISION`，v5 迁移修正已有库。
+- **ingest 不校验 `OccurredAt`**：拒绝 7 天以前或 5 分钟以后的事件，避免错误时钟污染会话时间线。
+- **会话分页同毫秒漏页**：游标改为 `(timestamp, id)`，API 返回 `nextBeforeId`。
+
+**服务端安装**
+
+- **默认安装后 Ops 会话监控为空**：原生 Windows / Linux / macOS 服务端的共享安装步骤现在自动生成独立的
+  32 字节 Ops HMAC 密钥，并写入 Rendezvous 与 Relay 的 `OpsEvents` 以及控制台的 `Ops:Ingest:Keys`；升级会
+  补齐旧安装缺失的一侧而不轮换已有密钥。多机 Relay 可用 `--ops-events-endpoint` 和 `RD_OPS_INGEST_KEY`
+  指向中央控制台。自定义 KeyId、额外接收密钥和 Endpoint 保持不变；同一 KeyId 对应不同密钥时安装明确失败。
+
+**运维监控台数据接入**
+
+- **节点指标只采不展**：节点管理页新增「详情」，展示节点版本、启动时间、运行时长和该节点全部最新指标；新增
+  `/api/metrics` 目录供告警规则选择。Windows 升级现在同样开启信令 `/metrics`；macOS/Linux TLS 本机节点统一
+  用回环地址，Linux 升级同步节点地址，避免无 `NodeToken` 时的 401。
+- **Docker 节点不再手工登记**：Ops 容器启动前幂等登记 `rendezvous` / `relay`；Compose 显式开启
+  `Ops:AllowInsecureNodeHttp` 以允许令牌在隔离网络内明文传输，公网默认仍拒绝。
+- **告警规则补比值与校验**：UI 增加 `ratio` 和指标选择器；保存 `single`/`ratio` 时校验指标确实被抓取过，
+  避免拼写错误静默失效。
+- **链路占比不再把“无数据”当成 0**：只统计收到过客户端心跳的会话，`session.direct` 规则同样受益。
+
+**Linux 安装包评审**
 
 - **Ops 首次管理员命令在 .deb 布局下必然失败**（`Ops:Database:Path is required`）：现在读
   `/etc/remotedesktop-server/Ops/appsettings.json`，并在文档中给出 `--config-directory`。
@@ -273,33 +351,7 @@
 - **macOS 服务端 postinstall 未给 Ops 传数据库路径与监听地址**：`--create-admin` 与服务可能打开不同的
   `ops.db`；现在与 Linux 一样写在同一份配置上。
 
-### Added — macOS 安装包安装期配置
-
-- **自定义 Installer 面板**：新增 `native/macos/rd_installer_plugin.m`（代码构建视图，无 nib）与
-  `native/macos/build-installer-plugin.sh`，三个 `.pkg` 用 `productbuild --plugins` 内置一页配置面板。
-  服务端在安装时选择 SQLite / PostgreSQL（含连接串）与 TLS（不用 / 生成自签名 / 已有证书），
-  客户端与被控端在安装时填写信令地址并导入自签名服务器证书——与 Linux 的 debconf 问题对齐。
-- **安装期答案文件**：无人值守安装可把同样的键写到
-  `/Library/Application Support/RemoteDesktop/install-answers.plist`（root:wheel，0600）；答案先由
-  `preinstall` 从用户可写的 `/var/tmp` 移到 root 副本，`postinstall` 用完即删。
-- **整机级配置层**：macOS 的安装器把 `Transport:RendezvousUri` 写到
-  `/Library/Application Support/RemoteDesktop/appsettings.json`（签名过的 `.app` 内文件不能改），
-  client 与 host 按"随包默认 → 整机 → 用户 → 环境/命令行"的顺序读取；host 同时补上
-  `ContentRootPath = AppContext.BaseDirectory`，bundle 内的 appsettings 现在真的会被读到。
-- **服务端证书导出与证书固定**：自签名证书生成后复制到
-  `/usr/local/share/doc/remotedesktop-server/signaling.crt`；Ops 控制台通过 `Ops:NodeCertificatePath`
-  **只信任这一张证书**，客户端/被控端安装器选择同一份 PEM/DER 后也写入
-  `Transport:RendezvousCertificatePath` 做证书固定。安装脚本不修改系统钥匙串——macOS 会以
-  "no user interaction was possible" 拒绝 postinstall 的信任设置。Ops 的 pin 始终指向导出的公开 PEM：
-  选"已有证书"时 Kestrel 路径常是带口令的 `.pfx`，控制台无法直接加载，写进去会让它启动失败。
-- **host 安装时设置无人值守密码**：被控端配置页新增密码与确认栏（至少 8 位），postinstall 以当前登录
-  用户的身份把密码写进该用户的登录钥匙串并启动 host；留空表示不设置，升级时留空保留现有密码。密码通过
-  一个 0600 的临时文件交给 `--set-fixed-password-file`，不出现在 argv、日志或进程列表里，结束即删除。
-  没有图形会话时无法确定写入哪个用户的钥匙串，postinstall 会提示登录后手工执行 `--set-fixed-password`。
-- **host 卸载脚本**：安装到 `/Library/Application Support/RemoteDesktop/uninstall-host.sh`，
-  停登录项、删 plist、`.app` 与安装回执。
-
-### Fixed — macOS 安装包评审
+**macOS 安装包评审**
 
 - **客户端 `.pkg` 构建在最后一步以 141 退出**：`pkgutil --payload-files | head` 在 `pipefail` 下触发
   SIGPIPE；改为一次性读取列表。发版不再"包已生成、构建却失败"。
@@ -357,7 +409,7 @@
   `.pkg` 加 `allowed-os-versions`；服务端包不再带 `appsettings.Development.json`；client/host 的
   `--arch` 明确只支持 arm64；`pkgutil`/`lsbom` 的 `grep -q` 与 `pipefail` 组合改为读完整输入。
 
-### Fixed — Windows 安装包评审
+**Windows 安装包评审**
 
 - **server MSI 升级会丢掉 live settings，Relay 起不来**：三份 `appsettings.json` 从 `Program Files` 移到
   `%ProgramData%\Remote Desktop Server\`，不再在 MSI 的文件表里；第一次从旧布局升级时，迁移动作在
@@ -424,20 +476,40 @@
 - **文档与行为不一致**：修正“升级不会覆盖 appsettings”“服务器地址以安装包里的为准/手改会保留”、
   ReadyToRun、构建产物命名、残留进程关闭顺序等句子。
 
-### Added — Windows 安装包评审
+**并发、资源释放与性能（评审 16 处）**
 
-- **client/host 安装程序的服务器连接页**：安装时询问 `RENDEZVOUSURI`；地址为 `wss://` 时可选服务器证书（PEM/DER 公钥），
-  静默安装用 `SERVERCERTIFICATEPATH`。安装器只把公钥导出到
-  `%ProgramData%\RemoteDesktop\certificates\signaling.cer` 并写 `Transport:RendezvousCertificatePath` 固定它；`ws://`
-  或公开 CA 证书时留空。与 macOS 的 pin 行为一致，不修改系统信任库；host 的连接页后面仍是无人值守密码页。
-- **图形界面升级会带出当前地址/证书**：修改后随安装应用；静默升级不运行界面，因此保留现有地址、证书和设备身份。
-  连接页只在全新安装和 major upgrade 出现；修复/维护安装不显示它，也不会重写 live 设置。
-- **安装/升级/卸载冒烟测试**：`build/installer/windows/Test-InstallerUpgrade.ps1` 在 CI 与 release 的 Windows
-  job 上安装三个 MSI、修改 live 设置、模拟旧布局，再用带新 ProductCode/PackageCode 的同版本副本触发真实
-  major upgrade，验证迁移、设置保留与 `REMOVEDATA=1` 卸载清理；另外安装一次带自签名证书的 `wss://` client/host，
-  检查公钥被导出并固定到设置、卸载时随 `REMOVEDATA=1` 删除。
-- **client/host 安装包的自定义动作 DLL**：net48、x64，负责首次升级迁移与固定密码文件；与 server 包一样由
-  包内容测试检查 SfxCA 位数和 `CustomAction.config`。
+- **WebSocket 发送串行化**：连接请求、心跳与会话结束报告三条发送路径现在共用同一把发送锁（`ClientWebSocket` 不允许并发
+  `SendAsync`，此前三者可能在帧中间交错）；重连循环释放套接字的瞬间发送，按"连接丢失"处理而不是抛出。
+- **信令服务器的待处理连接请求上限原子化**：总量上限、单设备上限与插入在同一把门闩下完成，两个并发请求不再能同时看到
+  空位而越过上限；单设备计数随表一起维护，不再每次遍历全表。
+- **固定密码的校验耗时不再泄露"是否设置了固定密码"**：没有固定密码时也做同样的 PBKDF2 运算（以空串对比，永远不会匹配）。
+- **资源释放与并发**：PipeWire 帧与原生句柄泄漏、`DxgiScreenCapturer` 的 COM 对象泄漏、会话事件处理器的异常隔离、
+  共享采集与查看器的锁内拷贝，以及小帧串行化等修复，涉及 Application、Transport、Features、Media、Platform、
+  Server 共 15 个文件。
+- **性能**：`UdpRelay` 查"端点是否已绑定到别的会话"改为反向索引而不是扫描所有配对；终端模拟器的 O(n) 路径同步优化
+  （见下一条）。
+
+**终端缩放与文本提取的开销**
+
+- **`ResizeRows` 不再 O(n²)**：缩小时用一次 `RemoveRange` 代替循环 `RemoveAt(0)`，放大时先从回滚区取回再一次
+  `InsertRange`（取回的行按原顺序，最旧的在上）；`GetText` 复用同一个 `StringBuilder`；OSC 解析用 `CollectionsMarshal.AsSpan`
+  直接解码，不再为每条 OSC 复制一份缓冲。
+
+**解码器静默丢帧时自愈重建**
+
+- **控制端画面卡住但解码器没报错**：被控端仍在送非关键帧、解码器却持续不出图（失去同步后静默丢弃一切）时，
+  `DesktopViewer` 在距上一幅画面超过 2 秒时直接重建解码器并请求关键帧，不再只请求关键帧后等看门狗的
+  2/4/8/16/30 秒退避。日志里会有一条 Warning "The decoder stopped producing pictures while being fed"。
+- **摄像头同类问题**：`CameraViewer` 加入同样的 2 秒判定与重建。摄像头画面不会像桌面那样合法地长时间不变，
+  所以这里无出图即视为停滞；此前看门狗会一直等一个永远不会被请求的关键帧。
+
+**被控端日志及时落盘；Agent 日志按桌面类型分文件**
+
+- **日志不再滞留在缓冲区**：`service-.log` 与 Agent 日志都按 1 秒周期落盘，卡流时诊断需要的编码器/采集日志在进程仍
+  运行时就已经在磁盘上。`service-.log` 只有一个进程写入，去掉了 `shared`（按代码注释，shared 的 sink 会忽略落盘
+  间隔）。
+- **Agent 日志文件名改为 `agent-{desktop}-<日期>.log`**：用户桌面与登录/UAC 安全桌面的 Agent 分别写
+  `agent-user-*.log` 与 `agent-secure-*.log`，因此不再需要 `shared`；保留 7 天不变。
 
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 

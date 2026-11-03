@@ -7,8 +7,8 @@
 哪条路走通了、哪条路被平台挡住了、以及踩过哪些"编得过、跑起来才炸"的坑。
 
 > **实测过程不在这里。** 当年那些命令、输出、逐条探针记录（约 1300 行）已从文档中移除——
-> 需要复现某条结论时，去 git 历史里找 `docs/ports/README.md` 与 `docs/ports/README.md`
-> 的最后一版。这里只留结论和它成立的理由。
+> 需要复现某条结论时，去 git 历史里找 `docs/ports/macos-port-plan.md` 与 `docs/ports/linux-port-plan.md`
+> （合并成本文件之前的两份移植计划）的最后一版。这里只留结论和它成立的理由。
 > 一次性的评审意见在 [`docs/reviews/`](../reviews/)；功能与平台能力对照见 [使用说明](../usage/README.md)。
 
 ## 1. 三平台对照
@@ -17,9 +17,12 @@
 |---|---|---|---|
 | 平台项目 | `Platform.Windows` | `Platform.MacOS` | `Platform.Linux`（与 macOS 共享 `Platform.Posix`） |
 | 进程模型 | LocalSystem 服务 + 用户会话 Agent | **单进程**，`.app` 自己是被控端 | **单进程**，`systemd --user` 服务 |
-| 屏幕 | DXGI Desktop Duplication | ScreenCaptureKit | portal + PipeWire |
+| 屏幕 | DXGI Desktop Duplication（失败时回退 GDI） | ScreenCaptureKit | portal + PipeWire |
 | 输入 | `SendInput` / `SendSAS` | CGEvent | libei（EIS） |
 | 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / VA-API / x264） |
+| 音频 | WASAPI 环回 | ScreenCaptureKit 环回 + AudioQueue | PulseAudio |
+| 摄像头 | Media Foundation | AVFoundation | portal 摄像头节点 + PipeWire |
+| 录制 | Media Foundation（`MfVideoRecorder`） | AVAssetWriter | libavcodec（`FfmpegVideoRecorder`） |
 | 终端 | ConPTY | PTY（`posix_spawn`，共享 Posix 层） | PTY（同一份共享实现） |
 | 密钥 | DPAPI | Keychain | 0600 文件 |
 | 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 | logind `Inhibit` |
@@ -40,7 +43,7 @@
   `.desktop`、发布流水线到处写着。做法是在宿主里按平台分支注册。
 - **语义相同的部分抽到 `Platform.Posix`，不要各写一份。** 两个移植里真正值得共享的是 PTY：
   `posix_openpt` / `grantpt` / `unlockpt`、`posix_spawn` + file actions、会话组长、按**进程组**发信号而不是
-  发给 shell 本身、argv 封送、dispose 语义——这些在 macOS 与 Linux 上完全相同（约 455 行），
+  发给 shell 本身、argv 封送、dispose 语义——这些在 macOS 与 Linux 上完全相同，
   不同的只有常量与入口点。0600 文件密钥库与 Unix 用户上下文守卫同理。
   `Platform.Linux → Platform.Posix` 不违反分层规则（规则表不含 `Platform` 自身，一行未改）。
 - **原生互操作保留 `net10.0` 单一 TFM，手写 P/Invoke。** 不用 `net10.0-macos` / `net10.0-linux` TFM，
@@ -146,9 +149,9 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 | 阶段 | 结果 |
 |---|---|
 | P1 平台骨架与工具链 | ✅ |
-| P2 密钥与设备身份（Keychain） | ✅ 单测 28/28 |
+| P2 密钥与设备身份（Keychain） | ✅ 有单测（`tests/RemoteDesktop.Platform.MacOS.UnitTests`） |
 | P3 屏幕采集 + 输入注入 | ✅ ScreenCaptureKit + CGEvent，`--self-check` 有真帧与真注入探针 |
-| P4 视频编解码（VideoToolbox） | ✅ 端到端探针通过，单测 14/14 |
+| P4 视频编解码（VideoToolbox） | ✅ 端到端探针通过，有单测（`VideoCodecTests`） |
 | P5 剪贴板与防休眠 | ✅ NSPasteboard + IOKit 电源断言 |
 | P6 远程终端（PTY） | ✅ 落在共享 `Platform.Posix`，不用 `forkpty` |
 | P7 文件传输适配 | ✅ 两个真 bug 已修；受保护目录的 TCC 行为已联调 |
@@ -167,7 +170,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 | 打包 | 客户端与被控端 `.deb` + systemd **用户**服务；服务端 `.deb` + systemd 系统单元 + debconf |
 | 视频编解码 | 硬件与软件**都经 libavcodec 一把桥**，不手绑 VA-API / NVENC |
 | POSIX 共享 | 新建 `Platform.Posix`，与 macOS 共用语义相同的部分 |
-| 输入注入 | **EIS（libei）为主**，`/dev/uinput` 只作显式启用的后备 |
+| 输入注入 | **只用 EIS（libei）**；`/dev/uinput` 评估后弃用，没有实现 |
 
 ### 硬约束与结论
 
@@ -186,8 +189,8 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 也不要重影。
 
 **输入注入用 EIS，`/dev/uinput` 是坏账。** 加入可写 `/dev/uinput` 的组意味着"可随时、无需同意地向本机
-任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得：udev 规则随包安装但**默认不生效**，
-也**不自动把用户加进组**。EIS 下一次授权同时覆盖采集与控制，与 Windows 的体验一致。
+任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得，所以**既没有 uinput 后备实现，包里也没有 udev 规则，
+也不会自动把用户加进任何组**。EIS 下一次授权同时覆盖采集与控制，与 Windows 的体验一致。
 
 **一次授权管两件事被 portal 拒绝了。** 原计划把采集和控制放在同一个会话上；实测报
 `org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist`——
@@ -201,8 +204,9 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 `object.serial` **不是同一个数**。
 
 **编解码器设备要自己枚举，绝不假设 `renderD128` 就是编码器**（索引跨重启与 GPU 热插拔都不稳定）。
-做法是枚举 `/sys/class/drm/renderD*`，读 `device/vendor` 与 `device/driver`，逐个用 `vaInitialize` +
-`vaQueryConfigEntrypoints` 探测，把选中的节点交给 `av_hwdevice_ctx_create`。
+做法是枚举 `/sys/class/drm/renderD*`，读 `device/vendor` 与 `device/driver`，对每个节点用
+`av_hwdevice_ctx_create` 建设备并试开 libavcodec 的 VA-API 编码器，能打开的才算可用。不直接问 libva
+支持什么——硬件与软件编码都只经 libavcodec 一把桥。
 
 **MsQuic 在 Linux 上要自己弄到。** Windows 由运行时包提供 `msquic.dll`，**Linux 没有**，Ubuntu 仓库也没有。
 缺它时每个开 QUIC 连接的测试都失败并报 `QUIC is not supported on this system`——看着像平台不支持，

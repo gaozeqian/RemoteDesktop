@@ -8,14 +8,17 @@ namespace RemoteDesktop.Server.Shared;
 /// The bearer token the console presents to a node's <c>/metrics</c> and <c>/internal/*</c> endpoints.
 /// </summary>
 /// <remarks>
-/// One token for the deployment rather than one per node: the console has to send the same secret back, so a per-node
-/// token only works if the console can recover it — which means storing it in clear, the same as this. Rotation is a
-/// configuration change on all three processes, documented in <c>docs/ops/README.md</c>.
+/// By default one token serves the whole deployment (<c>Ops:NodeToken</c> on the console, the same value as
+/// <c>NodeToken</c> on the node). The console can also hold a token of its own for a single node and present that one
+/// instead; the node still checks whatever it was configured with, so the node's setting and the console's token for
+/// it must match. Either way the console has to send the secret back, so it can only be stored in clear — in
+/// configuration for the deployment-wide token, in the console's database for a per-node one. Rotation is a
+/// configuration change on the node and on the console, documented in <c>docs/ops/README.md</c>.
 /// <para>
 /// When no token is configured the endpoints are not open to everyone: they are open only to callers on the loopback
 /// interface. The signaling server listens on <c>0.0.0.0</c> by default, so "no token" used to mean "anyone who can
 /// reach the port", which exposed device enumeration and device revocation on a public server. A console on another
-/// machine, or in another container, configures the token on all three processes.
+/// machine, or in another container, needs the token configured on the node it reads and on the console itself.
 /// </para>
 /// </remarks>
 public static class NodeTokenGuard

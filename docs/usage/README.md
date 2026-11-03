@@ -20,25 +20,26 @@
 | 剪贴板（文本 + 图片） | ✅ | ✅ | ✅（每次连接要授权） |
 | 音频（被控端声音回传） | WASAPI 环回 | ScreenCaptureKit 环回 | PulseAudio |
 | 文件传输 | ✅ | ✅ | ✅ |
-| 远程终端 | ✅ ConPTY | ✅ PTY | ✅ PTY |
+| 远程终端 | ✅ ConPTY（PowerShell / cmd） | ✅ PTY（登录 shell） | ✅ PTY（登录 shell） |
 | 远程摄像头 | ✅ Media Foundation | ✅ AVFoundation | ✅ portal + PipeWire（真机验证） |
-| 无人值守（固定密码） | ✅ 登录前也在线 | ⚠️ 仅登录后 | ❌ 无法无人值守操作，见下 |
+| 无人值守（固定密码） | ✅ 登录前也在线（服务） | ⚠️ 仅登录后（host 包用 LaunchAgent，client 用登录项） | ❌ 无法无人值守操作，见下 |
 | 登录界面 / 登录前访问 | ✅ 服务换 Agent 接管安全桌面 | ❌ 没有对应物 | ❌ 没有对应物 |
 | 快速用户切换 / 多用户 | ✅ | ❌ 一个进程一个用户 | ❌ 一个服务一个用户 |
 | Ctrl+Alt+Del | ✅ `SendSAS` | ❌ 没有对应概念 | ❌ 没有对应概念 |
 | 防休眠（Keep-Awake） | `SetThreadExecutionState` | IOKit 电源断言 | logind `Inhibit` |
-| 密钥存储 | DPAPI | Keychain | 0600 文件 |
+| 密钥存储 | DPAPI | Keychain | 0600 文件（威胁模型见 [系统设计](../design/README.md) §3） |
 | H.265 | ❌ 未实现 | ❌ 未实现 | ❌ 未实现 |
 | 隐私屏 | ❌ 未实现 | ❌ 未实现 | ❌ 未实现 |
 
 **读这张表的规矩**：⚠️ 表示"代码在但没验证过"，❌ 表示"这个平台上没有对应物或没做"。两者不一样——
-前者可能一跑就通，后者做不了。被控端**不会假装成功**：没有的能力控制端看不到相关按钮，按下会得到"此平台不支持"。
+前者可能一跑就通，后者做不了。被控端**不会假装成功**：没有的能力，或被控端没有授予的能力，控制端界面上根本不显示
+相关按钮（例如 Ctrl+Alt+Del），而不是显示一个按下去没反应的按钮。
 
 ### 被控端的形态
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app（client，或独立的 host-only app） | 图形会话里的 `systemd --user` 服务 |
+| 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent（服务拉起的辅助进程，真正采集屏幕、注入输入的是它） | 用户会话里的 app（client，或独立的 host-only app） | 图形会话里的 `systemd --user` 服务 |
 | 为什么是这个形状 | Session 0 采不到屏，必须拆出一个在交互会话里干活的 Agent | 没有 Session 0，root 的 LaunchDaemon 拿不到屏幕录制权限，所以只能是一个用户会话里的 app；host 包把这个 app 做成无窗口、只被控的形态 | portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
 
 Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC 三个桌面：
@@ -46,7 +47,8 @@ Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC
 - 服务（LocalSystem）本身**不采集屏幕、不注入输入**，只负责连接、鉴权、授权和转发；屏幕和输入由当前控制台
   会话里的 Agent 完成。桌面切换到登录界面 / 锁屏 / UAC 时，服务换上另一种 Agent（用户令牌 / winlogon 的
   SYSTEM 令牌），控制端画面不中断。注销、登录、快速用户切换、Agent 崩溃同理。
-- Ctrl+Alt+Del 不能用按键注入，只能由服务调用 `SendSAS`（安装脚本会打开所需策略 `SoftwareSASGeneration`）。
+- Ctrl+Alt+Del 不能用按键注入，只能由服务调用 Windows 的安全注意序列接口（`SendSAS`；安装脚本会打开所需策略
+  `SoftwareSASGeneration`）。
 - 客户端检测到服务后，设备代码和临时密码显示的是服务的那一份；客户端自己只负责发起连接。
   `--HostMode standalone` 可忽略服务，直接用客户端当被控端（只能控制用户桌面，看不到登录界面和 UAC）。
 
@@ -59,36 +61,21 @@ Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC
 dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；
 首次构建前需运行 `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。
 
-**先说不会工作的部分：**
+与 Windows 的能力差异（没有 Ctrl+Alt+Del、没有登录界面 / 登录前访问、一个进程只服务一个用户、H.265 与隐私屏未实现）
+都已在上面的矩阵里，不再重复。host 包是独立的无窗口 app，**没有服务，也就没有登录前访问**。
 
-- **Ctrl+Alt+Del**：macOS 没有对应概念，被控端不报告这个能力，控制端看不到这个按钮（不会假装成功）。
-- **登录界面 / 登录前的远程访问**：没有对应物。
-- **快速用户切换 / 多用户**：一个进程、一个用户、一个图形会话。
-- **H.265、隐私屏**：Windows 上也没实现。
+**需要人工做的一件事：**
+
 - **屏幕录制 / 辅助功能 / 摄像头授权**：首次使用要在「系统设置 → 隐私与安全性」里人工授予，
   而授权是**按签名身份**记录的——开发构建换了签名就要重新授权一次。
-
-**和 Windows 不同的几件事：**
-
-| | Windows | macOS |
-|---|---|---|
-| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app；host 包是独立的无窗口 app（没有服务，也就没有登录前访问） |
-| 屏幕 | DXGI Desktop Duplication | ScreenCaptureKit |
-| 输入 | `SendInput` / `SendSAS` | CGEvent（Ctrl+Alt+Del 不可用） |
-| 编解码 | Media Foundation | VideoToolbox |
-| 终端 | ConPTY + PowerShell / cmd | PTY（`posix_spawn`）+ 登录 shell |
-| 密钥 | DPAPI | Keychain |
-| 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 |
-| 无人值守 | 服务 + 固定密码，登录前也在线 | LaunchAgent（host 包）或 `SMAppService`（client）+ 固定密码（仅登录后） |
 
 ### Linux
 
 **先说不会工作的部分：**
 
-- **Ctrl+Alt+Del**：Linux 没有对应概念。控制端按下去会得到"此平台不支持"，不会假装成功。
 - **登录界面 / 登录前的远程访问**：GNOME 的登录界面是另一个用户、另一个 VT，私有用户会话既看不见也驱动不了。
   Windows 上能换 Agent 接管安全桌面，这里**没有对应物**——这是相对 Windows 的真实能力回退。
-- **快速用户切换 / 多用户**：一个服务、一个用户、一个图形会话。
+  （Ctrl+Alt+Del 与多用户同样没有对应物，见上面的矩阵。）
 - **剪贴板**：已实现，两个方向都在本机端到端验证过（发布、读取、以及"本机复制后同步过去"的触发）。
   前提是桌面愿意授权：portal 把它挂在一条远程桌面会话上，每次连接都要点一次同意，和键盘鼠标是同一次。
 - **摄像头**：已在 Ubuntu 26.04 + 4K USB 摄像头上真机验证（MJPEG 1280×720@30 → NV12 → H.264，
@@ -97,8 +84,6 @@ dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/
   「高级设置 → 安全 → 摄像头权限」里允许一次，或运行
   `RemoteDesktop.HostService --camera-access allow`；允许后控制端才能列出并使用本机摄像头，可随时撤销。
   未允许时控制端会直接看到"被控端未允许摄像头访问"，而不是"没有摄像头"。
-- **H.265**：Windows 上也没实现。
-- **隐私屏**：Windows 上也没实现。
 - **光标形状与位置**：本机实测收不到 portal 的光标元数据（`cursor_mode=Metadata` 授权成功，但 PipeWire 流里
   始终没有 `SPA_META_Cursor`）。被控端会记一条警告然后照常出帧，控制端只能画自己最后知道的那个指针。
 - **X11 会话**：只在 Wayland 上验证过。portal 路径在 X11 下大概率也能用，但不作承诺。
@@ -109,20 +94,8 @@ dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/
   `xdg-desktop-portal-wlr`（wlroots 系）。**没有 portal 就什么都共享不了**——这是被控端唯一的入口。
 - 编码用 `libavcodec`，有 GPU 就用硬件编码器（NVENC / VA-API），没有就回落 x264。装了哪个、有没有回落，
   都在被控端日志里。
-- 采集走 PipeWire，输入走 libei。两者都随 `.deb` 一起声明为依赖。
-
-**和 Windows 不同的几件事：**
-
-| | Windows | Linux |
-|---|---|---|
-| 被控端形态 | LocalSystem 服务 + 用户会话里的 Agent | 一个 `systemd --user` 服务，**没有 Agent**——portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
-| 屏幕 | DXGI Desktop Duplication | portal + PipeWire |
-| 输入 | `SendInput` | libei（**不需要 `/dev/uinput` 这种机器级特权**） |
-| 编解码 | Media Foundation | libavcodec |
-| 终端 | ConPTY + PowerShell / cmd | PTY + 登录 shell |
-| 密钥 | DPAPI | 0600 文件（威胁模型见 [系统设计](../design/README.md) §3） |
-| 防休眠 | `SetThreadExecutionState` | logind `Inhibit` |
-| 登录前的访问 | 支持 | **不支持**（见上） |
+- 采集走 PipeWire，输入走 libei（**不需要 `/dev/uinput` 这种机器级特权**）。两者都随 `.deb` 一起声明为依赖。
+- 被控端是一个 `systemd --user` 服务，**没有 Agent**——见上面的"被控端的形态"。
 
 ### 授权的差别——Linux 上这条最影响使用
 
@@ -137,16 +110,22 @@ dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/
 
 ### 先确认这台机器能不能用
 
-两个平台都带一个只读的自检开关，把该问的一次问完：
+三个平台的客户端都带一个自检开关，把该问的一次问完：
 
 ```bash
 remotedesktop --self-check                                           # 客户端
 /usr/lib/remotedesktop-host/RemoteDesktop.HostService --self-check   # Linux 被控端
 ```
 
-它检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、显示布局、PipeWire、
-libei、libavcodec 版本、可用的 H.264 编码器。每一项都是**只读**，不弹任何对话框，所以在一台还没授权过、
-甚至起不来的机器上照样能跑。有必需项不通过时退出码是 1。
+Linux 上它检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、显示布局、
+PipeWire、libei、libavcodec 版本、可用的 H.264 编码器；Windows 上只报告数据目录和传输层；macOS 上则按客户端
+实际的组装方式逐项检查。自检**不弹任何对话框、不打开摄像头**，所以在一台还没授权过、甚至起不来的机器上照样能跑。
+唯一的写操作是数据目录的可写探测：它会创建数据目录（如果还不存在），并在里面写一个 `.writable` 空文件后立刻删除。
+有必需项不通过时退出码是 1。
+
+`--output <文件>` 可以把整份报告同时写进文件。macOS 通过 `open -a` 启动时会丢掉命令行参数，这时改用环境变量：
+`RD_SELF_CHECK=1` 让每次启动都只自检然后退出，`RD_SELF_CHECK_OUTPUT=<文件>` 指定报告写到哪里；用完要把两个变量
+都取消，否则每次启动该应用都不再打开窗口。
 
 **被控端更需要它**——portal、PipeWire、libei 和显示都是它在用，而只装被控端的机器上未必有客户端可跑。
 
@@ -195,8 +174,8 @@ remotedesktop://902226105
 - **被控端的权限**：被控端界面列出正在控制本机的人，可随时点"仅观看"（立即关闭其输入、剪贴板等通道，
   控制端界面随之变化）或"断开"。
 - **录制**：工具栏的"录制屏幕"把当前画面存成 MP4，再点一次停止并保存；摄像头窗口的"录制摄像头"同理。
-  Linux 写到 `~/视频/RemoteDesktop/`（`Screen_<时间戳>.mp4` / `Camera_<时间戳>.mp4`），目录不存在时会
-  自动创建。
+  三个平台都写到系统「视频」文件夹下的 `RemoteDesktop` 目录（`Screen_<时间戳>.mp4` / `Camera_<时间戳>.mp4`），
+  目录不存在时会自动创建；Linux 上「视频」文件夹随系统语言而定（例如 `~/视频` 或 `~/Videos`）。
 - **控制授权**：Linux 被控端还要经桌面的 portal 授权。系统对话框弹出时，控制端顶部显示"已请求被控端
   授权控制"；被控端需要在对话框里打开"允许远程交互"再点"分享"。如果被拒绝或对话框被关掉，控制端显示
   "被控端未允许控制：当前只能观看"并给出"重试授权"按钮；允许后横幅消失、键鼠恢复，不必重新连接。
@@ -217,11 +196,12 @@ remotedesktop://902226105
   （`partial-files.log`），**超过 7 天没人回来续传的自动删掉**——否则对方每放弃一次尝试就在你的文件夹里
   留一个文件。传完后比较整个文件的 xxHash64，一致才改成目标名并设置修改时间，所以目标名下永远不会出现
   写了一半的文件；校验不一致时丢弃临时文件并自动从头重传一次。取消会删除临时文件。
-- **安全**：文件操作由 Agent 以登录用户的身份执行，从不以 SYSTEM 执行；被控端只有登录界面 / UAC 可用时
+- **安全**：Windows 上文件操作由 Agent 以登录用户的身份执行，从不以 SYSTEM 执行；被控端只有登录界面 / UAC 可用时
   一律拒绝。路径必须是绝对路径，拒绝设备路径（`\\.\`、`\\?\`）、NTFS 备用数据流和 `CON`、`NUL` 等保留名，
-  `..` 先解析再检查。`AddFileTransferFeature(new FileAccessPolicy([根目录…]))` 可把可访问范围限制在指定
-  目录内（默认不限制，即登录用户能访问的都可以）。观看模式由被控端拒绝文件通道。会话 ID、操作类型和路径
-  写入 Agent 日志（`agent-*.log`）作为审计记录。
+  `..` 先解析再检查。**当前版本没有"把可访问范围限制到指定目录"的配置项**：被控端不限制根目录，登录用户能访问的
+  都可以访问。观看模式由被控端拒绝文件通道。会话 ID、操作类型和路径写入被控端日志作为审计记录：Windows 上是
+  Agent 日志（`agent-user-*.log`，登录界面 / UAC 桌面是 `agent-secure-*.log`）；Linux 和 macOS 没有 Agent，
+  记在被控端进程自己的日志（`service-*.log`）里；独立客户端模式（`--HostMode standalone`）没有文件日志。
 - 服务到 Agent 的文件通道是无损转发：带背压、不丢帧、不因为 Agent 被替换而续传到另一个 Agent；
   Agent 丢失时传输中止，重试即可续传。
 
@@ -230,12 +210,14 @@ remotedesktop://902226105
 工具栏的"终端"按钮（观看模式或被控端收回权限后不显示）打开终端窗口：每个标签是被控端上的一个 shell，
 可以同时开多个。
 
-- 被控端用 Windows 伪控制台（ConPTY）运行 PowerShell 7（有则用）、Windows PowerShell 或 cmd，
-  窗口顶部可选 shell。控制端只能选被控端列出的名字，不能指定程序路径；同一台被控端最多同时开 8 个终端。
-- shell 由 Agent 以登录用户的身份启动，从不以 SYSTEM 启动；只有登录界面 / UAC 可用时拒绝。shell 及它启动的
-  子进程放在作业对象里，关闭标签、断开连接或 Agent 退出都会把它们一起结束。打开、退出和关闭写入 Agent 日志
-  （`agent-*.log`），不记录键入内容。
-- 终端窗口是自带的 VT 模拟器（`Features.Terminal/Emulation`）：xterm 兼容的光标与滚动区、
+- **Windows**：被控端用 Windows 伪控制台（ConPTY）运行 PowerShell 7（有则用）、Windows PowerShell 或 cmd，
+  窗口顶部可选 shell。shell 由 Agent 以登录用户的身份启动，从不以 SYSTEM 启动；只有登录界面 / UAC 可用时拒绝。
+  shell 及它启动的子进程放在作业对象里，关闭标签、断开连接或 Agent 退出都会把它们一起结束。
+- **Linux / macOS**：被控端用 PTY 启动**登录 shell**（`-l`，读和本机终端相同的配置文件），可选的是账号自己的 shell
+  （取自 `$SHELL`）以及 bash、zsh、fish、sh 中本机存在的那些；工作目录是用户主目录。
+- 控制端只能选被控端列出的名字，不能指定程序路径；同一台被控端最多同时开 8 个终端。打开、退出和关闭记入被控端日志
+  （Windows 是 `agent-user-*.log`，Linux / macOS 是 `service-*.log`），不记录键入内容。
+- 终端窗口是自带的 VT 模拟器：xterm 兼容的光标与滚动区、
   16 / 256 / 真彩色、粗体斜体下划线、备用屏幕（vim、less、nano 用）、滚动缓冲（5000 行）、
   宽字符（中日韩和 emoji 占两格）、括号粘贴、鼠标上报（vim、htop 用）、窗口大小随窗口变化。
   已用真实的 PowerShell（含 PSReadLine 的历史与行编辑）、vim、less、nano 验证。
@@ -259,11 +241,11 @@ remotedesktop://902226105
   YUY2、NV12）都转成 NV12，之后和远程桌面用同一条编码管线（优先硬件编码，否则软件编码；码率自适应；
   丢帧后自动请求关键帧）。只保留最新画面，所以网络慢时延迟不会累积。
 - 摄像头由 Agent 以登录用户的身份打开（和文件、终端一样），从不以 SYSTEM 打开；只有登录界面 / UAC 可用时
-  拒绝。打开和关闭写入 Agent 日志（`agent-*.log`）。如果摄像头被别的程序占用、被拔掉，或 Windows 的
+  拒绝。打开和关闭写入 Agent 日志（`agent-user-*.log`）。如果摄像头被别的程序占用、被拔掉，或 Windows 的
   "设置 > 隐私和安全性 > 摄像头"不允许桌面应用使用，控制端会看到原因。
 
-> macOS 用 AVFoundation 走同一条管线。Linux 走 portal 的摄像头节点 + PipeWire，已在 4K USB 摄像头上
-> 真机验证（MJPEG/YUY2 均可）；首次使用需要按 §1 的说明在被控端显式允许摄像头权限。
+> 以上以 Windows 为准。macOS 用 AVFoundation 走同一条管线；Linux 走 portal 的摄像头节点 + PipeWire，
+> 首次使用需要按 §1 的说明在被控端显式允许摄像头权限。
 
 ## 7. 无人值守模式
 
@@ -274,8 +256,7 @@ remotedesktop://902226105
   **下限定在 8 位只是下限而不是建议**——口令是这套设计里最薄的一环，能多长就多长（原因见
   [系统设计](../design/README.md) §3 的"PAKE 降低的是离线爆破面，不是口令熵"）。
 - **防休眠保护（Keep-Awake）**：被控端在有活跃的远程连接期间，会自动阻止计算机进入睡眠模式
-  （Windows 用 `SetThreadExecutionState`，macOS 用 IOKit 电源断言，Linux 用 logind `Inhibit`）；
-  所有连接断开后自动恢复默认电源策略，保证远程运维或大文件传输不被闲置睡眠打断。
+  （各平台用的机制见 §1 的矩阵）；所有连接断开后自动恢复默认电源策略，保证远程运维或大文件传输不被闲置睡眠打断。
 
 > **Linux 上固定密码并不能让控制变成无人值守**：portal 不允许远程桌面会话持久化，控制权限每次连接都要有
 > 人在机器前点一次同意（见 §1 的"授权的差别"）。
@@ -303,7 +284,7 @@ remotedesktop://902226105
 不回答"谁在用什么"。
 
 - 关掉之后不会有任何**质量**上报，也不会启动定时器——不是"上报后丢弃"。
-- 心跳失败不影响会话：发送只是入队，队列满了就丢最新的一条之外最旧的一条，断线期间整队清空。
+- 心跳失败不影响会话：发送只是入队，队列满了就丢最旧的一条，断线期间整队清空。
 - 被控端也要打开才会出现在"平台分布"里；只开控制端时该面板为空，界面显示"—"而不是 0。
 - **会话结束是例外，始终上报**：无论这个开关是否打开，会话正常结束时两端都会通过信令上报一次
   `session.ended`，内容只有会话 id、这一端的角色和结束原因（`closed`）。没有它，直连（P2P）会话在监控台里

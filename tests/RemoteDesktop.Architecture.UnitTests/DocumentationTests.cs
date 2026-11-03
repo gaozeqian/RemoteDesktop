@@ -30,6 +30,10 @@ public class DocumentationTests
         "LICENSE",
         "docs/README.md",
         "docs/STYLE.md",
+        "docs/usage/README.md",
+        "docs/design/README.md",
+        "docs/ops/README.md",
+        "docs/ports/README.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
     ];
 

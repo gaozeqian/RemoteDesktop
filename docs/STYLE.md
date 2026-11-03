@@ -15,8 +15,8 @@
 
 | 类别 | 回答什么问题 | 会更新吗 | 放在哪 |
 |---|---|---|---|
-| **规范 / 指南**（living） | "现在应该怎么做" | **会**，与代码同步改动 | `docs/design/`、`docs/ops/`、根目录 |
-| **计划**（plan） | "还要做什么"：阶段、风险、未验证项 | **会**，随进展更新 | `docs/ports/`（或与主题同级的目录） |
+| **规范 / 指南**（living） | "现在应该怎么做"；已完成事项的**结论**也算这一类（如 `docs/ports/`，两个移植都已完成，它记的是定下了什么、没验证什么） | **会**，与代码同步改动 | `docs/usage/`、`docs/design/`、`docs/ops/`、`docs/ports/`、根目录 |
+| **计划**（plan） | "还要做什么"：阶段、风险、未验证项 | **会**，随进展更新 | 与主题同级的目录（目前没有进行中的计划文档） |
 | **评审快照**（review） | "某一次评审在当时看到什么" | **不会**，写到哪算哪 | `docs/reviews/` |
 
 一条推论，值得单独说：**评审里写的"建议"不等于现行约定。** 建议后来被采纳了，就把它写进规范类文档；
@@ -68,7 +68,8 @@
 **同一天、同一主题做了多轮，就合订成一份**（`repo-structure-review-2026-10-16.md` 把三轮放在一个文件里，
 按轮分节），而不是为每轮开一个文件——那样只会让归档变成一串读不出差别的名字。
 
-目录名同样是 kebab-case，且目录名 == 里面的 `.csproj` 名（这条由 `RepositoryStructureTests` 断言）。
+文档目录名同样是 kebab-case。（代码项目的目录名 == 里面的 `.csproj` 名是另一条规则，写在 `CONTRIBUTING.md`，
+由 `RepositoryStructureTests` 在 `src/` 与 `tests/` 下断言。）
 
 ## 4. 必备文件
 
@@ -169,7 +170,7 @@ $EDITOR docs/README.md
 # 4. 本地验证：结构、命名、链接
 dotnet test tests/RemoteDesktop.Architecture.UnitTests
 # 5. 格式（若本地装了 node）
-npx markdownlint-cli2 "**/*.md"
+npx --yes markdownlint-cli2@0.23.3 "**/*.md"
 ```
 
 第 4 步是必须的——它会替你检查本文档里 §7 那张表的上半部分。

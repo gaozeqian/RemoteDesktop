@@ -21,9 +21,16 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 （有私钥、未过期、用途是代码签名），找到就签名。它只自动使用**名字里含 `RemoteDesktop`** 的证书——别人的证书
 （比如另一个产品的）绝不会被默默拿来签本产品；那种情况下脚本会列出候选并让你用 `-SignCertificate` 明确指定。
 
+下面的例子都以 `Build-ClientInstaller.ps1` 为准，但 `host/Build-HostInstaller.ps1` 与 `server/Build-ServerInstaller.ps1`
+有同一套签名参数（`-SignCertificate`、`-SigningTool`、`-CertificateFile`、`-CertificatePassword`、`-PrivateKeyFile`、
+`-SkipSigning`、`-TimestampServer`、`-SkipSignatureVerification`），行为也一样。不同的只有两处：`-ServerCertificate`
+（把信令服务器的证书公钥打进包里，让 `wss://` 免证书报错）只有 client 与 host 脚本有，server 脚本没有；
+服务端脚本里与服务器地址相关的参数叫 `-RendezvousUrl`（信令服务器**监听**的地址，如 `http://0.0.0.0:5080`），而
+client / host 脚本的 `-RendezvousUri` 是客户端要**连**的 `ws://` / `wss://` 地址。
+
 签名分两步，顺序在脚本里是固定的，因为顺序错了就白签：
 
-1. **先签发布目录里本产品自己的 exe/dll**（`RemoteDesktop*.exe`、`RemoteDesktop*.dll`，当前是 18 个）。这样**装到机器上的程序**
+1. **先签发布目录里本产品自己的 exe/dll**（`RemoteDesktop*.exe`、`RemoteDesktop*.dll`；个数随角色而不同）。这样**装到机器上的程序**
    也是签过名的——SmartScreen 和杀毒软件看的是用户真正运行的那个 exe。旁边的 .NET 运行时和微软的库本来就有微软的签名，不动它们。
 2. **再给 MSI 签名**。签名之后脚本会用 `signtool verify /pa`（或 PowerShell 的签名检查）验证一次。
 
@@ -75,7 +82,7 @@ brew install osslsigncode
 ```
 
 ```powershell
-# PKCS#12（.pfx/.p12）：-SingingTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
+# PKCS#12（.pfx/.p12）：-SigningTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
     -RendezvousUri ws://<服务器>:5080/ws `
     -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
@@ -251,7 +258,17 @@ Apple DTS 的原话见
 所有 Mach-O，apphost 带 `server/entitlements.plist` 的 JIT 权限，dylib 不带；签名后逐个
 `codesign --verify --strict`。`--notarize` 在没有 Application 证书时直接拒绝。
 
-### GitHub Secrets
+### GitHub Secrets 与变量
+
+Windows 包由 `release.yml` 用同一把 `.pfx` 签名（解码后以 `-CertificateFile` / `-CertificatePassword` 传给三个打包脚本）。
+两个 Secret 缺任何一个，都会退回 `-SkipSigning`；缺 `CODE_SIGN_CERT_BASE64` 时 Release 说明里还会写明"Windows 包未签名"：
+
+| Secret / 变量 | 内容 |
+|---|---|
+| `CODE_SIGN_CERT_BASE64` / `CODE_SIGN_CERT_PASSWORD`（Secret） | Windows 代码签名证书 `.pfx`（base64 单行）与口令 |
+| `DEFAULT_RENDEZVOUS_URI`（仓库**变量**，不是 Secret） | 内置进 Windows 客户端与被控端安装包的信令服务器地址；不配置就不内置地址，不影响签名 |
+
+macOS：
 
 | Secret | 内容 |
 |---|---|

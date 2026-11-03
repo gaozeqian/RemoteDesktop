@@ -41,25 +41,16 @@
 ## 评审快照（`reviews/`）
 
 **不是现行约定**，是某一次评审在当时看到的东西，冻结不改。查"当时为什么这么定"时看这里；
-写新代码时**不要**以它为准。归档说明见 [`reviews/README.md`](reviews/README.md)。
+写新代码时**不要**以它为准。每份评审的主题、日期和"结论现在在哪 / 修了没有"都在
+[`reviews/README.md`](reviews/README.md) 的归档表里，这里只列链接（状态摘要只维护那一处，避免两边分叉）：
 
-* [**Windows 安装包评审（2026-10-26）**](reviews/windows-installer-review-2026-10-26.md) —— client / host / server
-  三个 MSI 的打包、升级、签名与 Ops 首装；服务器升级丢 live settings、Ops 未接入两个服务器、
-  部署秘密进日志/进程列表，以及自签证书缺部署名。
-* [**macOS 安装包评审（2026-10-25）**](reviews/macos-installer-review-2026-10-25.md) —— client / host / server
-  三个 `.pkg` 的打包、签名、公证与安装后生命周期；P0 三项阻断与 host/Ops 的首装、升级缺陷。
-* [**客户端 UI 与产品图标评审（2026-10-18，两轮）**](reviews/ui-and-icon-review-2026-10-18.md) —— macOS 26
-  与 Windows 11 两轮实机逐屏与图标资产/打包核对；R1/R2/R4/R7/R10、W1–W8 已修复，亮色外观（R8）已补做；
-  R5/W9（四段版本号）在版本收敛时已解决，R9 随 W8 改为只淡化图标与文件名，R6 的"关闭"按钮已改为"删除"，
-  W10（浅色下终端保持深色）定为有意保留；只剩图标栅格（R3）待设计决定。
-* [**客户端 UI 跨平台一致性评审（2026-10-17）**](reviews/ui-consistency-review-2026-10-17.md) —— 三平台
-  视图/样式/主题共享盘点与平台驱动差异逐项核对；发现 Linux 上三处 macOS 遗留言案与一处限制告知缺口。
-* [**目录结构评审（2026-10-16，三轮）**](reviews/repo-structure-review-2026-10-16.md) —— 同一天做了三轮：
-  跨平台规范逐项核对、第一轮修复的落地核验、逐目录逐文件的全量普查（正是这轮把六条约定变成了测试断言）。
-* [**安全审查报告（2026-10-12）**](reviews/security-review-2026-10-12.md) —— 逐项定级与对抗性实测；
-  规范性结论已并入 [`design/`](design/README.md) §3。
-* [**macOS 移植评审（2026-10-13）**](reviews/macos-port-review-2026-10-13.md) —— 架构与技术选型评估、
-  遗留技术债与改进建议；后续做法见 [`ports/`](ports/README.md)。
+* [Windows 安装包评审（2026-10-26）](reviews/windows-installer-review-2026-10-26.md)
+* [macOS 安装包评审（2026-10-25）](reviews/macos-installer-review-2026-10-25.md)
+* [客户端 UI 与产品图标评审（2026-10-18）](reviews/ui-and-icon-review-2026-10-18.md)
+* [客户端 UI 跨平台一致性评审（2026-10-17）](reviews/ui-consistency-review-2026-10-17.md)
+* [目录结构评审（2026-10-16）](reviews/repo-structure-review-2026-10-16.md)
+* [安全审查报告（2026-10-12）](reviews/security-review-2026-10-12.md)
+* [macOS 移植评审（2026-10-13）](reviews/macos-port-review-2026-10-13.md)
 
 ## 规则与索引（本目录）
 

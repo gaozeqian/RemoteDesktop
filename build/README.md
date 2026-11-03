@@ -1,7 +1,9 @@
 # build/ — 打包、部署与仓库维护脚本
 
 **本目录不是构建系统。** 构建是 `dotnet build RemoteDesktop.slnx`，由根目录的 `Directory.Build.props` 与
-`Directory.Packages.props` 定义——这里没有任何参与其中的东西：没有 Makefile，没有聚合脚本，也没有 CI 调用的入口。
+`Directory.Packages.props` 定义——这里没有任何参与其中的东西：没有 Makefile，也没有把所有东西串起来的聚合脚本。CI 与发布流程会按需**逐个**调用这里的
+打包脚本（`installer/` 下的 `Build-*Installer.ps1`、`build-deb.sh`、`make-pkg.sh`，以及 `tools/` 与 `version.sh`），
+但它们是独立的打包步骤，不是构建的一部分。
 它叫 `build/`，因为装的是"跑一下就能产出交付物"的脚本；冲着"构建在哪定义"进来的，请回根目录。
 
 ## 这个目录怎么分层
@@ -26,7 +28,7 @@ build/
 `installer/linux/` 而不是 `installer/debian/`，和 `artifacts/installer/<平台>/` 的取法一致（见 `CONTRIBUTING.md`
 §构建产物布局）。
 
-三平台的**角色集合现在是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops）。
+三平台的**角色集合现在是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops + Gateway）。
 角色目录仍然只为该平台真实存在的东西而建，只是三个平台现在都有这三样：
 
 | 平台 | `installer/` 下的角色 | 被控端包与控制端包的关系 |
@@ -52,7 +54,8 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 
 `docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有四个
 （信令、中继、监控台、Ops HTTPS 网关），`docker-compose.yml` 只启动前两个；监控台、网关与信令 TLS 是显式
-加载的 overlay：`docker-compose.ops.yml` 与 `docker-compose.tls.yml`（后者带一个 Caddyfile）。上面那张树里
+加载的 overlay：`docker-compose.ops.yml`、`docker-compose.tls.yml`（带一个 Caddyfile，公网 TLS）与
+`docker-compose.selfsigned.yml`（信令直接用自签名证书在 5080 上提供 TLS，用于局域网；用法见该文件开头的注释）。上面那张树里
 其余四项都服从 `<平台>/<角色>`，只有它不分层。
 
 ## "本目录"与子目录各放什么
@@ -64,7 +67,7 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 | `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF；`version.sh`：macOS/Linux 打包脚本共用的版本读取与校验 | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
 | `service/` | — | `<平台>/`：只有那个平台上的服务管理器读得懂的定义 |
 | `signing/` | 跨平台的证书脚本（纯 .NET API，`pwsh` 三平台可跑） | `windows/`：只在 Windows 上成立的两件事 |
-| `tools/` | 三个仓库维护脚本，与平台无关，见下 | — |
+| `tools/` | 两个仓库维护脚本，与平台无关，见下 | — |
 
 `installer/` 与 `signing/` 看起来是"脚本和子目录混在一层"，其实不是混放：**本层 = 共用，子目录 = 专属**。
 判断标准只有一句——这个文件是被两个以上的角色/平台用到，还是只被一个用到。

@@ -165,7 +165,8 @@ enum TelemetryTransport {
 message TelemetryReport {
   // The session both ends agree on (32 hex chars), announced by the controller in Hello.session_id.
   string session_id = 1;
-  // UUID in "D" form when this session went through a relay; empty for a direct path.
+  // The server-minted session id, as a UUID in "D" form, when the connection has one (it always does on a relayed
+  // path); empty when the connection carries none. A direct path may still have one, and then it is reported too.
   string relay_session_id = 2;
   TelemetryRole role = 3;
   // "control" or "view" — a string rather than an enum so a new mode does not need a protocol change to be measured.
