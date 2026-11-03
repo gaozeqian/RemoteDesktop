@@ -430,6 +430,9 @@ if ($migrated.Rendezvous.MetricsEnabled -ne $true) {
 
 # A normal upgrade must not overwrite the live settings, but it must repair the relay key: an upgrade skips
 # ConfigureServer, and before SyncRelayKey existed the Relay kept an empty SharedKey while Rendezvous had the key.
+# The one setting an upgrade does set is MetricsEnabled (SyncLocalNodes passes --metrics-enabled): packages from before
+# the console existed left /metrics off, and keeping it off would leave the console's signaling KPIs empty. So the test
+# turns it off here and expects the upgrade to turn it back on, while the relay key and everything else stays as it was.
 $migrated.Rendezvous.MetricsEnabled = $false
 $migrated | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $rendezvousSettings -Encoding UTF8
 $relayWithoutKey = Read-Settings $relaySettings
@@ -437,8 +440,11 @@ $relayWithoutKey.Relay.SharedKey = ''
 $relayWithoutKey | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $relaySettings -Encoding UTF8
 Install-Msi $serverLater @('NOFIREWALL=1') 'server-later'
 $afterUpgrade = Read-Settings $rendezvousSettings
-if ($afterUpgrade.Rendezvous.MetricsEnabled -ne $false) {
-    throw 'A normal server upgrade overwrote the operator''s MetricsEnabled setting.'
+if ($afterUpgrade.Rendezvous.MetricsEnabled -ne $true) {
+    throw 'A normal server upgrade did not turn the signaling /metrics endpoint back on.'
+}
+if ($afterUpgrade.Rendezvous.RelaySharedKey -ne $markerKey) {
+    throw 'A normal server upgrade changed the relay key it should have kept.'
 }
 $relayAfterUpgrade = Read-Settings $relaySettings
 if ($relayAfterUpgrade.Relay.SharedKey -ne $afterUpgrade.Rendezvous.RelaySharedKey) {

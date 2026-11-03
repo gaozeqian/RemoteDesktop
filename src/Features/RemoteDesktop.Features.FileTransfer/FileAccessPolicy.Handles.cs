@@ -14,8 +14,12 @@ namespace RemoteDesktop.Features.FileTransfer;
 /// </summary>
 public sealed partial class FileAccessPolicy
 {
+    // struct vnode_fdinfowithpath from <sys/proc_info.h>: a proc_fileinfo (24 bytes), then a vnode_info (152 bytes), then
+    // the path (MAXPATHLEN = 1024 bytes). The path therefore starts at offset 176 and the whole struct is 1200 bytes.
+    private const int MacProcPidFdVnodePathInfo = 2;
+    private const int MacVnodeInfoWithPathSize = 1200;
+    private const int MacVnodePathOffset = 176;
     private const int MacPathMax = 1024;
-    private const int MacFGetPath = 50;
 
     /// <summary>Opens an existing file for reading and verifies the real target behind its handle.</summary>
     public FileStream OpenRead(string path) =>
@@ -188,14 +192,20 @@ public sealed partial class FileAccessPolicy
 
     private static string? MacFinalPath(int descriptor)
     {
-        var buffer = new byte[MacPathMax];
-        if (Fcntl(descriptor, MacFGetPath, buffer) != 0)
+        // fcntl(F_GETPATH) is not usable from here: fcntl is variadic in C, and on Apple Silicon variadic arguments are
+        // passed on the stack rather than in registers. A P/Invoke declared with a fixed signature therefore hands the
+        // kernel a garbage buffer address, and the call corrupts memory (an AccessViolationException that takes the
+        // whole process down). proc_pidfdinfo has a fixed signature and returns the same path.
+        var buffer = new byte[MacVnodeInfoWithPathSize];
+        var written = ProcPidFdInfo(Environment.ProcessId, descriptor, MacProcPidFdVnodePathInfo, buffer, buffer.Length);
+        if (written < MacVnodePathOffset + 1)
         {
             return null;
         }
 
-        var end = Array.IndexOf(buffer, (byte)0);
-        return end <= 0 ? null : Encoding.UTF8.GetString(buffer, 0, end);
+        var path = buffer.AsSpan(MacVnodePathOffset, MacPathMax);
+        var end = path.IndexOf((byte)0);
+        return end <= 0 ? null : Encoding.UTF8.GetString(path[..end]);
     }
 
     [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -205,6 +215,6 @@ public sealed partial class FileAccessPolicy
         uint pathLength,
         uint flags);
 
-    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int Fcntl(int descriptor, int command, [Out] byte[] buffer);
+    [DllImport("libproc", EntryPoint = "proc_pidfdinfo", SetLastError = true)]
+    private static extern int ProcPidFdInfo(int pid, int descriptor, int flavor, [Out] byte[] buffer, int bufferSize);
 }

@@ -13,10 +13,15 @@ public class HostControlWaitTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    // On macOS a pipe is a Unix socket under a per-user temp directory that is already about 70 characters long
+    // (/var/folders/xx/.../T/remotedesktop-runner/), and a socket path is limited to 104. A full GUID in the name
+    // pushed it over, so the name stays short; 12 hex digits are plenty for a test that runs once per process.
+    private static string ShortUniqueName() => "rd-hcw-" + Guid.NewGuid().ToString("N")[..12];
+
     [Fact]
     public async Task A_service_that_starts_after_the_first_probe_is_found()
     {
-        var pipeName = $"rd-hostcontrol-wait-{Guid.NewGuid():N}";
+        var pipeName = ShortUniqueName();
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = ServeAfterAsync(pipeName, TimeSpan.FromMilliseconds(300), stop.Token);
 
@@ -29,7 +34,7 @@ public class HostControlWaitTests
     [Fact]
     public async Task Waiting_gives_up_at_the_deadline()
     {
-        var pipeName = $"rd-hostcontrol-wait-{Guid.NewGuid():N}";
+        var pipeName = ShortUniqueName();
         var elapsed = Stopwatch.StartNew();
 
         Assert.False(await PipeHostControl.WaitUntilAvailableAsync(pipeName, TimeSpan.FromMilliseconds(500), Ct));

@@ -10,8 +10,10 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 /// </summary>
 public sealed class LinkActivationTests
 {
-    // A pipe of its own: the machine running the tests may have a real client holding the production one.
-    private static string FreshPipeName() => "RemoteDesktop.Client.Test." + Guid.NewGuid().ToString("N");
+    // A pipe of its own: the machine running the tests may have a real client holding the production one. The name is
+    // kept short because on macOS the pipe is a Unix socket under a long per-user temp directory, and a socket path
+    // may not exceed 104 characters.
+    private static string FreshPipeName() => "rd.link.test." + Guid.NewGuid().ToString("N")[..12];
 
     [Fact]
     public async Task A_second_launch_hands_the_link_to_the_running_client()

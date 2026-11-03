@@ -462,8 +462,8 @@
   配置/数据库，`Restart-Service` 会报“无法打开...服务”；文档已注明。
 - **升级后 Relay 的 `SharedKey` 为空，中继票据被拒**：升级跳过 `ConfigureServer`，旧包留下的
   `Relay\appsettings.json` 不会补写 `SharedKey`，而 `Rendezvous` 已经有 `RelaySharedKey`。现在升级动作
-  `SyncLocalNodes` 会用不带地址/TLS/数据库/metrics 选项的 `--configure-system` 同步两个密钥，既不改动
-  操作员配置，也让中继能校验票据；升级冒烟测试会先清空 Relay 密钥再断言恢复。
+  `SyncLocalNodes` 会用不带地址/TLS/数据库选项的 `--configure-system` 同步两个密钥（并重新开启信令
+  `/metrics`），不改动操作员的其他配置，也让中继能校验票据；升级冒烟测试会先清空 Relay 密钥再断言恢复。
 - **证书确认页显示 `auto` 而不是刚选的文件**：确认页改显示 `TLSCERTIFICATEFILE`；选择“已有证书文件”却没选
   文件时会弹出提示，不再静默安装成明文 http。
 - **Ops CLI 不展开 `%ProgramData%`**：`--create-admin` / `--seed-local-nodes` 现在展开环境变量，并按

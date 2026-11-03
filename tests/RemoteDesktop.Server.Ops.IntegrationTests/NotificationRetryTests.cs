@@ -29,10 +29,24 @@ public class NotificationRetryTests(OpsHostFixture fixture) : IClassFixture<OpsH
         webhook.Logging.ClearProviders();
         var hook = webhook.Build();
 
+        // A name of its own, and only requests that carry it are counted. The other test in this class leaves an alert
+        // behind whose rule and node it deleted; the next evaluation pass resolves that orphan and posts a "resolved"
+        // notification to whatever webhook is configured by then. Which test runs first depends on the platform, so
+        // counting every request made this one pass on Linux and fail on macOS.
+        var ruleName = "retry-" + Guid.NewGuid().ToString("N")[..12];
         var calls = 0;
         var failuresRemaining = 1;
         hook.MapPost("/hook", async context =>
         {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(Ct);
+            if (!body.Contains(ruleName, StringComparison.Ordinal))
+            {
+                context.Response.StatusCode = StatusCodes.Status204NoContent;
+                await context.Response.CompleteAsync();
+                return;
+            }
+
             Interlocked.Increment(ref calls);
             context.Response.StatusCode = Interlocked.Decrement(ref failuresRemaining) >= 0
                 ? StatusCodes.Status500InternalServerError
@@ -56,7 +70,7 @@ public class NotificationRetryTests(OpsHostFixture fixture) : IClassFixture<OpsH
         try
         {
             var csrf = cookies.GetCookies(fixture.BaseAddress)["ops_csrf"]!.Value;
-            ruleId = await CreateRuleAsync(client, csrf);
+            ruleId = await CreateRuleAsync(client, csrf, ruleName);
             nodeId = await CreateFailingNodeAsync(client, csrf);
 
             // The fixture seeds a scrape rule. It would open a second alert for the same failing node and make the
@@ -202,13 +216,13 @@ public class NotificationRetryTests(OpsHostFixture fixture) : IClassFixture<OpsH
         }
     }
 
-    private static async Task<string> CreateRuleAsync(HttpClient client, string csrf)
+    private static async Task<string> CreateRuleAsync(HttpClient client, string csrf, string name = "测试：重试通知")
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/settings/rules")
         {
             Content = JsonContent.Create(new
             {
-                name = "测试：重试通知",
+                name,
                 kind = "scrape",
                 comparator = "gt",
                 threshold = 0.5,
