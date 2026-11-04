@@ -56,9 +56,6 @@ public static class CandidateGatherer
             .Where(e => e.AddressFamily == AddressFamily.InterNetwork)
             .Distinct()];
 
-    public static string Describe(IEnumerable<IPEndPoint> endpoints) =>
-        string.Join(", ", endpoints.Select(e => e.ToString()));
-
     private static IEnumerable<IPAddress> GetLocalAddresses()
     {
         NetworkInterface[] interfaces;

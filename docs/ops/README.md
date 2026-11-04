@@ -1752,11 +1752,8 @@ build/installer/linux/client/build-deb.sh
 客户端把"最近连接过的设备"放在数据目录下的 `recent_devices.json`（Windows 默认 `%AppData%\RemoteDesktop\`，Linux
 `~/.local/share/RemoteDesktop/`，macOS `~/Library/Application Support/RemoteDesktop/`），运维上只需要知道这几件事：
 
-- **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在系统密钥库里（Windows 是 DPAPI），换一台
-  机器不会跟着走。备份这个文件就是备份设备列表，密码需要重新输入。
-- **写入是原子的**（先写 `recent_devices.json.tmp` 再替换），中途崩溃不会留下截断的文件。解析失败，或文件版本比
-  程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回。
-- **旧格式会自动迁移**：早期的裸数组文件（条目里带明文密码）在第一次读到时，密码被搬进密钥库，文件重写成带版本的结构。
+- **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在平台的密钥存储里（Windows 是 DPAPI，macOS 是 Keychain，Linux 是数据目录下 `secrets/` 里仅属主可读的 0600 文件），换一台机器不会跟着走。备份 `recent_devices.json` 就是备份设备列表，密码需要重新输入；Linux 上备份整个数据目录则会连密码一起带走。
+- **解析失败的文件会被保留。** 解析失败，或文件版本比程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
 - 没有账号体系，也没有跨机器同步。数据格式、合并规则和"为什么不放密码"见 [系统设计](../design/README.md) 的
   "客户端本机存储"一节。
 

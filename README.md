@@ -118,16 +118,7 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory "$env:TEM
 
 ## 文档
 
-**[文档中心（索引）→](docs/README.md)**
-
-| 我要…… | 看这里 |
-|---|---|
-| 了解这是什么、怎么用 | [`docs/usage/`](docs/usage/) |
-| 理解系统怎么分层、看协议与线格式、确认安全边界 | [`docs/design/README.md`](docs/design/README.md) |
-| 部署服务器与客户端、打包与产物 | [`docs/ops/README.md`](docs/ops/README.md) |
-| 做新平台移植 | [`docs/ports/`](docs/ports/) |
-| 写文档 | [`docs/STYLE.md`](docs/STYLE.md) |
-| 提交代码 | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+**[文档中心（索引）→](docs/README.md)** —— 使用、设计、运维、平台移植四份正文和文档规范都从那里进入；那份清单是唯一的一份，这里不再重列。出问题了先看 [运维文档](docs/ops/README.md) 的"故障速查"，写代码前先看 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 变更历史见 [`CHANGELOG.md`](CHANGELOG.md)；第三方组件见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)；
 安全漏洞上报方式见 [`SECURITY.md`](SECURITY.md)。

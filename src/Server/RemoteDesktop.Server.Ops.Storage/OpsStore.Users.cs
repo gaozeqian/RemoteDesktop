@@ -31,16 +31,6 @@ public sealed partial class OpsStore
         return username.Trim().ToUpperInvariant();
     }
 
-    /// <summary>True when the console has at least one account — the first-run check for <c>--create-admin</c>.</summary>
-    public async Task<bool> HasAnyUserAsync(CancellationToken cancellationToken = default)
-    {
-        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM ops_admin_user;";
-        var count = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return Convert.ToInt64(count, CultureInfo.InvariantCulture) > 0;
-    }
-
     /// <summary>The account named <paramref name="username"/>, or <c>null</c>. Case and surrounding space do not matter.</summary>
     public async Task<OpsAdminUser?> FindUserAsync(string username, CancellationToken cancellationToken = default)
     {
