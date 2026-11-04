@@ -28,10 +28,9 @@ public interface IRecentDevicesStore
 /// The local device list, kept as versioned JSON in the data directory.
 /// </summary>
 /// <remarks>
-/// Passwords are not part of it: they live in the OS-protected <see cref="ISecretStore"/>, so they cannot be
-/// decrypted on another machine and can never be carried along if the list is synced to an account later. Entries
-/// carry <see cref="RecentDeviceEntry.UpdatedAtUtc"/> and a tombstone on removal for the same reason — see
-/// <c>docs/design/README.md</c> ("账号体系上线时怎么接") for what a future account sync is expected to do with them.
+/// Passwords are not part of it: they live in the <see cref="ISecretStore"/>, which is per machine and per user and
+/// is kept apart from the list file on purpose — see <c>docs/design/README.md</c> ("密码为什么不进列表"). Removal
+/// leaves a tombstone rather than deleting the entry, so a removed device can come back when it is connected to again.
 /// </remarks>
 public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 {

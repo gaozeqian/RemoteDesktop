@@ -68,18 +68,9 @@ build/installer/linux/host/build-deb.sh
 build/installer/linux/server/build-deb.sh
 ```
 
-服务端那一个包同时装 **Rendezvous（信令）+ Relay（中继）+ Ops（运维监控台）+ Gateway（监控台的 HTTPS 网关）**：
-控制台没有它们就没有数字可看，分开装只会多出"装了一半"的状态。Windows 的 host MSI 在安装向导里可以直接设固定密码，Linux 的 host `.deb`
-安装时用 debconf 询问无人值守密码；macOS 的 host 是**独立的无窗口后台组件**（`Remote Desktop Host.app`，
-装在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”），不是把客户端换个名字，
-TCC 授权也与客户端分开。三个角色的边界见
+各角色装什么、怎么安装与配置（服务端那一个包装的是信令、中继、监控台和监控台的 HTTPS 网关四个程序；macOS 的被控端是独立的
+无窗口后台组件，TCC 授权与客户端分开）见 [`docs/ops/README.md`](docs/ops/README.md)，三个角色的边界见
 [`docs/usage/README.md`](docs/usage/README.md)。
-
-macOS 的三个 `.pkg` 在安装器里各有一页配置面板：服务端选 SQLite / PostgreSQL 与 TLS（生成自签名或使用已有
-证书），客户端与被控端填写信令服务器地址并在需要时导入自签名服务器证书。无人值守安装的答案文件见
-[`docs/ops/README.md`](docs/ops/README.md) 的 macOS 一节。
-
-细节（含打包脚本的坑）见 [`docs/ops/README.md`](docs/ops/README.md)。
 
 ## 快速开始
 

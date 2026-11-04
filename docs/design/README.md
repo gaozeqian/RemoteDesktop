@@ -616,13 +616,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 ## 5. 客户端本机存储（最近设备列表）
 
-> **2026-10-10 决定：不做账号体系。** 下面关于"账号体系上线后"的部分因此不会发生，留在这里是因为它记录了
-> 当前数据格式为什么长这样（条目里没有密码、时间字段的合并规则、墓碑、`accountId` 参数），
-> 以及万一将来改变主意时已经踩过的坑。清单同步、`SyncedRecentDevicesStore`、服务端的 `account_devices` 表都不实现。
+> **2026-10-10 决定：不做账号体系。** 列表只存在这台机器上，没有同步，也没有服务端的对应表。
 
-本节说明"最近连接过的设备"这个列表今天存在哪里、为什么这么存，以及**账号体系上线后**要把它搬到
-服务器时，哪些决定必须现在做、哪些坑必须提前避开。今天没有账号，也没有同步——这里描述的是已经落地的
-数据格式和明确留出的接口。
+本节说明"最近连接过的设备"这个列表存在哪里、为什么这么存。
 
 ### 今天怎么存
 
@@ -646,7 +642,7 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 ```
 
 读写由 `IRecentDevicesStore` / `RecentDevicesStore`（`src/Hosts/RemoteDesktop.Client/Storage/`）负责，界面只
-通过接口访问它——这个接口就是将来接同步时的缝，见下文。
+通过接口访问它。
 
 存取方式的几个要点：
 
@@ -657,100 +653,41 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 * **旧格式会被迁移**：早期文件是一个裸数组，条目里还带着明文 `SavedPassword`。读到这种文件时，密码被搬进
   系统保护的密钥库；含密码时文件立即重写成上面的带版本结构——明文随升级从磁盘上拿掉，而不是等用户下次改点什么。
 
+`RecentDevicesStore` 的构造函数还接受一个可选的 `accountId`：传入时列表在
+`dataDirectory/accounts/<accountId>/recent_devices.json`，密钥名带账号前缀（`recent-device-<accountId>-<id>`），
+并且校验它不含路径分隔符和 `..`。目前所有宿主都不传，只有测试用到。
+
 ### 密码为什么不进列表
 
 `RecentDeviceEntry` 里**没有**密码字段，这是刻意的，三条理由：
 
 1. **跨机器没有意义**。Windows 上密码用 DPAPI 以 `CurrentUser` 作用域加密、macOS 上放在登录 Keychain 里，
-   换一台机器都解不开，同步过去也是废数据。Linux 上只是仅属主可读的 0600 文件（代码有意不用 libsecret），
-   文件本身能被带走：备份数据目录会连同密码一起带走，所以这条理由在 Linux 上更多是"不该同步"而不是"同步了也解不开"。
+   换一台机器都解不开。Linux 上只是仅属主可读的 0600 文件（代码有意不用 libsecret），
+   文件本身能被带走：备份数据目录会连同密码一起带走，所以这条理由在 Linux 上更多是"不该带走"而不是"带走了也解不开"。
 2. **服务器不该看到它**。本文 §3 把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
    把设备密码放上去，等于要求用户相信一个我们明确假设不可信的组件。
 3. **它是本机的事**。"记住密码"是这台机器上的便利，不是账号的属性。
 
 所以密码存在 `ISecretStore`（Windows 是数据目录下 `secrets/` 里的 DPAPI 文件，macOS 是 Keychain，Linux 是 `secrets/` 里的 0600 文件）里，
-名字为 `recent-device-<设备代码去掉空格后的数字 id>`（带账号时是 `recent-device-<accountId>-<id>`），
+名字为 `recent-device-<设备代码去掉空格后的数字 id>`，
 由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。接口上 `UpdatePasswordAsync(id, null)` 会
 **删除**密钥，但界面目前没有调用它：取消"记住密码"现在只是不再写入，已存的密码不会因此被清掉。
 
-将来如果产品坚持要"新机器登录后自动带上密码"，唯一可接受的形态是：客户端用账号口令派生密钥（Argon2id）
-做端到端加密，服务器只存不透明密文。因为密码不在条目里，这个决定**不需要改动数据格式**就能后加。
+### 字段语义
 
-### 字段语义与合并规则
+| 字段 | 含义 |
+|---|---|
+| `LastConnectedUtc` | 最后一次连上这台设备的时间 |
+| `UpdatedAtUtc` | 用户最后一次**改这个条目**的时间（改别名、或删除）。连接行为不动它 |
+| `DeletedAtUtc` | 用户删除它的时间；null 表示还在列表里 |
 
-账号同步一上线，"两台机器上的同一份列表怎么合"就必须有确定答案。三个时间字段就是为它准备的：
-
-| 字段 | 含义 | 合并规则 |
-|---|---|---|
-| `LastConnectedUtc` | 最后一次连上这台设备的时间 | 取两边**较晚**的值。这是各机器的观测，不是编辑 |
-| `UpdatedAtUtc` | 用户最后一次**改这个条目**的时间（改别名、或删除） | 较晚者胜。连接行为不动它 |
-| `DeletedAtUtc` | 用户删除它的时间；null 表示还在列表里 | 非空即视为删除；与对方的 `UpdatedAtUtc` 比较，较晚者胜 |
-
-注意 `LastConnectedUtc` 用的是取最大值而不是"最后写入者胜"：连接是观测，谁先谁后无所谓，晚的那次才是事实。
-把连接的写入也当成编辑（顺带推进 `UpdatedAtUtc`）会让"在 A 机改名"被"在 B 机连接"无声覆盖。
-
-**墓碑**（`DeletedAtUtc`）是删除必须软删的原因：在 A 机上删掉设备，如果只是从文件里拿掉，B 机的副本会在
-下次同步时把它原样送回来，用户会觉得"删不掉"。带时间戳的墓碑让删除可以被合并、被传播，合并完再清理。
-在没有同步的今天，墓碑只是留在文件里、被 `GetAllAsync` 过滤掉——所以现在删掉的设备**看起来**是没了。
+删除是软删：条目留在文件里，`DeletedAtUtc` 非空，被 `GetAllAsync` 过滤掉，所以删掉的设备**看起来**是没了。
 连上同一个设备会让它复活（`DeletedAtUtc` 清空、`UpdatedAtUtc` 推进），不会出现"删过一次就再也回不来"。
 
-### 账号作用域
+### 设备代码会失效，在线状态只是观测
 
-`RecentDevicesStore` 的构造函数接受一个可选的 `accountId`：
-
-* 不传（今天的情况）：列表在 `dataDirectory/recent_devices.json`，密钥名 `recent-device-<id>`。
-* 传入：列表在 `dataDirectory/accounts/<accountId>/recent_devices.json`，密钥名带账号前缀（`recent-device-<accountId>-<id>`）。
-
-这样同一个 Windows 用户登录两个账号时，两份列表和两套记住的密码互不串扰。现在就把这个参数留出来，是因为
-它的成本是零；等到有了账号再改，已经写下的数据就要迁移。`accountId` 来自服务器，所以构造时会校验它不含
-路径分隔符和 `..`——它必须只是一个名字，不能决定文件写到哪儿。
-
-### 账号体系上线时怎么接
-
-**客户端**：`MainWindowViewModel` 依赖的是接口，不是具体类型，所以换实现不用动界面。预期是在中间加一层：
-
-```text
-IRecentDevicesStore
-  └─ SyncedRecentDevicesStore(本地: RecentDevicesStore, 远端: IAccountDeviceListClient)
-       读：本地立即返回，后台按 UpdatedAtUtc 合并
-       写：本地先落（离线可用）+ 入队推送
-```
-
-能这么接的前提正是"条目里没有密码"——同步层搬运 `RecentDeviceEntry` 这件事本身就不可能泄漏密码。
-
-**服务端**：设备代码已经持久化（Rendezvous 经 `RemoteDesktop.Server.Storage`，裸 SQL + 启动时
-`EnsureSchemaAsync`；按 `Rendezvous:Database:Provider` 选 PostgreSQL 或 SQLite，没配则回退内存），
-映射在 `device_registrations` 里，新表直接引用它的 `device_id`：
-
-```sql
-CREATE TABLE IF NOT EXISTS account_devices (
-    account_id        BIGINT NOT NULL,
-    device_id         BIGINT NOT NULL,      -- 对应 device_registrations.device_id
-    alias             TEXT,
-    last_connected_at TIMESTAMPTZ,
-    updated_at        TIMESTAMPTZ NOT NULL,
-    deleted_at        TIMESTAMPTZ,
-    PRIMARY KEY (account_id, device_id)
-);
-```
-
-沿用既有的写法（裸 SQL、启动建表、`Rendezvous:Database` 配置），不要为这一张表引入 EF Core。
-
-两点别低估：
-
-* **账号体系本身的工作量远大于列表同步**。现在的 Rendezvous 对客户端只有 `/ws` 信令和 `/health`，没有注册、
-  登录、令牌、吊销、找回中的任何一样。还要决定设备证书怎么绑定到账号——最自然的做法是设备证书注册进账号，
-  这样设备开机不需要输账号密码。
-* **设备代码会失效**。它绑定证书指纹，设备重装就是新指纹、新代码。列表里的旧条目会变成死链接，不能假设
-  `device_id` 永远有效。界面现在显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"
-  和"当前离线"的回答故意完全相同（见本文 §3「部署者必须自己做的事」里关于在线状态查询的一段），所以界面只能说这么多。
-  连接返回"对方设备不在线"时，界面只是把那一行置为离线并提示"对方设备不在线。"；"该设备可能已重新注册"这类提示目前**没有实现**。
-  **这三态只存在内存里，不写进 `recent_devices.json`**：它是机器的观测值而不是用户意图，写进去只会给将来的
-  账号同步增加一条需要合并的字段。合并规则因此完全不受影响。
-
-### 现在有意不做的
-
-* 不引入 EF Core，不写客户端同步框架：一个接口、一种格式、一组时间字段就够了。
-* 不把 `DeviceId` 换成 GUID 之类的"分布式友好"标识：服务端已经用 `device_id BIGINT UNIQUE` 关联好了。
-* 不清理墓碑：合并规则需要它们。等同步真正落地时再定保留期（比如超过 N 天的墓碑可以丢弃）。
-* **不做密码同步**，也不为此预留字段。
+设备代码绑定证书指纹，设备重装就是新指纹、新代码，列表里的旧条目会变成死链接，不能假设 `device_id` 永远有效。
+界面显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"和"当前离线"的回答故意完全相同
+（见本文 §3「部署者必须自己做的事」里关于在线状态查询的一段），所以界面只能说这么多。
+连接返回"对方设备不在线"时，界面只是把那一行置为离线并提示"对方设备不在线。"；"该设备可能已重新注册"这类提示目前**没有实现**。
+这三态只存在内存里，不写进 `recent_devices.json`：它是机器的观测值，不是用户的意图。

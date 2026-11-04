@@ -54,7 +54,8 @@
 ### 1. 服务端安装包（三平台）
 
 三个平台各有一个服务端安装包，装的都是同样四个程序（信令 Rendezvous、中继 Relay、监控台 Ops、Ops 的 HTTPS 网关
-Gateway）：Linux 是 Debian 包，Windows 是 MSI，macOS 是 `.pkg`。下面按平台分节。
+Gateway）：Linux 是 Debian 包，Windows 是 MSI，macOS 是 `.pkg`。四个程序放在同一个包里，是因为控制台没有另外三个
+就没有数字可看，分开装只会多出"装了一半"的状态。下面按平台分节。
 
 #### Linux：Debian 包
 
@@ -1754,7 +1755,7 @@ build/installer/linux/client/build-deb.sh
 
 - **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在平台的密钥存储里（Windows 是 DPAPI，macOS 是 Keychain，Linux 是数据目录下 `secrets/` 里仅属主可读的 0600 文件），换一台机器不会跟着走。备份 `recent_devices.json` 就是备份设备列表，密码需要重新输入；Linux 上备份整个数据目录则会连密码一起带走。
 - **解析失败的文件会被保留。** 解析失败，或文件版本比程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
-- 没有账号体系，也没有跨机器同步。数据格式、合并规则和"为什么不放密码"见 [系统设计](../design/README.md) 的
+- 没有账号体系，也没有跨机器同步。数据格式和"为什么不放密码"见 [系统设计](../design/README.md) 的
   "客户端本机存储"一节。
 
 ## 十、故障速查
