@@ -15,7 +15,7 @@
 | 远程控制（键鼠注入） | ✅ `SendInput` / `SendSAS` | ✅ CGEvent | ✅ libei |
 | 观看模式 | ✅ | ✅ | ✅ |
 | 屏幕采集 | DXGI Desktop Duplication | ScreenCaptureKit | portal + PipeWire |
-| 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / VA-API / x264） |
+| 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / x264；VA-API 🔬） |
 | 多显示器 | ✅ | ✅ | ✅（Wayland 会话） |
 | 剪贴板（文本 + 图片） | ✅ | ✅ | ✅（每次连接要授权） |
 | 音频（被控端声音回传） | WASAPI 环回 | ScreenCaptureKit 环回 | PulseAudio |
@@ -31,8 +31,9 @@
 | H.265 | ❌ 未实现 | ❌ 未实现 | ❌ 未实现 |
 | 隐私屏 | ❌ 未实现 | ❌ 未实现 | ❌ 未实现 |
 
-**读这张表的规矩**：⚠️ 表示"代码在但没验证过"，❌ 表示"这个平台上没有对应物或没做"。两者不一样——
-前者可能一跑就通，后者做不了。被控端**不会假装成功**：没有的能力，或被控端没有授予的能力，控制端界面上根本不显示
+**读这张表的规矩**：⚠️ 表示"可用但有限制"（例如 macOS 的无人值守只在登录后可用），🔬 表示"代码在但没在
+真机上验证过"（例如 Linux 的 VA-API 硬件编码），❌ 表示"这个平台上没有对应物或没做"。三者不一样——
+⚠️ 能用但有边界，🔬 可能一跑就通，❌ 做不了。被控端**不会假装成功**：没有的能力，或被控端没有授予的能力，控制端界面上根本不显示
 相关按钮（例如 Ctrl+Alt+Del），而不是显示一个按下去没反应的按钮。
 
 ### 被控端的形态
@@ -42,6 +43,11 @@
 | 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent（服务拉起的辅助进程，真正采集屏幕、注入输入的是它） | 用户会话里的 app（client，或独立的 host-only app） | 图形会话里的 `systemd --user` 服务 |
 | 为什么是这个形状 | Session 0 采不到屏，必须拆出一个在交互会话里干活的 Agent | 没有 Session 0，root 的 LaunchDaemon 拿不到屏幕录制权限，所以只能是一个用户会话里的 app；host 包把这个 app 做成无窗口、只被控的形态 | portal 只在该会话内应答，所以宿主自己就是采集和注入的那一方 |
 
+**只装了客户端包、没有 host 服务的机器**，被控端就在客户端这个进程里运行（界面上写"被控端在本进程内运行"），
+主页与「高级设置」里的"本机控制端代码"是同一个。装了 host 服务（Windows 的服务、Linux / macOS 的 host 包）之后，
+客户端只负责发起连接：主页显示的是服务的设备代码，「高级设置」里的"本机控制端代码"是另一个——这台机器连出去
+时用的是后者。
+
 Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC 三个桌面：
 
 - 服务（LocalSystem）本身**不采集屏幕、不注入输入**，只负责连接、鉴权、授权和转发；屏幕和输入由当前控制台
@@ -50,7 +56,8 @@ Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC
 - Ctrl+Alt+Del 不能用按键注入，只能由服务调用 Windows 的安全注意序列接口（`SendSAS`；安装脚本会打开所需策略
   `SoftwareSASGeneration`）。
 - 客户端检测到服务后，设备代码和临时密码显示的是服务的那一份；客户端自己只负责发起连接。
-  `--HostMode standalone` 可忽略服务，直接用客户端当被控端（只能控制用户桌面，看不到登录界面和 UAC）。
+  `--HostMode standalone` 可忽略服务，直接用客户端当被控端（只能控制用户桌面，看不到登录界面和 UAC）；
+  这个开关三个平台都生效，见 §2 末尾的命令行开关。
 
 另外两个平台都没有这一层拆分，所以也没有这些机制：macOS 与 Linux 上不存在"登录前访问"，因为采集与注入 API
 本身就只在用户图形会话里可用。
@@ -156,7 +163,8 @@ remotedesktop://902226105
 它也不会禁用任何按钮。
 
 命令行开关：`--Transport:ForceRelay true` 强制走中继，`--Transport:RendezvousUri ws://<服务器>:5080/ws`
-连接其他服务器，`--DataDirectory <目录>` 换一套设备身份。
+连接其他服务器，`--DataDirectory <目录>` 换一套设备身份，`--HostMode standalone` 不委托给本机已装的 host
+服务、由客户端这个进程自己托管被控端（Windows、macOS、Linux 都生效）。
 
 ## 3. 远程桌面窗口
 
@@ -199,7 +207,7 @@ remotedesktop://902226105
 - **安全**：Windows 上文件操作由 Agent 以登录用户的身份执行，从不以 SYSTEM 执行；被控端只有登录界面 / UAC 可用时
   一律拒绝。路径必须是绝对路径，拒绝设备路径（`\\.\`、`\\?\`）、NTFS 备用数据流和 `CON`、`NUL` 等保留名，
   `..` 先解析再检查。**当前版本没有"把可访问范围限制到指定目录"的配置项**：被控端不限制根目录，登录用户能访问的
-  都可以访问。观看模式由被控端拒绝文件通道。会话 ID、操作类型和路径写入被控端日志作为审计记录：Windows 上是
+  基本都可以访问；没配根目录时仍然拒绝 UNC 网络共享（Windows）和 `/proc`、`/sys`、`/dev`（Linux / macOS）。观看模式由被控端拒绝文件通道。会话 ID、操作类型和路径写入被控端日志作为审计记录：Windows 上是
   Agent 日志（`agent-user-*.log`，登录界面 / UAC 桌面是 `agent-secure-*.log`）；Linux 和 macOS 没有 Agent，
   记在被控端进程自己的日志（`service-*.log`）里；独立客户端模式（`--HostMode standalone`）没有文件日志。
 - 服务到 Agent 的文件通道是无损转发：带背压、不丢帧、不因为 Agent 被替换而续传到另一个 Agent；
@@ -223,8 +231,8 @@ remotedesktop://902226105
   已用真实的 PowerShell（含 PSReadLine 的历史与行编辑）、vim、less、nano 验证。
 - **终端在两种主题下都用自己的深色配色**：ANSI 的 16 色是按深色背景定的，搬到浅底会失去对比，所以画面与
   状态栏保持深色，而窗口边框、标签栏和其余界面跟随系统主题。这是有意的选择，不是漏掉浅色主题。
-- 操作：选中文字即可复制（Ctrl+Shift+C，或有选中时按 Ctrl+C；双击选词，三击选行）；Ctrl+V、Shift+Insert、
-  右键或中键粘贴**控制端**剪贴板的内容；Shift+PageUp / PageDown 或滚轮翻看历史；程序开启鼠标上报时按住
+- 操作：选中文字**不会**自动复制，要复制得再按 Ctrl+Shift+C、Ctrl+Insert，或有选中时按 Ctrl+C（双击选词，
+  三击选行）；右键有选区时复制、没有选区时粘贴；Ctrl+V、Shift+Insert、中键粘贴**控制端**剪贴板的内容；Shift+PageUp / PageDown 或滚轮翻看历史；程序开启鼠标上报时按住
   Shift 可以照常选中文字。
 - 限制：被控端锁屏、注销或切换到安全桌面时 Agent 会被替换，终端随之结束（窗口会提示，重新开一个即可）。
 
@@ -269,7 +277,12 @@ remotedesktop://902226105
 { "Telemetry": { "Enabled": true, "IntervalSeconds": 30 } }
 ```
 
-打开后，每 30 秒通过已有的信令连接（WebSocket）发一条心跳，内容只有这些字段：
+这一段在客户端的 `appsettings.json`（`src/Hosts/RemoteDesktop.Client/`）和被控端服务的 `appsettings.json`
+（`src/Hosts/RemoteDesktop.HostService/`）里各有一份，默认 `Enabled` 为 `false`、`IntervalSeconds` 为 30；
+间隔会被夹在 5 到 3600 秒之间。
+
+打开后，会话开始约 5 秒后先报一次（让第一个往返延迟有机会测出来），之后按配置的间隔（默认 30 秒）通过已有的
+信令连接（WebSocket）发一条心跳，内容只有这些字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -287,5 +300,5 @@ remotedesktop://902226105
 - 心跳失败不影响会话：发送只是入队，队列满了就丢最旧的一条，断线期间整队清空。
 - 被控端也要打开才会出现在"平台分布"里；只开控制端时该面板为空，界面显示"—"而不是 0。
 - **会话结束是例外，始终上报**：无论这个开关是否打开，会话正常结束时两端都会通过信令上报一次
-  `session.ended`，内容只有会话 id、这一端的角色和结束原因（`closed`）。没有它，直连（P2P）会话在监控台里
+  `session.ended`，内容只有会话 id、中继会话 id（`relaySessionId`，未配置中继时为空）、这一端的角色和结束原因（`closed`）。没有它，直连（P2P）会话在监控台里
   永远不会结束。它不是周期性的，也不含 RTT、平台或版本。

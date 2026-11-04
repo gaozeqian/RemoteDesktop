@@ -6,7 +6,7 @@
 和 `CONTRIBUTING.md` 的分工：那份管**代码**，这份管**文档**。两者都指向同一件事——让下一个人不用问就能找对地方。
 
 > **为什么要有这份文件。** 在此之前，文档约定散在三处：`CONTRIBUTING.md` 讲了一点、`build/README.md` 讲了一点、
-> `docs/README.md` 又讲了一点。三轮目录结构评审每轮都能挑出新的不一致（索引漏项、命名混乱、评审被当成现行约定），
+> `docs/README.md` 又讲了一点。约定分散在三处，就会各说各话、逐渐分叉（索引漏项、命名不一致），
 > 因为"写在哪"本身就是分散的。现在收成一份，并且**其中能机器判断的部分已经变成测试**（见 §7）。
 
 ## 1. 文档分两类，生命周期不同
@@ -120,8 +120,9 @@ README 的职责是**让人在三十秒内知道这是什么、怎么跑起来�
 | 规则 | 谁来管 | 在哪 | 违反时 |
 |---|---|---|---|
 | 必备文件存在（§4） | `DocumentationTests` | `dotnet test` | 构建红 |
-| 一个文件一个 H1（§5） | `DocumentationTests` | 同上 | 构建红 |
-| `docs/` 下每个文档都被索引（§2） | `DocumentationTests` | 同上 | 构建红 |
+| 一个文件一个 H1（§5；不检查 `.github/` 下的文件） | `DocumentationTests` | 同上 | 构建红 |
+| `docs/` 下每个文档都被索引（§2；豁免各目录的 `README.md`，它们靠 `docs/README.md` 直接链接保证） | `DocumentationTests` | 同上 | 构建红 |
+| `docs/` 根只放索引与本文件（§2） | `DocumentationTests`（`Docs_root_holds_only_the_index_and_the_style_guide`） | 同上 | 构建红 |
 | 相对链接可解析（§5） | `DocumentationTests` | 同上 | 构建红 |
 | 文件名规范（§3） | `DocumentationTests` | 同上 | 构建红 |
 | README 必备章节（§5） | `DocumentationTests` | 同上 | 构建红 |
@@ -156,7 +157,7 @@ markdownlint 管**格式**（空行、缩进、代码块标注）。前者需要
 $EDITOR docs/README.md
 # 4. 本地验证：结构、命名、链接
 dotnet test tests/RemoteDesktop.Architecture.UnitTests
-# 5. 格式（若本地装了 node）
+# 5. 格式（若本地装了 node；版本以 .github/workflows/ci.yml 为准）
 npx --yes markdownlint-cli2@0.23.3 "**/*.md"
 ```
 

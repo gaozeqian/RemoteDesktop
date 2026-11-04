@@ -5,7 +5,7 @@
 ## 🛠 开发环境准备
 
 1. **SDK 要求**: .NET 10 SDK，**不低于 10.0.112**。版本由根目录的 `global.json` 固定（`rollForward: latestFeature`，
-   同一主版本内更新的功能带也可以），测试运行器也在那里指定为 Microsoft.Testing.Platform。
+   同一 主.次 版本（10.0）内更新的功能带也可以），测试运行器也在那里指定为 Microsoft.Testing.Platform。
 2. **IDE 推荐**: Visual Studio 2022 (Preview) / JetBrains Rider / VS Code (配合 C# Dev Kit)。
 3. **构建系统**: 本项目使用较新的 `.slnx` 解决方案格式，请确保您的 IDE 支持。
 
@@ -21,8 +21,8 @@ dotnet build RemoteDesktop.slnx
 dotnet test RemoteDesktop.slnx
 ```
 
-> `dotnet test` 会在当前目录建一个**空的** `TestResults/`，这是 Microsoft.Testing.Platform 的默认值，不是本仓库
-> 的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
+> `dotnet test` 不带 `--results-directory` 时会在当前目录建一个**空的** `TestResults/`，这是
+> Microsoft.Testing.Platform（`global.json` 指定的测试运行器）的默认值，不是本仓库的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
 > 根上那个空目录已被 gitignore，看到它不必处理；想自己留一份报告就加
 > `--results-directory artifacts/test-results/<平台>`。
 
@@ -32,7 +32,7 @@ dotnet test RemoteDesktop.slnx
 
 | 种类 | 含义 | 例子 |
 |---|---|---|
-| `UnitTests` | 不需要外部服务或网络，随时可跑 | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
+| `UnitTests` | 不需要外部服务或网络，随时可跑（个别用例例外：依赖已构建好的服务端 MSI 的用例，在 `artifacts/installer/windows/` 里找不到、也没设 `RD_SERVER_INSTALLER_MSI` 指向它时跳过；要人工点"分享"的 Linux portal 用例，不设 `RD_PORTAL_TEST=1` 就跳过） | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
 | `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
 
 **后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
@@ -50,7 +50,7 @@ dotnet test RemoteDesktop.slnx
 | `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表） |
 | `RemoteDesktop.Server.Ops.UnitTests` | 监控台核心 `Server.Ops.Core` 与 `Server.Shared` |
 | `RemoteDesktop.Server.Ops.IntegrationTests` | 监控台三层（`Server.Ops`、`Server.Ops.Core`、`Server.Ops.Storage`）合起来跑 |
-| `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、以及 `RepositoryStructureTests` 里的结构约定 |
+| `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、`RepositoryStructureTests` 里的结构约定、以及 `DocumentationTests` 里的文档规范 |
 | `RemoteDesktop.Platform.<OS>.UnitTests` | 那一个平台的实现 |
 
 所以"某个功能在哪测"不能只靠项目名推。默认是**功能层的单测放 `Core.UnitTests`**；只有平台专有的才进对应平台的
@@ -112,8 +112,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd1 
 | 路径 | 是什么 |
 |---|---|
 | `artifacts/installer/<平台>/` | **交付物**：安装包。三个平台各三个：Windows `.msi`、macOS `.pkg`、Linux `.deb`，对应客户端、被控端、服务端三个角色。角色写在**文件名**里，不另开子目录；名字的形状与下面发布资产的一致，只是 `<tag>` 换成 `<版本>`。`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
-| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `Remote Desktop.app`；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/`、`Ops/` 与 `Gateway/`（Ops 的 HTTPS 网关） |
-| `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`；Linux 的 `libmsquic.so`，由 `native/linux/fetch-libmsquic.sh` 取来） |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `Remote Desktop.app`，另有 `host/`（`Remote Desktop Host.app`）与 `server/`（服务端发布内容）两个子目录；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/`、`Ops/` 与 `Gateway/`（Ops 的 HTTPS 网关） |
+| `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`；Linux 的 `libmsquic.so.<版本>` 加软链 `libmsquic.so.2`，由 `native/linux/fetch-libmsquic.sh` 取来） |
 | `artifacts/test-results/<平台>/` | 测试报告（`dotnet test --report-trx` 产出的 `.trx`），按跑测试的机器分平台 |
 
 发布时 `release.yml` 会把上面这些包**改名**成用户看到的那份资产，形状是
@@ -144,14 +144,14 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 
 **这两组不是同一条规则。** 上面那组是我们自己的脚本写的，`<类别>/<平台>/` 由我们定；下面那组由 SDK 写，
 第二层是 `<项目>` 与 `<pivot>`，**不按平台分**——加一个平台不会在这里多一层。所以"新增平台"是往
-`installer/`、`app/`、`lib/`、`test-results/` 各加一层，SDK 的那四个不动。`vstest` 默认的 `TestResults/`
-在仓库根，只有不带 `--results-directory` 手跑时才会出现；`dotnet test` 不带参数默认就写它，所以
+`installer/`、`app/`、`lib/`、`test-results/` 各加一层，SDK 的那四个不动。Microsoft.Testing.Platform 默认的
+`TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
 所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 35 个：`src/` 下 26 个，`tests/` 下 9 个）
 不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
-**唯一的例外**是 `build/installer/windows/` 下的三个安装器工程（两个 WiX 工程与 net48 的 `CustomActions`）：它们
+**唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们
 带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在工程目录内（`bin/`、`obj/`、
 `bin/x64/`）。所以"删 `artifacts/bin` 与 `artifacts/obj`"清不掉它们——要连它们一起清，用
 `git clean -xdf build/installer`（`-x` 会连被忽略的文件一起删，用之前先看一眼 `git clean -xdn`）。
@@ -169,7 +169,8 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 * `Domain` (领域层) 不能引用任何其他层。
 * `Abstractions` (抽象端口) 只能引用 `Domain`。
 * `Signaling`（信令契约）是独立的一层：不引用任何其他内部项目；`Transport` 引用它，反过来不行。
-* `Protocol`、`Transport`、`Application` 依次向外，且都不得引用 `Features`、`Media`、`Platform`、`Server` 或三个宿主
+* `Protocol`、`Transport`、`Application` 依次向外（`Protocol` 不得引用 `Signaling`、`Transport`、`Application`，
+  `Transport` 不得引用 `Application`），且都不得引用 `Features`、`Media`、`Platform`、`Server` 或三个宿主
   （`Client`、`HostService`、`SessionAgent`）。
 * `Platform.*` (平台实现) 和 `Media` (具体技术) 不得引用 `Protocol`、`Signaling`、`Transport`、`Application`、
   `Features`、`Server` 与宿主（二者彼此也不引用），也就是只面对 `Abstractions` 与 `Domain`。**例外**：
@@ -196,6 +197,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 | `.cs` 文件名要么是它声明的类型，要么是它分组的概念（此时必须声明 **两个以上** 类型） | 见下 |
 | `.sh` 用 kebab-case；`.ps1` 用 Verb-Noun，动词取自 PowerShell 的批准动词表 | `build/README.md` |
 | `build/installer/<平台>/<角色>/`、`build/service/<平台>/`，平台取 `windows`/`macos`/`linux` | `build/README.md` |
+| Linux 服务端 `.deb` 的 `postinst` 要让监控台钉住本机节点自己的证书（含 `--ops-node-certificate-path` 与 `tls/signaling.crt`），对应 `The_linux_package_lets_the_console_pin_its_own_certificate` | `build/installer/linux/server/postinst` |
 
 第二条值得展开：一个文件承载"一个概念的接口族与它的 DTO"是允许的（`IAudio.cs` 里没有 `IAudio` 类型，
 但它是音频端口的整组契约），所以判据不是"文件名必须是类型名"，而是**"名字不是类型时，它必须是个分组"**。

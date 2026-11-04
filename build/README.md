@@ -48,15 +48,18 @@ macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote 
 macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd_installer_plugin.m`（Objective-C，
 `InstallerSection`/`InstallerPane` 代码构建视图，无 nib），由 `native/macos/build-installer-plugin.sh` 按角色
 编出 `.bundle`，三个 `make-pkg.sh` 用 `productbuild --plugins` 放进产品归档。它属于 `native/` 而不是
-`installer/`，因为它是**要编译的原生代码**，与 `rd_*.m` 放在一起；`installer/macos/<角色>/` 里只留该角色的
-打包脚本与脚本目录。client 与 host 的答案应用逻辑只有一份：
-`installer/macos/client/scripts/apply-answers.sh`，host 的 `make-pkg.sh` 在组装脚本目录时把它拷过去。
+`installer/`，因为它是**要编译的原生代码**，与 `rd_*.m` 放在一起；`installer/macos/<角色>/` 里放该角色的
+打包脚本与脚本目录。有一处明确的例外：host 包依赖 `client/` 里的共用物，没有再抽到平台一层——
+`host/make-app.sh` 调用 `client/make-icns.sh` 生成图标、用 `client/entitlements.plist` 签名、读
+`client/development-identity` 里的开发签名身份；`host/make-pkg.sh` 在组装脚本目录时把
+`client/scripts/apply-answers.sh` 拷过去（client 与 host 的答案应用逻辑只有这一份）。
 
 `docker/` 是第三条轴，不在这两条里：它装的是服务端镜像，镜像本身就是跨平台的，也不按角色分。镜像有四个
 （信令、中继、监控台、Ops HTTPS 网关），`docker-compose.yml` 只启动前两个；监控台、网关与信令 TLS 是显式
 加载的 overlay：`docker-compose.ops.yml`、`docker-compose.tls.yml`（带一个 Caddyfile，公网 TLS）与
 `docker-compose.selfsigned.yml`（信令直接用自签名证书在 5080 上提供 TLS，用于局域网；用法见该文件开头的注释）。上面那张树里
-其余四项都服从 `<平台>/<角色>`，只有它不分层。
+只有 `installer/` 服从 `<平台>/<角色>`；`service/` 只分到平台，`signing/`、`tools/` 与 `docker/` 各有自己的规则，
+其中 `docker/` 不分平台也不分角色。
 
 ## "本目录"与子目录各放什么
 
@@ -64,7 +67,8 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 
 | 位置 | 本层 | 子目录 |
 |---|---|---|
-| `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF；`version.sh`：macOS/Linux 打包脚本共用的版本读取与校验 | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
+| `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF；`version.sh`：打包脚本与 CI 共用的版本读取与校验 | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
+| `installer/<平台>/` 本层 | 平台内跨角色共用：`linux/common.sh`（三个 `build-deb.sh` 共用）、`windows/Test-InstallerUpgrade.ps1`（`ci.yml`、`release.yml` 调用） | `<角色>/` |
 | `service/` | — | `<平台>/`：只有那个平台上的服务管理器读得懂的定义 |
 | `signing/` | 跨平台的证书脚本（纯 .NET API，`pwsh` 三平台可跑） | `windows/`：只在 Windows 上成立的两件事 |
 | `tools/` | 两个仓库维护脚本，与平台无关，见下 | — |
@@ -72,11 +76,11 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 `installer/` 与 `signing/` 看起来是"脚本和子目录混在一层"，其实不是混放：**本层 = 共用，子目录 = 专属**。
 判断标准只有一句——这个文件是被两个以上的角色/平台用到，还是只被一个用到。
 
-`installer/version.sh` 就是这条规则的一个例子：它只有一份，被 macOS 的五个脚本与 Linux 的三个脚本 source。
+`installer/version.sh` 就是这条规则的一个例子：它只有一份，打包脚本与 CI（`release.yml` 的 `check-version` 与 `verify-packages` 这个复合 action）都 source 它。
 版本本身仍来自根 `Directory.Build.props` 的 `<Version>`；这个脚本负责空值、三段数字与 MSI 数值上限的检查，
 让 macOS/Linux 在本地打包时也得到与 Windows 相同的失败，而不是各自回退到 `0.0.0` 或用另一种解释接受它。
 Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的最终形态见
-[`docs/ops/README.md`](../docs/ops/README.md) 的"版本形态"表。
+[`docs/ops/README.md`](../docs/ops/README.md) §三开头的版本表。
 
 `installer/New-LicenseRtf.ps1` 是这条判据里的一个窄例（`version.sh` 是标准情形：两个平台、三个角色都用到），
 值得说清楚：它**只被 Windows 用**（RTF 是 WiX 许可页的格式），
@@ -94,16 +98,15 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 | shell（`.sh`） | kebab-case | `build-deb.sh`、`make-pkg.sh`、`fetch-libmsquic.sh` |
 | PowerShell（`.ps1`） | Verb-Noun PascalCase，动词取自 [PowerShell 的批准动词表](https://learn.microsoft.com/powershell/scripting/developer/cmdlet/approved-verbs-for-windows-powershell-commands) | `New-LicenseRtf.ps1`、`Invoke-SecurityAudit.ps1`、`Export-ThirdPartyNotices.ps1` |
 
-注意 `Generate-` **不**在批准动词表上（这是它改成 `Export-` 的原因），`Build-` 与 `Deploy-` 则只在 PowerShell 7
+注意 `Generate-` **不**在批准动词表上（所以导出类脚本用 `Export-`），`Build-` 与 `Deploy-` 则只在 PowerShell 7
 上算批准。两条命名规则都由 `tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 断言。
 
 ## 新增一个平台
 
 加一层 `<平台>/`，不要另起一个和 `installer/`、`service/` 并列的目录。
 
-以前 Linux 的打包脚本住在 `build/debian/{client,host,server}/`，Windows 和 macOS 的住在
-`build/installer/{client,server}/{windows,macos}/`：一个按发行版分、一个按角色分，加一个平台时要先选边站。
-现在只剩一个答案。
+三个平台的打包脚本都在 `build/installer/<平台>/<角色>/` 下（`.deb` 也在 `installer/linux/` 下，不按发行版另设目录），
+加一个平台时没有第二种放法可选。
 
 ## 产物落在哪里
 
@@ -140,9 +143,17 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 
 # 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 文件读不到
-pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"
-pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/appsettings.json
+# -SettingsPath 一次只查一份文件。MSI 部署实际生效的配置在 %ProgramData%\Remote Desktop Server\ 下
+pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$env:ProgramData\Remote Desktop Server\Rendezvous\appsettings.json"
+pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$env:ProgramData\Remote Desktop Server\Relay\appsettings.json"
+
+# 开发时查发布产物（服务端的发布目录按程序分子目录）
+pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/Rendezvous/appsettings.json
 ```
+
+`-InstallDirectory <目录>` 会读 `<目录>\Rendezvous\appsettings.json` 与 `<目录>\Relay\appsettings.json` 两份，
+适合手工解压或拷贝出来的部署。对 MSI 装出来的 `C:\Program Files\Remote Desktop Server` 它读到的是**随包出厂的默认值**，
+不是实际生效的配置（后者在 `%ProgramData%\Remote Desktop Server\`，升级不会覆盖），所以审 MSI 部署请用上面的 `-SettingsPath`。
 
 两个脚本的默认输出位置都相对**仓库根**解析（由脚本自身的 `$PSScriptRoot` 往上找），所以在哪个目录下敲命令都
 一样。它们只读文件、不调用平台专有 API，所以在 Linux 或 macOS 上可以用 `pwsh` 直接跑，审那边的服务端部署

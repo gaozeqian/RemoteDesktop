@@ -248,8 +248,8 @@ macOS 的签名不走本目录的脚本，而在打包流程里：`make-app.sh` 
 分发——`make-app.sh --distribution` 会直接拒绝它（只对本地开发有意义）。
 
 **Installer 证书不是 code-signing 身份。** 它没有 Code Signing EKU，`security find-identity -p codesigning`
-不会列出它——早期脚本就是用这个过滤器找 Installer 证书，结果在真正配了证书的机器上必然失败。
-现在 `make-pkg.sh` 用 `security find-identity -v`（不过滤）找 Installer，用 `-p codesigning` 找 Application；
+不会列出它——用这个过滤器找 Installer 证书，在真正配了证书的机器上必然失败。
+所以 `make-pkg.sh` 用 `security find-identity -v`（不过滤）找 Installer，用 `-p codesigning` 找 Application；
 Apple DTS 的原话见
 [论坛 822661](https://developer.apple.com/forums/thread/822661)。
 
@@ -284,7 +284,8 @@ base64 -i app.p12 | tr -d '\n'                    # 粘进 Secret
 base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 ```
 
-**四个证书 Secret 都在** → 签名；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
+**两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`，即 Application 与 Installer 的 `.p12`）
+都在** → 签名（`release.yml` 只判断这两个，口令不参与判断）；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
 警告**（`::warning`），绝不静默出一个半成品。
 
 > 公证也支持 Apple ID + 专用密码（`NOTARY_APPLE_ID` / `NOTARY_PASSWORD` / `NOTARY_TEAM_ID`），但 CI 里 API Key

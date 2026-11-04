@@ -20,7 +20,7 @@
 |---|---|---|---|
 | 被控端是什么 | LocalSystem 服务 + 用户会话里的 Agent | 用户会话里的 app（`Remote Desktop.app`，或独立的、隐藏于 `Library/Application Support` 的 `Remote Desktop Host.app` 后台组件） | 图形会话里的 `systemd --user` 服务 |
 | 登录前的远程访问 | 支持 | 不支持 | 不支持 |
-| 无人值守操作 | 支持 | 仅登录后 | **不支持**（portal 不允许控制会话持久化） |
+| 无人值守（固定密码） | 支持 | 仅登录后 | **不支持**（portal 不允许控制会话持久化） |
 
 **没有的能力不会假装成功**：被控端不提供的能力，控制端界面里不会出现对应的按钮，而不是放一个点了没反应的按钮。
 完整的能力矩阵、各平台不支持的东西及其原因见 [`docs/usage/README.md`](docs/usage/README.md)。
@@ -82,6 +82,9 @@ macOS 的三个 `.pkg` 在安装器里各有一页配置面板：服务端选 SQ
 细节（含打包脚本的坑）见 [`docs/ops/README.md`](docs/ops/README.md)。
 
 ## 快速开始
+
+下面的命令适用于 Windows 与 Linux；**macOS 不需要 `dotnet run`**，改用服务端 `.pkg` 加直接运行 bundle 里的
+可执行文件，见 [`CONTRIBUTING.md`](CONTRIBUTING.md) §本地联调。
 
 每条 `dotnet run` 都会一直运行，所以下面四条各开一个终端。
 

@@ -6,9 +6,10 @@
 这两个移植**都已完成**（阶段状态见表），所以这份文档不再承担"计划"的职责，它记的是**结论**：
 哪条路走通了、哪条路被平台挡住了、以及踩过哪些"编得过、跑起来才炸"的坑。
 
-> **实测过程不在这里。** 当年那些命令、输出、逐条探针记录（约 1300 行）已从文档中移除——
+> **实测过程不在这里。** 当年那些命令、输出、逐条探针记录已从文档中移除——
 > 需要复现某条结论时，去 git 历史里找 `docs/ports/macos-port-plan.md` 与 `docs/ports/linux-port-plan.md`
-> （合并成本文件之前的两份移植计划）的最后一版。这里只留结论和它成立的理由。
+> （合并成本文件之前的两份移植计划）的最后一版：它们在提交 `2b01997` 中被删除，
+> 用 `git show 2b01997^:docs/ports/macos-port-plan.md`（Linux 那份同理）即可取出。这里只留结论和它成立的理由。
 > 功能与平台能力对照见 [使用说明](../usage/README.md)。
 
 ## 1. 三平台对照
@@ -54,7 +55,9 @@
   "这个功能还没做"变成"宿主起不来"。
 - **`--self-check` 是每个平台都要有的东西。** 原生子系统多数经 `DllImport` 接入，失败形式常常是没有任何
   上下文的 `DllNotFoundException` 或一个永不返回的调用，而**发现这件事的地方是已经坏了的那台机器**。
-  自检要能自己走一遍真实读写，而不只是列出"端口已注册"。
+  自检要探到能力本身，而不只是列出"端口已注册"。各平台现状不同：macOS 的自检自己走一遍真实读写 / 真帧 / 真注入；
+  Linux 做只读的能力探测（会话、portal、PipeWire、libei、libavcodec 与可用编码器），不弹窗、不开始会话；
+  Windows 只报告数据目录和传输层。
 
 ## 3. macOS (Apple Silicon)
 
@@ -185,12 +188,12 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 **不是 2**——2 是 `Embedded`）：抽象接口写死了指针由客户端自己画，选 `Embedded` 会把指针烧进像素里，
 客户端再画一个就成了重影。但实测本机**始终收不到 `SPA_META_Cursor`**（授权成功，`AvailableCursorModes`
 含 Metadata），所以被控端会警告一次然后照常出帧，控制端只能画自己最后知道的那个指针。
-降级检测做了（连续 10 帧没有 cursor meta 就警告并停止通告），**配置开关没做**——宁可抑制客户端光标
+降级检测做了（连续 10 帧没有 cursor meta 就警告一次），**配置开关没做**——宁可抑制客户端光标
 也不要重影。
 
 **输入注入用 EIS，`/dev/uinput` 是坏账。** 加入可写 `/dev/uinput` 的组意味着"可随时、无需同意地向本机
 任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得，所以**既没有 uinput 后备实现，包里也没有 udev 规则，
-也不会自动把用户加进任何组**。EIS 下一次授权同时覆盖采集与控制，与 Windows 的体验一致。
+也不会自动把用户加进任何组**。
 
 **一次授权管两件事被 portal 拒绝了。** 原计划把采集和控制放在同一个会话上；实测报
 `org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist`——
@@ -210,7 +213,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 
 **MsQuic 在 Linux 上要自己弄到。** Windows 由运行时包提供 `msquic.dll`，**Linux 没有**，Ubuntu 仓库也没有。
 缺它时每个开 QUIC 连接的测试都失败并报 `QUIC is not supported on this system`——看着像平台不支持，
-其实是缺库。`.deb` 里随包分发；**开发时框架依赖运行必须设 `LD_LIBRARY_PATH`**（自包含发布不需要）。
+其实是缺库。`.deb` 里随包分发；**开发时是框架依赖运行，库不在可执行文件旁，要么把 `libmsquic` 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它**（自包含发布不需要）。
 
 **密钥是 0600 文件，服务端证书的私钥也只能是文件。** Windows 把证书放进机器证书存储、只导出公钥；
 Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限就是私钥与其他人之间唯一的屏障，
@@ -276,5 +279,5 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | portal 会话状态机繁琐（先订阅后调用、request handle、`Start` 以 variant 返回 streams、restore token、合成器重启后 PipeWire fd 失效） | 先用 shell spike 跑通；持久化 restore token；把"会话失效"当**正常状态**而不是异常 |
 | TCC 权限在开发期反复丢失 | 第一天就用 `.app` + 稳定 Apple Development 签名；不用沙箱环境验证权限 |
 | ScreenCaptureKit 的 ObjC 互操作复杂度 | 用小型 ObjC 辅助库收敛，只暴露扁平 C ABI；新功能先做最小 PoC 再展开 |
-| "能注册 ≠ 能用" | 每加一层都配一条**真帧 / 真注入 / 真读写**探针；`--self-check` 会自己走一遍 |
+| "能注册 ≠ 能用" | 每加一层都配一条**真帧 / 真注入 / 真读写**探针；macOS 的 `--self-check` 会自己走一遍，Linux 的只做能力探测 |
 | 迁移到 `[LibraryImport]` 时静默丢失长度信息 | 凡是"缓冲区 + 长度"的原生签名逐个复查，并从托管侧真的调一次 |

@@ -6,8 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提之前建议先看一眼 [README](../blob/master/README.md) 的"平台支持与限制"一节与
-        [`docs/usage/README.md`](../blob/master/docs/usage/README.md)：
+        提之前建议先看一眼 [`docs/usage/README.md`](../blob/master/docs/usage/README.md) 的"支持矩阵"：
         有些能力是某个平台上**没有对应物**（比如 macOS 没有 Ctrl+Alt+Del、Linux portal 不允许远程控制会话持久化），
         不是没做。这类改不了，但知道的人越多越好。
 
