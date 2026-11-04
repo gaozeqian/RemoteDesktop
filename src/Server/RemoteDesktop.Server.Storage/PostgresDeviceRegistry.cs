@@ -21,7 +21,7 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
     }
 
     /// <summary>
-    /// PostgreSQL's half of the four statements. The upsert names the fingerprint as the conflict target, so a
+    /// PostgreSQL's half of the dialect's seven statements. The upsert names the fingerprint as the conflict target, so a
     /// collision on the device id itself still raises a unique violation and is retried by the base class.
     /// </summary>
     /// <remarks>

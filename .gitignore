@@ -21,7 +21,7 @@ mono_crash.*
 #
 # Two patterns, by name, and nothing else. These two are the whole build-output section now: they cover the projects
 # that deliberately escape ArtifactsPath, and they are also the net under anyone who builds with -p:UseArtifactsOutput=false
-# to debug the layout, which is the one way the 27 converged projects can still grow a bin/ or obj/.
+# to debug the layout, which is the one way the converged projects can still grow a bin/ or obj/.
 #
 # What is deliberately not here is the rest of the stock Visual Studio template ([Dd]ebug/, [Rr]elease/, [Ww][Ii][Nn]32/,
 # [Aa][Rr][Mm]64/, bld/, [Oo]ut/, [Ll]og/, [Ll]ogs/, and the anchored *x64/*x86 variants). None of them matched

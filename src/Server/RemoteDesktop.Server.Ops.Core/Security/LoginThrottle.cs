@@ -7,7 +7,7 @@ namespace RemoteDesktop.Server.Ops.Core;
 /// guessing by accident.
 /// </summary>
 /// <remarks>
-/// In memory on purpose: the console is a single instance (see the plan, §3.3) and a lockout that survives a restart is
+/// In memory on purpose: the console is a single instance and a lockout that survives a restart is
 /// also a lockout an operator cannot clear without editing the database. The table of attempts is bounded — an
 /// unbounded dictionary keyed by attacker-chosen input is a memory leak with extra steps.
 /// </remarks>

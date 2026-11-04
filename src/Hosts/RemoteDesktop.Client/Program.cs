@@ -24,7 +24,7 @@ internal static class Program
         //
         // The environment variable is for launches that discard their arguments or their output. macOS's
         // LaunchServices is the concrete case: `open -a "Remote Desktop.app" --args …` drops the arguments
-        // (macOS-port-plan.md 3.11⑧), and that is also the only launch whose TCC attribution is the app's own
+        // (see docs/ports/README.md, "`open --args` 送不到参数"), and that is also the only launch whose TCC attribution is the app's own
         // rather than the calling terminal's — so it is the run whose answers mean anything. Set it with
         // `launchctl setenv RD_SELF_CHECK 1` so it lands in the session environment every launched app inherits,
         // and RD_SELF_CHECK_OUTPUT says where the report goes; unset both afterwards, because with the variable set

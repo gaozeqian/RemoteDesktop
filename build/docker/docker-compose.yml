@@ -15,7 +15,7 @@
 #
 # and have clients use ws://<server>:5080/ws. The internal management API stays protected by NODE_TOKEN either way.
 #
-# The monitoring console is optional; docker-compose.ops.yml adds it. See docs/ops/README.md §7.
+# The monitoring console is optional; docker-compose.ops.yml adds it. See docs/ops/README.md, "用 Docker 部署（Linux 服务器首选）".
 #
 # Device codes are stored persistently in PostgreSQL (volume postgres-data), so unattended access keeps its device
 # IDs across restarts and upgrades.

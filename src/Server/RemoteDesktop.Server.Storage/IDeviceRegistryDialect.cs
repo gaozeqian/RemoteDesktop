@@ -1,8 +1,8 @@
 namespace RemoteDesktop.Server.Storage;
 
 /// <summary>
-/// The part of the device registry that is different in every database: four statements, how a unique violation is
-/// recognised, and whether the store can take more than one writer at a time.
+/// The part of the device registry that is different in every database: seven statements, how a unique violation and a
+/// duplicate column are recognised, and whether the store can take more than one writer at a time.
 /// </summary>
 /// <remarks>
 /// Everything else — the cache, the nine-digit id, the collision retry, the distinction between a new device and a

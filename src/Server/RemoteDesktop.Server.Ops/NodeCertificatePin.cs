@@ -8,10 +8,11 @@ namespace RemoteDesktop.Server.Ops;
 /// is configured.
 /// </summary>
 /// <remarks>
-/// The server package writes the signaling certificate here when signaling uses TLS. macOS refuses
+/// The server packages write the signaling certificate here when signaling uses TLS. macOS refuses
 /// <c>security add-trusted-cert</c> from a package's postinstall ("authorization was denied since no user interaction
-/// was possible"), so the console cannot rely on the System keychain for its own self-signed certificate. Only the
-/// two node clients use this handler; alert webhooks keep the default validation.
+/// was possible"), so the console cannot rely on the System keychain for its own self-signed certificate; the other
+/// platforms' generated certificates are not in the system trust store either. The pin applies to both node clients
+/// (metrics scraping and device queries), whichever node they call; alert webhooks keep the default validation.
 /// </remarks>
 internal static class NodeCertificatePin
 {

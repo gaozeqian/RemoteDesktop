@@ -16,8 +16,9 @@ namespace RemoteDesktop.Server.Shared;
 /// configuration change on the node and on the console, documented in <c>docs/ops/README.md</c>.
 /// <para>
 /// When no token is configured the endpoints are not open to everyone: they are open only to callers on the loopback
-/// interface. The signaling server listens on <c>0.0.0.0</c> by default, so "no token" used to mean "anyone who can
-/// reach the port", which exposed device enumeration and device revocation on a public server. A console on another
+/// interface. The signaling server is often bound to a public address (the shipped <c>appsettings.json</c> listens on
+/// loopback, but the Docker setup uses <c>0.0.0.0</c>), so "no token" used to mean "anyone who can reach the port",
+/// which exposed device enumeration and device revocation on a public server. A console on another
 /// machine, or in another container, needs the token configured on the node it reads and on the console itself.
 /// </para>
 /// </remarks>

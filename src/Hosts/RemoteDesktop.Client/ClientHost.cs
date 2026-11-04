@@ -97,7 +97,7 @@ internal static class ClientHost
                 ControlledEndInThisProcess: !useService,
                 HostControlPipeName: pipeName))
             // No account id yet: the list belongs to this machine alone. A signed-in account passes its id here (and
-            // gets its own list and remembered passwords) — see docs/ops/README.md.
+            // gets its own list and remembered passwords) — see docs/design/README.md, "账号体系上线时怎么接".
             .AddSingleton<IRecentDevicesStore>(sp => new RecentDevicesStore(dataDirectory, sp.GetRequiredService<ISecretStore>()))
             // Registered even when there is no link: the window asks one question, and "no link" is an answer rather
             // than a missing service.

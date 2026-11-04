@@ -2,9 +2,9 @@
 #
 # Packages "Remote Desktop.app" into a macOS .pkg installer.
 #
-# Why a .pkg and not a .dmg: this application is meant to run as an unattended controlled-side host, which on macOS
-# means it has to live in /Applications (SMAppService.mainAppService is keyed to the installed bundle — see
-# src/Core/RemoteDesktop.Abstractions/Platform/ILoginItem.cs). A .pkg installs straight into /Applications with the
+# Why a .pkg and not a .dmg: the application's login item has to live in /Applications (SMAppService.mainAppService
+# is keyed to the installed bundle — see src/Core/RemoteDesktop.Abstractions/Platform/ILoginItem.cs). The unattended
+# host-only role is a separate package, build/installer/macos/host/make-pkg.sh. A .pkg installs straight into /Applications with the
 # right ownership; a .dmg makes the user drag it there themselves. It also gives us a place to explain the two TCC
 # prompts (Screen Recording, Accessibility) that a first-time user will otherwise hit with no context.
 #

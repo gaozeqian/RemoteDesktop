@@ -97,7 +97,7 @@ public sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : 
 /// <remarks>
 /// <para>
 /// Losing access (resolution change, desktop switch to UAC / lock screen) recreates the duplication; while that is
-/// impossible (secure desktop from a user process, until milestone M3) captures simply return no frame.
+/// impossible (secure desktop from a user process, which only the session agent can reach) captures simply return no frame.
 /// </para>
 /// <para>
 /// A removed or reset graphics device is different: nothing on that device ever works again, so the failure is

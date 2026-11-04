@@ -14,8 +14,8 @@ public sealed class RendezvousOptions
     public string Name { get; set; } = "rendezvous";
 
     /// <summary>
-    /// Bearer token the console must present to <c>/metrics</c> and <c>/internal/*</c>. Empty means no check, which is
-    /// only acceptable on a loopback listener. The same value is configured on the relay and the console.
+    /// Bearer token the console must present to <c>/metrics</c> and <c>/internal/*</c>. Empty means only callers on the loopback
+    /// interface are accepted, so a console on another machine needs it set. The same value is configured on the relay and the console.
     /// </summary>
     public string NodeToken { get; set; } = string.Empty;
 

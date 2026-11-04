@@ -60,7 +60,7 @@ public sealed partial class PortalConnection : IDisposable
     // The camera grant is kept here rather than in a file of ours. The portal reads it when AccessCamera is called,
     // and a grant written anywhere else would be invisible to it. The interface is an implementation detail of
     // xdg-desktop-portal, used because GNOME cannot show the access dialog to a background host whose window is not
-    // focused; see CameraAccess and docs/usage/README.md §6.
+    // focused; see CameraAccess and the 摄像头 item in the Linux section of docs/usage/README.md.
     private const string PermissionStore = "org.freedesktop.impl.portal.PermissionStore";
     private const string PermissionStorePath = "/org/freedesktop/impl/portal/PermissionStore";
     private const string PermissionTable = "devices";

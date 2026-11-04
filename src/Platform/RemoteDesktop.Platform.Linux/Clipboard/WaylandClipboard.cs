@@ -43,7 +43,7 @@ public sealed partial class WaylandClipboard(
     /// <summary>How long to wait before looking again at a control session that has not been granted yet.</summary>
     private static readonly TimeSpan WatchRetryDelay = TimeSpan.FromSeconds(5);
 
-    /// <summary>The largest selection read or written in one go; the same ceiling the synchroniser enforces.</summary>
+    /// <summary>The largest selection read or written in one go. This is the synchroniser's image ceiling (8 MB); it caps text lower, at 4 MB, on its own.</summary>
     private const int MaxBytes = 8 * 1024 * 1024;
 
     private readonly Lock _gate = new();

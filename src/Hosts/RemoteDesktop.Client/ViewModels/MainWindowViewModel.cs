@@ -326,7 +326,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// used to mean macOS, which made Linux read a wrong statement wherever the two differ — where a secret is
     /// kept, what changing the server address costs, and which process a device code belongs to. Linux is not
     /// macOS: secrets live in an owner-only file and the controlled end is a systemd --user service, see
-    /// docs/usage/README.md §1.
+    /// the Linux section of docs/usage/README.md, "1. 支持矩阵".
     /// </summary>
     private static string ByPlatform(string windows, string macOS, string linux) =>
         OperatingSystem.IsWindows() ? windows

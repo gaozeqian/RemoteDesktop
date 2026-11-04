@@ -22,8 +22,7 @@
   拦住它。
 
   三个平台都能跑：它只读文件、不调用任何平台专有 API，所以在 Linux 或 macOS 上用 pwsh 跑同一份脚本，就能
-  审那边的服务端部署（配置换成 /etc/remotedesktop-server/ 下那两份）。图标与第三方许可清单那两份脚本没有
-  这个性质，见 build/README.md。
+  审那边的服务端部署（配置换成 /etc/remotedesktop-server/ 下那两份）。
 #>
 [CmdletBinding()]
 param(

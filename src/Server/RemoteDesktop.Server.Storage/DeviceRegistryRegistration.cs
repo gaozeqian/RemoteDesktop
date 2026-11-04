@@ -11,8 +11,8 @@ public static class DeviceRegistryRegistration
 {
     /// <summary>
     /// Registers the registry the settings describe, and <see cref="IDeviceRegistryStore"/> as well when that
-    /// registry keeps its ids in a database. The host reads the second registration as "start an initializer and add
-    /// a health check"; there is nothing else to switch on.
+    /// registry keeps its ids in a database. The host decides whether to start the initializer and add the health
+    /// check from <c>Provider != DatabaseSettings.None</c>, which is exactly when the second registration exists.
     /// </summary>
     /// <exception cref="InvalidOperationException">The settings were not validated, or name a provider that is not
     /// in the switch below. <see cref="DatabaseSettings.Validate"/> is the one that is expected to catch this.</exception>

@@ -64,8 +64,9 @@ public sealed class TransportOptions
                 $"Transport:RendezvousUri must be a ws:// or wss:// address with a host and the server's /ws path (got '{RendezvousUri}').");
         }
 
-        // The parser fills in /ws for an address typed without a path and refuses any other path. Storing the parsed
-        // form means the connection uses the path the server actually maps, whichever spelling the operator used.
+        // The parser fills in /ws for an address typed without a path and keeps any other path (a reverse proxy may use
+        // a prefix). Storing the parsed form means the connection uses the path the server actually maps, whichever
+        // spelling the operator used.
         RendezvousUri = parsed.Value;
 
         if (RendezvousUri.Scheme == "ws" && !RendezvousUri.IsLoopback && !AllowInsecureSignaling)

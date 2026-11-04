@@ -177,18 +177,18 @@ function Get-ProductVersion {
 # One component per file, the subfolders of the publish output mirrored as directories. Ids are positional: component
 # GUIDs are derived from each file's key path, so they stay stable as long as a file keeps its name and place.
 #
-# Two things differ from the client installer's copy of this function, both of them because the servers have what it
-# does not (one folder per server, each with the runtime's own localization folders under it):
+# Two things are worth knowing next to the client installer's copy of this function:
 #
-#   * the folders directly under the publish directory are named after those servers and get their id from
+#   * the servers have what it does not (one folder per server, each with the runtime's own localization folders under
+#     it), so the folders directly under the publish directory are named after those servers and get their id from
 #     $TopLevelDirectoryIds rather than from the counter. The hand-written components in Components.wxs install into
 #     them (the two executables, the two settings files), and a counter would tie those to the order the publish
 #     output happens to be read in. A folder the caller does not name falls back to the counter, and the components
 #     that expect the named id then fail to link - loudly, which is the point;
 #   * the directory tree is written under a DirectoryRef and the components stay in the ComponentGroup, each one
-#     carrying the id of the folder it belongs to. WiX 5 has no Directory element inside a ComponentGroup (the client's
-#     publish output is flat, so its generator never met that), and a component that nothing references is not
-#     installed at all, so the two cannot simply be written together.
+#     carrying the id of the folder it belongs to, as in the client's copy. WiX 5 has no Directory element inside a
+#     ComponentGroup, and a component that nothing references is not installed at all, so the two cannot simply be
+#     written together.
 function New-FileList {
     param([string]$Source, [string]$Destination, [string[]]$Exclude, [hashtable]$TopLevelDirectoryIds = @{})
 

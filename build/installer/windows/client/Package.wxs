@@ -77,8 +77,8 @@
     <Property Id="DEFAULT_RENDEZVOUSURI" Value="$(var.DefaultRendezvousUri)" />
 
     <!-- The certificate source chosen/typed on the connection page. A space keeps the edit control editable; the
-         execute action exports only its public half to ProgramData, so a PEM/PFX that also carries a private key never
-         puts that key on the machine. -->
+         execute action exports only its public half to ProgramData, so a PEM file that also carries a private key never
+         puts that key on the machine. Only PEM and DER certificates are read; a PFX is not accepted. -->
     <Property Id="SERVERCERTIFICATEPATH" Value=" " Secure="yes" />
     <!-- The public certificate file the configure-system step pins in the machine settings. -->
     <Property Id="RENDEZVOUSCERTIFICATEPATH" Value=" " Secure="yes" />

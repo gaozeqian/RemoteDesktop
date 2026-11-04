@@ -4,7 +4,8 @@ namespace RemoteDesktop.Protocol.Framing;
 
 /// <summary>
 /// Wire format of every message on a channel stream: <c>[uint32 payload length][uint16 message type][payload]</c>,
-/// big-endian. Payloads are protobuf-encoded by the channel owner.
+/// big-endian. Control-style channels carry protobuf envelopes (<see cref="ProtobufFrames"/>); video, audio, file
+/// chunks and terminal data are raw bytes.
 /// </summary>
 public static class FrameCodec
 {

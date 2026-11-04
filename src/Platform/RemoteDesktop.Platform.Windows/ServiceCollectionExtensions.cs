@@ -25,8 +25,8 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Windows implementations of the platform ports: DPAPI secrets, DXGI capture, SendInput and
-    /// Media Foundation H.264 (hardware encoders first, the built-in software encoder as fallback).
-    /// ConPTY, WASAPI and camera adapters are added in later milestones.
+    /// Media Foundation H.264 (hardware encoders first, the built-in software encoder as fallback),
+    /// ConPTY, WASAPI audio, Media Foundation cameras, the clipboard and recording.
     /// </summary>
     /// <param name="dataDirectory">Where protected state is stored (%ProgramData% for the service, %AppData% for the UI).</param>
     [SupportedOSPlatform("windows")]

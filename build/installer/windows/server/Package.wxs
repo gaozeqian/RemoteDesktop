@@ -149,7 +149,7 @@
 
     <!-- Adds no firewall rules when it is 1: msiexec /i <msi> NOFIREWALL=1. For a machine whose rules are managed
          centrally, or one whose server only listens on a network the rules are not wanted on. "0" is the default and
-         means the three inbound rules in Components.wxs are installed. -->
+         means the four inbound rules in Components.wxs are installed. -->
     <Property Id="NOFIREWALL" Value="0" Secure="yes" />
 
     <!-- Uninstalling keeps the databases, settings and the generated certificate unless the operator asks for them to

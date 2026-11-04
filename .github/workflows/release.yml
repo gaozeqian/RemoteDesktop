@@ -5,7 +5,7 @@ on:
     tags:
       - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
 
-# 只有最后那个发布 job 需要写权限，它自己声明 contents: write；其余两个只读仓库。
+# 只有最后那个发布 job 需要写权限，它自己声明 contents: write；其余三个（check-version、build-linux、build-macos）只读仓库。
 permissions:
   contents: read
 
@@ -189,7 +189,7 @@ jobs:
           security find-identity -v "$KC"
 
       # 三个 .pkg：客户端（Remote Desktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
-      # （信令、中继与监控台 + 三个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
+      # （信令、中继、监控台与 HTTPS 网关 + 四个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
       # TCC 授权也分开，不能互相复用。
       # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize
       # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
@@ -216,7 +216,7 @@ jobs:
           ./build/installer/macos/server/make-pkg.sh "${args[@]}"
 
       # 打开三个包的 payload 看里面有什么（客户端那个必须带着 Info.plist，被控端那个必须带着登录项 plist，
-      # 服务端那三个必须带着各自的 launchd plist），与 ci.yml 及另外两个平台调用同一份共享动作。
+      # 服务端那四个必须带着各自的 launchd plist），与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
 
       # 三个包都落在 artifacts/installer/macos/，文件名里已经带角色词，这一步只是把版本换成 Tag。
@@ -394,7 +394,7 @@ jobs:
 
           .\build\installer\windows\host\Build-HostInstaller.ps1 @arguments
 
-      # 服务端（信令 + 中继 + 监控台）的安装包。和上面那些用同一套签名参数、同一个版本号，但是三个各自独立安装的包：
+      # 服务端（信令 + 中继 + 监控台 + HTTPS 网关）的安装包。和上面那些用同一套签名参数、同一个版本号，但是三个各自独立安装的包：
       # 一台机器可以只做被控端、只做服务器，或者都做。
       - name: Build Server MSI Installer
         shell: pwsh

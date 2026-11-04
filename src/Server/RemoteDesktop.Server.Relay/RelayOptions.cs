@@ -23,8 +23,8 @@ public sealed class RelayOptions
     public string HttpEndpoint { get; set; } = "http://127.0.0.1:5083";
 
     /// <summary>
-    /// Bearer token the console must present. Empty means no check, which is only acceptable on a loopback listener.
-    /// The same value is configured on the console and on the signaling server.
+    /// Bearer token the console must present. Empty means only callers on the loopback interface are accepted, so a console
+    /// on another machine needs it set. The same value is configured on the console and on the signaling server.
     /// </summary>
     public string NodeToken { get; set; } = string.Empty;
 }

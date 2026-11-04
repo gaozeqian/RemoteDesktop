@@ -20,7 +20,7 @@ public sealed record Overview(
     int DirectSessions,
     int RelayedSessions);
 
-/// <summary>The four numbers at the top. Alerts stay null until M3 — there is no rule engine to produce them yet.</summary>
+/// <summary>The four numbers at the top. The metric-derived ones are null without a fresh reading; the alert count is always a number.</summary>
 public sealed record OverviewKpis(
     double? DevicesOnline,
     double? RelaySessions,

@@ -60,10 +60,12 @@ public sealed class OpsOptions
     /// A certificate to pin for calls to nodes, as a PEM or DER file. Empty means the system trust store decides.
     /// </summary>
     /// <remarks>
-    /// The macOS server package writes the signaling server's certificate here when signaling uses TLS. A .pkg's
-    /// postinstall cannot add a certificate to the System keychain — macOS refuses the trust change without a user
-    /// session — so the console trusts exactly this certificate instead. Only the local nodes use it; webhooks keep the
-    /// platform's normal validation.
+    /// The server packages on all three platforms write the signaling server's certificate here when signaling uses
+    /// TLS. On macOS a .pkg's postinstall cannot add a certificate to the System keychain — macOS refuses the trust
+    /// change without a user session — and the generated certificate is not in the system trust store elsewhere
+    /// either, so the console trusts exactly this certificate instead. It applies to every call the console makes to
+    /// a node (metrics scraping and device queries), not just the local ones; webhooks keep the platform's normal
+    /// validation.
     /// </remarks>
     public string NodeCertificatePath { get; set; } = string.Empty;
 

@@ -38,8 +38,9 @@ public static class ServiceCollectionExtensions
     /// from RemoteDesktop.Platform.Posix rather than from here, so that a second Posix platform would not mean a second copy
     /// of them.
     ///
-    /// The clipboard and the cameras are registered but not implemented — see P5 and P8 in the port plan. They are
-    /// present so that a host can be composed, and they report their absence rather than pretending.
+    /// The clipboard and the cameras are implemented over the desktop portal and PipeWire (WaylandClipboard,
+    /// WaylandCameraEnumerator, WaylandCameraSourceFactory). Both depend on a grant from the desktop and report its
+    /// absence rather than pretending.
     /// </para>
     /// <para>
     /// <c>IAgentGateway</c> is absent on purpose and will stay absent. On Windows the privileged service cannot see the

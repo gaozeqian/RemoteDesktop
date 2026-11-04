@@ -4,13 +4,13 @@
 # .pkg installer.
 #
 # The counterpart of build/installer/windows/server/Build-ServerInstaller.ps1, and deliberately the same shape: the
-# three programs go into one install directory, each with its own appsettings.json, and a setup step writes the
+# four programs go into one install directory, each with its own appsettings.json, and a setup step writes the
 # signaling/relay settings at install time. That step is the server's own `--configure-system`, which is
 # platform-neutral .NET, so both platforms produce identical settings and generate the relay key the same way. The
 # console needs no setup step of its own: its database path and loopback address come from its launchd job.
 #
 # What differs is only what has to: there is no MSI property mechanism here, so the answers are baked into the package
-# when it is built (as setup-options) and handed to the setup step by the postinstall; the two servers are launchd
+# when it is built (as setup-options) and handed to the setup step by the postinstall; the four services are launchd
 # LaunchDaemons instead of Windows services; and there is no firewall step, because macOS has no per-port rule to add
 # — its application firewall is off by default and, when on, is per-application. docs/ops/README.md says what to open.
 #

@@ -4,11 +4,12 @@
 #
 #     build/installer/linux/server/build-deb.sh [output-directory]
 #
-# One package holding both servers, because they are useless apart: the rendezvous server signs the tickets the relay
-# checks, and they share a key that has to match. Installing them separately would be two steps that can be done
-# wrong, and a half-installed pair that fails in a way that looks like a network problem.
+# One package holding all the servers (signaling, relay, the Ops console and its HTTPS gateway), because they are
+# useless apart: the rendezvous server signs the tickets the relay checks, and they share a key that has to match.
+# Installing them separately would be two steps that can be done wrong, and a half-installed pair that fails in a way
+# that looks like a network problem.
 #
-# The two programs are published self-contained: the target is a server that has to be given a package and nothing
+# The programs are published self-contained: the target is a server that has to be given a package and nothing
 # else, and asking an operator to install a .NET runtime first is one more thing that can be the wrong version.
 set -eu
 
@@ -45,8 +46,8 @@ done
 
 # The settings are not shipped in the package: the post-install step writes them from /etc/default, so that a first
 # install and every later upgrade go through the same code. The appsettings.json the publish produced sits next to
-# the program and is never read — the services start in /etc, and that is the content root. The console is the same,
-# except its settings come from the environment the unit sets (see remotedesktop-ops.service).
+# the program and is never read — the services start in /etc, and that is the content root. The console is the same:
+# its unit starts in /etc/remotedesktop-server/Ops and reads the appsettings.json there (see remotedesktop-ops.service).
 rm -f "$work/usr/lib/remotedesktop-server/Rendezvous/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Relay/appsettings"*.json
 rm -f "$work/usr/lib/remotedesktop-server/Ops/appsettings"*.json

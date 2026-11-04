@@ -31,7 +31,7 @@ public enum CameraAccessState
 /// </summary>
 /// <remarks>
 /// This exists because of a desktop limitation rather than a product preference. See
-/// <see cref="CameraAccessState"/> and <c>docs/usage/README.md</c> §6.
+/// <see cref="CameraAccessState"/> and <c>docs/usage/README.md</c> (the 摄像头 item in the Linux section).
 /// </remarks>
 public interface ICameraAccess
 {

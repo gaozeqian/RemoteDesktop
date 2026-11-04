@@ -6,7 +6,7 @@
 #   1. apply the answers collected by the Installer pane (database, TLS, certificate) or preserve what an earlier
 #      installation already had;
 #   2. make the monitoring console usable on a fresh installation: seed the two local nodes and mount /metrics;
-#   3. hand the three launchd jobs to the system so they start now and at every boot.
+#   3. hand the four launchd jobs to the system so they start now and at every boot.
 #
 # macOS has no debconf and no MSI properties. The pane is the interactive path; the same answer keys are accepted from
 # /Library/Application Support/RemoteDesktop/install-answers.plist for unattended installs, and the old build-time
@@ -98,7 +98,8 @@ elif [ "$first_install" -eq 0 ]; then
 fi
 
 # "Preserve" on a fresh installation would leave the template's empty RelayEndpoint in place and the signaling server
-# would refuse to start. A hand-written answers file can say it; treat that as "use the defaults" instead.
+# would have no relay fallback (an empty RelayEndpoint disables it). A hand-written answers file can say it; treat
+# that as "use the defaults" instead.
 if [ "$apply" -eq 0 ] && [ "$first_install" -eq 1 ]; then
     apply=1
 fi
@@ -201,7 +202,7 @@ if [ "$apply" -eq 1 ]; then
         esac
 
         # The pane does not ask about the relay address. A fresh install has to decide it (the template's value is
-        # empty and the signaling server refuses to start); an upgrade keeps the existing one unless it has none.
+        # empty, which disables the relay fallback); an upgrade keeps the existing one unless it has none.
         if [ "$first_install" -eq 1 ]; then
             args+=(--relay-endpoint auto)
         else
@@ -227,8 +228,8 @@ if [ "$apply" -eq 1 ]; then
             esac
         done
         # A first install has to say "decide for this machine" explicitly now that an omitted address means "leave it
-        # alone". Without these the fresh file would keep the empty RelayEndpoint from its template, which the server
-        # refuses to start with.
+        # alone". Without these the fresh file would keep the empty RelayEndpoint from its template, which leaves the relay
+        # fallback disabled.
         if [ "$has_urls" -eq 0 ]; then
             args+=(--urls auto)
         fi
