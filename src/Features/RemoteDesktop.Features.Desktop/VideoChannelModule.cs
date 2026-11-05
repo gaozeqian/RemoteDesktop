@@ -28,7 +28,7 @@ public sealed partial class VideoChannelModule(
     ILogger<VideoChannelModule> logger) : IFeatureModule
 {
     private const int MaxFrameRate = 60;
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan SetupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan DisplayPoll = TimeSpan.FromSeconds(2);
 
@@ -49,7 +49,7 @@ public sealed partial class VideoChannelModule(
         VideoRequest request;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
-            timeout.CancelAfter(RequestTimeout);
+            timeout.CancelAfter(SetupTimeout);
             var first = await ProtobufFrames.ReadAsync(channel.Stream, VideoControl.Parser, 64 * 1024, timeout.Token).ConfigureAwait(false);
             if (first?.BodyCase != VideoControl.BodyOneofCase.Request)
             {

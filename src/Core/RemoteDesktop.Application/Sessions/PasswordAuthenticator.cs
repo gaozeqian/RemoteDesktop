@@ -151,9 +151,10 @@ public static class PasswordAuthenticator
             .GenerateClientCredentials(salt.ToArray(), identity, Encoding.UTF8.GetBytes(password))
             .ToByteArrayUnsigned();
 
-        var secret = client.CalculateSecret(new BigInteger(1, serverPublic.ToArray()));
+        // The call is needed for its effect on the client state, which the evidence is computed from. The returned
+        // BigInteger is immutable and cannot be wiped (ToByteArrayUnsigned would only hand out a copy to zero).
+        _ = client.CalculateSecret(new BigInteger(1, serverPublic.ToArray()));
         var clientEvidence = client.CalculateClientEvidenceMessage().ToByteArrayUnsigned();
-        CryptographicOperations.ZeroMemory(secret.ToByteArrayUnsigned());
         return new PasswordAttempt(clientPublic, clientEvidence, client);
     }
 
@@ -177,8 +178,8 @@ public static class PasswordAuthenticator
 
         try
         {
-            var secret = challenge.Server.CalculateSecret(new BigInteger(1, clientPublic.ToArray()));
-            CryptographicOperations.ZeroMemory(secret.ToByteArrayUnsigned());
+            // Called for its effect on the server state; the secret itself is an immutable BigInteger that cannot be wiped.
+            _ = challenge.Server.CalculateSecret(new BigInteger(1, clientPublic.ToArray()));
 
             if (!challenge.Server.VerifyClientEvidenceMessage(new BigInteger(1, clientEvidence.ToArray())))
             {

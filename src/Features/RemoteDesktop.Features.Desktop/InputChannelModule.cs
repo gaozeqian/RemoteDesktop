@@ -68,14 +68,16 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
         }
         finally
         {
+            // Each release stands alone: one that fails must neither leave the others held nor replace the exception
+            // this block is unwinding with.
             foreach (var (scanCode, extended) in pressedKeys)
             {
-                injector.Inject(new KeyEvent(scanCode, extended, IsDown: false));
+                Release(new KeyEvent(scanCode, extended, IsDown: false));
             }
 
             foreach (var button in pressedButtons.Values)
             {
-                injector.Inject(button with { IsDown = false });
+                Release(button with { IsDown = false });
             }
 
             if (pressedKeys.Count + pressedButtons.Count > 0)
@@ -84,6 +86,23 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
             }
         }
     }
+
+    private void Release(InputEvent release)
+    {
+        try
+        {
+            injector.Inject(release);
+        }
+#pragma warning disable CA1031 // The remaining keys and buttons must still be released.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogReleaseFailed(logger, ex.Message);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release a key or button left pressed by the controller: {Reason}")]
+    private static partial void LogReleaseFailed(ILogger logger, string reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Input ignored: {Reason}")]
     private static partial void LogUnsupported(ILogger logger, string reason);

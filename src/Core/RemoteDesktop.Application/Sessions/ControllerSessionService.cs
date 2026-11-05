@@ -45,7 +45,7 @@ public sealed class ControllerSessionService(
 
             var challenge = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthChallenge, cancellationToken)
                 .ConfigureAwait(false)).AuthChallenge;
-            var hostVersion = new ProtocolVersion((ushort)challenge.ProtocolMajor, (ushort)challenge.ProtocolMinor);
+            var hostVersion = ProtocolVersion.FromWire(challenge.ProtocolMajor, challenge.ProtocolMinor);
             if (!ProtocolVersion.Current.IsCompatibleWith(hostVersion))
             {
                 throw new SessionException(SessionFailure.IncompatibleVersion, $"The remote device speaks protocol {hostVersion}.");

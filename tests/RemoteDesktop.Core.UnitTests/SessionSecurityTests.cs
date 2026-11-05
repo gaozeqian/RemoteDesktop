@@ -54,21 +54,19 @@ public class PasswordAuthenticatorTests
         var credentials = new HostCredentials();
         var password = credentials.TemporaryPassword;
 
-        Assert.False(CanAuthenticate(credentials, password, HostFp, ControllerFp, "not-the-password", HostFp, ControllerFp));
-        Assert.False(CanAuthenticate(credentials, password, HostFp, ControllerFp, password, "CC33", ControllerFp));
-        Assert.False(CanAuthenticate(credentials, password, HostFp, ControllerFp, password, HostFp, "CC33"));
-        Assert.True(CanAuthenticate(credentials, password, HostFp, ControllerFp, password, HostFp, ControllerFp));
+        Assert.False(CanAuthenticate(credentials, HostFp, ControllerFp, "not-the-password", HostFp, ControllerFp));
+        Assert.False(CanAuthenticate(credentials, HostFp, ControllerFp, password, "CC33", ControllerFp));
+        Assert.False(CanAuthenticate(credentials, HostFp, ControllerFp, password, HostFp, "CC33"));
+        Assert.True(CanAuthenticate(credentials, HostFp, ControllerFp, password, HostFp, ControllerFp));
 
         static bool CanAuthenticate(
             HostCredentials credentials,
-            string password,
             string challengeHost,
             string challengeController,
             string supplied,
             string responseHost,
             string responseController)
         {
-            _ = password;
             var challenge = credentials.BeginAuthentication(challengeHost, challengeController)[0];
             var attempt = PasswordAuthenticator.Respond(supplied, challenge.Salt, challenge.ServerPublic, responseHost, responseController);
             return PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, attempt.ClientEvidence, out _);

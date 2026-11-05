@@ -130,6 +130,7 @@ public sealed partial class HostSessionService(
         await using (connection.ConfigureAwait(false))
         {
             IChannel? control = null;
+            SessionId? runningSession = null;
             try
             {
                 SessionContext? session;
@@ -177,6 +178,7 @@ public sealed partial class HostSessionService(
                     session = ReserveId(session);
                     hosted = new HostedSession(session, control!, end);
                     _hosted[session.Id] = hosted;
+                    runningSession = session.Id;
                 }
 
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
@@ -214,6 +216,15 @@ public sealed partial class HostSessionService(
                     LogSessionEnded(logger, session.Id);
                     RaiseSessionEvent(SessionEnded, session, nameof(SessionEnded));
                 }
+            }
+            catch (OperationCanceledException) when (runningSession is not null)
+            {
+                // The host is stopping or the session was ended on purpose; LogSessionEnded has already said so.
+            }
+            catch (Exception ex) when (runningSession is { } sessionId && ex is IOException or InvalidDataException or SessionException)
+            {
+                // Past the handshake: a channel failure that RunSessionAsync rethrows is not a handshake problem.
+                LogSessionEndedWithError(logger, sessionId, ex.Message);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or SessionException or OperationCanceledException)
             {
@@ -266,7 +277,7 @@ public sealed partial class HostSessionService(
     {
         var hello = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.Hello, cancellationToken).ConfigureAwait(false)).Hello;
 
-        var controllerVersion = new ProtocolVersion((ushort)hello.ProtocolMajor, (ushort)hello.ProtocolMinor);
+        var controllerVersion = ProtocolVersion.FromWire(hello.ProtocolMajor, hello.ProtocolMinor);
         if (!ProtocolVersion.Current.IsCompatibleWith(controllerVersion))
         {
             await RefuseAsync(control, AuthFailure.IncompatibleVersion, cancellationToken).ConfigureAwait(false);
@@ -653,6 +664,9 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} ended.")]
     private static partial void LogSessionEnded(ILogger logger, SessionId sessionId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId} ended with an error: {Reason}.")]
+    private static partial void LogSessionEndedWithError(ILogger logger, SessionId sessionId, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Wrong password from {Controller}.")]
     private static partial void LogBadPassword(ILogger logger, DeviceId controller);

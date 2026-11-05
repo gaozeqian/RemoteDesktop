@@ -19,7 +19,9 @@ public sealed class RemoteSession : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private Task _loops = Task.CompletedTask;
-    private int _closed;
+    private readonly object _closedGate = new();
+    private EventHandler? _closedHandlers;
+    private bool _closed;
     private int _disposed;
     private volatile InputAccessStatus? _inputAccess;
     private ulong _inputAccessSequence;
@@ -40,8 +42,35 @@ public sealed class RemoteSession : IAsyncDisposable
 
     public event EventHandler? RoundTripTimeChanged;
 
-    /// <summary>Raised once when the session ends for any reason (peer closed, network lost, disposed).</summary>
-    public event EventHandler? Closed;
+    /// <summary>
+    /// Raised once when the session ends for any reason (peer closed, network lost, disposed). A handler added after
+    /// the session has already ended is called immediately: the loops start before the caller can subscribe, so
+    /// without this a peer that closes right away would never be reported.
+    /// </summary>
+    public event EventHandler? Closed
+    {
+        add
+        {
+            lock (_closedGate)
+            {
+                if (!_closed)
+                {
+                    _closedHandlers += value;
+                    return;
+                }
+            }
+
+            value?.Invoke(this, EventArgs.Empty);
+        }
+
+        remove
+        {
+            lock (_closedGate)
+            {
+                _closedHandlers -= value;
+            }
+        }
+    }
 
     /// <summary>Raised when the host changed what this session may do (e.g. switched it to watch-only); see <see cref="SessionContext.Grant"/>.</summary>
     public event EventHandler? GrantChanged;
@@ -184,9 +213,19 @@ public sealed class RemoteSession : IAsyncDisposable
 
     private void RaiseClosed()
     {
-        if (Interlocked.Exchange(ref _closed, 1) == 0)
+        EventHandler? handlers;
+        lock (_closedGate)
         {
-            Closed?.Invoke(this, EventArgs.Empty);
+            if (_closed)
+            {
+                return;
+            }
+
+            _closed = true;
+            handlers = _closedHandlers;
+            _closedHandlers = null;
         }
+
+        handlers?.Invoke(this, EventArgs.Empty);
     }
 }
