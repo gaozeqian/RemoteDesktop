@@ -412,14 +412,17 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
                     continue;
                 }
 
-                using (frame)
-                {
-                    Publish(frame);
-                }
-
+                // A frame means the capturer works again. The flag is cleared before the frame is handed out: a
+                // subscriber that has just received a picture must not be able to read IsFaulted as true because this
+                // thread has not yet reached the next line.
                 lock (_gate)
                 {
                     _faulted = false;
+                }
+
+                using (frame)
+                {
+                    Publish(frame);
                 }
             }
         }
