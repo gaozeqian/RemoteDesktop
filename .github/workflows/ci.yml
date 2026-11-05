@@ -247,7 +247,6 @@ jobs:
             remotedesktop/ops:ci
           docker run -d --name rd-gateway --network rd-ops-ci \
             -e OPS_GATEWAY_IP="$OPS_GATEWAY_IP" \
-            -e Gateway__Upstream=http://rd-ops:5090 \
             -e ReverseProxy__Clusters__ops__Destinations__loopback__Address=http://rd-ops:5090 \
             -p 15443:5443 \
             -v rd-gateway-ci:/data \

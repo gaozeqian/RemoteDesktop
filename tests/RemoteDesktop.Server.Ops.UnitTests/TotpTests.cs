@@ -38,8 +38,8 @@ public class TotpTests
         var previous = Totp.Compute(RfcSecret, at.AddSeconds(-30));
         var older = Totp.Compute(RfcSecret, at.AddSeconds(-90));
 
-        Assert.True(Totp.Verify(RfcSecret, previous, at));
-        Assert.False(Totp.Verify(RfcSecret, older, at));
+        Assert.True(Totp.TryVerify(RfcSecret, previous, at, out _));
+        Assert.False(Totp.TryVerify(RfcSecret, older, at, out _));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class TotpTests
     [InlineData("")]
     public void Malformed_codes_are_refused(string code)
     {
-        Assert.False(Totp.Verify(RfcSecret, code, DateTimeOffset.UnixEpoch));
+        Assert.False(Totp.TryVerify(RfcSecret, code, DateTimeOffset.UnixEpoch, out _));
     }
 
     [Fact]

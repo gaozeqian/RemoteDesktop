@@ -916,7 +916,6 @@ public sealed class ServerSetupTests : IDisposable
 
         var gateway = Configuration(ServerSetup.GatewayFolder);
         Assert.Equal("https://0.0.0.0:5443", gateway["Gateway:Listen"]);
-        Assert.Equal(ServerSetup.DefaultGatewayUpstream, gateway["Gateway:Upstream"]);
         Assert.Equal("/{**catch-all}", gateway["ReverseProxy:Routes:ops:Match:Path"]);
         Assert.Equal("Set", gateway["ReverseProxy:Routes:ops:Transforms:0:X-Forwarded"]);
         Assert.Equal(ServerSetup.DefaultGatewayUpstream, gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);

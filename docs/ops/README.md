@@ -877,7 +877,6 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 |---|---|---|
 | `Ops:Listen` | `http://127.0.0.1:5090` | 控制台自身的 Kestrel 监听地址；保持回环，对外只经过 Gateway |
 | `Gateway:Listen` | `https://0.0.0.0:5443` | 安装包内置的 HTTPS Gateway 监听地址；证书自动生成并包含本机 IPv4 IP SAN |
-| `Gateway:Upstream` | `http://127.0.0.1:5090` | 仅供参考，**Gateway 不读它**（`Program.cs` 只读 `Gateway:Listen` 与 `ReverseProxy`），改它不会改变转发目标。真正的上游是 `ReverseProxy:Clusters:ops:Destinations:loopback:Address`；安装步骤每次都会把它重写成回环地址，避免被改成任意外部代理 |
 | `GATEWAYHOSTNAME` / `--gateway-hostname` | 空 | 安装参数：给生成证书追加 IP/DNS；本机 IPv4 已自动包含 |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
 | `Ops:RequireTotp` | `true` | 口令之后强制 TOTP |

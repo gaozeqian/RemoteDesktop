@@ -864,7 +864,6 @@ public static class ServerSetup
         }
 
         section["Listen"] = listen;
-        section["Upstream"] = DefaultGatewayUpstream;
 
         // The proxy is not a general-purpose forwarder: its one route and one loopback destination are rewritten on
         // every setup run. X-Forwarded=Set discards client-supplied forwarding headers before adding the real ones.

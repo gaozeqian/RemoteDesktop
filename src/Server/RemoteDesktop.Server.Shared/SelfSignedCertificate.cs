@@ -87,7 +87,7 @@ public static class SelfSignedCertificate
         {
             // Kept, not replaced: a client that trusted this certificate yesterday must still trust it today, and
             // reinstalling or upgrading the server runs this step again.
-            WritePublicHalf(installDirectory, publicPath, existing);
+            WritePublicHalf(publicPath, existing);
             notes.Add($"Signaling TLS uses the existing certificate '{subject}' from {CertificateStoreLocation}\\{CertificateStoreName}; its public half is at {publicPath}.");
             return subject;
         }
@@ -104,7 +104,7 @@ public static class SelfSignedCertificate
 
         var created = CreateForThisMachine(subject, additionalDnsNames);
         store.Add(created);
-        WritePublicHalf(installDirectory, publicPath, created);
+        WritePublicHalf(publicPath, created);
 
         notes.Add($"A self-signed certificate '{subject}' was created and stored in {CertificateStoreLocation}\\{CertificateStoreName} (valid until {created.NotAfter:yyyy-MM-dd}).");
         notes.Add($"Clients must trust it, or they will refuse the connection: give them {publicPath} (Import-Certificate -FilePath ... -CertStoreLocation Cert:\\LocalMachine\\Root), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
@@ -286,7 +286,7 @@ public static class SelfSignedCertificate
             X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
     }
 
-    private static void WritePublicHalf(string installDirectory, string publicPath, X509Certificate2 certificate)
+    private static void WritePublicHalf(string publicPath, X509Certificate2 certificate)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(publicPath)!);
         File.WriteAllBytes(publicPath, certificate.Export(X509ContentType.Cert));

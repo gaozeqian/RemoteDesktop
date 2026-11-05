@@ -118,9 +118,8 @@ services:
     image: remotedesktop/gateway:${REMOTEDESKTOP_VERSION:-dev}
     environment:
       Gateway__Listen: https://0.0.0.0:5443
-      Gateway__Upstream: http://ops:5090
       # The gateway's shipped settings contain a loopback destination for the package deployment. Inside Compose the
-      # console is another container, so both the informational setting and the actual YARP destination change.
+      # console is another container, so the YARP destination changes.
       ReverseProxy__Clusters__ops__Destinations__loopback__Address: http://ops:5090
       OPS_GATEWAY_IP: ${OPS_GATEWAY_IP:?set OPS_GATEWAY_IP to the address administrators use for the console}
       OPS_GATEWAY_DNS: ${OPS_GATEWAY_DNS:-}

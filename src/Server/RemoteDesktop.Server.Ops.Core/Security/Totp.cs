@@ -35,15 +35,10 @@ public static class Totp
     }
 
     /// <summary>
-    /// True when <paramref name="code"/> is the code for <paramref name="at"/>, or for the step before or after it —
-    /// clocks drift, and a phone that is thirty seconds fast should not lock its owner out.
-    /// </summary>
-    public static bool Verify(string secret, string code, DateTimeOffset at, int window = 1) =>
-        TryVerify(secret, code, at, out _, window);
-
-    /// <summary>
-    /// Verifies a code and reports which time step it matched. The step is what makes a code single-use: the caller
-    /// stores it and refuses a later sign-in that presents the same step again.
+    /// Verifies a code and reports which time step it matched. The code for <paramref name="at"/> is accepted, and so
+    /// is the code for the step before or after it — clocks drift, and a phone that is thirty seconds fast should not
+    /// lock its owner out. The step is what makes a code single-use: the caller stores it and refuses a later sign-in
+    /// that presents the same step again.
     /// </summary>
     public static bool TryVerify(string secret, string code, DateTimeOffset at, out long step, int window = 1)
     {
