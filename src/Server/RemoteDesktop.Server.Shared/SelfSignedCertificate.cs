@@ -169,11 +169,20 @@ public static class SelfSignedCertificate
 
         using var created = CreateForThisMachine(SubjectForThisMachine, additionalDnsNames);
 
-        // The key is written and tightened before anything else happens, so it is never on disk with permissions
-        // wider than its owner even for a moment.
+        // The key file is created with an owner-only mode (applied by open(2), so it is never on disk wider than
+        // that, even for a moment; a umask can only narrow it further). Any older file is removed first, because
+        // opening an existing one would keep its old mode. The explicit chmod afterwards is a second guarantee.
         using (var key = created.GetRSAPrivateKey() ?? throw new CryptographicException("The new certificate has no private key."))
         {
-            File.WriteAllText(keyPath, key.ExportPkcs8PrivateKeyPem());
+            File.Delete(keyPath);
+            using var stream = new FileStream(keyPath, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+            using var writer = new StreamWriter(stream);
+            writer.Write(key.ExportPkcs8PrivateKeyPem());
         }
 
         File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);

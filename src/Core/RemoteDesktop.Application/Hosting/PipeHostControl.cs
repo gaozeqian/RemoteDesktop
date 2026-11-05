@@ -9,6 +9,11 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     /// How long the service has to answer once connected. The pipe name is global on Windows, so another local
     /// process can own an instance and simply never reply; without this the client waited before its window appeared,
     /// with no way to tell a wedged service from a slow one.
+    /// The service now creates the first instance of the name with <c>FirstPipeInstance</c>, so a process that is
+    /// already holding the name stops the service from serving it (it logs an error and retries) rather than sharing
+    /// it, and this client connects with the Identification impersonation level, so whatever owns the name cannot act
+    /// as the caller. What is still not checked is who the server is: a process that creates the name while the
+    /// service is down (at boot, or in the pause after a crash) can still answer, and this client will talk to it.
     /// </summary>
     private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
 

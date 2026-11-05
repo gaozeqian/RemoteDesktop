@@ -1456,16 +1456,31 @@ public static class ServerSetup
         // operator to copy that key to a relay on another machine — and on a command line nothing decodes +, so
         // the relay would be given a different key and refuse every ticket.
         var temporary = path + ".tmp";
-        File.WriteAllText(temporary, settings.ToJsonString(new JsonSerializerOptions
+
+        // A leftover from an interrupted run is removed first: opening it would keep whatever mode it was left with,
+        // and CreateNew below then applies the owner-only mode at open(2) time instead of after the secrets are in it.
+        File.Delete(temporary);
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows())
         {
-            WriteIndented = true,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        }));
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        using (var stream = new FileStream(temporary, options))
+        using (var writer = new StreamWriter(stream))
+        {
+            writer.Write(settings.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }));
+        }
 
         // These files carry the relay shared key and, when PostgreSQL is used, its password. The service reads them
         // as its own account; nobody else on the machine has any business doing so. The package's post-install step
-        // gives the group the right name (the service account); the mode is set here so a manual run cannot leave a
-        // world-readable key behind even for the moment before that step.
+        // gives the group the right name (the service account). The file is created owner-only above, so a manual run
+        // never has a world-readable key on disk, not even for a moment; the group read the package needs is added
+        // here (the create mode does not exist on Windows, hence the check).
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(

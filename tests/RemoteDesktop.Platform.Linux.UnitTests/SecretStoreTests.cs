@@ -60,6 +60,44 @@ public sealed class SecretStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_secret_is_owner_only_even_when_the_umask_would_allow_more()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // With the umask fully open, the mode a new file gets is exactly the one it was created with, so this checks
+        // the creation itself and not just the chmod that follows it.
+        using var umask = new UmaskScope(0);
+
+        _store.Save("device-identity", [1, 2, 3]);
+
+        var file = new FileInfo(Path.Combine(_root, "secrets", "device-identity.bin"));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, file.UnixFileMode);
+    }
+
+    [Fact]
+    public void A_leftover_temporary_file_with_wide_permissions_does_not_pass_them_on()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        using var umask = new UmaskScope(0);
+
+        // What an interrupted earlier save could have left: a file that is already there, readable by everyone. Writing
+        // into it would keep that mode, so the store has to start from a fresh file.
+        var directory = Path.Combine(_root, "secrets");
+        Directory.CreateDirectory(directory);
+        var leftover = Path.Combine(directory, "device-identity.bin.tmp");
+        File.WriteAllText(leftover, "stale");
+        File.SetUnixFileMode(leftover, (UnixFileMode)0x1FF); // 0777
+
+        _store.Save("device-identity", [1, 2, 3]);
+
+        var file = new FileInfo(Path.Combine(directory, "device-identity.bin"));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, file.UnixFileMode);
+        Assert.Equal(new byte[] { 1, 2, 3 }, _store.Load("device-identity"));
+        Assert.False(File.Exists(leftover));
+    }
+
+    [Fact]
     public void Saving_over_a_secret_leaves_no_half_written_file_behind()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);

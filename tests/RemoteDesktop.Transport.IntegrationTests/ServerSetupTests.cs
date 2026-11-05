@@ -1103,6 +1103,69 @@ public sealed class ServerSetupTests : IDisposable
         Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
     }
 
+    /// <summary>
+    /// The settings file is created owner-plus-group-read in the first place, not tightened afterwards: with a wide
+    /// umask (a manual run in a shell that has one) the key must not sit on disk readable by everyone in between.
+    /// </summary>
+    [Fact]
+    public void On_unix_the_settings_are_created_with_the_final_mode_even_under_an_open_umask()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+            new FileInfo(path).UnixFileMode);
+    }
+
+    [Fact]
+    public void On_unix_a_wide_leftover_temporary_settings_file_does_not_pass_its_mode_on()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        // An interrupted earlier run: the temporary file is still there, readable by everyone.
+        var folder = Path.Combine(_folder, ServerSetup.RendezvousFolder);
+        Directory.CreateDirectory(folder);
+        var leftover = Path.Combine(folder, ServerSetup.SettingsFileName + ".tmp");
+        File.WriteAllText(leftover, "stale");
+        File.SetUnixFileMode(leftover, (UnixFileMode)0x1FF); // 0777
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(folder, ServerSetup.SettingsFileName);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+            new FileInfo(path).UnixFileMode);
+        Assert.False(File.Exists(leftover));
+        Assert.DoesNotContain("stale", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void On_unix_the_private_key_is_owner_only_under_an_open_umask_and_over_a_wide_old_file()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        // A key file from an earlier run that is readable by everyone: generating a new key must not inherit that.
+        var tls = Path.Combine(_folder, "tls");
+        Directory.CreateDirectory(tls);
+        var staleKey = Path.Combine(tls, "signaling.key");
+        File.WriteAllText(staleKey, "stale");
+        File.SetUnixFileMode(staleKey, (UnixFileMode)0x1FF); // 0777
+
+        var (_, keyPath) = SelfSignedCertificate.EnsurePem(tls, []);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, new FileInfo(keyPath).UnixFileMode);
+        Assert.Contains("BEGIN PRIVATE KEY", File.ReadAllText(keyPath), StringComparison.Ordinal);
+    }
+
     private JsonObject MutableSettings(string folder) =>
         JsonNode.Parse(File.ReadAllText(Path.Combine(_folder, folder, ServerSetup.SettingsFileName)))!.AsObject();
 

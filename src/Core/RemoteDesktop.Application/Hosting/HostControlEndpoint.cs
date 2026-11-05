@@ -50,7 +50,14 @@ public static class HostControlEndpoint
 
         if (OperatingSystem.IsWindows() && Path.IsPathRooted(address) is false)
         {
-            var pipe = new System.IO.Pipes.NamedPipeClientStream(".", address, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
+            // Identification: the server may learn who is calling but cannot impersonate this user, which is what a
+            // process that got hold of the pipe name before the service would otherwise be able to do.
+            var pipe = new System.IO.Pipes.NamedPipeClientStream(
+                ".",
+                address,
+                System.IO.Pipes.PipeDirection.InOut,
+                System.IO.Pipes.PipeOptions.Asynchronous,
+                System.Security.Principal.TokenImpersonationLevel.Identification);
             try
             {
                 await pipe.ConnectAsync(timeout, cancellationToken).ConfigureAwait(false);

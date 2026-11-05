@@ -72,7 +72,9 @@ public sealed class PosixPtySession : IPtySession
     {
         ArgumentException.ThrowIfNullOrEmpty(shellPath);
 
-        var master = LibC.OpenPseudoTerminal(LibC.ORdWr | LibC.ONoCtty);
+        // Close-on-exec: the shell must not inherit the master (its own or that of any other session), or the pty
+        // stays allocated and a hangup never reaches the slave side while another process holds it open.
+        var master = LibC.OpenPseudoTerminalCloseOnExec();
         if (master < 0)
         {
             throw new IOException($"Could not open a pseudo-terminal (errno {Marshal.GetLastPInvokeError()}).");
@@ -99,7 +101,10 @@ public sealed class PosixPtySession : IPtySession
                 {
                     // O_NOCTTY: this open is not allowed to make the terminal this process's controlling one. It
                     // becomes the shell's, in the child, which is where that belongs.
-                    slave = LibC.Open(name, LibC.ORdWr | LibC.ONoCtty);
+                    // O_CLOEXEC keeps this descriptor out of any other program started meanwhile. The shell still gets
+                    // the terminal: dup2 onto 0-2 yields descriptors without the flag, and the original is closed by
+                    // a spawn file action.
+                    slave = LibC.Open(name, LibC.ORdWr | LibC.ONoCtty | LibC.OCloExec);
                 }
             }
 
