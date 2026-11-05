@@ -69,7 +69,7 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 | 位置 | 本层 | 子目录 |
 |---|---|---|
 | `installer/` | `New-LicenseRtf.ps1`：把仓库根的 `LICENSE` 转成 WiX 许可页要的 RTF；`version.sh`：打包脚本与 CI 共用的版本读取与校验 | `<平台>/<角色>/`：该平台该角色的打包脚本与工程 |
-| `installer/<平台>/` 本层 | 平台内跨角色共用：`linux/common.sh`（三个 `build-deb.sh` 共用）、`windows/Test-InstallerUpgrade.ps1`（`ci.yml`、`release.yml` 调用） | `<角色>/` |
+| `installer/<平台>/` 本层 | 平台内跨角色共用：`linux/common.sh`（三个 `build-deb.sh` 共用）、`windows/Test-InstallerUpgrade.ps1`（`ci.yml`、`release.yml` 调用）、`windows/Import-SigningHelpers.ps1`（`client` 与 `server` 两个打包脚本共用的签名与清理函数，被它们点源引入，不能单独运行） | `<角色>/` |
 | `service/` | — | `<平台>/`：只有那个平台上的服务管理器读得懂的定义 |
 | `signing/` | 跨平台的证书脚本（纯 .NET API，`pwsh` 三平台可跑） | `windows/`：只在 Windows 上成立的两件事 |
 | `tools/` | 两个仓库维护脚本，与平台无关，见下 | — |
@@ -82,6 +82,16 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 让 macOS/Linux 在本地打包时也得到与 Windows 相同的失败，而不是各自回退到 `0.0.0` 或用另一种解释接受它。
 Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的最终形态见
 [`docs/ops/README.md`](../docs/ops/README.md) §三开头的版本表。
+
+`installer/windows/Import-SigningHelpers.ps1` 是同一条规则在平台层的例子，但它**不是脚本**，而是一组函数：
+`Find-SigningCertificate`、`Resolve-SigningTool`、`Get-SigningCertificate`、`Read-PfxCertificate`、`Invoke-Signing` 与
+`Remove-GeneratedDirectory`。它们原先逐字复制在 `client/Build-ClientInstaller.ps1` 与 `server/Build-ServerInstaller.ps1`
+里，改一份就漏另一份。现在两个打包脚本都用 `. (Join-Path $PSScriptRoot '..\Import-SigningHelpers.ps1')` **点源**（行首的点号加空格
+不能少：函数要定义在打包脚本自己的作用域里，才读得到它的 `$CertificateFile`、`$SigningTool` 等参数与 `$signing`）。
+文件名用 `Import-` 只是为了满足 Verb-Noun 命名规则。它和两个打包脚本一样是 UTF-8 带 BOM + CRLF（Windows PowerShell 5.1
+读无 BOM 的文件会按本地代码页解码）。两个脚本里**写法不同**的函数（`Get-ProductVersion`、`New-FileList`、
+`Get-UntrustedCertificateAdvice`）与只有客户端用的 `Export-TrustedRootCertificate` 不在其中，仍留在各自脚本里；
+`RepositoryStructureTests` 断言两个脚本不再重复定义上述六个函数。
 
 `installer/New-LicenseRtf.ps1` 是这条判据里的一个窄例（`version.sh` 是标准情形：两个平台、三个角色都用到），
 值得说清楚：它**只被 Windows 用**（RTF 是 WiX 许可页的格式），

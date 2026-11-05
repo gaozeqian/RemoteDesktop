@@ -299,6 +299,52 @@ public class RepositoryStructureTests
         Assert.DoesNotContain("Name=\"\"$($directory.Name)\"\"", text, StringComparison.Ordinal);
     }
 
+    private static readonly string[] SharedInstallerFunctions =
+    [
+        "Find-SigningCertificate", "Get-SigningCertificate", "Invoke-Signing",
+        "Read-PfxCertificate", "Remove-GeneratedDirectory", "Resolve-SigningTool",
+    ];
+
+    /// <summary>
+    /// The signing and cleanup functions both Windows packaging scripts need are defined once, in
+    /// build/installer/windows/Import-SigningHelpers.ps1, and dot-sourced. They used to be pasted into each script, and a
+    /// fix made to one copy never reached the other.
+    /// </summary>
+    [Theory]
+    [InlineData("client", "Build-ClientInstaller.ps1")]
+    [InlineData("server", "Build-ServerInstaller.ps1")]
+    public void The_windows_packaging_scripts_share_their_signing_functions_instead_of_copying_them(string role, string script)
+    {
+        var text = File.ReadAllText(Path.Combine(Root, "build", "installer", "windows", role, script));
+
+        var redefined = SharedInstallerFunctions
+            .Where(name => Regex.IsMatch(text, $@"^\s*function\s+{Regex.Escape(name)}\b", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+            .ToArray();
+        AssertNoOffenders(redefined, $"{script} defines functions that Import-SigningHelpers.ps1 already provides:");
+
+        Assert.Contains(@". (Join-Path $PSScriptRoot '..\Import-SigningHelpers.ps1')", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The shared file has to define every function the two scripts stopped carrying, and be UTF-8 with a byte order
+    /// mark like the scripts that load it: Windows PowerShell 5.1 reads a file without one in the machine's code page.
+    /// </summary>
+    [Fact]
+    public void The_shared_signing_helpers_define_every_function_the_packaging_scripts_dropped()
+    {
+        var path = Path.Combine(Root, "build", "installer", "windows", "Import-SigningHelpers.ps1");
+        Assert.True(File.Exists(path), "build/installer/windows/Import-SigningHelpers.ps1 is missing.");
+
+        var bytes = File.ReadAllBytes(path);
+        Assert.True(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF, "Import-SigningHelpers.ps1 must be UTF-8 with a byte order mark.");
+
+        var text = File.ReadAllText(path);
+        var missing = SharedInstallerFunctions
+            .Where(name => !Regex.IsMatch(text, $@"^function\s+{Regex.Escape(name)}\b", RegexOptions.Multiline))
+            .ToArray();
+        AssertNoOffenders(missing, "functions missing from Import-SigningHelpers.ps1:");
+    }
+
     /// <summary>Fails with every offending path listed; xunit's own formatting truncates a long collection.</summary>
     private static void AssertNoOffenders(string[] offenders, string rule)
     {
