@@ -14,7 +14,7 @@ namespace RemoteDesktop.Architecture.UnitTests;
 ///
 /// Formatting (blank lines around headings and lists, code fences tagged with a language) is deliberately *not*
 /// here — that is markdownlint's job in CI. This class checks meaning: does the file belong there, and does the
-/// link go anywhere. The split is spelled out in docs/STYLE.md §7.
+/// link go anywhere. The split is spelled out in docs/STYLE.md §6.
 /// </summary>
 public class DocumentationTests
 {

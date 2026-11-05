@@ -1,4 +1,4 @@
-// markdownlint-cli2 —— 文档的**格式**检查（规则与分工见 docs/STYLE.md §7）。
+// markdownlint-cli2 —— 文档的**格式**检查（规则与分工见 docs/STYLE.md §6）。
 // 语义（文件该不该存在、名字对不对、链接通向哪里）由 tests/.../DocumentationTests.cs 在 dotnet test 里管。
 {
   "config": {

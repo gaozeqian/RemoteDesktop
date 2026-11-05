@@ -276,7 +276,7 @@ jobs:
     #
     # Whether a document should exist, where it may live, what it may be called and whether its links resolve is
     # checked somewhere else -- DocumentationTests, in dotnet test, on all three runners. That split is deliberate
-    # (docs/STYLE.md §7): markdownlint sees one file at a time and cannot know that a link points at a path no
+    # (docs/STYLE.md §6): markdownlint sees one file at a time and cannot know that a link points at a path no
     # longer there, and the test has no opinion about whitespace. Each checks what it is good at.
     runs-on: ubuntu-26.04
     steps:
