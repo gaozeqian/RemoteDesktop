@@ -445,6 +445,21 @@ public sealed class ServerSetupTests : IDisposable
     }
 
     /// <summary>
+    /// An empty path with nothing else naming a database would otherwise be written as an empty
+    /// <c>Rendezvous:Database:Path</c> and only be refused when the service starts.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void An_empty_database_path_is_refused_at_setup(string path)
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => ServerSetup.Configure(_folder, new ServerSetupOptions { DatabasePath = path }));
+
+        Assert.Contains("database path", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// An empty connection string is how the installers have always said "no database", and it has to keep meaning
     /// that: a deployment that deliberately runs without one must not be given a file to lose instead.
     /// </summary>

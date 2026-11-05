@@ -67,6 +67,18 @@ public sealed class SmtpMailerTests
         Assert.Contains("cannot reach 127.0.0.1:1", ex.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>An expired connect deadline must read as a timeout, not as the runtime's "A task was canceled.".</summary>
+    [Fact]
+    public async Task A_connect_that_runs_out_of_time_is_reported_as_a_timeout()
+    {
+        // A zero deadline is already over when the connect starts, which is deterministic where an unroutable address is not.
+        // Nothing needs to be listening: the connect is abandoned before it is attempted.
+        var ex = await Assert.ThrowsAsync<SmtpDeliveryException>(() =>
+            SmtpMailer.SendAsync(Settings(1, username: null), "subject", "body", Ct, TimeSpan.Zero));
+
+        Assert.Contains("timed out", ex.Message, StringComparison.Ordinal);
+    }
+
     private static SmtpSettings Settings(int port, string? username, string? password = null) => new()
     {
         Host = "127.0.0.1",

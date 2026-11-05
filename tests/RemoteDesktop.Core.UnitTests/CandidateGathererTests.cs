@@ -1,4 +1,5 @@
 using System.Net;
+using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Nat;
 
 namespace RemoteDesktop.Core.UnitTests;
@@ -21,6 +22,37 @@ public class CandidateGathererTests
         var candidates = CandidateGatherer.Gather(51820, reflexive: null);
 
         Assert.Contains(candidates, candidate => candidate.Address.Equals(IPAddress.Loopback) && candidate.Port == 51820);
+        Assert.Equal(IPAddress.Loopback, candidates[^1].Address);
+    }
+
+    /// <summary>A peer that lists thousands of addresses must not make this side send thousands of packets.</summary>
+    [Fact]
+    public void A_peer_cannot_make_us_try_more_than_the_candidate_limit()
+    {
+        var flood = Enumerable.Range(1, 3000)
+            .Select(i => new PeerEndpoint { Address = $"10.0.{i / 250}.{i % 250 + 1}", Port = 40000 })
+            .ToList();
+
+        var candidates = CandidateGatherer.FromMessages(flood);
+
+        Assert.Equal(CandidateGatherer.MaxPeerCandidates, candidates.Count);
+        Assert.Equal(IPAddress.Parse("10.0.0.2"), candidates[0].Address);
+    }
+
+    [Fact]
+    public void A_normal_candidate_list_is_taken_whole_and_in_order()
+    {
+        var list = new[]
+        {
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50000 },
+            new PeerEndpoint { Address = "203.0.113.9", Port = 50001 },
+            new PeerEndpoint { Address = "127.0.0.1", Port = 50000 },
+        };
+
+        var candidates = CandidateGatherer.FromMessages(list);
+
+        Assert.Equal(3, candidates.Count);
+        Assert.Equal(IPAddress.Parse("192.168.1.5"), candidates[0].Address);
         Assert.Equal(IPAddress.Loopback, candidates[^1].Address);
     }
 

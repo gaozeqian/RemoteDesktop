@@ -83,7 +83,16 @@ public static class UserEndpoints
                 Disabled: false,
                 time.GetUtcNow().ToUnixTimeMilliseconds());
 
-            await store.CreateUserAsync(user, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await store.CreateUserAsync(user, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (OpsStore.IsUniqueViolation(ex))
+            {
+                // Another request took the name between the check above and this insert.
+                return Results.Conflict(new { error = "username", message = "an account with that name already exists" });
+            }
+
             await AuditAsync(store, context, "admin.create", username, $"created {role}", time, cancellationToken)
                 .ConfigureAwait(false);
 

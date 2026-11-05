@@ -47,14 +47,22 @@ public static class CandidateGatherer
         return new PeerEndpoint { Address = endPoint.Address.ToString(), Port = (uint)endPoint.Port };
     }
 
-    /// <summary>Parses candidates from the peer, skipping anything malformed.</summary>
+    /// <summary>
+    /// Most candidates taken from a peer. Far more than any machine has addresses; the limit exists because every
+    /// candidate costs a few punch packets sent to an address the peer chose, and a 64 KiB signaling message can
+    /// otherwise carry thousands.
+    /// </summary>
+    public const int MaxPeerCandidates = 64;
+
+    /// <summary>Parses candidates from the peer, skipping anything malformed and keeping the first <see cref="MaxPeerCandidates"/>.</summary>
     public static List<IPEndPoint> FromMessages(IEnumerable<PeerEndpoint> endpoints) =>
         [.. endpoints
             .Where(e => e.Port is > 0 and <= ushort.MaxValue)
             .Select(e => IPAddress.TryParse(e.Address, out var address) ? new IPEndPoint(address, (int)e.Port) : null)
             .OfType<IPEndPoint>()
             .Where(e => e.AddressFamily == AddressFamily.InterNetwork)
-            .Distinct()];
+            .Distinct()
+            .Take(MaxPeerCandidates)];
 
     private static IEnumerable<IPAddress> GetLocalAddresses()
     {

@@ -139,6 +139,19 @@ public sealed partial class OpsStore : IDisposable
         return value is null or DBNull ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Whether <paramref name="exception"/> is the database refusing a row because a unique key already holds it, on
+    /// either provider. Lets a caller turn "someone else inserted that name first" into a conflict instead of an error.
+    /// </summary>
+    public static bool IsUniqueViolation(Exception exception) =>
+        exception switch
+        {
+            // 2067 is SQLITE_CONSTRAINT_UNIQUE and 1555 is SQLITE_CONSTRAINT_PRIMARYKEY.
+            SqliteException { SqliteExtendedErrorCode: 2067 or 1555 } => true,
+            PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } => true,
+            _ => false,
+        };
+
     /// <summary>Throws when the database cannot answer. The health endpoint turns that into an unhealthy report.</summary>
     public async Task ProbeAsync(CancellationToken cancellationToken = default)
     {

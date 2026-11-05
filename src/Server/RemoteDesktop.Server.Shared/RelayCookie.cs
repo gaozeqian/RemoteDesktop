@@ -23,7 +23,7 @@ public static class RelayCookie
 
     private static readonly byte[] Context = "rd-relay-bind-cookie-v1"u8.ToArray();
 
-    private static readonly long WindowSeconds = 30;
+    private const long WindowSeconds = 30;
 
     public static byte[] Compute(ReadOnlySpan<byte> key, ReadOnlySpan<byte> ticket, byte role, IPEndPoint from, DateTimeOffset now)
     {

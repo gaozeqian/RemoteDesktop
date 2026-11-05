@@ -143,7 +143,16 @@ public static class NodeEndpoints
                 time.GetUtcNow().ToUnixTimeMilliseconds(),
                 Token: token);
 
-            await store.CreateNodeAsync(node, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await store.CreateNodeAsync(node, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (OpsStore.IsUniqueViolation(ex))
+            {
+                // Another request took the name between the check above and this insert.
+                return Results.Conflict(new { error = "name", message = "a node with that name already exists" });
+            }
+
             await AuditAsync(store, context, "node.create", node.Name, $"registered {role} at {baseUrl}", time, cancellationToken)
                 .ConfigureAwait(false);
             return Results.Created($"/api/nodes/{node.Id}", Describe(node));

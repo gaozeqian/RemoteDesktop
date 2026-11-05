@@ -1,9 +1,10 @@
 namespace RemoteDesktop.Server.Rendezvous;
 
 /// <summary>
-/// A token bucket per registered device, so one client cannot use presence queries to watch a large list of codes.
+/// A token bucket per signaling connection, so one client cannot use presence queries to watch a large list of codes.
 /// The bucket hangs off the device's session, which the server already proved by certificate, so an anonymous caller
-/// cannot spend someone else's budget.
+/// cannot spend someone else's budget. It is the connection, not the device id, that is counted: a device that
+/// reconnects starts with a full bucket.
 /// </summary>
 /// <remarks>
 /// Ten queries at once, then one every six seconds — around ten a minute. The client asks about its whole list once

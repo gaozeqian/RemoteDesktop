@@ -183,6 +183,33 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         }
     }
 
+    /// <summary>Simultaneous registrations of one name pass the name check together; the unique index must answer 409, not 500.</summary>
+    [Fact]
+    public async Task Simultaneous_registrations_of_one_name_end_in_one_node_and_conflicts()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var responses = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => Task.Run(
+                async () =>
+                {
+                    var response = await CreateNodeAsync(client, cookies, node);
+                    if (response.StatusCode == HttpStatusCode.Created)
+                    {
+                        _created.Add((await response.Content.ReadFromJsonAsync<CreatedNode>(Ct))!.Id);
+                    }
+
+                    return response.StatusCode;
+                },
+                Ct)));
+
+            Assert.Equal(1, responses.Count(status => status == HttpStatusCode.Created));
+            Assert.All(responses, status => Assert.True(status is HttpStatusCode.Created or HttpStatusCode.Conflict, $"unexpected {status}"));
+        }
+    }
+
     /// <summary>
     /// The scrape has to present the node's own secret when it has one, and the deployment's when it does not. The
     /// header is asserted on the node side, because "the token is stored" is not the same claim as "the token is sent".

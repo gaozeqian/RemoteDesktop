@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
 using RemoteDesktop.Server.Shared;
@@ -67,6 +68,54 @@ public class StorageMaintenanceTests
         var alerts = await db.Store.ListAlertsAsync(null, 10, Ct);
         Assert.Single(alerts);
         Assert.Equal("recent-alert", alerts[0].Id);
+    }
+
+    /// <summary>A retention window of zero days means "keep forever" for that table, not "delete everything".</summary>
+    [Fact]
+    public async Task A_retention_window_of_zero_days_keeps_that_history_forever()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var old = DateTimeOffset.UtcNow.AddDays(-400);
+        await SeedOldHistoryAsync(db, old);
+
+        var service = RetentionFor(db, new RetentionSettings { SampleDays = 0, EventDays = 0, SessionDays = 0, AlertDays = 0 });
+        await service.RunOnceAsync(Ct);
+
+        Assert.Single(await db.Store.ReadSeriesAsync(["m"], 0, long.MaxValue, Ct));
+        Assert.Single(await db.Store.ReadSessionEventsAsync("old-correlation", Ct));
+        Assert.Single(await db.Store.ListSessionsAsync(10, null, null, Ct));
+        Assert.Single(await db.Store.ListAlertsAsync(null, 10, Ct));
+    }
+
+    [Fact]
+    public async Task Retention_cleans_only_the_tables_whose_window_is_set()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var old = DateTimeOffset.UtcNow.AddDays(-400);
+        await SeedOldHistoryAsync(db, old);
+
+        var service = RetentionFor(db, new RetentionSettings { SampleDays = 30, EventDays = 0, SessionDays = 0, AlertDays = 0 });
+        await service.RunOnceAsync(Ct);
+
+        Assert.Empty(await db.Store.ReadSeriesAsync(["m"], 0, long.MaxValue, Ct));
+        Assert.Single(await db.Store.ReadSessionEventsAsync("old-correlation", Ct));
+        Assert.Single(await db.Store.ListSessionsAsync(10, null, null, Ct));
+        Assert.Single(await db.Store.ListAlertsAsync(null, 10, Ct));
+    }
+
+    private static RetentionService RetentionFor(TempDatabase db, RetentionSettings retention) => new(
+        db.Store,
+        new OpsOptions { Retention = retention },
+        new OpsLease(db.Store, TimeProvider.System),
+        TimeProvider.System,
+        NullLogger<RetentionService>.Instance);
+
+    private static async Task SeedOldHistoryAsync(TempDatabase db, DateTimeOffset old)
+    {
+        await db.Store.WriteSamplesAsync("node", old.ToUnixTimeMilliseconds(), [new PrometheusSample("m", "m", 1)], Ct);
+        await db.Store.AppendEventsAsync([Event("old", old, "old-correlation")], old.ToUnixTimeMilliseconds(), Ct);
+        await db.Store.OpenAlertAsync(Alert("old-alert", old), Ct);
+        await db.Store.ResolveAlertAsync("old-alert", old.ToUnixTimeMilliseconds(), Ct);
     }
 
     [Fact]

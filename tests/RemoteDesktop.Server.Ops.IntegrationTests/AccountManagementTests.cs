@@ -127,6 +127,35 @@ public class AccountManagementTests(OpsHostFixture fixture) : IClassFixture<OpsH
             (await secondClient.PostAsJsonAsync("/api/auth/totp", new { challenge = secondChallenge, code }, Ct)).StatusCode);
     }
 
+    /// <summary>
+    /// The name check and the insert are two statements, so simultaneous requests for one name can all pass the check.
+    /// The losers hit the unique index and must read as a conflict, not as a server error.
+    /// </summary>
+    [Fact]
+    public async Task Simultaneous_requests_for_one_username_end_in_one_account_and_conflicts()
+    {
+        var (admin, adminCookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (admin)
+        {
+            var username = "race-" + Guid.NewGuid().ToString("N")[..8];
+            var csrf = adminCookies.GetCookies(fixture.BaseAddress)[OpsAuthCsrf()]!.Value;
+
+            var responses = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => Task.Run(
+                async () => (await PostAsync(admin, "/api/users", new { username, password = "initial password 123", role = "viewer" }, csrf)).StatusCode,
+                Ct)));
+
+            Assert.Equal(1, responses.Count(status => status == HttpStatusCode.OK));
+            Assert.All(responses, status => Assert.True(status is HttpStatusCode.OK or HttpStatusCode.Conflict, $"unexpected {status}"));
+
+            var users = await admin.GetFromJsonAsync<List<UserDto>>("/api/users", Ct);
+            var created = Assert.Single(users!, user => user.Username == username);
+            var deleteCsrf = adminCookies.GetCookies(fixture.BaseAddress)[OpsAuthCsrf()]!.Value;
+            using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/users/{created.Id}");
+            delete.Headers.Add(CsrfHeader, deleteCsrf);
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.SendAsync(delete, Ct)).StatusCode);
+        }
+    }
+
     private static string OpsAuthCsrf() => "ops_csrf";
 
     private async Task<CreatedUser> CreateUserAsync(HttpClient admin, CookieContainer cookies, string username, string password, string role)

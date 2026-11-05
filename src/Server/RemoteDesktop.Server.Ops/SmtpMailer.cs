@@ -27,14 +27,24 @@ internal static class SmtpMailer
     private const int MaxReplyLength = 8 * 1024;
 
     /// <exception cref="SmtpDeliveryException">The server refused a step, or could not be reached.</exception>
-    public static async Task SendAsync(SmtpSettings settings, string subject, string text, CancellationToken cancellationToken)
+    public static async Task SendAsync(
+        SmtpSettings settings, string subject, string text, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(text);
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        stop.CancelAfter(Timeout);
+        var limit = timeout ?? Timeout;
+        if (limit <= TimeSpan.Zero)
+        {
+            // CancelAfter(0) still goes through a timer; a budget that is already spent should fail deterministically.
+            stop.Cancel();
+        }
+        else
+        {
+            stop.CancelAfter(limit);
+        }
 
         using var tcp = new TcpClient();
         try
@@ -44,6 +54,11 @@ internal static class SmtpMailer
         catch (SocketException ex)
         {
             throw new SmtpDeliveryException($"cannot reach {settings.Host}:{settings.Port}: {ex.Message}");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Our own deadline fired while connecting; without this the failure would read "A task was canceled.".
+            throw new SmtpDeliveryException($"timed out connecting to {settings.Host}:{settings.Port}");
         }
 
         Stream stream = tcp.GetStream();

@@ -429,7 +429,8 @@ public sealed partial class UdpRelay : IDisposable
         });
     }
 
-    private void CleanupIfDue()    {
+    private void CleanupIfDue()
+    {
         var now = _time.GetUtcNow();
         if (now < _nextCleanup)
         {

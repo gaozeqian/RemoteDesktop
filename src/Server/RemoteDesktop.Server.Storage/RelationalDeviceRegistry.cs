@@ -209,7 +209,8 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         _ => 0,
     };
 
-    public async Task<DeviceRegistration> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)    {
+    public async Task<DeviceRegistration> GetOrAllocateAsync(string fingerprint, CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
 
         if (_cache.TryGetValue(fingerprint, out var cached))

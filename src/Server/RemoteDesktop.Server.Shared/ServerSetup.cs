@@ -1078,8 +1078,11 @@ public static class ServerSetup
                 : IsAuto(postgres) ? Automatic(existing) : (ProviderPostgres, postgres, null);
         }
 
-        // A file with no provider can only mean the database that has one.
-        return (ProviderSqlite, null, path!);
+        // A file with no provider can only mean the database that has one. An empty path names none, and writing it
+        // would only fail later, when the service starts and rejects the setting.
+        return string.IsNullOrWhiteSpace(path)
+            ? throw new InvalidOperationException("The SQLite database path is empty. Pass a file path, or choose a provider with --database-provider.")
+            : (ProviderSqlite, null, path);
     }
 
     /// <summary>
