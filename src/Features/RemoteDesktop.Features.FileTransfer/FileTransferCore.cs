@@ -43,18 +43,50 @@ public static class PartialFile
     /// <summary>The longest file name the filesystems here accept, in characters.</summary>
     private const int MaxFileNameLength = 255;
 
-    /// <summary>Whether <paramref name="directory"/>'s drive has room for <paramref name="bytes"/> more; true when that cannot be told.</summary>
+    /// <summary>Whether <paramref name="directory"/>'s volume has room for <paramref name="bytes"/> more; true when that cannot be told.</summary>
     public static bool HasRoomFor(string directory, long bytes)
     {
         try
         {
-            var root = Path.GetPathRoot(directory);
-            return root is null || bytes <= 0 || new DriveInfo(root).AvailableFreeSpace >= bytes;
+            if (string.IsNullOrEmpty(directory) || bytes <= 0)
+            {
+                return true;
+            }
+
+            var full = Path.GetFullPath(directory);
+            var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var root = VolumeRootFor(full, DriveInfo.GetDrives().Select(drive => drive.Name), comparison) ?? Path.GetPathRoot(full);
+            return root is null || new DriveInfo(root).AvailableFreeSpace >= bytes;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             return true; // cannot tell (network share); let the write fail if there is really no room
         }
+    }
+
+    /// <summary>
+    /// The volume <paramref name="fullPath"/> lives on: the longest of <paramref name="volumeRoots"/> (drive letters, or
+    /// mount points on Unix) that is a prefix of it, or null when none is. The path root alone is no answer on Unix,
+    /// where it is always "/" even for a folder on a USB stick or a separate /home.
+    /// </summary>
+    internal static string? VolumeRootFor(string fullPath, IEnumerable<string> volumeRoots, StringComparison comparison)
+    {
+        string? best = null;
+        foreach (var root in volumeRoots)
+        {
+            if (string.IsNullOrEmpty(root) || (best is not null && root.Length <= best.Length))
+            {
+                continue;
+            }
+
+            var prefix = root[^1] == Path.DirectorySeparatorChar ? root : root + Path.DirectorySeparatorChar;
+            if (fullPath.StartsWith(prefix, comparison) || string.Equals(fullPath, root, comparison))
+            {
+                best = root;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>Picks "name (1).ext", "name (2).ext"... for the first one that does not exist yet.</summary>

@@ -220,7 +220,14 @@ public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? reque
         }
         finally
         {
-            _gate.Release();
+            try
+            {
+                _gate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // DisposeAsync ran while this request was in flight; its own outcome must not be replaced by that.
+            }
         }
     }
 

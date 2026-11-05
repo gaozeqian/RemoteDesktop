@@ -75,7 +75,7 @@ public sealed partial class FileAccessPolicy
 
         if (IsWindows)
         {
-            if (path.StartsWith(@"\\.\", StringComparison.Ordinal) || path.StartsWith(@"\\?\", StringComparison.Ordinal))
+            if (IsDevicePath(path))
             {
                 throw Invalid("Device paths are not allowed.");
             }
@@ -98,6 +98,14 @@ public sealed partial class FileAccessPolicy
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             throw new FileOperationException(FileError.InvalidPath, "The path is not valid.", ex);
+        }
+
+        // The check on the raw spelling above only knows the backslash form; GetFullPath turns "//./PhysicalDrive0" into
+        // "\\.\PhysicalDrive0", so the canonical spelling is judged too. Otherwise the only thing between a device path
+        // and the filesystem would be the network-share refusal, which a configured UNC root switches off.
+        if (IsWindows && IsDevicePath(full))
+        {
+            throw Invalid("Device paths are not allowed.");
         }
 
         if (IsWindows && full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsReserved))
@@ -336,9 +344,14 @@ public sealed partial class FileAccessPolicy
         }
     }
 
+    // A filesystem root ("/" or "D:\") already ends in the separator; appending another would make the prefix "//" or
+    // "D:\\", which no path has, and everything beneath such a root would be judged outside it.
     private static bool IsSameOrInside(string path, string root) =>
         path.Equals(root, PathComparison) ||
-        path.StartsWith(root + Path.DirectorySeparatorChar, PathComparison);
+        path.StartsWith(root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar, PathComparison);
+
+    private static bool IsDevicePath(string path) =>
+        path.StartsWith(@"\\.\", StringComparison.Ordinal) || path.StartsWith(@"\\?\", StringComparison.Ordinal);
 
     private static string TrimTrailingSeparator(string path)
     {

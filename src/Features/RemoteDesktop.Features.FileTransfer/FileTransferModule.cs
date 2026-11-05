@@ -433,6 +433,52 @@ public sealed partial class FileTransferModule(
         }
     }
 
+    /// <summary>
+    /// A path or name for the log. Both come from the other computer, and the path policy lets control characters
+    /// through (a file may legitimately be named that way), so a newline in one could forge a log line. The value is
+    /// logged with such characters spelled out instead; nothing is refused because of it.
+    /// </summary>
+    internal static string Printable(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Any(char.IsControl))
+        {
+            return text ?? string.Empty;
+        }
+
+        var builder = new System.Text.StringBuilder(text.Length + 8);
+        foreach (var c in text)
+        {
+            switch (c)
+            {
+                case '\n':
+                    builder.Append(@"\n");
+                    break;
+                case '\r':
+                    builder.Append(@"\r");
+                    break;
+                case '\t':
+                    builder.Append(@"\t");
+                    break;
+                case var control when char.IsControl(control):
+                    builder.Append(@"\u").Append(((int)control).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                default:
+                    builder.Append(c);
+                    break;
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>A path or name from the other computer, shown in the log through <see cref="Printable"/>.</summary>
+    private readonly record struct LogText(string? Value)
+    {
+        public static implicit operator LogText(string? value) => new(value);
+
+        public override string ToString() => Printable(Value);
+    }
+
     private static FileResponse Failure(FileOperationException ex) => new() { Result = new OperationResult { Status = StatusOf(ex) } };
 
     private static FileStatus Ok() => new() { Error = FileError.None };
@@ -443,20 +489,20 @@ public sealed partial class FileTransferModule(
         ProtobufFrames.WriteAsync(stream, response, cancellationToken);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: {Operation} {Path}")]
-    private static partial void LogOperation(ILogger logger, SessionId sessionId, string operation, string path);
+    private static partial void LogOperation(ILogger logger, SessionId sessionId, string operation, LogText path);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: rename {Path} to {NewName}")]
-    private static partial void LogRename(ILogger logger, SessionId sessionId, string path, string newName);
+    private static partial void LogRename(ILogger logger, SessionId sessionId, LogText path, LogText newName);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: {Operation} of {Path} started ({Size} bytes, from offset {Offset}).")]
-    private static partial void LogTransfer(ILogger logger, SessionId sessionId, string operation, string path, long size, long offset);
+    private static partial void LogTransfer(ILogger logger, SessionId sessionId, string operation, LogText path, long size, long offset);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: {Operation} of {Path} finished.")]
-    private static partial void LogTransferDone(ILogger logger, SessionId sessionId, string operation, string path);
+    private static partial void LogTransferDone(ILogger logger, SessionId sessionId, string operation, LogText path);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Kept the finished upload's partial file {Path}: {Reason}")]
     private static partial void LogPartialKept(ILogger logger, string path, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: {Operation} of {Path} failed: {Reason}")]
-    private static partial void LogTransferFailed(ILogger logger, SessionId sessionId, string operation, string path, string reason);
+    private static partial void LogTransferFailed(ILogger logger, SessionId sessionId, string operation, LogText path, string reason);
 }

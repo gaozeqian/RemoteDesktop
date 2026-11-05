@@ -155,7 +155,12 @@ public static class FileTransferClient
                 }
 
                 Check(accepted.Status);
-                var offset = (long)accepted.ResumeOffset;
+                var offset = ToLength(accepted.ResumeOffset);
+                if (offset > size)
+                {
+                    throw new FileOperationException(FileError.Unsupported, "The remote computer asked to continue beyond the end of the file.");
+                }
+
                 observer.Started(size, offset, accepted.FinalPath, PartialFile.PathFor(accepted.FinalPath, size, modified));
 
                 var hash = await FileSender.SendAsync(stream, info.FullName, size, offset, observer.Progress, cancellationToken).ConfigureAwait(false);
@@ -218,7 +223,7 @@ public static class FileTransferClient
 
                 var accepted = answer.DownloadAccepted;
                 Check(accepted.Status);
-                var size = (long)accepted.Size;
+                var size = ToLength(accepted.Size);
                 var modified = FileTimestamps.FromUnixMilliseconds(accepted.ModifiedUnixMs);
 
                 var final = destination;
@@ -333,6 +338,12 @@ public static class FileTransferClient
     private static async Task<FileResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken) =>
         await ProtobufFrames.ReadAsync(stream, FileResponse.Parser, MaxResponseBytes, cancellationToken).ConfigureAwait(false)
         ?? throw new EndOfStreamException("The remote computer closed the channel.");
+
+    // Sizes and offsets are the host's to announce; cast unchecked, anything above long.MaxValue turns negative.
+    private static long ToLength(ulong announced) =>
+        announced <= long.MaxValue
+            ? (long)announced
+            : throw new FileOperationException(FileError.Unsupported, "The remote computer announced a size that is not valid.");
 
     private static void Check(FileStatus? status)
     {

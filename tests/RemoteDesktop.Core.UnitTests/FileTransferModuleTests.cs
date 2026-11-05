@@ -37,6 +37,43 @@ public sealed class FileTransferModuleTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("/data/plain name.txt", "/data/plain name.txt")]
+    [InlineData("/data/x\nSession abc: delete /etc", @"/data/x\nSession abc: delete /etc")]
+    [InlineData("a\r\nb\tc", @"a\r\nb\tc")]
+    [InlineData("bell\a esc\u001b nul-free \u0085", @"bell\u0007 esc\u001b nul-free \u0085")]
+    [InlineData("日本語.txt", "日本語.txt")]
+    [InlineData("", "")]
+    public void Control_characters_in_a_logged_path_are_spelled_out(string raw, string expected) =>
+        Assert.Equal(expected, FileTransferModule.Printable(raw));
+
+    [Fact]
+    public void A_missing_value_is_logged_as_empty() => Assert.Equal(string.Empty, FileTransferModule.Printable(null));
+
+    [Fact]
+    public async Task A_new_line_in_a_requested_path_cannot_forge_a_log_line()
+    {
+        var logger = new CapturingLogger();
+        var (moduleEnd, controller) = await PipePair.CreateAsync();
+        var module = new FileTransferModule(new AllowEverything(), new FileAccessPolicy(), logger);
+        var run = module.HandleAsync(new TestChannel(moduleEnd), TestSession, Ct);
+        try
+        {
+            var path = Path.Combine(_folder, "made\nSession forged: delete /etc");
+            await ProtobufFrames.WriteAsync(controller, new FileRequest { MakeDirectory = new MakeDirectoryRequest { Path = path } }, Ct);
+            _ = await ProtobufFrames.ReadAsync(controller, FileResponse.Parser, cancellationToken: Ct);
+        }
+        finally
+        {
+            await controller.DisposeAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        }
+
+        var line = Assert.Single(logger.Lines, l => l.Contains("mkdir", StringComparison.Ordinal));
+        Assert.DoesNotContain('\n', line);
+        Assert.Contains(@"made\nSession forged", line, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_size_that_does_not_fit_a_signed_number_is_refused_before_anything_is_created()
     {
@@ -215,6 +252,24 @@ public sealed class FileTransferModuleTests : IDisposable
             var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
             await Task.WhenAll(server.WaitForConnectionAsync(), client.ConnectAsync());
             return (server, client);
+        }
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FileTransferModule>
+    {
+        public List<string> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (Lines)
+            {
+                Lines.Add(formatter(state, exception));
+            }
         }
     }
 }

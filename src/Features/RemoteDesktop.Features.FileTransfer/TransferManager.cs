@@ -477,7 +477,13 @@ public sealed class TransferManager : IAsyncDisposable
                 _slots.Release();
             }
 
-            job.RunToken = null;
+            // Resume can run from the notification that announced this run's end, before this cleanup: the token then
+            // belongs to the new run, and clearing it would leave that run impossible to pause or cancel.
+            if (ReferenceEquals(job.RunToken, run))
+            {
+                job.RunToken = null;
+            }
+
             run.Dispose();
         }
     }

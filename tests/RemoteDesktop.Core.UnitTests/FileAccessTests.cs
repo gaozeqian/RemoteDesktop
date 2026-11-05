@@ -37,6 +37,42 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(FileError.InvalidPath, ex.Error);
     }
 
+    // The forward-slash spellings reach the same devices once GetFullPath has canonicalized them, so the device check
+    // cannot rely on the raw spelling alone. A configured UNC root must not change the answer either.
+    [Theory]
+    [InlineData("//./PhysicalDrive0")]
+    [InlineData("//?/C:/Windows")]
+    [InlineData("/\\./PhysicalDrive0")]
+    [InlineData("\\\\?/C:\\Windows")]
+    public void Device_paths_are_rejected_in_every_spelling_even_with_a_network_root_configured(string path)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+        foreach (var policy in new[] { Open, new FileAccessPolicy([@"\\configured.invalid\share"]) })
+        {
+            var ex = Assert.Throws<FileOperationException>(() => policy.Normalize(path));
+            Assert.Equal(FileError.InvalidPath, ex.Error);
+        }
+    }
+
+    // A root that is a filesystem root already ends in the separator; paths beneath it must still count as inside.
+    [Fact]
+    public void A_filesystem_root_configured_as_the_shared_root_allows_the_paths_beneath_it()
+    {
+        var folder = Directory.CreateTempSubdirectory("rd-fsroot-").FullName;
+        try
+        {
+            var root = Path.GetPathRoot(folder)!;
+            var policy = new FileAccessPolicy([root]);
+
+            Assert.Equal(Path.Combine(folder, "file.txt"), policy.Normalize(Path.Combine(folder, "file.txt")));
+            Assert.Equal(folder, policy.Normalize(folder));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("relative/path.txt")]
     [InlineData("../etc/passwd")]

@@ -136,12 +136,13 @@ public sealed partial class FileAccessPolicy
 
     private static string? FinalPathOf(SafeFileHandle handle)
     {
-        var descriptor = handle.DangerousGetHandle().ToInt32();
         if (IsWindows)
         {
             return WindowsFinalPath(handle);
         }
 
+        // Only a Unix descriptor is a small integer; a Windows handle is a pointer-sized value that ToInt32 may refuse.
+        var descriptor = handle.DangerousGetHandle().ToInt32();
         if (OperatingSystem.IsLinux())
         {
             return LinuxFinalPath(descriptor);
