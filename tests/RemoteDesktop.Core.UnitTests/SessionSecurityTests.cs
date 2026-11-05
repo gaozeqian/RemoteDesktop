@@ -134,6 +134,144 @@ public class PasswordAuthenticatorTests
         var attempt = PasswordAuthenticator.Respond("unattended-password", challenges[1].Salt, challenges[1].ServerPublic, HostFp, ControllerFp);
         Assert.True(PasswordAuthenticator.VerifyHost(challenges[1], attempt.ClientPublic, attempt.ClientEvidence, out _));
     }
+
+    // The host must treat anything a controller sends as hostile. A malformed public value or evidence is a failed
+    // authentication (false), never an exception out of the protocol layer.
+    private static (HostPasswordChallenge Challenge, PasswordAttempt Attempt) ValidExchange()
+    {
+        var credentials = new HostCredentials();
+        var challenge = credentials.BeginAuthentication(HostFp, ControllerFp)[0];
+        var attempt = PasswordAuthenticator.Respond(
+            credentials.TemporaryPassword, challenge.Salt, challenge.ServerPublic, HostFp, ControllerFp);
+        return (challenge, attempt);
+    }
+
+    private static Org.BouncyCastle.Math.BigInteger GroupModulus() =>
+        Org.BouncyCastle.Crypto.Agreement.Srp.Srp6StandardGroups.rfc5054_3072.N;
+
+    [Fact]
+    public void The_host_rejects_a_client_public_value_of_zero()
+    {
+        var (challenge, attempt) = ValidExchange();
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, new byte[] { 0 }, attempt.ClientEvidence, out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_host_rejects_an_all_zero_client_public_value_of_full_width()
+    {
+        var (challenge, attempt) = ValidExchange();
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, new byte[384], attempt.ClientEvidence, out _));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void The_host_rejects_a_client_public_value_that_is_a_multiple_of_the_group_modulus(int multiple)
+    {
+        // A mod N == 0 makes the shared secret independent of the password, so SRP requires refusing it.
+        var (challenge, attempt) = ValidExchange();
+        var value = GroupModulus().Multiply(Org.BouncyCastle.Math.BigInteger.ValueOf(multiple)).ToByteArrayUnsigned();
+
+        Assert.True(value.Length <= PasswordAuthenticator.MaxPublicValueSize);
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, value, attempt.ClientEvidence, out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_host_rejects_an_oversized_client_public_value()
+    {
+        var (challenge, attempt) = ValidExchange();
+        var oversized = new byte[PasswordAuthenticator.MaxPublicValueSize + 1];
+        RandomNumberGenerator.Fill(oversized);
+        oversized[0] |= 1;
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, oversized, attempt.ClientEvidence, out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_host_rejects_an_empty_client_public_value_or_empty_evidence()
+    {
+        var (challenge, attempt) = ValidExchange();
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, ReadOnlySpan<byte>.Empty, attempt.ClientEvidence, out _));
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, ReadOnlySpan<byte>.Empty, out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_host_rejects_oversized_evidence()
+    {
+        var (challenge, attempt) = ValidExchange();
+        var oversized = new byte[129];
+        RandomNumberGenerator.Fill(oversized);
+        oversized[0] |= 1;
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, oversized, out _));
+    }
+
+    [Fact]
+    public void The_host_rejects_truncated_client_evidence()
+    {
+        var (challenge, attempt) = ValidExchange();
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, attempt.ClientEvidence.AsSpan(0, attempt.ClientEvidence.Length - 1), out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_host_rejects_a_truncated_client_public_value()
+    {
+        var (challenge, attempt) = ValidExchange();
+
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic.AsSpan(0, attempt.ClientPublic.Length - 1), attempt.ClientEvidence, out var serverEvidence));
+        Assert.Empty(serverEvidence);
+    }
+
+    [Fact]
+    public void The_client_rejects_empty_truncated_zero_or_oversized_server_evidence()
+    {
+        var (challenge, attempt) = ValidExchange();
+        Assert.True(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, attempt.ClientEvidence, out var evidence));
+
+        Assert.False(PasswordAuthenticator.VerifyServer(attempt, ReadOnlySpan<byte>.Empty));
+        Assert.False(PasswordAuthenticator.VerifyServer(attempt, new byte[] { 0 }));
+        Assert.False(PasswordAuthenticator.VerifyServer(attempt, evidence.AsSpan(0, evidence.Length - 1)));
+        Assert.False(PasswordAuthenticator.VerifyServer(attempt, new byte[129]));
+        Assert.True(PasswordAuthenticator.VerifyServer(attempt, evidence));
+    }
+
+    [Fact]
+    public void The_client_refuses_to_respond_to_a_malformed_challenge()
+    {
+        var challenge = new HostCredentials().BeginAuthentication(HostFp, ControllerFp)[0];
+
+        Assert.Throws<ArgumentException>(() => PasswordAuthenticator.Respond("pw", challenge.Salt, [], HostFp, ControllerFp));
+        Assert.Throws<ArgumentException>(
+            () => PasswordAuthenticator.Respond("pw", challenge.Salt, new byte[PasswordAuthenticator.MaxPublicValueSize + 1], HostFp, ControllerFp));
+        Assert.Throws<ArgumentException>(
+            () => PasswordAuthenticator.Respond("pw", challenge.Salt.AsSpan(0, PasswordAuthenticator.SaltSize - 1), challenge.ServerPublic, HostFp, ControllerFp));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void The_client_refuses_a_server_public_value_of_zero_or_a_multiple_of_the_modulus(int multiple)
+    {
+        // B mod N == 0 is rejected by the SRP library with a CryptoException; ControllerSessionService turns that into
+        // a protocol error instead of letting it escape.
+        var challenge = new HostCredentials().BeginAuthentication(HostFp, ControllerFp)[0];
+        var value = multiple == 0
+            ? new byte[] { 0 }
+            : GroupModulus().Multiply(Org.BouncyCastle.Math.BigInteger.ValueOf(multiple)).ToByteArrayUnsigned();
+
+        Assert.Throws<Org.BouncyCastle.Crypto.CryptoException>(
+            () => PasswordAuthenticator.Respond("pw", challenge.Salt, value, HostFp, ControllerFp));
+    }
 }
 
 public class AuthAttemptLimiterTests

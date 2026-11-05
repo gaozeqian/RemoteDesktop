@@ -173,6 +173,116 @@ public sealed class PartialFileSweeperTests : IDisposable
         }
     }
 
+    /// <summary>The cap that is in force when nobody says otherwise is the documented one, not just the one tests lower.</summary>
+    [Fact]
+    public void A_list_longer_than_the_default_cap_is_trimmed_to_it_keeping_the_newest()
+    {
+        Assert.Equal(1024, PartialFileLedger.DefaultMaxEntries);
+        var records = Enumerable.Range(0, PartialFileLedger.DefaultMaxEntries + 2)
+            .Select(i => Path.Combine(_folder, $"movie.mp4.{i}-a.rdpart"))
+            .ToArray();
+        System.IO.File.WriteAllLines(Path.Combine(_folder, "partial-files.log"), records);
+
+        var entries = Ledger().Entries();
+
+        Assert.Equal(PartialFileLedger.DefaultMaxEntries, entries.Count);
+        Assert.Equal(records[2], entries[0]);
+        Assert.Equal(records[^1], entries[^1]);
+    }
+
+    /// <summary>One slot is the smallest list that can exist; a cap of zero or less does not turn tracking into a crash.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void A_cap_below_one_still_keeps_the_newest_record(int maxEntries)
+    {
+        var ledger = Ledger(maxEntries);
+        ledger.Record(Path.Combine(_folder, "a.1-a.rdpart"));
+        ledger.Record(Path.Combine(_folder, "b.1-a.rdpart"));
+
+        Assert.Equal([Path.Combine(_folder, "b.1-a.rdpart")], Ledger(maxEntries).Entries());
+    }
+
+    /// <summary>
+    /// Tracking an attempt that is already tracked changes nothing - in particular it does not make the record newer.
+    /// A resumed transfer that records its partial file again therefore does not push other records out.
+    /// </summary>
+    [Fact]
+    public void Recording_a_path_twice_keeps_one_record_in_its_original_place()
+    {
+        var ledger = Ledger(maxEntries: 3);
+        var a = Path.Combine(_folder, "a.1-a.rdpart");
+        var b = Path.Combine(_folder, "b.1-a.rdpart");
+        var c = Path.Combine(_folder, "c.1-a.rdpart");
+        ledger.Record(a);
+        ledger.Record(b);
+        ledger.Record(a);
+        ledger.Record(c);
+
+        Assert.Equal([a, b, c], Ledger(maxEntries: 3).Entries());
+
+        // Because "a" is still the oldest, the next new record is the one that pushes it out.
+        ledger.Record(Path.Combine(_folder, "d.1-a.rdpart"));
+        Assert.Equal([b, c, Path.Combine(_folder, "d.1-a.rdpart")], Ledger(maxEntries: 3).Entries());
+    }
+
+    /// <summary>Dropping a record from the middle leaves the others in the order they were made, also after a reload.</summary>
+    [Fact]
+    public void Forgetting_a_record_from_the_middle_keeps_the_order_of_the_rest_after_a_reload()
+    {
+        var ledger = Ledger();
+        string[] letters = ["a", "b", "c", "d"];
+        var names = letters.Select(n => Path.Combine(_folder, n + ".1-a.rdpart")).ToArray();
+        foreach (var name in names)
+        {
+            ledger.Record(name);
+        }
+
+        ledger.Forget(names[1]);
+        ledger.Forget(Path.Combine(_folder, "never-recorded.1-a.rdpart"));
+
+        Assert.Equal([names[0], names[2], names[3]], Ledger().Entries());
+        Assert.False(File.Exists(Path.Combine(_folder, "partial-files.log.tmp")));
+    }
+
+    /// <summary>A list edited by hand may have blank lines, padding and repeats; reading makes one clean list of it.</summary>
+    [Fact]
+    public void A_list_with_blank_lines_padding_and_repeats_is_read_as_distinct_records_in_first_seen_order()
+    {
+        var a = Path.Combine(_folder, "a.1-a.rdpart");
+        var b = Path.Combine(_folder, "b.1-a.rdpart");
+        System.IO.File.WriteAllLines(
+            Path.Combine(_folder, "partial-files.log"),
+            [string.Empty, "  " + a + "  ", b, "   ", a, b + "\t", string.Empty]);
+
+        Assert.Equal([a, b], Ledger().Entries());
+    }
+
+    /// <summary>Evicting a record only stops tracking: the file it named is not the ledger's to delete.</summary>
+    [Fact]
+    public void An_evicted_record_does_not_delete_the_file_it_named()
+    {
+        var ledger = Ledger(maxEntries: 1);
+        var first = WriteFile(Path.Combine(_folder, "first.iso.1-a.rdpart"), "half a file");
+        ledger.Record(first);
+        ledger.Record(Path.Combine(_folder, "second.iso.1-a.rdpart"));
+
+        Assert.DoesNotContain(first, ledger.Entries());
+        Assert.True(File.Exists(first));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_path_is_refused_by_record_and_forget(string path)
+    {
+        var ledger = Ledger();
+
+        Assert.Throws<ArgumentException>(() => ledger.Record(path));
+        Assert.Throws<ArgumentException>(() => ledger.Forget(path));
+        Assert.Throws<ArgumentNullException>(() => ledger.Record(null!));
+    }
+
     private PartialFileLedger Ledger(int maxEntries = PartialFileLedger.DefaultMaxEntries) =>
         new(new PartialFileLedgerOptions(Path.Combine(_folder, "partial-files.log"), maxEntries), NullLogger<PartialFileLedger>.Instance);
 

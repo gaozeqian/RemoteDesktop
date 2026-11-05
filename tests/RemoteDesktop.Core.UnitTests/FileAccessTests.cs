@@ -328,6 +328,31 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(name, FileAccessPolicy.NormalizeName(name));
     }
 
+    // Line breaks in a path are not refused by Normalize: on Unix they are ordinary characters of a legal file name, and
+    // on Windows the path is accepted here and the operating system refuses it when the file is opened. This pins the
+    // CURRENT behavior, it is not a statement that such paths are wanted. What keeps a path like this from forging a
+    // log line is that log messages carry paths escaped, not that the policy turns them away.
+    [Theory]
+    [InlineData("a\nb.txt")]
+    [InlineData("a\r\nb.txt")]
+    [InlineData("file.txt\n")]
+    public void A_line_break_in_a_path_is_passed_through_unchanged(string leaf)
+    {
+        var path = OperatingSystem.IsWindows() ? @"C:\dir\" + leaf : "/home/u/" + leaf;
+
+        Assert.Equal(path, Open.Normalize(path));
+    }
+
+    [Theory]
+    [InlineData("a\nb")]
+    [InlineData("a\r\nb")]
+    [InlineData("file.txt\n")]
+    public void A_line_break_in_a_file_name_is_rejected(string name)
+    {
+        var ex = Assert.Throws<FileOperationException>(() => FileAccessPolicy.NormalizeName(name));
+        Assert.Equal(FileError.InvalidPath, ex.Error);
+    }
+
     [Fact]
     public void A_very_long_name_is_rejected() =>
         Assert.Throws<FileOperationException>(() => FileAccessPolicy.NormalizeName(new string('a', 256)));
