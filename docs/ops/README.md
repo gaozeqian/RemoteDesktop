@@ -686,7 +686,11 @@ docker volume rm remotedesktop_ops-gateway-data
 docker compose -f docker-compose.yml -f docker-compose.ops.yml up -d
 ```
 
-首次登录用刚建的管理员（口令 + TOTP）。两个节点会在控制台启动前自动登记（幂等），默认 baseUrl 为：
+首次登录用刚建的管理员（口令 + TOTP）。两个节点由一次性服务 `ops-seed` 在控制台启动前登记：`ops` 依赖它成功退出
+（`service_completed_successfully`），所以登记失败时控制台不会启动，而不是带着空节点表上线。登记是幂等的，节点表里已有行时
+不做任何修改（操作员删掉的节点不会被补回）。`ops-seed` 与 `ops` 使用同一镜像与同一份环境，因此写入的是控制台将要使用的
+PostgreSQL；镜像的 `ENTRYPOINT` 就是控制台本身，`ops` 不再带 `command:`，`run --rm -it ops --create-admin admin` 的参数
+直接交给控制台的安装命令。默认 baseUrl 为：
 
 ```text
 rendezvous   http://rendezvous:5080

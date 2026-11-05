@@ -266,6 +266,9 @@ jobs:
       # Only a boolean is needed here: the note below has to say whether the macOS packages were signed, and the
       # packages themselves are built in the other job.
       MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
+      # Likewise a boolean: the build-macos job only notarizes when all three notary secrets are present, and a signed
+      # but not notarized package still gets the Gatekeeper prompt on a first run.
+      MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
 
     steps:
       - name: Checkout Code
@@ -303,8 +306,12 @@ jobs:
       # （地址）"并告诉用户去哪儿改，所以不会变成"看着正常、就是连不上"。这里的说明会写进 Release。
       - name: Decide the server address and the release note
         shell: pwsh
+        # The variable is read from the environment, not interpolated into the script text: a value containing a quote
+        # or a $( ) would otherwise be parsed as PowerShell.
+        env:
+          DEFAULT_RENDEZVOUS_URI: ${{ vars.DEFAULT_RENDEZVOUS_URI }}
         run: |
-          $address = "${{ vars.DEFAULT_RENDEZVOUS_URI }}"
+          $address = $env:DEFAULT_RENDEZVOUS_URI
           if ($address) {
               Write-Host "The client installer will point at $address."
               "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
@@ -335,9 +342,21 @@ jobs:
               $boundaries.Add('> [!WARNING]')
               $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
               $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          } elseif ($env:MACOS_NOTARIZED -ne 'true') {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **macOS 包已签名但未公证**：Gatekeeper 在首次打开时仍会提示。右键点击 `.pkg` 选择')
+              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
           }
 
-          if (-not $env:PFX_BASE64) {
+          # The build steps below sign only when both the certificate and its password exist and otherwise fall back to
+          # -SkipSigning, so this has to use the same condition: checking the certificate alone said "signed" for a
+          # release whose packages were not.
+          if (-not ($env:PFX_BASE64 -and $env:PFX_PASSWORD)) {
+              $missing = @()
+              if (-not $env:PFX_BASE64) { $missing += 'CODE_SIGN_CERT_BASE64' }
+              if (-not $env:PFX_PASSWORD) { $missing += 'CODE_SIGN_CERT_PASSWORD' }
+              Write-Host "::warning title=Unsigned Windows packages::Missing secret(s): $($missing -join ', '). The MSI files will be unsigned: SmartScreen will warn, and the UIAccess session agent cannot start."
               $boundaries.Add('')
               $boundaries.Add('> [!WARNING]')
               $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')

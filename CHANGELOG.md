@@ -191,6 +191,23 @@
 
 ### Fixed
 
+**构建、部署与 CI 的评审修复**
+
+- **Docker ops 容器没有登记本机节点**：镜像的 `ENTRYPOINT` 就是控制台，compose 里 `command: [bash, -ec, ...]` 只会被
+  当成参数追加，脚本从未执行。改为一次性服务 `ops-seed`（同镜像、同环境）运行 `--seed-local-nodes`，`ops` 依赖它成功退出；
+  `ops` 不再带 `command:`，`run --rm -it ops --create-admin admin` 的参数直接交给控制台。CI 增加对应的 compose 断言。
+- **macOS 服务端安装完成页的 `--create-admin` 以 root 运行**：改为 `sudo -u _remotedesktop ...`，否则 SQLite 的
+  `-wal`/`-shm` 归 root，监控台之后写不进去。
+- **Linux/macOS 安装脚本不再把密钥放进命令行参数**：中继密钥、PostgreSQL 连接串、PFX 口令改经 `RD_RELAY_KEY` /
+  `RD_POSTGRES` / `RD_TLS_PASSWORD` 环境变量交给 `--configure-system`（Windows 安装器本来就这样做）。
+- **`Uninstall-HostService.ps1` 对 `-InstallDirectory` 无保护**：改按字面路径处理，并在停服务之前拒绝盘符根、Program Files、
+  Program Files (x86)、Windows 目录。
+- **发布流水线的签名降级**：Windows 缺 `CODE_SIGN_CERT_BASE64` 或 `CODE_SIGN_CERT_PASSWORD` 任一项都写 `::warning` 并在
+  Release 说明里标未签名；macOS 已签名但未公证也写进 Release 说明；`DEFAULT_RENDEZVOUS_URI` 不再内插进脚本文本；
+  `audit-packages` 在 `dotnet list package` 退出码非 0 或出现 NU1900（漏洞数据取不到）时同样失败。
+- **macOS 录屏遇到带行填充的帧**：队列项保存重新打包后的行宽，而不是调用方的 stride，否则原生校验必然失败。
+- **`Invoke-SecurityAudit.ps1` 帮助文本过期**：示例改为 MSI 部署的 ProgramData 路径与存在的产物路径。
+
 **Docker 部署：信令监听改回容器外可达**
 
 - **默认 compose 部署连不上信令**：信令默认监听改为回环后，容器里没有任何地方覆盖 `Urls`，宿主机的端口映射、Caddy 和监控台访问的 `rendezvous:5080` 全部连不上，而容器内的健康检查仍然显示正常。`docker-compose.yml` 现在为 rendezvous 设置 `Urls=http://0.0.0.0:5080` 并显式放行 `AllowInsecureSignaling`，CI 的冒烟用例同步修改；暴露范围仍由 `ports:` 与 `RENDEZVOUS_BIND_IP` 决定，发布到可信网络之外要叠加 tls 或 selfsigned overlay。selfsigned overlay 里的 `http://0.0.0.0:5082` 以前同样会因缺少放行而无法启动。

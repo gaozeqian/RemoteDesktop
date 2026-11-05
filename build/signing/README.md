@@ -267,7 +267,8 @@ Apple DTS 的原话见
 ### GitHub Secrets 与变量
 
 Windows 包由 `release.yml` 用同一把 `.pfx` 签名（解码后以 `-CertificateFile` / `-CertificatePassword` 传给三个打包脚本）。
-两个 Secret 缺任何一个，都会退回 `-SkipSigning`；缺 `CODE_SIGN_CERT_BASE64` 时 Release 说明里还会写明"Windows 包未签名"：
+两个 Secret 缺任何一个，都会退回 `-SkipSigning`；此时构建日志里有 `::warning`（写明缺的是哪一个），Release 说明里也会写明
+"Windows 包未签名"（判断条件与构建步骤一致：`CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD` 同时存在才算已签名）：
 
 | Secret / 变量 | 内容 |
 |---|---|
@@ -292,7 +293,9 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 
 **两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`，即 Application 与 Installer 的 `.p12`）
 都在** → 签名（`release.yml` 只判断这两个，口令不参与判断）；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
-警告**（`::warning`），绝不静默出一个半成品。
+警告**（`::warning`），绝不静默出一个半成品。Release 说明也会如实写出：证书缺失时写"macOS 包未签名、未公证"；
+证书齐全但公证 Secret 缺任何一个时写"macOS 包已签名但未公证"（Gatekeeper 首次打开同样会提示）。`release.yml` 里发布 job 的
+`MACOS_SIGNED` / `MACOS_NOTARIZED` 只是由 Secret 是否为空算出的布尔值，Secret 本身不会进入环境变量。
 
 > 公证也支持 Apple ID + 专用密码（`NOTARY_APPLE_ID` / `NOTARY_PASSWORD` / `NOTARY_TEAM_ID`），但 CI 里 API Key
 > 更省事：没有 2FA，也不用为每台机器轮换专用密码。

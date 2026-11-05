@@ -107,6 +107,10 @@ fi
 # --- settings ----------------------------------------------------------------------------------
 
 args=()
+# These two travel in the environment of the settings step, not in its arguments: an argument is readable by every
+# local account (ps, /proc) while the step runs.
+setup_postgres=""
+setup_tls_password=""
 if [ "$apply" -eq 1 ]; then
     if [ -n "$ANSWERS" ]; then
         provider="$(answer DatabaseProvider)"
@@ -115,7 +119,7 @@ if [ "$apply" -eq 1 ]; then
                 args+=(--database postgres)
                 postgres="$(answer PostgresConnectionString)"
                 if [ -n "$postgres" ]; then
-                    args+=(--postgres "$postgres")
+                    setup_postgres="$postgres"
                 fi
                 ;;
             sqlite|"")
@@ -196,7 +200,7 @@ if [ "$apply" -eq 1 ]; then
                 args+=(--urls "$urls" --tls-certificate "$certificate")
                 password="$(answer TlsPassword)"
                 if [ -n "$password" ]; then
-                    args+=(--tls-password "$password")
+                    setup_tls_password="$password"
                 fi
                 ;;
         esac
@@ -273,7 +277,19 @@ if [ "$apply" -eq 1 ]; then
     echo "  writing the servers' settings"
     # A failure here is fatal: the Installer shows the failure while somebody is watching, instead of leaving services
     # that restart every five seconds against a settings file nobody can explain.
-    if ! "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "${args[@]}"; then
+    # RD_POSTGRES and RD_TLS_PASSWORD are set explicitly, and only when an answer was given, in a subshell: a variable
+    # left over in the installer's environment must not be what the step reads. Not giving one is what omitting the
+    # argument used to mean.
+    if ! (
+        unset RD_POSTGRES RD_TLS_PASSWORD
+        if [ -n "$setup_postgres" ]; then
+            export RD_POSTGRES="$setup_postgres"
+        fi
+        if [ -n "$setup_tls_password" ]; then
+            export RD_TLS_PASSWORD="$setup_tls_password"
+        fi
+        exec "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR" "${args[@]}"
+    ); then
         echo "Remote Desktop Server: the settings step failed; see $INSTALL_DIR/server-setup.log." >&2
         exit 1
     fi

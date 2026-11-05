@@ -1,8 +1,9 @@
 name: Audit packages for known vulnerabilities
 description: >-
   Walks the whole dependency graph, including everything the packages a project references drag in, and fails the build
-  when any of them has a published vulnerability. Shared by ci.yml and release.yml so that the two cannot drift apart:
-  a release is the one build nobody gets to re-check before it is public, so it has to apply exactly the rule CI
+  when any of them has a published vulnerability, or when the audit itself could not be completed (a vulnerability
+  source that cannot be reached is not a clean result). Shared by ci.yml and release.yml so that the two cannot drift
+  apart: a release is the one build nobody gets to re-check before it is public, so it has to apply exactly the rule CI
   applied. The build itself only reports what is wrong with the packages a project references directly.
 
 runs:
@@ -10,9 +11,22 @@ runs:
   steps:
     - name: Audit
       shell: pwsh
+      env:
+        # The vulnerability check below reads the English wording of the report, so the CLI must not localise it.
+        DOTNET_CLI_UI_LANGUAGE: en
       run: |
         $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
+        $exitCode = $LASTEXITCODE
         $report
-        if ($report -match 'has the following vulnerable packages') {
+        if ($exitCode -ne 0) {
+          throw "dotnet list package exited with code $exitCode; the audit did not complete. The output is above."
+        }
+        $text = $report -join "`n"
+        # NU1900: the vulnerability data could not be fetched. The command still exits 0 and prints no vulnerable
+        # package, so without this check an unreachable feed would pass the gate as if nothing was wrong.
+        if ($text -match 'NU1900') {
+          throw "NuGet could not retrieve vulnerability data (NU1900), so the packages were not audited; the report is above."
+        }
+        if ($text -match 'has the following vulnerable packages') {
           throw "Vulnerable packages found; the report is above."
         }

@@ -142,9 +142,8 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 
 # 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 文件读不到
-# -SettingsPath 一次只查一份文件。MSI 部署实际生效的配置在 %ProgramData%\Remote Desktop Server\ 下
-pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$env:ProgramData\Remote Desktop Server\Rendezvous\appsettings.json"
-pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$env:ProgramData\Remote Desktop Server\Relay\appsettings.json"
+# MSI 部署：Program Files 下的是随包出厂默认，实际生效的配置在 %ProgramData%\Remote Desktop Server\<角色>\
+pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\Remote Desktop Server"
 
 # 开发时查发布产物（服务端的发布目录按程序分子目录）
 pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/Rendezvous/appsettings.json
@@ -152,7 +151,7 @@ pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/wind
 
 `-InstallDirectory <目录>` 会读 `<目录>\Rendezvous\appsettings.json` 与 `<目录>\Relay\appsettings.json` 两份，
 适合手工解压或拷贝出来的部署。对 MSI 装出来的 `C:\Program Files\Remote Desktop Server` 它读到的是**随包出厂的默认值**，
-不是实际生效的配置（后者在 `%ProgramData%\Remote Desktop Server\`，升级不会覆盖），所以审 MSI 部署请用上面的 `-SettingsPath`。
+不是实际生效的配置（后者在 `%ProgramData%\Remote Desktop Server\`，升级不会覆盖），所以审 MSI 部署请把 `-InstallDirectory` 指向 `%ProgramData%\Remote Desktop Server`（上面第一条），或用 `-SettingsPath` 指向其中某一份。
 
 两个脚本的默认输出位置都相对**仓库根**解析（由脚本自身的 `$PSScriptRoot` 往上找），所以在哪个目录下敲命令都
 一样。它们只读文件、不调用平台专有 API，所以在 Linux 或 macOS 上可以用 `pwsh` 直接跑，审那边的服务端部署

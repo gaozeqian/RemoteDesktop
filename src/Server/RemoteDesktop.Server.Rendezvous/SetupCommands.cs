@@ -36,9 +36,10 @@ public static class SetupCommands
         {
             Urls = Argument(args, "--urls"),
             RelayPublicEndpoint = Argument(args, "--relay-endpoint"),
-            // The Windows installer runs this as a child process and puts the secret values in its environment rather
-            // than on the command line, where they would be visible in the process list and in the MSI log.
-            // The command-line options stay for hand runs and for the Linux/macOS packages.
+            // The installers run this as a child process and put the secret values in its environment rather than on
+            // the command line, where they would be visible in the process list (and, on Windows, in the MSI log):
+            // the Windows installer, the Linux postinst and the macOS postinstall all do. The command-line options
+            // stay for hand runs, which is also what configure-server.sh forwards.
             RelaySharedKey = Argument(args, "--relay-key") ?? Environment.GetEnvironmentVariable("RD_RELAY_KEY"),
             DatabaseProvider = Argument(args, "--database"),
             DatabasePath = Argument(args, "--database-path"),

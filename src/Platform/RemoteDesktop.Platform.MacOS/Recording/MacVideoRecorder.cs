@@ -143,7 +143,7 @@ public sealed class MacVideoRecorder : IVideoRecorder
             bgraPixels.Slice(y * stride, rowBytes).CopyTo(buffer.AsSpan(y * rowBytes, rowBytes));
         }
 
-        channel.Writer.TryWrite(new QueuedFrame(buffer, stride, width, height));
+        channel.Writer.TryWrite(new QueuedFrame(buffer, rowBytes, width, height));
     }
 
     public async Task<string> StopAsync()
@@ -276,7 +276,7 @@ public sealed class MacVideoRecorder : IVideoRecorder
                                     recorder,
                                     pixels,
                                     (nuint)frame.Pixels.Length,
-                                    frame.Stride,
+                                    frame.RowBytes,
                                     frame.Width,
                                     frame.Height,
                                     errorPointer,
@@ -308,5 +308,9 @@ public sealed class MacVideoRecorder : IVideoRecorder
     private void Fail(VideoRecorderFailure failure) =>
         Interlocked.CompareExchange(ref _failure, (int)failure, (int)VideoRecorderFailure.None);
 
-    private sealed record QueuedFrame(byte[] Pixels, int Stride, int Width, int Height);
+    /// <summary>
+    /// The pixels are already repacked to <c>RowBytes = Width * 4</c>, so that is the stride the native call must be
+    /// given; the caller's stride (possibly padded) describes a buffer that no longer exists.
+    /// </summary>
+    private sealed record QueuedFrame(byte[] Pixels, int RowBytes, int Width, int Height);
 }

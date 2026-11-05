@@ -180,6 +180,17 @@ jobs:
           docker compose -f build/docker/docker-compose.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.tls.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+      - name: Check the ops overlay seeds the local nodes
+        # The ops image's ENTRYPOINT is the console, so a `command: [bash, -ec, ...]` on ops is only appended to it as
+        # arguments and never runs; seeding is the job of the one-shot ops-seed service that ops waits for.
+        run: |
+          set -euo pipefail
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config --format json > ops-config.json
+          jq -e '.services.ops.command == null' ops-config.json
+          jq -e '.services["ops-seed"].command[0] == "--seed-local-nodes"' ops-config.json
+          jq -e '.services["ops-seed"].restart == "no"' ops-config.json
+          jq -e '.services.ops.depends_on["ops-seed"].condition == "service_completed_successfully"' ops-config.json
+          rm ops-config.json
       - name: Validate the Caddyfile
         run: |
           docker run --rm \

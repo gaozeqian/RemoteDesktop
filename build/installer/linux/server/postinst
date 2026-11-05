@@ -225,12 +225,9 @@ case "$1" in
             --install-directory "$INSTALL_DIRECTORY" \
             --urls "$RD_URLS" \
             --relay-endpoint "$RD_RELAY_ENDPOINT" \
-            --relay-key "$RD_RELAY_KEY" \
             --database "$provider" \
             --database-path "$database_path" \
-            --postgres "$postgres" \
             --tls-certificate "$tls_argument" \
-            --tls-password "$tls_password" \
             --tls-hostname "$tls_hostname" \
             --ops-database-path "$ops_database_path" \
             --ops-listen "http://127.0.0.1:5090" \
@@ -261,7 +258,19 @@ case "$1" in
                 ;;
         esac
 
-        "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" "$@"
+        # The relay key, the PostgreSQL connection string (its password) and the PFX password go to the step through its
+        # environment, not its arguments: an argument is readable by every local account in /proc/<pid>/cmdline for as
+        # long as the step runs. They are set explicitly, and only when there is a value, in a subshell so that a
+        # variable left over in the installer's own environment (RD_POSTGRES is also read by the config script) is
+        # never what the step reads. Not giving a value is the same as giving an empty one: the provider is always
+        # passed above, so an empty connection string is ignored for every provider but postgres, and an empty key or
+        # password means "keep what the machine has".
+        (
+            if [ -n "$RD_RELAY_KEY" ]; then export RD_RELAY_KEY; else unset RD_RELAY_KEY; fi
+            if [ -n "$postgres" ]; then RD_POSTGRES=$postgres; export RD_POSTGRES; else unset RD_POSTGRES; fi
+            if [ -n "$tls_password" ]; then RD_TLS_PASSWORD=$tls_password; export RD_TLS_PASSWORD; else unset RD_TLS_PASSWORD; fi
+            exec "$PROGRAM_DIRECTORY/Rendezvous/RemoteDesktop.Server.Rendezvous" "$@"
+        )
 
         mkdir -p "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server
         chown -R "$SERVICE_USER:$SERVICE_USER" "$DEFAULT_DATABASE_DIRECTORY" /var/log/remotedesktop-server

@@ -159,6 +159,51 @@ public class RepositoryStructureTests
         Assert.Contains("tls/signaling.crt", postinst, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The Linux and macOS package scripts must not put secrets on the command line of the settings step.
+    /// </summary>
+    /// <remarks>
+    /// An argument is readable by every local account (<c>ps</c>, <c>/proc/&lt;pid&gt;/cmdline</c>) while the step runs.
+    /// <c>--configure-system</c> reads the same values from <c>RD_RELAY_KEY</c>, <c>RD_POSTGRES</c> and
+    /// <c>RD_TLS_PASSWORD</c>, which is what the Windows installer already uses. configure-server.sh only forwards
+    /// what the operator typed and is deliberately not covered.
+    /// </remarks>
+    [Theory]
+    [InlineData("linux", "postinst")]
+    [InlineData("macos", "scripts/postinstall")]
+    public void The_server_package_scripts_pass_secrets_through_the_environment(string platform, string script)
+    {
+        var path = Path.Combine(new[] { Root, "build", "installer", platform, "server" }.Concat(script.Split('/')).ToArray());
+        var text = File.ReadAllText(path);
+
+        foreach (var option in new[] { "--relay-key", "--postgres", "--tls-password" })
+        {
+            Assert.DoesNotContain(option, text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("RD_POSTGRES", text, StringComparison.Ordinal);
+        Assert.Contains("RD_TLS_PASSWORD", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The manual uninstaller removes a directory recursively, so it must take the path literally and refuse a
+    /// dangerous one before it stops the service.
+    /// </summary>
+    [Fact]
+    public void The_host_uninstaller_validates_its_install_directory_before_stopping_anything()
+    {
+        var script = File.ReadAllText(Path.Combine(Root, "build", "service", "windows", "Uninstall-HostService.ps1"));
+
+        Assert.DoesNotContain("Remove-Item -Recurse", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Test-Path $", script, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath", script, StringComparison.Ordinal);
+
+        var refusal = script.IndexOf("Refusing to remove", StringComparison.Ordinal);
+        var stop = script.IndexOf("Stop-Service", StringComparison.Ordinal);
+        Assert.True(refusal >= 0, "The uninstaller has no refusal for dangerous directories.");
+        Assert.True(refusal < stop, "The directory must be validated before the service is stopped.");
+    }
+
     /// <summary>Fails with every offending path listed; xunit's own formatting truncates a long collection.</summary>
     private static void AssertNoOffenders(string[] offenders, string rule)
     {

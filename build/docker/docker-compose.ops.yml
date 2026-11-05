@@ -17,11 +17,37 @@
 #   docker compose -f docker-compose.yml -f docker-compose.ops.yml \
 #       cp gateway:/data/gateway/tls/ops-gateway.crt ./ops-gateway.crt
 #
-# The two nodes are seeded automatically and the operation is idempotent.
+# The two nodes are registered by the one-shot ops-seed service, which runs to completion before ops starts. The
+# image's ENTRYPOINT is the console itself, so a service `command:` is only ever appended to it as arguments and cannot
+# chain two programs; seeding therefore has its own service (same image and environment as ops). The operation is
+# idempotent: a console that already has nodes is left untouched. It is also why `run ... ops --create-admin` works
+# unchanged - ops has no `command:`, so the arguments given to `run` reach the console's setup commands directly.
 #
 # OpsEvents carries session facts to the console; OPS_INGEST_KEY must be at least 32 bytes of base64 and is the same
 # value in Ops__Ingest__Keys__k1 and in both nodes' OpsEvents__Key.
 name: remotedesktop
+
+# Shared by ops and ops-seed so the seeding step opens exactly the database the console will use.
+x-ops-build: &ops-build
+  context: ../..
+  dockerfile: build/docker/Dockerfile.ops
+  args:
+    VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+
+x-ops-environment: &ops-environment
+  Ops__Listen: http://0.0.0.0:5090
+  # The console uses the same PostgreSQL instance as the device registry. Its tables are the ops_* ones, so the
+  # two schemas coexist in one database; a backup of postgres-data covers both.
+  Ops__Database__Provider: postgres
+  Ops__Database__ConnectionString: "Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}"
+  Ops__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
+  Ops__Ingest__Keys__k1: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
+  # The compose network is isolated. This explicit opt-in lets the console send NodeToken to service names over
+  # its internal HTTP links; the application default remains HTTPS or loopback only.
+  Ops__AllowInsecureNodeHttp: "true"
+  # Only the gateway is attached to this network, so this subnet is the exact source range Ops may believe when it
+  # reads X-Forwarded-For/X-Forwarded-Proto. A broader bridge range would let another container forge client IPs.
+  Ops__TrustedProxies__0: ${OPS_GATEWAY_SUBNET:-172.30.0.0/24}
 
 services:
   rendezvous:
@@ -41,37 +67,40 @@ services:
       OpsEvents__Key: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
       OpsEvents__KeyId: k1
 
-  ops:
-    build:
-      context: ../..
-      dockerfile: build/docker/Dockerfile.ops
-      args:
-        VERSION: ${REMOTEDESKTOP_VERSION:-dev}
+  # One-shot: registers the two local nodes (idempotent) and exits. ops waits for it to complete successfully, so a
+  # failed seeding stops the console from starting instead of leaving it with no nodes.
+  ops-seed:
+    build: *ops-build
     image: remotedesktop/ops:${REMOTEDESKTOP_VERSION:-dev}
-    environment:
-      Ops__Listen: http://0.0.0.0:5090
-      # The console uses the same PostgreSQL instance as the device registry. Its tables are the ops_* ones, so the
-      # two schemas coexist in one database; a backup of postgres-data covers both.
-      Ops__Database__Provider: postgres
-      Ops__Database__ConnectionString: "Host=postgres;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=${POSTGRES_PASSWORD}"
-      Ops__NodeToken: ${NODE_TOKEN:?set NODE_TOKEN, for example openssl rand -base64 32}
-      Ops__Ingest__Keys__k1: ${OPS_INGEST_KEY:?set OPS_INGEST_KEY, for example openssl rand -base64 32}
-      # The compose network is isolated. This explicit opt-in lets the console send NodeToken to service names over
-      # its internal HTTP links; the application default remains HTTPS or loopback only.
-      Ops__AllowInsecureNodeHttp: "true"
-      # Only the gateway is attached to this network, so this subnet is the exact source range Ops may believe when it
-      # reads X-Forwarded-For/X-Forwarded-Proto. A broader bridge range would let another container forge client IPs.
-      Ops__TrustedProxies__0: ${OPS_GATEWAY_SUBNET:-172.30.0.0/24}
-      OPS_RENDEZVOUS_NODE_URL: ${OPS_RENDEZVOUS_NODE_URL:-http://rendezvous:5080}
-      OPS_RELAY_NODE_URL: ${OPS_RELAY_NODE_URL:-http://relay:5083}
+    environment: *ops-environment
     command:
-      - bash
-      - -ec
-      - |
-        dotnet RemoteDesktop.Server.Ops.dll --seed-local-nodes \
-          --rendezvous-base-url "$$OPS_RENDEZVOUS_NODE_URL" \
-          --relay-base-url "$$OPS_RELAY_NODE_URL"
-        exec dotnet RemoteDesktop.Server.Ops.dll
+      - --seed-local-nodes
+      - --rendezvous-base-url
+      - ${OPS_RENDEZVOUS_NODE_URL:-http://rendezvous:5080}
+      - --relay-base-url
+      - ${OPS_RELAY_NODE_URL:-http://relay:5083}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  ops:
+    build: *ops-build
+    image: remotedesktop/ops:${REMOTEDESKTOP_VERSION:-dev}
+    environment: *ops-environment
     expose:
       - "5090"
     networks:
@@ -85,6 +114,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ops-seed:
+        condition: service_completed_successfully
       rendezvous:
         condition: service_healthy
       relay:

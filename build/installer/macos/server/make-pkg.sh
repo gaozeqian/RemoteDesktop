@@ -339,7 +339,7 @@ HTTPS gateway. Its self-signed certificate is exported to
 <b>/usr/local/share/doc/remotedesktop-server/ops-gateway.crt</b>; trust that file on each administration Mac. The
 console has no account yet and no default password. Create the first administrator in a terminal (it asks for a
 password and prints a TOTP secret once):</p>
-<p style="font-family: ui-monospace, Menlo, monospace;">sudo /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin<br>
+<p style="font-family: ui-monospace, Menlo, monospace;">sudo -u _remotedesktop /usr/local/remotedesktop-server/Ops/RemoteDesktop.Server.Ops --create-admin admin<br>
 sudo launchctl kickstart -k system/com.remotedesktop.ops</p>
 <p>The console already has this installation's signaling and relay registered as local nodes, and the signaling
 server exposes <b>/metrics</b>, so its node page has data from the first scrape.</p>
