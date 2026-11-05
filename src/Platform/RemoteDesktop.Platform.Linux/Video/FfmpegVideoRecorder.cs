@@ -143,7 +143,9 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
         if (channel is null || worker is null)
         {
-            throw new InvalidOperationException("No recording is running.");
+            // Nothing is running (never started, or already stopped): same answer as the Windows and macOS recorders
+            // give, the path of the latest recording, or an empty string when there has been none.
+            return _outputPath ?? string.Empty;
         }
 
         channel.Writer.TryComplete();

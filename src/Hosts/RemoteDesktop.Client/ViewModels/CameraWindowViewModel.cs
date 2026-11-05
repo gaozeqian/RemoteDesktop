@@ -24,7 +24,7 @@ public sealed record CameraChoice(CameraInfo Camera)
 
 public sealed record CameraModeChoice(CameraMode Mode)
 {
-    public string Label => string.Create(CultureInfo.InvariantCulture, $"{Mode.Width}×{Mode.Height} · {Mode.FrameRate} fps");
+    public string Label => string.Create(CultureInfo.InvariantCulture, $"{Mode.Width}×{Mode.Height} · {Math.Min(Mode.FrameRate, CameraModes.MaxFrameRate)} fps");
 
     public override string ToString() => Label;
 }
@@ -155,8 +155,9 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             return;
         }
 
-        // Picture sizes are offered once each, at their best rate; more than 30 fps is not streamed.
-        foreach (var mode in value.Camera.Modes.Where(m => m.FrameRate <= 30).GroupBy(m => (m.Width, m.Height)).Select(g => g.OrderByDescending(m => m.FrameRate).First()))
+        // Picture sizes are offered once each, at their best rate; more than 30 fps is not streamed (a camera that
+        // only has faster modes is offered its slowest ones, which the host thins down to 30 fps).
+        foreach (var mode in CameraModes.Usable(value.Camera.Modes).GroupBy(m => (m.Width, m.Height)).Select(g => g.OrderByDescending(m => m.FrameRate).First()))
         {
             Modes.Add(new CameraModeChoice(mode));
         }

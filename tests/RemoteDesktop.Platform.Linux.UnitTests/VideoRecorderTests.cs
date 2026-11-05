@@ -78,6 +78,18 @@ public sealed class VideoRecorderTests : IDisposable
     }
 
     [Fact]
+    public async Task Stopping_a_recorder_that_never_started_returns_an_empty_path_instead_of_throwing()
+    {
+        // Needs no FFmpeg: nothing is loaded until a recording starts. Windows and macOS answer the same way.
+        await using var recorder = new FfmpegVideoRecorder();
+
+        Assert.Equal(string.Empty, await recorder.StopAsync());
+
+        Assert.False(recorder.IsRecording);
+        Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+    }
+
+    [Fact]
     public async Task A_recording_of_nothing_says_so_and_leaves_no_file_behind()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);

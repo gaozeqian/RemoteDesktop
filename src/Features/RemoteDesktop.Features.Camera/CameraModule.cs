@@ -27,7 +27,7 @@ public sealed partial class CameraModule(
     ICameraAccess? cameraAccess = null) : IFeatureModule
 {
     private const int MaxRequestBytes = 64 * 1024;
-    private const int MaxFrameRate = 30;
+    private const int MaxFrameRate = CameraModes.MaxFrameRate;
 
     public ChannelType ChannelType => ChannelType.Camera;
 
@@ -90,13 +90,16 @@ public sealed partial class CameraModule(
         }
     }
 
-    /// <summary>The camera mode closest to what was asked for: same picture size preferred, then the nearest frame rate.</summary>
+    /// <summary>
+    /// The camera mode closest to what was asked for: same picture size preferred, then the nearest frame rate. Modes
+    /// above 30 fps are only chosen when the camera offers nothing else; then the slowest ones are the candidates, and
+    /// <see cref="StreamAsync"/> thins the stream down to 30 fps (the returned mode's rate is above 30 in that case).
+    /// </summary>
     public static CameraMode? ChooseMode(IReadOnlyList<CameraMode> modes, int width, int height, int frameRate)
     {
         ArgumentNullException.ThrowIfNull(modes);
         var wanted = Math.Clamp(frameRate <= 0 ? MaxFrameRate : frameRate, 1, MaxFrameRate);
-        return modes
-            .Where(m => m.FrameRate <= MaxFrameRate)
+        return CameraModes.Usable(modes)
             .OrderBy(m => Math.Abs(((long)m.Width * m.Height) - ((long)width * height)))
             .ThenBy(m => Math.Abs(m.FrameRate - wanted))
             .Cast<CameraMode?>()
@@ -150,6 +153,11 @@ public sealed partial class CameraModule(
             return;
         }
 
+        // A camera that only offers more than 30 fps (60/120 fps cameras, capture cards) is streamed at 30: the
+        // encoder, the bitrate control and the stream info all work with the rate that is actually sent.
+        var streamRate = Math.Min(mode.FrameRate, MaxFrameRate);
+        var limiter = mode.FrameRate > MaxFrameRate ? new FrameRateLimiter(MaxFrameRate) : null;
+
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var state = new StreamState();
         var control = ReadControlAsync(stream, state, stop);
@@ -158,6 +166,11 @@ public sealed partial class CameraModule(
         {
             await using var source = sources.Open(camera.Id);
             LogOpened(logger, session.Id, camera.Name, mode.Width, mode.Height, mode.FrameRate);
+            if (limiter is not null)
+            {
+                LogThinned(logger, session.Id, camera.Name, mode.FrameRate, streamRate);
+            }
+
             var allowHardware = true;
             BitrateController? bitrate = null;
             var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -166,6 +179,13 @@ public sealed partial class CameraModule(
             {
                 using (frame)
                 {
+                    // Dropped before any conversion or encoding. A pending key-frame request stays pending: it is
+                    // only taken when a picture is actually encoded.
+                    if (limiter is not null && !limiter.ShouldKeep(frame.Timestamp))
+                    {
+                        continue;
+                    }
+
                     // Platforms do not agree on one camera format: Windows and Linux deliver NV12, AVFoundation
                     // delivers BGRA. The encoder only takes NV12, so a BGRA frame is converted here rather than
                     // dropped — the skip that used to stand here accepted the promise "cameras are NV12" and
@@ -196,14 +216,14 @@ public sealed partial class CameraModule(
                         if (encoder is null || encoder.Options.Width != picture.Width || encoder.Options.Height != picture.Height)
                         {
                             encoder?.Dispose();
-                            (encoder, bitrate) = CreateEncoder(picture.Width, picture.Height, mode.FrameRate, allowHardware);
+                            (encoder, bitrate) = CreateEncoder(picture.Width, picture.Height, streamRate, allowHardware);
                             await SendAsync(stream, new CameraEvent
                             {
                                 StreamInfo = new CameraStreamInfo
                                 {
                                     Width = (uint)picture.Width,
                                     Height = (uint)picture.Height,
-                                    FrameRate = (uint)mode.FrameRate,
+                                    FrameRate = (uint)streamRate,
                                     CameraName = camera.Name,
                                     EncoderName = encoder.Name,
                                     HardwareEncoder = encoder.IsHardware,
@@ -329,6 +349,9 @@ public sealed partial class CameraModule(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: camera '{Camera}' opened ({Width}x{Height}@{FrameRate}).")]
     private static partial void LogOpened(ILogger logger, SessionId sessionId, string camera, int width, int height, int frameRate);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: camera '{Camera}' only offers {CameraRate} fps; frames are dropped to {StreamRate} fps.")]
+    private static partial void LogThinned(ILogger logger, SessionId sessionId, string camera, int cameraRate, int streamRate);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: camera '{Camera}' closed.")]
     private static partial void LogClosed(ILogger logger, SessionId sessionId, string camera);
