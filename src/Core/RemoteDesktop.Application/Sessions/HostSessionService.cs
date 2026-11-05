@@ -37,7 +37,10 @@ public sealed partial class HostSessionService(
 
     /// <summary>How many controllers may be in a session at once. Well past what a person connecting from a
     /// phone and a laptop needs, and low enough that opening sessions in a loop cannot spend the machine.</summary>
-    private const int MaxSessions = 16;
+    private const int DefaultMaxSessions = 16;
+
+    /// <summary>The ceiling in force; only tests lower it, so that reaching it does not take sixteen real sessions.</summary>
+    internal int MaxSessions { get; set; } = DefaultMaxSessions;
 
     /// <summary>
     /// How many channels one session may have open at once. The products use fewer than ten (video, input, clipboard,
@@ -155,6 +158,8 @@ public sealed partial class HostSessionService(
                 // Every session holds its own channels and buffers, and each of those costs this machine memory for
                 // as long as it lives. A password is all it takes to get this far, so without a ceiling one
                 // controller — or somebody who was given the password — can open sessions until the machine gives up.
+                // AuthenticateAsync has already turned away the ordinary case with a reason; this is the authoritative
+                // check for the controllers that were all admitted below the limit at the same time.
                 using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 HostedSession hosted;
                 lock (_hostedGate)
@@ -331,6 +336,18 @@ public sealed partial class HostSessionService(
         }
 
         limiter.RecordSuccess(controller);
+
+        // Say so before accepting: once AuthResult.Accepted has gone out the controller believes it has a session, and
+        // closing the connection afterwards looks like a network fault. This is only a courtesy check; the decision
+        // that counts is the one in ServeAsync, made under the lock, because several controllers can pass this point
+        // at the same moment.
+        if (_hosted.Count >= MaxSessions)
+        {
+            LogTooManySessions(logger, controller, _hosted.Count);
+            await RefuseAsync(control, AuthFailure.TooManySessions, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
         var grant = AccessGrant.Create(
             ControlMessages.FromMessage(hello.Mode),
             ControlMessages.FromWire(hello.RequestedPermissions),

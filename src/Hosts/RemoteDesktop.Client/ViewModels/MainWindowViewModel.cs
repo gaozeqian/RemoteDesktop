@@ -1039,6 +1039,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 SessionFailure.BadPassword => "密码错误。",
                 SessionFailure.TooManyAttempts => "失败次数过多，请稍后再试。",
                 SessionFailure.IncompatibleVersion => "对方版本不兼容。",
+                SessionFailure.TooManySessions => "对方当前连接的会话数已满，请稍后再试。",
                 _ => "会话建立失败。",
             };
             return;

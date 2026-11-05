@@ -72,6 +72,9 @@ enum AuthFailure {
   AUTH_FAILURE_BAD_PASSWORD = 1;
   AUTH_FAILURE_TOO_MANY_ATTEMPTS = 2;
   AUTH_FAILURE_INCOMPATIBLE_VERSION = 3;
+  // The host is already serving as many controllers as it allows. Sent instead of an accepted result, so the
+  // controller learns why rather than seeing an accepted session whose connection is then closed.
+  AUTH_FAILURE_TOO_MANY_SESSIONS = 4;
 }
 
 // Host -> controller.

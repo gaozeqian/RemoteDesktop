@@ -222,26 +222,34 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         }
     }
 
-    /// <summary>Drains end reports onto the socket while this connection is up.</summary>
+    /// <summary>
+    /// Drains end reports onto the socket while this connection is up. Unlike heartbeats, nothing here is discarded when
+    /// the connection ends: a report describes a peer-to-peer session, which does not depend on the signaling socket,
+    /// so one that is still queued — or that this connection failed to send — goes out on the next connection.
+    /// </summary>
     private async Task SessionEndLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
         try
         {
             await foreach (var report in _sessionEnds.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await SendLockedAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await SendLockedAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
+                {
+                    // Put back for the next connection, then stop: this one is broken, and trying the same report on
+                    // it again would only fail the same way. The server merges repeated reports for a session, so a
+                    // report that did reach it before the break and is sent again is harmless.
+                    _sessionEnds.Writer.TryWrite(report);
+                    throw;
+                }
             }
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
         {
             // The receive loop reports the disconnect; a report that cannot be sent is not a second error.
-        }
-        finally
-        {
-            // Whatever was queued describes a session on a connection that no longer exists.
-            while (_sessionEnds.Reader.TryRead(out _))
-            {
-            }
         }
     }
 
