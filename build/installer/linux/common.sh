@@ -54,7 +54,7 @@ rd_validate_rendezvous_uri() {
     esac
 
     case "$1" in
-        *'&'*|*'#'*|*'\\'*|*'"'*|*'|'*|*[[:space:]]*)
+        *'&'*|*'#'*|*'\'*|*'"'*|*'|'*|*[[:space:]]*)
             echo "The signaling address contains a character this script cannot safely substitute." >&2
             return 1
             ;;

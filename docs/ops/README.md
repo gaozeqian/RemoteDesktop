@@ -78,7 +78,7 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 |---|---|---|
 | 数据库 | `sqlite` / `postgres` / `none` | 前两个是正式选择；`none` 只把设备码放内存，重启即失效。Ops 用同一个 provider，`none` 时仍保留自己的 SQLite 库 |
 | SQLite 文件 | 绝对路径 | 默认 `/var/lib/remotedesktop-server/rendezvous.db`；同目录下放 `ops.db`。目录会创建并交给服务账户 |
-| PostgreSQL 连接串 | Npgsql 连接串 | 选 postgres 时必填；数据库本身要先存在，表由服务创建 |
+| PostgreSQL 连接串 | Npgsql 连接串 | 选 postgres 时必填；数据库本身要先存在，表由服务创建。升级或重配时，只有现有设置本来就用 PostgreSQL（`Rendezvous:Database:Provider` 为 `postgres`，或没有 Provider 的旧布局里留着连接串）才可留空沿用已有连接串；现有设置是 sqlite / none、只是手工留了一个旧连接串时，不会被当作答案，仍会再问一次，仍留空则安装失败 |
 | 信令 TLS | `generate` / `existing` / `none` | 自签证书 / 已有证书（PKCS#12 或 PEM + 同名 `.key`）/ 明文 HTTP |
 | 证书文件与口令 | 路径 / 口令 | `existing` 时询问；文件会被复制到 `/etc/remotedesktop-server/tls/custom/`，服务账户可读 |
 | 公网主机名 | 可逗号分隔 | 仅 `generate` 时询问；写进自签证书的 SAN，客户端用 DNS 名或 NAT 地址访问时必须填 |
@@ -1511,7 +1511,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 
 | 键 | 值 |
 |---|---|
-| `RendezvousUri` | `ws://主机:5080/ws` 或 `wss://主机:5080/ws` |
+| `RendezvousUri` | `ws://主机:5080/ws` 或 `wss://主机:5080/ws`；整个地址里不能有空白、控制字符、双引号或反斜杠，否则安装失败 |
 | `ServerCertificatePath` | 自签名服务器证书的绝对路径（PEM/DER），仅在 `wss://` 时需要 |
 | `UnattendedPassword` | 仅 host 包：写入当前登录用户钥匙串的无人值守密码（至少 8 位）；不填则保持现有密码不变 |
 

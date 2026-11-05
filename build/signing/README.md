@@ -294,8 +294,10 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 **两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`，即 Application 与 Installer 的 `.p12`）
 都在** → 签名（`release.yml` 只判断这两个，口令不参与判断）；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
 警告**（`::warning`），绝不静默出一个半成品。Release 说明也会如实写出：证书缺失时写"macOS 包未签名、未公证"；
-证书齐全但公证 Secret 缺任何一个时写"macOS 包已签名但未公证"（Gatekeeper 首次打开同样会提示）。`release.yml` 里发布 job 的
-`MACOS_SIGNED` / `MACOS_NOTARIZED` 只是由 Secret 是否为空算出的布尔值，Secret 本身不会进入环境变量。
+证书齐全但公证 Secret 缺任何一个时写"macOS 包已签名但未公证"（Gatekeeper 首次打开同样会提示）。`release.yml` 里 macOS job 与发布 job 的
+`MACOS_SIGNED` / `MACOS_NOTARIZED`（以及 Windows 的 `HAS_PFX_CERT` / `HAS_PFX_PASSWORD`）只是由 Secret 是否为空算出的布尔值，
+放在 job 级 env 里供各步骤的 `if:` 读取；证书、口令与公证 Key 这些 Secret 本身**不在 job 级 env 里**（否则 restore、build 与测试进程
+都读得到），只出现在确实要用它的几步自己的 `env:` 里：macOS 的"导入证书"与"打包 + 公证"，Windows 的"解码证书"与三个 MSI 构建步骤。
 
 > 公证也支持 Apple ID + 专用密码（`NOTARY_APPLE_ID` / `NOTARY_PASSWORD` / `NOTARY_TEAM_ID`），但 CI 里 API Key
 > 更省事：没有 2FA，也不用为每台机器轮换专用密码。

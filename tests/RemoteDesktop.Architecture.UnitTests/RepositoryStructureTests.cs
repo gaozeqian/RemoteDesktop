@@ -186,6 +186,86 @@ public class RepositoryStructureTests
     }
 
     /// <summary>
+    /// The macOS pre-install script reads the pane's answers file from the world-writable <c>/var/tmp</c> as root, and
+    /// puts the signaling address into a PlistBuddy command.
+    /// </summary>
+    /// <remarks>
+    /// A symbolic link at that path would make root copy whatever it points at, and an address check without an end
+    /// anchor lets <c>ws://h/ "x</c> through. The scripts need macOS to run; the behaviour was exercised in a Linux
+    /// container with the macOS tools stubbed, and this keeps the two guards from being edited away.
+    /// </remarks>
+    [Fact]
+    public void The_macos_answers_script_refuses_a_symbolic_link_and_anchors_the_address_check()
+    {
+        var script = File.ReadAllText(Path.Combine(Root, "build", "installer", "macos", "client", "scripts", "apply-answers.sh"));
+
+        Assert.Contains("[ -L \"$plugin\" ]", script, StringComparison.Ordinal);
+
+        var grepLine = script.Split('\n').Single(line => line.Contains("grep -Eq '^wss?://", StringComparison.Ordinal));
+        Assert.Contains(")?$'", grepLine, StringComparison.Ordinal);
+
+        // grep judges one line at a time, so the whole-string character check has to be there as well.
+        Assert.Contains("*[[:space:]]*|*[[:cntrl:]]*|*'\"'*|*'\\'*", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The Linux server package's config script must only treat a leftover connection string as an answer when the
+    /// existing settings use PostgreSQL.
+    /// </summary>
+    /// <remarks>
+    /// The server removes both connection-string keys when it writes sqlite or none, so a string beside another
+    /// provider is a hand edit; counting it skipped the second question and the server then reused it silently.
+    /// </remarks>
+    [Fact]
+    public void The_linux_config_script_reads_the_provider_before_trusting_a_connection_string()
+    {
+        var script = File.ReadAllText(Path.Combine(Root, "build", "installer", "linux", "server", "config"));
+
+        var provider = script.IndexOf("existing_provider=$value", StringComparison.Ordinal);
+        var decision = script.IndexOf("case \"$existing_provider\" in", StringComparison.Ordinal);
+        var connection = script.IndexOf("\"PostgresConnectionString\"[[:space:]]", StringComparison.Ordinal);
+
+        Assert.True(provider >= 0, "The script does not remember the provider the existing settings name.");
+        Assert.True(provider < decision, "The provider must be read before it is used.");
+        Assert.True(decision < connection, "A connection string must only be looked for inside the provider decision.");
+    }
+
+    /// <summary>
+    /// In POSIX sh a single-quoted <c>'\\'</c> is two backslashes, so a <c>case</c> pattern written that way never
+    /// matches the one backslash the check is meant to refuse.
+    /// </summary>
+    [Fact]
+    public void The_linux_common_script_refuses_a_single_backslash_in_the_signaling_address()
+    {
+        var script = File.ReadAllText(Path.Combine(Root, "build", "installer", "linux", "common.sh"));
+
+        Assert.DoesNotContain("*'\\\\'*", script, StringComparison.Ordinal);
+        Assert.Contains("*'\\'*", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The release workflow's job-level <c>env</c> is visible to every step, restore, build and the tests included, so
+    /// it may only hold the booleans the steps' <c>if:</c> conditions read — never a certificate, password or key.
+    /// </summary>
+    /// <remarks>
+    /// A Secret belongs in the <c>env</c> of the step that uses it (ten spaces deep), which this does not restrict.
+    /// </remarks>
+    [Fact]
+    public void The_release_workflow_keeps_secrets_out_of_job_level_environment()
+    {
+        var lines = File.ReadAllLines(Path.Combine(Root, ".github", "workflows", "release.yml"));
+
+        var offenders = lines
+            .Select((line, index) => (line, number: index + 1))
+            .Where(entry => System.Text.RegularExpressions.Regex.IsMatch(entry.line, @"^      [A-Za-z_]+: \$\{\{ .*secrets\."))
+            .Where(entry => !entry.line.Contains("!= ''", StringComparison.Ordinal))
+            .Select(entry => $"release.yml:{entry.number}: {entry.line.Trim()}")
+            .ToArray();
+
+        AssertNoOffenders(offenders, "Job-level env entries that carry a Secret rather than a boolean computed from it:");
+    }
+
+    /// <summary>
     /// The manual uninstaller removes a directory recursively, so it must take the path literally and refuse a
     /// dangerous one before it stops the service.
     /// </summary>

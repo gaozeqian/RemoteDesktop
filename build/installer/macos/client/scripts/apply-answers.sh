@@ -18,7 +18,13 @@ rd_prepare_answers() {
     role="$1"
     plugin="$(rd_plugin_answers "$role")"
     root="$(rd_root_answers "$role")"
-    if [ -f "$plugin" ]; then
+    if [ -L "$plugin" ]; then
+        # /var/tmp is writable by every user, and this script reads the file as root: a link there would make root
+        # copy whatever it points at. The answers are optional, so the link is dropped and the install carries on
+        # without them (a root copy left by an earlier cancelled install is not applied either).
+        echo "Remote Desktop: ignoring $plugin, it is a symbolic link." >&2
+        rm -f "$plugin" "$root"
+    elif [ -f "$plugin" ]; then
         install -m 600 -o root -g wheel "$plugin" "$root"
         rm -f "$plugin"
     else
@@ -69,8 +75,18 @@ apply_rendezvous_answers() {
                 ;;
         esac
         # The value is interpolated into a plist. The pane validates it with NSURLComponents; this is the same bar
-        # for a hand-written answers file: a scheme, a host, and no whitespace or quotes.
-        if ! printf '%s' "$address" | grep -Eq '^wss?://[^/[:space:]"\\]+'; then
+        # for a hand-written answers file: a scheme, a host, an optional path, and no whitespace, control characters,
+        # double quotes or backslashes anywhere. The case runs first because grep judges one line at a time and
+        # would let a value with a second line through.
+        address_ok=true
+        case "$address" in
+            *[[:space:]]*|*[[:cntrl:]]*|*'"'*|*'\'*) address_ok=false ;;
+        esac
+        if [ "$address_ok" = true ] &&
+            ! printf '%s' "$address" | grep -Eq '^wss?://[^/[:space:]"\\]+(/[^[:space:]"\\]*)?$'; then
+            address_ok=false
+        fi
+        if [ "$address_ok" = false ]; then
             echo "Remote Desktop: the signaling address '$address' is not an absolute ws:// or wss:// address." >&2
             exit 1
         fi

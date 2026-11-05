@@ -64,6 +64,7 @@ if [ -r "$settings" ]; then
     # installation.
     value=$(sed -n '/"Rendezvous"/,/^  }/p' "$settings" |
         sed -n 's/.*"Provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    existing_provider=$value
     case "$value" in
         sqlite|postgres|none) provider=$value ;;
     esac
@@ -72,12 +73,18 @@ if [ -r "$settings" ]; then
         sed -n 's/.*"Path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
     [ -n "$value" ] && database_path=$value
 
-    if grep -q '"ConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings"; then
-        have_postgres=true
-    fi
-    if grep -q '"PostgresConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings"; then
-        have_postgres=true
-    fi
+    # A connection string left behind is only an answer to "which PostgreSQL" when the settings use PostgreSQL. The
+    # server removes both keys when it writes sqlite or none, so a string beside another provider is a hand edit,
+    # and the server would reuse it silently if the question were skipped. A file with no provider is the older
+    # layout, where a connection string is how PostgreSQL was chosen.
+    case "$existing_provider" in
+        postgres|"")
+            if grep -q '"ConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings" ||
+                grep -q '"PostgresConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings"; then
+                have_postgres=true
+            fi
+            ;;
+    esac
 
     if grep -q '"Urls"[[:space:]]*:[[:space:]]*"https://' "$settings"; then
         value=$(sed -n '/"Kestrel"/,/^  }/p' "$settings" |
