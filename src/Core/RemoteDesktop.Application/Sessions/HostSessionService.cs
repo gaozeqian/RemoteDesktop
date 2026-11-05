@@ -285,7 +285,13 @@ public sealed partial class HostSessionService(
         }
 
         var controller = connection.RemoteDevice;
-        if (limiter.IsBlocked(controller))
+        // The attempt is taken here, not counted when it fails: the password round trip below takes several network
+        // hops, and handshakes of one device that were only checked for a lock at the start could all get through
+        // before the first failure was recorded. The reservation is settled by the outcome of the password check; any
+        // other way out of this method (the controller leaving, a timeout, cancellation, an exception) gives the
+        // attempt back without counting a failure, as a flaky link must not lock a legitimate controller out.
+        using var attempt = limiter.TryReserve(controller);
+        if (attempt is null)
         {
             await RefuseAsync(control, AuthFailure.TooManyAttempts, cancellationToken).ConfigureAwait(false);
             return null;
@@ -340,13 +346,13 @@ public sealed partial class HostSessionService(
 
         if (matched is null)
         {
-            limiter.RecordFailure(controller);
+            attempt.RecordFailure();
             LogBadPassword(logger, controller);
             await RefuseAsync(control, AuthFailure.BadPassword, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
-        limiter.RecordSuccess(controller);
+        attempt.RecordSuccess();
 
         // Say so before accepting: once AuthResult.Accepted has gone out the controller believes it has a session, and
         // closing the connection afterwards looks like a network fault. This is only a courtesy check; the decision

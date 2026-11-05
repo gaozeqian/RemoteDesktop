@@ -29,6 +29,8 @@ public sealed class TestDevice : IAsyncDisposable
 
     public HostSessionService HostSessions => _host.Services.GetRequiredService<HostSessionService>();
 
+    public AuthAttemptLimiter Limiter => _host.Services.GetRequiredService<AuthAttemptLimiter>();
+
     public static Task<TestDevice> StartAsync(ServerFixture server, bool forceRelay = false, params IFeatureModule[] modules) =>
         StartAsync(server.RendezvousUri, forceRelay, modules);
 

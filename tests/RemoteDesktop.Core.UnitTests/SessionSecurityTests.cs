@@ -233,4 +233,216 @@ public class AuthAttemptLimiterTests
         _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromMinutes(2));
         Assert.False(limiter.IsBlocked(newcomer));
     }
+
+    [Fact]
+    public async Task Concurrent_handshakes_from_one_device_cannot_exceed_the_failure_budget()
+    {
+        // Every handshake is parked before the password is shown, like 64 simultaneous connections that have all passed
+        // the old "is it blocked yet" check. Only the budget's worth may be let in; the rest are turned away at once.
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        using var start = new ManualResetEventSlim();
+
+        var attempts = Enumerable.Range(0, 64).Select(_ => Task.Run(() =>
+        {
+            start.Wait();
+            return limiter.TryReserve(device);
+        })).ToList();
+        start.Set();
+        var reservations = await Task.WhenAll(attempts);
+
+        Assert.Equal(AuthAttemptLimiter.MaxFailuresPerDevice, reservations.Count(r => r is not null));
+        Assert.Equal(AuthAttemptLimiter.MaxFailuresPerDevice, limiter.PendingReservations);
+
+        // The ones that got in all end without evidence: nothing is counted, the budget is whole again.
+        foreach (var reservation in reservations)
+        {
+            reservation?.Dispose();
+        }
+
+        Assert.Equal(0, limiter.PendingReservations);
+        Assert.False(limiter.IsBlocked(device));
+        Assert.NotNull(limiter.TryReserve(device));
+    }
+
+    [Fact]
+    public void A_reservation_counts_together_with_recorded_failures()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        limiter.RecordFailure(device);
+        limiter.RecordFailure(device);
+        limiter.RecordFailure(device);
+
+        using var first = limiter.TryReserve(device);
+        using var second = limiter.TryReserve(device);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Null(limiter.TryReserve(device));
+        Assert.False(limiter.IsBlocked(device));
+        Assert.NotNull(limiter.TryReserve(new DeviceId(222_222_222)));
+    }
+
+    [Fact]
+    public void A_successful_handshake_gives_its_reservation_back_and_clears_the_failures()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice - 1; i++)
+        {
+            limiter.RecordFailure(device);
+        }
+
+        var reservation = limiter.TryReserve(device);
+        Assert.NotNull(reservation);
+        reservation.RecordSuccess();
+
+        Assert.Equal(0, limiter.PendingReservations);
+        var again = Enumerable.Range(0, AuthAttemptLimiter.MaxFailuresPerDevice).Select(_ => limiter.TryReserve(device)).ToList();
+        Assert.All(again, r => Assert.NotNull(r));
+        Assert.Null(limiter.TryReserve(device));
+    }
+
+    [Fact]
+    public void A_success_leaves_the_other_handshakes_of_the_same_device_alone()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        limiter.RecordFailure(device);
+        limiter.RecordFailure(device);
+        var winner = limiter.TryReserve(device);
+        var other = limiter.TryReserve(device);
+        Assert.NotNull(winner);
+        Assert.NotNull(other);
+
+        winner.RecordSuccess();
+
+        // The failures are gone, the other handshake is still in flight and still holds one place.
+        Assert.Equal(1, limiter.PendingReservations);
+        var more = Enumerable.Range(0, AuthAttemptLimiter.MaxFailuresPerDevice - 1).Select(_ => limiter.TryReserve(device)).ToList();
+        Assert.All(more, r => Assert.NotNull(r));
+        Assert.Null(limiter.TryReserve(device));
+    }
+
+    [Fact]
+    public void A_wrong_password_turns_the_reservation_into_a_failure_and_the_fifth_locks_the_device()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice; i++)
+        {
+            var reservation = limiter.TryReserve(device);
+            Assert.NotNull(reservation);
+            reservation.RecordFailure();
+        }
+
+        Assert.Equal(0, limiter.PendingReservations);
+        Assert.True(limiter.IsBlocked(device));
+        Assert.Null(limiter.TryReserve(device));
+
+        _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromSeconds(1));
+        Assert.False(limiter.IsBlocked(device));
+        Assert.NotNull(limiter.TryReserve(device));
+    }
+
+    [Fact]
+    public void A_handshake_that_ends_before_any_evidence_counts_nothing_however_often_it_happens()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice * 4; i++)
+        {
+            var reservation = limiter.TryReserve(device);
+            Assert.NotNull(reservation);
+            reservation.Dispose();
+            reservation.Dispose();
+
+            // Settling twice must not give back (or take) anything twice.
+            reservation.RecordFailure();
+        }
+
+        Assert.Equal(0, limiter.PendingReservations);
+        Assert.False(limiter.IsBlocked(device));
+        Assert.All(
+            Enumerable.Range(0, AuthAttemptLimiter.MaxFailuresPerDevice).Select(_ => limiter.TryReserve(device)).ToList(),
+            r => Assert.NotNull(r));
+    }
+
+    [Fact]
+    public void A_reservation_does_not_expire_with_the_window_and_is_not_swept_away()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        var held = Enumerable.Range(0, AuthAttemptLimiter.MaxFailuresPerDevice).Select(_ => limiter.TryReserve(device)).ToList();
+
+        // A sweep runs (another device fails after the window and the sweep interval), and still the handshakes in
+        // flight are counted: they end by their outcome, not by the clock.
+        _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromMinutes(2));
+        limiter.RecordFailure(new DeviceId(222_222_222));
+
+        Assert.Null(limiter.TryReserve(device));
+        Assert.Equal(AuthAttemptLimiter.MaxFailuresPerDevice, limiter.PendingReservations);
+
+        held[0]!.Dispose();
+        Assert.NotNull(limiter.TryReserve(device));
+    }
+
+    [Fact]
+    public void A_device_with_a_handshake_in_flight_is_not_evicted_when_the_table_makes_room()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        var device = new DeviceId(111_111_111);
+        var held = limiter.TryReserve(device);
+        Assert.NotNull(held);
+
+        // The oldest entry by far, and the first candidate for eviction if the pending count did not pin it.
+        for (var i = 0; i < AuthAttemptLimiter.MaxTrackedDevices + 10; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(1));
+            limiter.RecordFailure(new DeviceId(600_000_000 + i));
+        }
+
+        var rest = Enumerable.Range(0, AuthAttemptLimiter.MaxFailuresPerDevice - 1).Select(_ => limiter.TryReserve(device)).ToList();
+        Assert.All(rest, r => Assert.NotNull(r));
+        Assert.Null(limiter.TryReserve(device));
+        Assert.Equal(AuthAttemptLimiter.MaxFailuresPerDevice, limiter.PendingReservations);
+    }
+
+    [Fact]
+    public void A_new_device_can_reserve_in_a_full_table_by_evicting_unlocked_devices()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        for (var d = 0; d < AuthAttemptLimiter.MaxTrackedDevices; d++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(1));
+            limiter.RecordFailure(new DeviceId(700_000_000 + d));
+        }
+
+        using var reservation = limiter.TryReserve(new DeviceId(999_999_999));
+
+        Assert.NotNull(reservation);
+    }
+
+    [Fact]
+    public void Unknown_devices_cannot_reserve_while_every_slot_is_a_locked_out_device_and_can_once_they_age_out()
+    {
+        var limiter = new AuthAttemptLimiter(_time);
+        for (var d = 0; d < AuthAttemptLimiter.MaxTrackedDevices; d++)
+        {
+            for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice; i++)
+            {
+                limiter.RecordFailure(new DeviceId(500_000_000 + d));
+            }
+        }
+
+        var newcomer = new DeviceId(999_999_999);
+        Assert.Null(limiter.TryReserve(newcomer));
+        Assert.Null(limiter.TryReserve(new DeviceId(500_000_000)));
+
+        _time.Advance(AuthAttemptLimiter.DeviceWindow + TimeSpan.FromMinutes(2));
+        Assert.NotNull(limiter.TryReserve(newcomer));
+    }
 }
