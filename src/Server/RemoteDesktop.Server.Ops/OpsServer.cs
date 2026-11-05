@@ -117,8 +117,12 @@ public static class OpsServer
 
         // Before anything reads RemoteIpAddress or Request.IsHttps. The framework's trust of loopback proxies is
         // removed: a proxy on this machine is named in Ops:TrustedProxies like any other, so a local caller cannot
-        // choose its own audit address or make a cookie Secure by writing a header.
-        app.UseForwardedHeaders(ForwardedHeaderOptions(app));
+        // choose its own audit address or make a cookie Secure by writing a header. With no trusted proxy the
+        // middleware is not added at all: with both of its lists empty it believes every caller.
+        if (ForwardedHeaderOptions(app) is { } forwarded)
+        {
+            app.UseForwardedHeaders(forwarded);
+        }
 
         // The shell loads nothing from anywhere else, so the policy can be this strict. Inline script and style are
         // excluded on purpose: a future page that needs them should be a decision, not an accident.
@@ -167,7 +171,7 @@ public static class OpsServer
     /// loopback trust would let anything that can reach the local socket choose the address the audit log records and
     /// the address the sign-in throttle counts against.
     /// </summary>
-    private static ForwardedHeadersOptions ForwardedHeaderOptions(WebApplication app)
+    private static ForwardedHeadersOptions? ForwardedHeaderOptions(WebApplication app)
     {
         var options = new ForwardedHeadersOptions
         {
@@ -191,7 +195,9 @@ public static class OpsServer
             }
         }
 
-        return options;
+        // The middleware only checks who is speaking when at least one of the two lists is non-empty; with both empty
+        // it applies the headers of any caller. "No trusted proxy" therefore has to mean "no middleware".
+        return options.KnownProxies.Count == 0 && options.KnownIPNetworks.Count == 0 ? null : options;
     }
 
     /// <summary>

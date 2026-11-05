@@ -99,7 +99,12 @@ public static class RendezvousServer
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.UseForwardedHeaders(ForwardedHeaderOptions(app));
+        // With no trusted proxy the middleware is not added at all: with both of its lists empty it believes every
+        // caller, which is the opposite of what clearing the framework's default proxies is meant to achieve.
+        if (ForwardedHeaderOptions(app) is { } forwarded)
+        {
+            app.UseForwardedHeaders(forwarded);
+        }
 
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
         app.MapHealthChecks("/health");
@@ -206,7 +211,7 @@ public static class RendezvousServer
     /// loopback fallback accept a request that came from outside. A proxy that really is on this machine has to be
     /// named in <c>Rendezvous:TrustedProxies</c> like any other.
     /// </remarks>
-    private static ForwardedHeadersOptions ForwardedHeaderOptions(WebApplication app)
+    private static ForwardedHeadersOptions? ForwardedHeaderOptions(WebApplication app)
     {
         var options = new ForwardedHeadersOptions
         {
@@ -229,6 +234,7 @@ public static class RendezvousServer
             }
         }
 
-        return options;
+        // See the call site: empty lists mean "believe everyone", so no trusted proxy has to mean no middleware.
+        return options.KnownProxies.Count == 0 && options.KnownIPNetworks.Count == 0 ? null : options;
     }
 }

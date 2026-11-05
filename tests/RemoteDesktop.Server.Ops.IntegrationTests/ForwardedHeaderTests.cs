@@ -25,7 +25,7 @@ public class ForwardedHeaderTests
     /// sign-in throttle key or whether a cookie is Secure. Unskip once <c>OpsServer.ForwardedHeaderOptions</c> turns
     /// forwarding off when <c>Ops:TrustedProxies</c> is empty.
     /// </summary>
-    [Fact(Skip = "Known defect: an empty Ops:TrustedProxies makes the forwarded-headers middleware trust every caller.")]
+    [Fact]
     public async Task With_no_trusted_proxy_a_local_caller_cannot_choose_its_address_or_scheme()
     {
         await using var host = await ProbeHost.StartAsync(trustedProxies: []);

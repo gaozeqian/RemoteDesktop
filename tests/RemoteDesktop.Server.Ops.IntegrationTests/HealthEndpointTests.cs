@@ -44,7 +44,7 @@ public class HealthEndpointTests(OpsHostFixture fixture) : IClassFixture<OpsHost
     /// The same promise for the scheme header alone. Fails today only because an empty Ops:TrustedProxies makes the
     /// forwarded-headers middleware consume the header from any caller; see the skipped test in ForwardedHeaderTests.
     /// </summary>
-    [Fact(Skip = "Blocked by the empty-TrustedProxies defect: the middleware strips X-Forwarded-Proto before /health sees it.")]
+    [Fact]
     public async Task A_request_carrying_only_the_scheme_header_is_not_answered()
     {
         var (http, _) = fixture.CreateClient();

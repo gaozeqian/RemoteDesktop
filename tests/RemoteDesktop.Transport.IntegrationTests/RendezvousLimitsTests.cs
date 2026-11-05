@@ -269,6 +269,29 @@ public class RendezvousLimitTests
         }
     }
 
+    /// <summary>
+    /// With no trusted proxy configured, forwarded headers are not believed at all. Clearing the framework's default
+    /// proxies is not enough: with both lists empty the middleware trusts every caller, so a caller could write its
+    /// own source address and get a fresh registration budget (and, with no node token, look like a loopback caller).
+    /// </summary>
+    [Fact]
+    public async Task A_caller_cannot_choose_its_source_address_when_no_proxy_is_trusted()
+    {
+        await using var server = await TestRendezvous.StartAsync(("Rendezvous:RegistrationBurst", "1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:2::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        // Same real caller, a different address written into the header: it must still count against one budget.
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "198.51.100.7"))
+        {
+            Assert.Null(await RawSignaling.RegisterAsync(socket));
+        }
+    }
+
     [Fact]
     public async Task Connect_requests_from_one_device_are_throttled()
     {
