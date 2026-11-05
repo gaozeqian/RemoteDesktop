@@ -31,12 +31,17 @@ public static class FrameCodec
 
     /// <summary>Reads the next frame, or returns <c>null</c> when the stream ended cleanly between frames.</summary>
     /// <exception cref="InvalidDataException">The stream ended mid-frame or the length exceeds <paramref name="maxPayloadSize"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxPayloadSize"/> is negative.</exception>
     public static async ValueTask<Frame?> ReadAsync(
         Stream stream,
         int maxPayloadSize = DefaultMaxPayloadSize,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
+
+        // The length prefix is compared as an unsigned number, so a negative limit would wrap to a huge one and switch
+        // the guard against a hostile length prefix off instead of closing it. Every caller passes a constant today.
+        ArgumentOutOfRangeException.ThrowIfNegative(maxPayloadSize);
 
         var header = new byte[HeaderSize];
         var read = await stream.ReadAtLeastAsync(header, HeaderSize, throwOnEndOfStream: false, cancellationToken)
