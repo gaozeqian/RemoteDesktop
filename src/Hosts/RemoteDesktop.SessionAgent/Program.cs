@@ -95,11 +95,13 @@ await using (link.ConfigureAwait(false))
         .AddSingleton<IInputInjector>(sp => new AgentInputInjector(
             new SendInputInjector(sp.GetRequiredService<IDisplayEnumerator>()),
             sp.GetRequiredService<AgentLink>()))
-        .AddSingleton<AgentRunner>();
+        .AddSingleton<AgentRunner>()
+        // The host is only started for its hosted services; see AgentHostLifetime.
+        .AddSingleton<IHostLifetime, AgentHostLifetime>();
 
     using var host = builder.Build();
     logger.Information("Agent for the {Desktop} desktop connected to the host service.", desktop);
-    await host.Services.GetRequiredService<AgentRunner>().RunAsync(stop.Token).ConfigureAwait(false);
+    await AgentRunner.RunHostedAsync(host, stop.Token).ConfigureAwait(false);
     logger.Information("Agent exiting.");
 }
 

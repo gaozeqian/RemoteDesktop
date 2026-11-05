@@ -118,6 +118,61 @@ public sealed class PartialFileSweeperTests : IDisposable
         Assert.Single(ledger.Entries()); // it is still tracked in memory, which is all this process can do
     }
 
+    /// <summary>
+    /// The list is a text file with one path per line. A path that itself contains a line break would be read back as
+    /// several unrelated entries, so it is not recorded at all; the transfer it belongs to is unaffected.
+    /// </summary>
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    [InlineData("\r\n")]
+    public void A_path_containing_a_line_break_is_not_recorded(string lineBreak)
+    {
+        var ledger = Ledger();
+        var legitimate = Path.Combine(_folder, "movie.mp4.123-abc.rdpart");
+        ledger.Record(legitimate);
+
+        ledger.Record(Path.Combine(_folder, $"dir{lineBreak}sub", "movie.mp4.123-abc.rdpart"));
+
+        Assert.Equal([legitimate], ledger.Entries());
+        Assert.Equal([legitimate], Ledger().Entries());
+        Assert.Equal([legitimate], File.ReadAllLines(Path.Combine(_folder, "partial-files.log")));
+    }
+
+    /// <summary>
+    /// The sweeper deletes what the list names, so it only acts on what a transfer could have put there: an absolute
+    /// path to a <c>.rdpart</c> file. A list edited by hand or damaged must not be able to point it at anything else.
+    /// </summary>
+    [Fact]
+    public void Entries_that_are_not_absolute_partial_files_are_never_deleted()
+    {
+        var old = _time.GetUtcNow().UtcDateTime - PartialFileSweeper.Retention - TimeSpan.FromDays(1);
+        var notPartial = WriteFile(Path.Combine(_folder, "precious.docx"), "keep me");
+        File.SetLastWriteTimeUtc(notPartial, old);
+
+        // Relative to the working directory of the process, which is not something a list can be trusted to mean.
+        var relative = "rd-relative-" + Guid.NewGuid().ToString("N") + PartialFile.Extension;
+        var relativeFull = Path.GetFullPath(relative);
+        WriteFile(relativeFull, "keep me too");
+        File.SetLastWriteTimeUtc(relativeFull, old);
+
+        try
+        {
+            File.WriteAllLines(Path.Combine(_folder, "partial-files.log"), [notPartial, relative]);
+            var ledger = Ledger();
+
+            var removed = new PartialFileSweeper(ledger, _time, NullLogger<PartialFileSweeper>.Instance).Sweep();
+
+            Assert.Equal(0, removed);
+            Assert.True(File.Exists(notPartial));
+            Assert.True(File.Exists(relativeFull));
+        }
+        finally
+        {
+            File.Delete(relativeFull);
+        }
+    }
+
     private PartialFileLedger Ledger(int maxEntries = PartialFileLedger.DefaultMaxEntries) =>
         new(new PartialFileLedgerOptions(Path.Combine(_folder, "partial-files.log"), maxEntries), NullLogger<PartialFileLedger>.Instance);
 

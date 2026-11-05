@@ -70,6 +70,14 @@ public sealed partial class PartialFileLedger
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(partialPath);
 
+        if (partialPath.AsSpan().ContainsAny('\r', '\n'))
+        {
+            // The list holds one path per line; a path with a line break in it would be read back as several
+            // unrelated entries. Not tracking it only costs the cleanup of this one file.
+            LogNotTracked(_logger);
+            return;
+        }
+
         string[] snapshot;
         long version;
         lock (_lock)
@@ -203,6 +211,9 @@ public sealed partial class PartialFileLedger
             }
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "An unfinished transfer is not tracked for cleanup: its path contains a line break, which the list cannot store.")]
+    private static partial void LogNotTracked(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The list of unfinished transfers at {Path} could not be read: {Reason}")]
     private static partial void LogUnreadable(ILogger logger, string path, string reason);

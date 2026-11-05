@@ -195,6 +195,12 @@ public sealed partial class HostSessionService(
                 }
                 finally
                 {
+                    // The session is over however it ended (the controller left, the link broke, the host stopped), but
+                    // only Disconnect cancels this token on its own. The end report and the heartbeat hang on it, so
+                    // without this they would never learn that a session ended by the other side. Cancelling twice is
+                    // a no-op, which is what keeps this and Disconnect from disagreeing.
+                    end.Cancel();
+
                     // Value-aware: a controller may announce an id again after the first session with it ended, and a
                     // late finally from the first must not remove the second.
                     _hosted.TryRemove(new KeyValuePair<SessionId, HostedSession>(session.Id, hosted));
@@ -455,7 +461,7 @@ public sealed partial class HostSessionService(
             return false;
         }
 
-        hosted.Context.Grant = hosted.Context.Grant.DowngradeToView();
+        hosted.Context.UpdateGrant(grant => grant.DowngradeToView());
         LogDowngraded(logger, id);
         await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
         return true;
@@ -473,7 +479,7 @@ public sealed partial class HostSessionService(
             return false;
         }
 
-        hosted.Context.Grant = hosted.Context.Grant.Revoke(permissions);
+        hosted.Context.UpdateGrant(grant => grant.Revoke(permissions));
         LogRevoked(logger, id, permissions);
         await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
         return true;

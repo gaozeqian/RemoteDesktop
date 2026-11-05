@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Application.Features;
@@ -14,8 +16,36 @@ namespace RemoteDesktop.SessionAgent;
 internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureModule> modules, ILogger<AgentRunner> logger)
 {
     private static readonly TimeSpan DesktopPoll = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan ChannelGrace = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan HostStopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Dictionary<ChannelType, IFeatureModule> _modules = modules.ToDictionary(m => m.ChannelType);
+
+    /// <summary>
+    /// Runs the agent inside its host. Registering a hosted service does nothing by itself: the sweeper of abandoned
+    /// partial files (and anything else the features add) only runs once the host is started.
+    /// </summary>
+    public static async Task RunHostedAsync(IHost host, CancellationToken stopping)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        await host.StartAsync(stopping).ConfigureAwait(false);
+        try
+        {
+            await host.Services.GetRequiredService<AgentRunner>().RunAsync(stopping).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Bounded: a hosted service that does not stop must not keep an agent the service is waiting on alive.
+            using var stopTimeout = new CancellationTokenSource(HostStopTimeout);
+            try
+            {
+                await host.StopAsync(stopTimeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
 
     /// <summary>Runs until the service shuts the agent down or the link closes.</summary>
     public async Task RunAsync(CancellationToken stopping)
@@ -38,7 +68,15 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
         {
             await run.CancelAsync().ConfigureAwait(false);
             await watcher.ConfigureAwait(false);
-            await Task.WhenAll(channels).WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(channels).WaitAsync(ChannelGrace, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // A channel that ignores cancellation is abandoned; the process is about to exit anyway.
+                LogChannelsStuck(logger, ChannelGrace.TotalSeconds);
+            }
         }
     }
 
@@ -112,6 +150,21 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
     [LoggerMessage(Level = LogLevel.Warning, Message = "No module serves the {Kind} channel.")]
     private static partial void LogNoModule(ILogger logger, AgentChannelKind kind);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Some channels did not stop within {Seconds} s of the agent shutting down; abandoning them.")]
+    private static partial void LogChannelsStuck(ILogger logger, double seconds);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "The {Kind} channel failed.")]
     private static partial void LogChannelFailed(ILogger logger, AgentChannelKind kind, Exception exception);
+}
+
+/// <summary>
+/// Leaves the agent's lifetime to <see cref="AgentRunner"/> and the host service. The default console lifetime hooks
+/// Ctrl+C and process exit, and on exit waits for the host to be disposed; the agent has no console, and a start of
+/// the host must not be able to change how the process ends.
+/// </summary>
+internal sealed class AgentHostLifetime : IHostLifetime
+{
+    public Task WaitForStartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

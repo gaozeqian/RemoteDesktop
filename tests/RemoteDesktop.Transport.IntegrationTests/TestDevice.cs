@@ -38,11 +38,23 @@ public sealed class TestDevice : IAsyncDisposable
     public static Task<TestDevice> StartAsync(Uri rendezvousUri, bool forceRelay = false, params IFeatureModule[] modules) =>
         StartAsync(rendezvousUri, forceRelay, inputAccess: null, modules);
 
-    public static async Task<TestDevice> StartAsync(
+    /// <summary>A device whose registrations the test may replace, after the standard composition has been added.</summary>
+    public static Task<TestDevice> StartAsync(ServerFixture server, Action<IServiceCollection> configure) =>
+        StartAsync(server.RendezvousUri, forceRelay: false, inputAccess: null, [], configure);
+
+    public static Task<TestDevice> StartAsync(
         Uri rendezvousUri,
         bool forceRelay,
         IInputAccess? inputAccess,
-        params IFeatureModule[] modules)
+        params IFeatureModule[] modules) =>
+        StartAsync(rendezvousUri, forceRelay, inputAccess, modules, configure: null);
+
+    private static async Task<TestDevice> StartAsync(
+        Uri rendezvousUri,
+        bool forceRelay,
+        IInputAccess? inputAccess,
+        IFeatureModule[] modules,
+        Action<IServiceCollection>? configure)
     {
         // Deliberately not the full set of defaults. Host.CreateApplicationBuilder() adds appsettings.json as a
         // *reloading* file provider, and a reloading provider holds an inotify instance for as long as the host lives.
@@ -71,6 +83,8 @@ public sealed class TestDevice : IAsyncDisposable
         {
             builder.Services.AddSingleton(inputAccess);
         }
+
+        configure?.Invoke(builder.Services);
 
         var device = new TestDevice(builder.Build());
         var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

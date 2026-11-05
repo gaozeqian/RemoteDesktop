@@ -35,6 +35,13 @@ public sealed partial class PartialFileSweeper(
         var removed = 0;
         foreach (var entry in ledger.Entries())
         {
+            if (!IsSweepable(entry))
+            {
+                // Only an absolute path to one of our own partial files is ever acted on, whatever the list says.
+                LogKept(logger, entry, "not an absolute path to a partial file");
+                continue;
+            }
+
             try
             {
                 var file = new FileInfo(entry);
@@ -64,6 +71,9 @@ public sealed partial class PartialFileSweeper(
 
         return removed;
     }
+
+    private static bool IsSweepable(string entry) =>
+        Path.IsPathFullyQualified(entry) && entry.EndsWith(PartialFile.Extension, StringComparison.OrdinalIgnoreCase);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

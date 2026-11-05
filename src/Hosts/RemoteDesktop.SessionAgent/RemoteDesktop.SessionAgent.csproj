@@ -16,6 +16,10 @@
     <ApplicationManifest Condition="'$(ApplicationManifest)' == ''">app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The agent's run loop (shutdown, hosted services) is worth testing where it lives. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.UnitTests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
