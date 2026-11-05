@@ -28,7 +28,7 @@
 | 密钥 | DPAPI | Keychain | 0600 文件 |
 | 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 | logind `Inhibit` |
 | 登录前 / 安全桌面 | 支持（换 Agent 接管） | **不支持** | **不支持** |
-| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定） |
+| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定，见 §4） |
 | 打包 | MSI（WiX v5） | `.app` + `.pkg` | `.deb` + systemd |
 | 原生代码 | 无（纯 P/Invoke） | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
 
@@ -67,9 +67,9 @@
 |---|---|
 | 原生互操作方式 | **混合方案 C**：`net10.0` + C 框架 P/Invoke + 小型 ObjC 辅助库 |
 | 交付范围 | 全功能一次到位（P1–P10） |
-| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；尚未用真实证书跑过一次公证） |
+| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；公证的验证状态见 §5） |
 | 无人值守 | `SMAppService`（client）或 LaunchAgent（host 包）；新增 `ILoginItem` 端口 |
-| 最低系统版本 | **macOS 26 (Tahoe)** |
+| 最低系统版本 | **macOS 26 (Tahoe)**（成因见下方硬约束） |
 
 ### 硬约束与结论
 

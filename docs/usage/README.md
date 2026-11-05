@@ -64,8 +64,8 @@ Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC
 
 ### macOS (Apple Silicon)
 
-最低系统版本是 **macOS 26 (Tahoe)**，由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定——
-dyld 拒绝在更老的系统上加载它们。原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；
+最低系统版本是 **macOS 26 (Tahoe)**，成因见 [平台移植总览](../ports/README.md#3-macos-apple-silicon) 的“最低系统版本是 macOS 26”。
+原生辅助库由 `native/macos/build-native.sh` 自动构建（构建平台项目时触发）；
 首次构建前需运行 `native/macos/fetch-libmsquic.sh` 暂存 MsQuic。
 
 与 Windows 的能力差异（没有 Ctrl+Alt+Del、没有登录界面 / 登录前访问、一个进程只服务一个用户、H.265 与隐私屏未实现）
@@ -125,8 +125,10 @@ remotedesktop --self-check                                           # 客户端
 ```
 
 Linux 上它检查数据目录、QUIC、会话类型、会话总线、运行时目录、portal（顺带答摄像头有没有）、显示布局、
-PipeWire、libei、libavcodec 版本、可用的 H.264 编码器；Windows 上只报告数据目录和传输层；macOS 上则按客户端
-实际的组装方式逐项检查。自检**不弹任何对话框、不打开摄像头**，所以在一台还没授权过、甚至起不来的机器上照样能跑。
+PipeWire、libei、libavcodec 版本、可用的 H.264 编码器；Windows 上只报告数据目录和传输层；macOS 上先看进程是否在已签名的 `.app`
+里以及签名身份、QUIC 传输和屏幕录制 / 辅助功能 / 摄像头三项授权（缺屏幕录制或不在 `.app` 里算不通过，其余两项只提示），
+再按客户端实际的组装方式核对各平台端口是否注册，并逐项做真实探测（钥匙串读写、显示器与抓帧、防休眠、剪贴板、
+摄像头、音频、视频编解码往返、录像、登录项、输入注入、受保护目录、终端与文件权限）。自检**不弹任何对话框、不打开摄像头**，所以在一台还没授权过、甚至起不来的机器上照样能跑。
 唯一的写操作是数据目录的可写探测：它会创建数据目录（如果还不存在），并在里面写一个 `.writable` 空文件后立刻删除。
 有必需项不通过时退出码是 1。
 

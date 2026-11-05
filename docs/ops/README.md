@@ -1564,8 +1564,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
   卸载 client 只需删 `/Applications/Remote Desktop.app` 并
   `sudo pkgutil --forget com.remotedesktop.client`；若在应用里开过登录项，先在应用里关掉。
 
-> **最低系统版本 macOS 26 (Tahoe)**：由随包分发的 `libmsquic` / `openssl@4` bottle 的 `minos 26.0` 决定
-> （见 [平台移植总览](../ports/README.md) 的"最低系统版本"）。`.pkg` 只面向 Apple Silicon（arm64）。
+> **最低系统版本 macOS 26 (Tahoe)**，成因见 [平台移植总览](../ports/README.md#3-macos-apple-silicon) 的“最低系统版本是 macOS 26”。
+> `.pkg` 只面向 Apple Silicon（arm64）。
 
 ## 七、运行期注意事项
 
@@ -1825,12 +1825,12 @@ Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, User
 `agent-user-*.log`（用户桌面的 agent 起来了但连不上服务或接管会话失败；登录/UAC 桌面的在 `agent-secure-*.log`）；`startup-error.log`（设置读不出来时服务直接退出）。
 服务被系统拒绝启动时另外看 `Get-WinEvent -LogName System -MaxEvents 50` 里的 Service Control Manager 条目。
 
-**实测结论（2026-10-30，Hyper-V 被控端 VM + 本机控制端）**：服务以 `LocalSystem` 运行、`RemoteDesktop.SessionAgent`
-以登录用户身份运行（提权只读命令确认）；控制端流尺寸如实显示（本次 2048×1152），画面保持比例不拉伸，鼠标四角落点
-对齐——托管形态与渲染都通过。**非 16:9 letterbox 与混合 DPI 的边界**：letterbox 的"等比缩放 + 居中"路径已被
-"画面保持比例"覆盖（它不依赖源宽高比）；"多显示器不同 DPI"在 Hyper-V 里无法构造，且 Windows 单显示器抓屏走物理
-像素、DPI 缩放不影响鼠标映射——所以这一项对 Windows 标注为**不适用**，而非未验证。要字面验证 4:3 源，把 vmconnect
-切到"基础会话"（guest 落到 1024×768）即可。
+**渲染**：从控制端连上后，流尺寸应如实显示、画面保持比例不拉伸，鼠标移到画面四角时被控端指针落在对应的角上。
+letterbox 的"等比缩放 + 居中"路径不依赖源宽高比，上面这一条即覆盖；要字面验证 4:3 源，在 Hyper-V 里把 vmconnect
+切到"基础会话"（guest 落到 1024×768）即可。"多显示器不同 DPI"对 Windows **不适用**：单显示器抓屏走物理像素，
+DPI 缩放不影响鼠标映射（Hyper-V 里也无法构造这种环境）。
+
+已有的一次实测记在文末记录表 V1 一行。
 
 ### V2 · macOS：服务端专用账户（P0）
 
@@ -1960,9 +1960,10 @@ echo "$XDG_SESSION_TYPE"
 
 ### V7 · 被控端：QUIC listener 泄漏（P2，观察）
 
-**背景**：被控端每准备一次入站连接就会新建一个 `QuicListener`（`QuicPeerListener`），.NET/MsQuic 侧有一个已知的
-原生泄漏（约 1.2 MB/次，已报上游；1.0.0 只限制了并发 32）。信令服务器走 WebSocket，不跑 QuicListener，不受影响，
-所以要量的是**被控端的 `RemoteDesktop.HostService` 进程**。这一条不是通过/失败，而是长期开机的体检。
+**背景**：被控端每准备一次入站连接就会新建一个 `QuicListener`，.NET/MsQuic 侧有一个已知的原生泄漏
+（约 1.2 MB/次，已报上游），来龙去脉见 [系统设计](../design/README.md) 的“还没有做的事”第一条。
+信令服务器走 WebSocket，不跑 QuicListener，不受影响，所以要量的是**被控端的 `RemoteDesktop.HostService` 进程**。
+这一条不是通过/失败，而是长期开机的体检。
 
 **做法**：服务稳定后取基线，正常使用一天后再取一次，同时记下当天的入站连接量。
 
@@ -2004,11 +2005,11 @@ Windows 上以控制台方式运行 `RemoteDesktop.Server.Ops.exe` 才有输出�
 
 ### 记录表
 
-复制这张表进发布记录，每条验收一行；"证据"写日志文件名与时间点，不要只写"已通过"。
+复制这张表进发布记录，每条验收一行；"证据"写日志文件名与时间点，不要只写"已通过"。V1 一行是已有的一次实测，新一轮请覆盖。
 
 | 日期 | 版本 | 条目 | 结果 | 证据 / 备注 |
 |---|---|---|---|---|
-|  |  | V1 |  |  |
+| 2026-10-30 |  | V1 | 通过 | Hyper-V 被控端 VM + 本机控制端：服务 `LocalSystem`、`RemoteDesktop.SessionAgent` 以登录用户运行（提权只读命令确认）；流尺寸 2048×1152 如实显示，保持比例，鼠标四角对齐 |
 |  |  | V2 |  |  |
 |  |  | V3 |  |  |
 |  |  | V4 |  |  |
