@@ -551,7 +551,7 @@ sc.exe start RemoteDesktopRelay
 
 ```bash
 cd build/docker
-cp .env.example .env      # 填好四个必填值；启用 Ops 时再填 OPS_GATEWAY_IP
+cp .env.example .env      # 四个必填值在文件里是空的，必须填好（留空时 compose 会拒绝启动）；启用 Ops 时再填 OPS_GATEWAY_IP
 docker compose up -d --build
 ```
 

@@ -145,6 +145,27 @@ public sealed class VideoRecorderTests : IDisposable
     }
 
     [Fact]
+    public async Task A_padded_frame_without_the_padding_after_its_last_row_is_accepted()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var path = PathFor("padded");
+        await using var recorder = new FfmpegVideoRecorder();
+        recorder.Start(path, Width, Height);
+
+        // Rows 64 bytes wider than the picture, and a buffer that ends where the last visible pixel does: the
+        // contract is the visible bytes of every row, the same as the Windows and macOS recorders accept.
+        const int paddedStride = Stride + 64;
+        var pixels = new byte[((Height - 1) * paddedStride) + Stride];
+        recorder.RecordFrame(pixels, paddedStride, Width, Height);
+
+        await recorder.StopAsync();
+
+        Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+        Assert.True(recorder.WrittenFrames > 0, "The frame was refused.");
+    }
+
+    [Fact]
     public async Task More_frames_than_the_queue_holds_are_dropped_rather_than_queued()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);

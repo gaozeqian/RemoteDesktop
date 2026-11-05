@@ -40,6 +40,8 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
     private unsafe byte*[]? _destinationData;
     private int[]? _destinationStride;
     private long _written;
+    private int _width;
+    private int _height;
     private int _failure;
     private DateTime _started;
     private string? _outputPath;
@@ -76,6 +78,11 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
             _outputPath = filePath;
             _started = DateTime.UtcNow;
 
+            // Kept as plain numbers: RecordFrame runs on the caller's thread and must not read the native encoder
+            // context, which Close frees when a stop on another thread finishes.
+            _width = width;
+            _height = height;
+
             Open(filePath, width, height, frameRate, bitrateKbps);
 
             var channel = Channel.CreateBounded<RecordSample>(new BoundedChannelOptions(QueueLength)
@@ -90,7 +97,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
         }
     }
 
-    public unsafe void RecordFrame(ReadOnlySpan<byte> bgraPixels, int stride, int width, int height)
+    public void RecordFrame(ReadOnlySpan<byte> bgraPixels, int stride, int width, int height)
     {
         var channel = _channel;
         if (channel is null)
@@ -100,21 +107,25 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
         // A picture that changes size cannot be recorded into a file whose frames are one size; the Windows recorder
         // stops for the same reason. The frames already written stay valid.
-        if (width != _encoder->width || height != _encoder->height)
+        if (width != _width || height != _height)
         {
             Fail(VideoRecorderFailure.PictureSizeChanged);
             return;
         }
 
-        var length = stride * height;
-        if (bgraPixels.Length < length)
+        // The last row needs only its visible bytes, not the padding after it, which is all the other recorders ask for.
+        var required = ((height - 1) * stride) + (width * 4);
+        if (stride < width * 4 || bgraPixels.Length < required)
         {
             Fail(VideoRecorderFailure.WriteFailed);
             return;
         }
 
-        // Copied here rather than on the worker: the caller owns the pixels only until it returns.
-        channel.Writer.TryWrite(new RecordSample(bgraPixels[..length].ToArray(), stride, width, height));
+        // Copied here rather than on the worker: the caller owns the pixels only until it returns. The buffer keeps
+        // the full stride * height size so the converter's view of the last row is the same as with a padded frame.
+        var pixels = new byte[stride * height];
+        bgraPixels[..required].CopyTo(pixels);
+        channel.Writer.TryWrite(new RecordSample(pixels, stride, width, height));
     }
 
     public async Task<string> StopAsync()

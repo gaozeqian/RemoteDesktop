@@ -177,6 +177,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
   `Platform.Linux` 与 `Platform.MacOS` 引用 `Platform.Posix`（两者共用的 POSIX 代码）。测试只禁止上面列出的方向，
   不禁止 `Platform.*` 之间互相引用，所以这类引用靠评审把关。
 * `Features.*` (独立功能模块) 彼此之间禁止互相引用，它们通过 `Application` 层的统一接口交互。
+* `Features.*` 也不得引用 `Platform` 或三个宿主：平台由宿主在启动时接进来，功能模块只面对 `Application`（`Desktop`、`Camera` 另外引用 `Media`）。
 * `Server.*` 不得引用 `Abstractions`、`Protocol`、`Transport`、`Application`、`Features`、`Media`、`Platform` 或宿主。
 * 运维监控台分三层，只能向内：`Server.Ops.Core` 不得引用 `Server.Ops.Storage`、`Server.Ops`、`Microsoft.AspNetCore`
   和 `Server.Storage`；`Server.Ops.Storage` 不得引用 `Server.Ops` 和 `Server.Storage`；`Server.Ops` 不得引用

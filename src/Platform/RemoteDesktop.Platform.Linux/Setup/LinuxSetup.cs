@@ -58,20 +58,54 @@ public static class LinuxSetup
             startInfo.ArgumentList.Add("restart");
             startInfo.ArgumentList.Add(HostServiceUnit);
 
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return;
-            }
-
-            // Drained, or a chatty systemd fills the pipe and the wait below never finishes.
-            _ = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            process.WaitForExit();
+            _ = RunToCompletion(startInfo, RestartTimeout);
         }
         catch (Exception error) when (error is Win32Exception or InvalidOperationException)
         {
             // No systemctl on this machine, or no systemd to talk to.
         }
+    }
+
+    /// <summary>How long the restart may take before it is abandoned; a unit that hangs must not hang the caller.</summary>
+    private static readonly TimeSpan RestartTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Runs a process with both output streams redirected and waits for it, killing it if it outlives the timeout.
+    /// </summary>
+    /// <returns><see langword="true"/> if the process exited on its own in time; <see langword="false"/> if it could not be started or had to be killed.</returns>
+    /// <remarks>
+    /// Both streams are read concurrently: reading one to the end before starting on the other blocks the child as
+    /// soon as it fills the pipe the reader is not looking at, and then neither side ever finishes.
+    /// </remarks>
+    internal static bool RunToCompletion(ProcessStartInfo startInfo, TimeSpan timeout)
+    {
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return false;
+        }
+
+        var drained = Task.WhenAll(
+            process.StandardOutput.ReadToEndAsync(),
+            process.StandardError.ReadToEndAsync());
+
+        if (process.WaitForExit(timeout))
+        {
+            // The streams reach end-of-file once the process (and anything that inherited its pipes) is gone; the
+            // wait is bounded for the same reason the process wait is.
+            _ = drained.Wait(timeout);
+            return true;
+        }
+
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception error) when (error is InvalidOperationException or Win32Exception)
+        {
+            // It exited between the timeout and the kill.
+        }
+
+        return false;
     }
 }

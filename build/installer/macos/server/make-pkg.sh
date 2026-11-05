@@ -76,7 +76,16 @@ while [[ $# -gt 0 ]]; do
         --configuration)   CONFIGURATION="$2"; shift 2 ;;
         --output)          OUTPUT_DIR="$2";    shift 2 ;;
         --publish)         PUBLISH_DIR="$2";   shift 2 ;;
-        --arch)            ARCH="$2"; RID="osx-$2"; shift 2 ;;
+        --arch)
+            ARCH="$2"
+            # The product ships for Apple silicon only (release.yml names the package arm64). A package labelled with
+            # any other architecture would be mislabelled, so say so rather than lie in the metadata.
+            if [[ "$ARCH" != "arm64" ]]; then
+                echo "This package is arm64 only; --arch $ARCH is not supported." >&2
+                exit 2
+            fi
+            RID="osx-$ARCH"
+            shift 2 ;;
         --app-identity)    APP_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
         --identity)        PKG_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
         --distribution)    DISTRIBUTION=1;     shift ;;

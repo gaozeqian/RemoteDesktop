@@ -173,6 +173,9 @@ jobs:
       OPS_INGEST_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
       RENDEZVOUS_DOMAIN: rd.example.com
       OPS_GATEWAY_IP: 127.0.0.1
+      # Placeholders for the self-signed overlay; `compose config` only interpolates them, the file need not exist.
+      TLS_CERT_PATH: ./rd.example.pfx
+      TLS_CERT_PASSWORD: ci-not-a-secret
     steps:
       - uses: actions/checkout@v7
       - name: Check the compose files parse
@@ -180,6 +183,49 @@ jobs:
           docker compose -f build/docker/docker-compose.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.tls.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.selfsigned.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.selfsigned.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+      - name: Check .env.example does not satisfy the required values
+        # The template leaves the secrets empty on purpose. If a placeholder ever returns, `cp .env.example .env` would
+        # start the servers with a value everybody knows. The environment is cleared so the job's test values above
+        # cannot mask it: with only the template as input, compose has to refuse.
+        run: |
+          if env -i PATH="$PATH" HOME="$HOME" docker compose --env-file build/docker/.env.example -f build/docker/docker-compose.yml config >/dev/null 2>&1; then
+            echo "build/docker/.env.example satisfies the required values; they must stay empty." >&2
+            exit 1
+          fi
+      - name: Smoke-test the security audit script
+        # Nothing else runs build/tools/Invoke-SecurityAudit.ps1. The shipped default settings must be reported as
+        # unsafe (exit 2: no database), and a configuration that sets what the audit looks at must pass (exit 0), so
+        # the script can neither stop reporting nor start reporting everything.
+        run: |
+          set -u
+          code=0
+          pwsh -NoProfile -File build/tools/Invoke-SecurityAudit.ps1 \
+            -SettingsPath src/Server/RemoteDesktop.Server.Rendezvous/appsettings.json >/dev/null || code=$?
+          if [ "$code" -ne 2 ]; then
+            echo "Expected exit code 2 for the default settings, got $code." >&2
+            exit 1
+          fi
+
+          good=$(mktemp)
+          cat > "$good" <<'JSON'
+          {
+            "Urls": "https://0.0.0.0:5080",
+            "Rendezvous": {
+              "RelayEndpoint": "",
+              "NodeToken": "audit-smoke-token",
+              "Database": { "Provider": "postgres", "ConnectionString": "Host=db" }
+            }
+          }
+          JSON
+          code=0
+          pwsh -NoProfile -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$good" >/dev/null || code=$?
+          rm -f "$good"
+          if [ "$code" -ne 0 ]; then
+            echo "Expected exit code 0 for a hardened configuration, got $code." >&2
+            exit 1
+          fi
       - name: Check the ops overlay seeds the local nodes
         # The ops image's ENTRYPOINT is the console, so a `command: [bash, -ec, ...]` on ops is only appended to it as
         # arguments and never runs; seeding is the job of the one-shot ops-seed service that ops waits for.

@@ -81,16 +81,21 @@ runs:
         check artifacts/installer/linux/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
         check artifacts/installer/linux/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
         check artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb RemoteDesktop.Server.Rendezvous
-        # The console is the third program in the server package. Checked separately so a server package that lost it
-        # fails here rather than at the first operator who opens 5090.
+        # The other three programs and the four units that start them. Checked separately so a server package that
+        # lost the relay, the console or its HTTPS gateway fails here rather than at the first operator who looks for it.
         server=$(ls -1 artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb)
-        case "$(dpkg-deb --contents "$server")" in
-          *RemoteDesktop.Server.Ops*) ;;
-          *)
-            echo "$server does not contain the Ops console." >&2
-            exit 1
-            ;;
-        esac
+        server_contents=$(dpkg-deb --contents "$server")
+        for wanted in \
+          RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway \
+          remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service; do
+          case "$server_contents" in
+            *"$wanted"*) ;;
+            *)
+              echo "$server does not contain $wanted." >&2
+              exit 1
+              ;;
+          esac
+        done
 
     - name: Verify the .pkg installers
       if: runner.os == 'macOS'
@@ -320,8 +325,9 @@ runs:
 
         server=$(ls -1 artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg)
         check "$server" \
-          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops \
+          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway \
           com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist com.remotedesktop.ops.plist \
+          com.remotedesktop.gateway.plist \
           configure-server.sh uninstall-server.sh how-to-configure.txt
         server_payload=$(pkgutil --payload-files "$server")
         case "$server_payload" in

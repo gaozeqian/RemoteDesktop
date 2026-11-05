@@ -25,7 +25,7 @@
 # database environment values and the depends_on entry below. The image creates /data with the server's UID, so a
 # fresh named volume is writable. Two rendezvous containers on SQLite would each hand out their own device ids.
 #
-# Required values (generate the secrets; do not reuse the placeholders in .env.example):
+# Required values (generate the secrets; .env.example leaves them empty so that a missing one stops compose):
 #   POSTGRES_PASSWORD       openssl rand -base64 24
 #   RELAY_SHARED_KEY        openssl rand -base64 48
 #   RELAY_PUBLIC_ENDPOINT   the ADDRESS clients are told to relay through, e.g. 203.0.113.10:5082 (not a name)
