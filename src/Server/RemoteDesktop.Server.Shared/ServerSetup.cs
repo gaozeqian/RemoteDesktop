@@ -1309,41 +1309,19 @@ public static class ServerSetup
     /// The same bar the servers themselves apply at start-up, checked here so a key that would stop them from
     /// starting is refused while somebody is still watching the installation.
     /// </summary>
-    private static void ValidateKey(string key)
-    {
-        byte[] bytes;
-        try
-        {
-            bytes = Convert.FromBase64String(key);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException("The relay shared key must be base64 (generate one with: openssl rand -base64 48).");
-        }
+    private static void ValidateKey(string key) =>
+        Base64Key.Decode(
+            key,
+            "The relay shared key must be base64 (generate one with: openssl rand -base64 48).",
+            length => $"The relay shared key must be at least {MinimumKeyBytes} bytes ({length} given). Generate one with: openssl rand -base64 48",
+            MinimumKeyBytes);
 
-        if (bytes.Length < MinimumKeyBytes)
-        {
-            throw new InvalidOperationException($"The relay shared key must be at least {MinimumKeyBytes} bytes ({bytes.Length} given). Generate one with: openssl rand -base64 48");
-        }
-    }
-
-    private static void ValidateOpsKey(string key)
-    {
-        byte[] bytes;
-        try
-        {
-            bytes = Convert.FromBase64String(key);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException("The Ops ingest key must be base64 (generate one with: openssl rand -base64 32).");
-        }
-
-        if (bytes.Length < MinimumKeyBytes)
-        {
-            throw new InvalidOperationException($"The Ops ingest key must be at least {MinimumKeyBytes} bytes ({bytes.Length} given). Generate one with: openssl rand -base64 32.");
-        }
-    }
+    private static void ValidateOpsKey(string key) =>
+        Base64Key.Decode(
+            key,
+            "The Ops ingest key must be base64 (generate one with: openssl rand -base64 32).",
+            length => $"The Ops ingest key must be at least {MinimumKeyBytes} bytes ({length} given). Generate one with: openssl rand -base64 32.",
+            MinimumKeyBytes);
 
     private static JsonObject Section(JsonObject settings, string name)
     {

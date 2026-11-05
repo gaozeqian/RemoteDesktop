@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
+using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Server.Ops;
 
@@ -173,6 +174,13 @@ public static class OpsServer
     /// </summary>
     private static ForwardedHeadersOptions? ForwardedHeaderOptions(WebApplication app)
     {
+        // The middleware only checks who is speaking when at least one of the two lists is non-empty; with both empty
+        // it applies the headers of any caller. "No trusted proxy" therefore has to mean "no middleware".
+        if (TrustedProxyList.Parse(app.Services.GetRequiredService<OpsOptions>().TrustedProxies) is not { } trusted)
+        {
+            return null;
+        }
+
         var options = new ForwardedHeadersOptions
         {
             ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
@@ -182,22 +190,17 @@ public static class OpsServer
         options.KnownProxies.Clear();
         options.KnownIPNetworks.Clear();
 
-        foreach (var entry in app.Services.GetRequiredService<OpsOptions>().TrustedProxies)
+        foreach (var address in trusted.Addresses)
         {
-            // Validated at start-up, so both parses are known to succeed here.
-            if (IPAddress.TryParse(entry, out var address))
-            {
-                options.KnownProxies.Add(address);
-            }
-            else if (System.Net.IPNetwork.TryParse(entry, out var network))
-            {
-                options.KnownIPNetworks.Add(network);
-            }
+            options.KnownProxies.Add(address);
         }
 
-        // The middleware only checks who is speaking when at least one of the two lists is non-empty; with both empty
-        // it applies the headers of any caller. "No trusted proxy" therefore has to mean "no middleware".
-        return options.KnownProxies.Count == 0 && options.KnownIPNetworks.Count == 0 ? null : options;
+        foreach (var network in trusted.Networks)
+        {
+            options.KnownIPNetworks.Add(network);
+        }
+
+        return options;
     }
 
     /// <summary>

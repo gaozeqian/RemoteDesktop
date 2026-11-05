@@ -213,6 +213,12 @@ public static class RendezvousServer
     /// </remarks>
     private static ForwardedHeadersOptions? ForwardedHeaderOptions(WebApplication app)
     {
+        // See the call site: empty lists mean "believe everyone", so no trusted proxy has to mean no middleware.
+        if (TrustedProxyList.Parse(app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.TrustedProxies) is not { } trusted)
+        {
+            return null;
+        }
+
         var options = new ForwardedHeadersOptions
         {
             ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
@@ -221,20 +227,16 @@ public static class RendezvousServer
         options.KnownProxies.Clear();
         options.KnownIPNetworks.Clear();
 
-        foreach (var entry in app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.TrustedProxies)
+        foreach (var address in trusted.Addresses)
         {
-            // Validated at start-up, so both parses are known to succeed here.
-            if (IPAddress.TryParse(entry, out var address))
-            {
-                options.KnownProxies.Add(address);
-            }
-            else if (System.Net.IPNetwork.TryParse(entry, out var network))
-            {
-                options.KnownIPNetworks.Add(network);
-            }
+            options.KnownProxies.Add(address);
         }
 
-        // See the call site: empty lists mean "believe everyone", so no trusted proxy has to mean no middleware.
-        return options.KnownProxies.Count == 0 && options.KnownIPNetworks.Count == 0 ? null : options;
+        foreach (var network in trusted.Networks)
+        {
+            options.KnownIPNetworks.Add(network);
+        }
+
+        return options;
     }
 }

@@ -168,21 +168,10 @@ public sealed class RendezvousOptions
 
         // The key signs the tickets that let a peer use the relay; an empty or short one would let anybody relay through
         // this server. The relay checks the same thing on its side, so a mismatch is caught at start-up as well.
-        var key = Array.Empty<byte>();
-        try
-        {
-            key = string.IsNullOrEmpty(RelaySharedKey) ? [] : Convert.FromBase64String(RelaySharedKey);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException("Rendezvous:RelaySharedKey must be base64 (generate one with: openssl rand -base64 48).");
-        }
-
-        if (key.Length < 32)
-        {
-            throw new InvalidOperationException(
-                $"Rendezvous:RelaySharedKey must be at least 32 bytes when Rendezvous:RelayEndpoint is set (it is {(key.Length == 0 ? "empty" : $"only {key.Length} bytes")}). Generate one with: openssl rand -base64 48");
-        }
+        _ = Base64Key.Decode(
+            RelaySharedKey ?? string.Empty,
+            "Rendezvous:RelaySharedKey must be base64 (generate one with: openssl rand -base64 48).",
+            length => $"Rendezvous:RelaySharedKey must be at least 32 bytes when Rendezvous:RelayEndpoint is set (it is {(length == 0 ? "empty" : $"only {length} bytes")}). Generate one with: openssl rand -base64 48");
     }
 
     /// <summary>
