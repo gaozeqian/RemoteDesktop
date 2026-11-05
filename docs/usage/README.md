@@ -133,8 +133,10 @@ PipeWire、libei、libavcodec 版本、可用的 H.264 编码器；Windows 上�
 有必需项不通过时退出码是 1。
 
 `--output <文件>` 可以把整份报告同时写进文件。macOS 通过 `open -a` 启动时会丢掉命令行参数，这时改用环境变量：
-`RD_SELF_CHECK=1` 让每次启动都只自检然后退出，`RD_SELF_CHECK_OUTPUT=<文件>` 指定报告写到哪里；用完要把两个变量
-都取消，否则每次启动该应用都不再打开窗口。
+`RD_SELF_CHECK=1` 让每次启动都只自检然后退出，`RD_SELF_CHECK_OUTPUT=<文件>` 指定报告写到哪里（效果等同于加了
+`--output`；只有客户端读这两个变量，被控端服务不读）。**只要 `RD_SELF_CHECK` 非空就会触发自检，`0` 和 `false` 也一样**，
+所以不能靠把它设成 `0` 来关闭；用完要把两个变量都取消（unset，例如 `launchctl unsetenv`），
+否则每次启动该应用都不再打开窗口。
 
 **被控端更需要它**——portal、PipeWire、libei 和显示都是它在用，而只装被控端的机器上未必有客户端可跑。
 

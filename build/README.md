@@ -28,8 +28,8 @@ build/
 `installer/linux/` 而不是 `installer/debian/`，和 `artifacts/installer/<平台>/` 的取法一致（见 `CONTRIBUTING.md`
 §构建产物布局）。
 
-三平台的**角色集合现在是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops + Gateway）。
-角色目录仍然只为该平台真实存在的东西而建，只是三个平台现在都有这三样：
+三平台的**角色集合是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops + Gateway）。
+角色目录仍然只为该平台真实存在的东西而建，三个平台都有这三样：
 
 | 平台 | `installer/` 下的角色 | 被控端包与控制端包的关系 |
 |---|---|---|
@@ -85,8 +85,8 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 
 `installer/windows/Import-SigningHelpers.ps1` 是同一条规则在平台层的例子，但它**不是脚本**，而是一组函数：
 `Find-SigningCertificate`、`Resolve-SigningTool`、`Get-SigningCertificate`、`Read-PfxCertificate`、`Invoke-Signing` 与
-`Remove-GeneratedDirectory`。它们原先逐字复制在 `client/Build-ClientInstaller.ps1` 与 `server/Build-ServerInstaller.ps1`
-里，改一份就漏另一份。现在两个打包脚本都用 `. (Join-Path $PSScriptRoot '..\Import-SigningHelpers.ps1')` **点源**（行首的点号加空格
+`Remove-GeneratedDirectory`。它们由 `client/Build-ClientInstaller.ps1` 与 `server/Build-ServerInstaller.ps1`
+共用，不各复制一份（逐字重复时改一份就会漏另一份）。两个打包脚本都用 `. (Join-Path $PSScriptRoot '..\Import-SigningHelpers.ps1')` **点源**（行首的点号加空格
 不能少：函数要定义在打包脚本自己的作用域里，才读得到它的 `$CertificateFile`、`$SigningTool` 等参数与 `$signing`）。
 文件名用 `Import-` 只是为了满足 Verb-Noun 命名规则。它和两个打包脚本一样是 UTF-8 带 BOM + CRLF（Windows PowerShell 5.1
 读无 BOM 的文件会按本地代码页解码）。两个脚本里**写法不同**的函数（`Get-ProductVersion`、`New-FileList`、

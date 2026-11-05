@@ -93,7 +93,7 @@ client 包是完整的 `Remote Desktop.app`（自带托管能力），host 包�
 的往返（Windows 上是为 SChannel 所需）。在 macOS 上默认加载方式会把私钥存进钥匙串且**不可导出**，
 MsQuic 导出凭证时直接抛异常。修法是加载 PKCS#12 时加 `X509KeyStorageFlags.Exportable`（3 行以内）。
 
-**Keychain 的 `OSStatus 100001` 是 `EPERM`，不是缺 entitlement。** 这条被写错过两次，所以留在这里：
+**Keychain 的 `OSStatus 100001` 是 `EPERM`，不是缺 entitlement。** 这条很容易被误判成别的原因，所以留在这里：
 `100001` = `EPERM`（缺 entitlement 是 `-34018`），成因是**调用方进程被沙箱包裹**，与代码签名、
 entitlement、`.app` 形态都无关。**钥匙串不需要稳定签名身份**；需要稳定身份的只有 TCC。
 两者真正的关系只剩一条：读回"以前由另一个签名创建过的条目"时系统会按"这是另一个程序"要求授权——
@@ -195,7 +195,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得，所以**既没有 uinput 后备实现，包里也没有 udev 规则，
 也不会自动把用户加进任何组**。
 
-**一次授权管两件事被 portal 拒绝了。** 原计划把采集和控制放在同一个会话上；实测报
+**一次授权管两件事被 portal 拒绝了。** 采集和控制不能放在同一个会话上、一次授权两用；实测报
 `org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist`——
 **远程桌面会话不允许持久化**。这是本平台最影响使用的一条：共享屏幕授权一次就记住了，
 **控制屏幕每次连接都要重新授权**。所以一台无人值守的 Linux 机器可以*被观看*，但没人坐在跟前就没法*被操作*。
@@ -230,7 +230,7 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 
 **打包要点**：`.deb` 的依赖**必须手写**——`dh_shlibdeps` 从 ELF `NEEDED` 推导，而我们的库是经 `DllImport`
 到达的，**扫描器看不见**，漏写的结果是包装得干干净净、首次使用 `DllNotFoundException`。
-（曾经的担心——含专利的编码器在 `-extra` 包里——实测是多余的：`libavcodec62` 自己就依赖 `libx264`。）
+（含专利的编码器在 `-extra` 包里这一顾虑，实测是多余的：`libavcodec62` 自己就依赖 `libx264`。）
 
 ### 明确不做的范围
 

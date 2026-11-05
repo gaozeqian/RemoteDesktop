@@ -1519,6 +1519,10 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600）；只做一次无人值守安装时，安装完成后
 应删除该文件，避免密码长期留在磁盘上。
 
+面板答案和这份答案文件都不存在时，安装脚本（`apply-answers.sh`）才会回退读安装进程环境里的 `RD_RENDEZVOUS_URI` /
+`RD_SERVER_CERTIFICATE`。这只是脚本里的后备，没有在真机上验证过环境变量能传到 `installer` 运行的安装脚本里，
+不要当作受支持的配置方式；需要预设就用答案文件。
+
 服务器地址（`Transport:RendezvousUri`，默认 `ws://127.0.0.1:5080/ws`）写在
 **`/Library/Application Support/RemoteDesktop/appsettings.json`**（root:wheel，0644）——它不在签名过的 `.app` 里，
 因为改 bundle 内的文件会让签名失效、连带丢掉 TCC 授权。当前用户自己的
@@ -1725,6 +1729,12 @@ build/installer/linux/client/build-deb.sh
 `RD_SERVER_CERTIFICATE` 必须是 PEM **证书**（不是私钥）；它随包分发，安装时仍可换成另一份证书。
 服务端没有构包期属性：数据库与 TLS 在安装时询问，也可以用 `debconf-set-selections` 预置。
 
+三个 `build-deb.sh` 还有几个**构建者的开发旋钮**，不是对外支持的特性：第一个参数 `[output-directory]` 指定输出目录
+（默认 `artifacts/installer/linux`）；环境变量 `DEB_ARCHITECTURE`（默认 `amd64`，写进包的 Architecture 与文件名）
+和 `DEB_RUNTIME`（默认 `linux-x64`，传给 `dotnet publish -r`）。**CI 与发布只支持 amd64 / linux-x64**（`ci.yml` 与
+`release.yml` 都直接调用脚本，不设这两个变量），随包的 `libmsquic` 也只取 amd64 版本（`native/linux/fetch-libmsquic.sh`）。
+这两个变量**必须成对修改**：脚本不校验它们是否一致，只改一个会产出标签与二进制不符的包。
+
 ### 产物在哪
 
 一律在 `artifacts/installer/<平台>/`，文件名的形状、发布时的改名，以及完整的产物路径与 SDK 自己的四层布局，见
@@ -1759,7 +1769,7 @@ remotedesktop --self-check                                           # 装了客
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
 | 设备代码显示 `--- --- ---`，状态"未连接服务器" | 连不上信令服务器 | 见"已经装好了，但设备代码是空的"一节；用了 `wss://` 时先确认证书域名和信任链 |
-| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | ① 本机节点被登记成机器名/IP：没有 NodeToken 时 `/metrics` 与 `/internal/*` 只授权回环调用，非回环访问得到 401；② 地址已经是 `127.0.0.1` 且信令用 TLS：证书 SAN 里没有 `127.0.0.1`（Debian/Ubuntu 把主机名映射到 127.0.1.1），又没有配 `Ops:NodeCertificatePath`，握手报名称不匹配 | ① 在节点管理页「改地址」改回 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；远程节点配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝）；② 在 `Ops/appsettings.json` 的 `Ops` 段加 `"NodeCertificatePath": "/etc/remotedesktop-server/tls/signaling.crt"` 后重启 `remotedesktop-ops`；新 server 包由安装脚本自动 pin，新生成的证书也带 `127.0.0.1` |
+| Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | ① 本机节点被登记成机器名/IP：没有 NodeToken 时 `/metrics` 与 `/internal/*` 只授权回环调用，非回环访问得到 401；② 地址已经是 `127.0.0.1` 且信令用 TLS：证书 SAN 里没有 `127.0.0.1`（Debian/Ubuntu 把主机名映射到 127.0.1.1），又没有配 `Ops:NodeCertificatePath`，握手报名称不匹配 | ① 在节点管理页「改地址」改回 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；远程节点配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝）；② 在 `Ops/appsettings.json` 的 `Ops` 段加 `"NodeCertificatePath": "/etc/remotedesktop-server/tls/signaling.crt"` 后重启 `remotedesktop-ops`；安装脚本会自动 pin，它新生成的证书也带 `127.0.0.1` |
 | 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级时的配置步骤（`--configure-system`）会把两边对齐到同一把密钥（已有的保留）；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
 | 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
