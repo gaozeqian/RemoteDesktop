@@ -1469,7 +1469,7 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
 
 ### 1. 构建与安装
 
-macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有一个 app。现在是两个不同 bundle 的应用：
+macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有一个 app。有两个不同 bundle 的应用：
 
 - **client**：`/Applications/Remote Desktop.app`，Avalonia 客户端，完整功能；不自动启动；可在应用内手动开
   “登录时自动启动”（SMAppService）。
@@ -1479,7 +1479,7 @@ macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有
   从旧包升级时，安装器会先停掉旧 LaunchAgent，再删除 `/Applications` 里的旧副本。
 - 两者 bundle id 不同（`com.remotedesktop.client` / `com.remotedesktop.host`），TCC 授权也分开。
   **可以同时安装**：client 检测到 Host 的控制服务后只做控制端（`AcceptIncoming=false`），Host 常驻负责被控；
-  两者使用不同的设备身份（client 用 `controller-identity`，Host 用 `device-identity`），不会再出现同一设备
+  两者使用不同的设备身份（client 用 `controller-identity`，Host 用 `device-identity`），不会出现同一设备
   代码互相踢下线。client 启动时如果 Host 包已安装，最多等 3 秒让服务创建控制 socket；如果服务在窗口打开后
   才启动，界面会提示重启客户端以交给 Host 托管。卸载 Host 后也要重启 client 才会在当前进程内重新承担被控端。
 
