@@ -23,15 +23,6 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
 
-    /// <summary>No picture for this long and a key frame is asked for: the stream may simply have lost sync.</summary>
-    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
-
-    /// <summary>
-    /// Non-key frames in a row that must come back without a picture before the decoder is judged out of sync (on top
-    /// of <see cref="StallTimeout"/>). One quiet answer is ordinary; a run of them while the host keeps sending is not.
-    /// </summary>
-    private const int SilentFramesBeforeRebuild = 3;
-
     /// <summary>A key frame asked for and not answered for this long: what is on screen is old, not just unchanged.</summary>
     private static readonly TimeSpan StallAlarm = TimeSpan.FromSeconds(4);
 
@@ -39,7 +30,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private static readonly TimeSpan MaxKeyFrameBackoff = TimeSpan.FromSeconds(30);
 
     private readonly IChannel _channel;
-    private readonly VideoCodecSelector _codecs;
+    private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
@@ -47,26 +38,23 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private readonly Lock _frameLock = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-    private IVideoDecoder? _decoder;
 
     // Two buffers: the decode loop converts into _back outside the lock and swaps, while the UI copies _front under
     // the lock. Only the decode loop touches _back; _front is guarded by _frameLock.
     private byte[] _front = [];
     private byte[] _back = [];
     private long _frameNumber;
-    private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
     private volatile bool _stalled;
-
-    // Non-key frames in a row that produced no picture; only the receive loop touches it.
-    private int _silentFrames;
 
     private DesktopViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
         _channel = channel;
-        _codecs = codecs;
         _time = time;
         _logger = logger;
+
+        // The stall time is real monotonic time; the viewer's own clock only drives the watchdog tick and the latency.
+        _supervisor = new VideoDecoderSupervisor(codecs, TimeProvider.System, ex => LogDecoderRebuildFailed(_logger, ex));
     }
 
     public DesktopStreamInfo? StreamInfo { get; private set; }
@@ -174,7 +162,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         await _channel.DisposeAsync().ConfigureAwait(false);
         await _loop.ConfigureAwait(false);
         await _watchdog.ConfigureAwait(false);
-        _decoder?.Dispose();
+        _supervisor.Dispose();
         _stop.Dispose();
         _writeLock.Dispose();
     }
@@ -214,7 +202,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     continue;
                 }
 
-                if (frame.MessageType != VideoDataFrame.MessageType || _decoder is null)
+                var decoder = _supervisor.Decoder;
+                if (frame.MessageType != VideoDataFrame.MessageType || decoder is null)
                 {
                     continue;
                 }
@@ -234,7 +223,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     }
 
                     decodeStarted = clock.Elapsed;
-                    picture = _decoder.Decode(encoded);
+                    picture = decoder.Decode(encoded);
                 }
                 catch (InvalidDataException ex)
                 {
@@ -252,23 +241,17 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     // until the next stall, so rebuild the decoder right here (this loop is its only owner) instead
                     // of leaving the watchdog to wait out the 30 s backoff.
                     //
-                    // Only a run of non-key frames counts. A decoder may legitimately answer nothing for a unit that
-                    // carries just parameter sets, or while it wants more input; a rebuild on the strength of one of
-                    // those would throw away the SPS/PPS it just learned and leave the next picture undecodable.
-                    if (!encoded.IsKeyFrame
-                        && ++_silentFrames >= SilentFramesBeforeRebuild
-                        && Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    // Whether it is a run of silence rather than one quiet answer is the supervisor's call.
+                    if (_supervisor.RecordSilentFrame(encoded.IsKeyFrame))
                     {
                         LogDecoderStalled(_logger);
-                        RebuildDecoder();
+                        _supervisor.Rebuild();
                         _waitingForKeyFrame = true;
                         await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
                     }
 
                     continue;
                 }
-
-                _silentFrames = 0;
 
                 using (picture)
                 {
@@ -285,7 +268,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
                 // Any picture at all — including a key frame the host encoded from an unchanged screen — proves the
                 // video path is alive, which is what the watchdog below measures.
-                Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+                _supervisor.PictureShown();
                 _stalled = false;
 
                 windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
@@ -352,8 +335,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 }
 
                 var now = Stopwatch.GetTimestamp();
-                var quiet = Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt), now);
-                if (quiet < StallTimeout)
+                var quiet = _supervisor.QuietFor(now);
+                if (quiet < VideoDecoderSupervisor.StallTimeout)
                 {
                     // More than the single answer to our request arrived: the screen is really changing, so the
                     // fast retry rate is right again. A static screen only ever produces that one answer, which is
@@ -406,68 +389,15 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private static bool IsValidCursor(CursorShapeUpdate shape) =>
         shape.Width is > 0 and <= 512 && shape.Height is > 0 and <= 512 && shape.Bgra.Length == shape.Width * shape.Height * 4;
 
-    /// <summary>
-    /// The largest stream this will set up buffers for. Every stream info allocates four bytes per pixel, and the
-    /// size is whatever the peer says it is, so "the host is trusted to be well-formed" does not cover this: a host
-    /// that is not really a host, or one that is confused, would otherwise have this window allocate a gigabyte on
-    /// request, over and over. 8K UHD is the largest display there is, so nothing real is refused.
-    /// </summary>
-    private const int MaxDimension = 8192;
-
-    private const long MaxPixels = 7680L * 4320;
-
-    /// <summary>
-    /// Replaces the decoder with a fresh one for the current stream. Called from the receive loop (the decoder's only
-    /// owner) when the decoder keeps being fed yet stops producing pictures, so a lone key frame is not mistaken for
-    /// a fixed stream.
-    /// </summary>
-    private void RebuildDecoder()
-    {
-        // Whatever happens, start counting again: a rebuild that failed must not be retried on the very next frame.
-        _silentFrames = 0;
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
-
-        if (StreamInfo is not { } info)
-        {
-            return;
-        }
-
-        // The new decoder comes first. Creating it can fail in backend-specific ways (no hardware decoder left, a
-        // device that was lost); the old one is then still a decoder, and the caller's key frame request gives it a
-        // chance, where a disposed one in _decoder would end the whole viewer on the next frame.
-        IVideoDecoder fresh;
-        try
-        {
-            fresh = _codecs.CreateDecoder(VideoCodec.H264, info.Width, info.Height);
-        }
-#pragma warning disable CA1031 // Any backend failure leaves the old decoder in place.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            LogDecoderRebuildFailed(_logger, ex);
-            return;
-        }
-
-        var old = _decoder;
-        _decoder = fresh;
-        old?.Dispose();
-    }
-
     private void OnStreamInfo(VideoStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
-        {
-            throw new InvalidDataException($"Invalid stream size {width}x{height}.");
-        }
 
         // Every stream info starts a new encoder on the host: the stream is reconfigured, or the host swapped its
-        // agent (login screen, UAC) and continues with a fresh encoder. A decoder from the old stream must not be
-        // fed the new one, even at the same resolution.
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
-        _silentFrames = 0;
+        // agent (login screen, UAC) and continues with a fresh encoder. The supervisor refuses an unusable size and
+        // replaces the decoder, so one from the old stream is never fed the new one, even at the same resolution.
+        _supervisor.Start(width, height);
 
         lock (_frameLock)
         {
@@ -478,11 +408,10 @@ public sealed partial class DesktopViewer : IAsyncDisposable
             }
 
             _frameNumber = 0;
-            StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _decoder.Name);
+            StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
         }
 
         Displays = [.. info.Displays];
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
         _waitingForKeyFrame = true;
         StreamInfoChanged?.Invoke(this, EventArgs.Empty);
     }

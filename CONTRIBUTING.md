@@ -45,7 +45,7 @@ dotnet test RemoteDesktop.slnx
 
 | 项目 | 实际覆盖 |
 |---|---|
-| `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
+| `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Camera,Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
 | `RemoteDesktop.Transport.IntegrationTests` | 传输层的端到端用例（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别）。它的 `ProjectReference` 不止 Transport：`Application`、`Features.*`、`Platform.Windows` / `Platform.MacOS`、`Server.Rendezvous`、`Server.Relay` 都在里面，所以信令、中继与功能通道的联调用例放这里 |
 | `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表） |
 | `RemoteDesktop.Server.Ops.UnitTests` | 监控台核心 `Server.Ops.Core` 与 `Server.Shared` |

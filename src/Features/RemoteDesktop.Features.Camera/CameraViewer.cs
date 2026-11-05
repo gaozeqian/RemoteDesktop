@@ -49,16 +49,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
 
-    /// <summary>The decoder has been fed for this long without producing a picture: it has lost sync and must be rebuilt.</summary>
-    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(2);
-
-    /// <summary>Non-key frames in a row that must come back without a picture (besides <see cref="StallTimeout"/>) before the decoder is rebuilt.</summary>
-    private const int SilentFramesBeforeRebuild = 3;
-
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
-    private readonly VideoCodecSelector _codecs;
+    private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
@@ -66,26 +60,23 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private readonly Lock _frameLock = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-    private IVideoDecoder? _decoder;
 
     // Two buffers: the decode loop converts into _back outside the lock and swaps, while the UI copies _front under
     // the lock. Only the decode loop touches _back; _front is guarded by _frameLock.
     private byte[] _front = [];
     private byte[] _back = [];
     private long _frameNumber;
-    private long _lastFrameAt = Stopwatch.GetTimestamp();
     private volatile bool _waitingForKeyFrame = true;
     private volatile string? _failure;
-
-    // Non-key frames in a row that produced no picture; only the receive loop touches it.
-    private int _silentFrames;
 
     private CameraViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
         _channel = channel;
-        _codecs = codecs;
         _time = time;
         _logger = logger;
+
+        // The stall time is real monotonic time; the viewer's own clock only drives the watchdog tick and the latency.
+        _supervisor = new VideoDecoderSupervisor(codecs, TimeProvider.System, ex => LogDecoderRebuildFailed(_logger, ex));
     }
 
     public CameraDetails? Details { get; private set; }
@@ -248,7 +239,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
         await _channel.DisposeAsync().ConfigureAwait(false);
         await _loop.ConfigureAwait(false);
         await _watchdog.ConfigureAwait(false);
-        _decoder?.Dispose();
+        _supervisor.Dispose();
         _stop.Dispose();
         _writeLock.Dispose();
     }
@@ -281,7 +272,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     continue;
                 }
 
-                if (frame.MessageType != VideoDataFrame.MessageType || _decoder is null)
+                var decoder = _supervisor.Decoder;
+                if (frame.MessageType != VideoDataFrame.MessageType || decoder is null)
                 {
                     continue;
                 }
@@ -301,7 +293,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     }
 
                     decodeStarted = clock.Elapsed;
-                    picture = _decoder.Decode(encoded);
+                    picture = decoder.Decode(encoded);
                 }
                 catch (InvalidDataException ex)
                 {
@@ -319,22 +311,17 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     // is a genuine stall rather than an unchanged screen; rebuild the decoder (this loop is its only
                     // owner) instead of leaving the watchdog to wait forever for a key frame it will never request.
                     //
-                    // Only a run of non-key frames counts: a decoder may legitimately answer nothing for a unit that
-                    // carries just parameter sets, and rebuilding on that would throw away the SPS/PPS it just learned.
-                    if (!encoded.IsKeyFrame
-                        && ++_silentFrames >= SilentFramesBeforeRebuild
-                        && Stopwatch.GetElapsedTime(Volatile.Read(ref _lastFrameAt)) >= StallTimeout)
+                    // Whether it is a run of silence rather than one quiet answer is the supervisor's call.
+                    if (_supervisor.RecordSilentFrame(encoded.IsKeyFrame))
                     {
                         LogDecoderStalled(_logger);
-                        RebuildDecoder();
+                        _supervisor.Rebuild();
                         _waitingForKeyFrame = true;
                         await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
                     }
 
                     continue;
                 }
-
-                _silentFrames = 0;
 
                 using (picture)
                 {
@@ -349,7 +336,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     }
                 }
 
-                Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
+                _supervisor.PictureShown();
                 windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
                 windowFrames++;
                 latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
@@ -413,30 +400,14 @@ public sealed partial class CameraViewer : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// The largest camera stream this will set up buffers for. The same argument as
-    /// <c>DesktopViewer.MaxDimension</c>: every stream info allocates four bytes per pixel, and the size is whatever
-    /// the other computer says it is. A camera that really produces 8K UHD is already at the edge of what exists;
-    /// 16384x16384 would be a gigabyte allocated on request, and alternating sizes would do it again on every
-    /// StreamInfo. 8K is far past any camera anybody points this at.
-    /// </summary>
-    private const int MaxDimension = 8192;
-
-    private const long MaxPixels = 7680L * 4320;
-
     private void OnStreamInfo(CameraStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
-        {
-            throw new InvalidDataException($"Invalid stream size {width}x{height}.");
-        }
 
-        // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream.
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
-        _silentFrames = 0;
+        // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream. The
+        // supervisor refuses an unusable size (the size is whatever the other computer says it is) and replaces it.
+        _supervisor.Start(width, height);
         lock (_frameLock)
         {
             if (_front.Length != width * height * 4)
@@ -446,47 +417,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
             }
 
             _frameNumber = 0;
-            Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _decoder.Name);
+            Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
         }
 
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
         _waitingForKeyFrame = true;
-    }
-
-    /// <summary>
-    /// Replaces the decoder with a fresh one for the current stream. Called from the receive loop (the decoder's only
-    /// owner) when the decoder keeps being fed yet stops producing pictures, so a lone key frame is not mistaken for
-    /// a fixed stream.
-    /// </summary>
-    private void RebuildDecoder()
-    {
-        // Whatever happens, start counting again: a rebuild that failed must not be retried on the very next frame.
-        _silentFrames = 0;
-        Volatile.Write(ref _lastFrameAt, Stopwatch.GetTimestamp());
-
-        if (Details is not { } details)
-        {
-            return;
-        }
-
-        // The new decoder comes first: if creating it fails, the old one is still a decoder and the caller's key frame
-        // request gives it a chance, where a disposed one in _decoder would end the whole viewer on the next frame.
-        IVideoDecoder fresh;
-        try
-        {
-            fresh = _codecs.CreateDecoder(VideoCodec.H264, details.Width, details.Height);
-        }
-#pragma warning disable CA1031 // Any backend failure leaves the old decoder in place.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            LogDecoderRebuildFailed(_logger, ex);
-            return;
-        }
-
-        var old = _decoder;
-        _decoder = fresh;
-        old?.Dispose();
     }
 
     private async ValueTask WriteAsync(CameraRequest message, CancellationToken cancellationToken)
