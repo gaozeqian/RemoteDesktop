@@ -63,7 +63,8 @@ public static class RendezvousServer
         services.AddSingleton<ConnectionQuota>();
 
         // What one address may cost the server, and what one device may ask of it. Both are keyed and both shrink
-        // again on their own; see KeyedTokenBucket.
+        // again on their own; see KeyedTokenBucket. The registration budget is keyed by ConnectionQuota.Normalize, the
+        // same source key the connection quota uses.
         services.AddSingleton(sp => new KeyedTokenBucket<IPAddress>(
             sp.GetRequiredService<IOptions<RendezvousOptions>>().Value.RegistrationBurst,
             sp.GetRequiredService<IOptions<RendezvousOptions>>().Value.RegistrationRefill,

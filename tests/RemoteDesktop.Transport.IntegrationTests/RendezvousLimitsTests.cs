@@ -225,6 +225,50 @@ public class RendezvousLimitTests
         Assert.Null(await RawSignaling.RegisterAsync(socket));
     }
 
+    /// <summary>
+    /// The registration budget counts a source the way the connection quota does: an IPv6 subscriber owns a whole /64
+    /// and an IPv4-mapped address is its IPv4 form. Otherwise one machine rotates addresses and is never throttled.
+    /// </summary>
+    [Theory]
+    [InlineData("2001:db8:1:2::1", "2001:db8:1:2:aaaa:bbbb:cccc:dddd")]
+    [InlineData("10.0.0.1", "::ffff:10.0.0.1")]
+    public async Task Registrations_from_one_network_are_throttled_whichever_address_inside_it_is_used(string first, string second)
+    {
+        await using var server = await TestRendezvous.StartAsync(
+            ("Rendezvous:RegistrationBurst", "1"),
+            ("Rendezvous:TrustedProxies:0", "127.0.0.1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: first))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: second))
+        {
+            Assert.Null(await RawSignaling.RegisterAsync(socket));
+        }
+    }
+
+    [Fact]
+    public async Task Registrations_from_different_networks_do_not_share_a_budget()
+    {
+        await using var server = await TestRendezvous.StartAsync(
+            ("Rendezvous:RegistrationBurst", "1"),
+            ("Rendezvous:TrustedProxies:0", "127.0.0.1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:2::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:3::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+    }
+
     [Fact]
     public async Task Connect_requests_from_one_device_are_throttled()
     {

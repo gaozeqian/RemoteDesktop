@@ -101,10 +101,14 @@ public sealed partial class SignalingEndpoint(
 
         // Before the certificate is checked and before the registry is written to: a registration costs this server an
         // identity, and identities are the unit every other budget here is counted in.
-        if (address is not null && !registrationBudget.TryTake(address))
+        // Counted under the same key the connection quota uses (an IPv6 /64, an IPv4-mapped address as IPv4), so one
+        // machine cannot get a fresh budget by changing addresses inside its own network. The refund below must use the
+        // same key or it would credit a bucket nothing was taken from.
+        var budgetKey = ConnectionQuota.Normalize(address);
+        if (budgetKey is not null && !registrationBudget.TryTake(budgetKey))
         {
             metrics.RegistrationRefused();
-            LogThrottledRegistration(logger, address.ToString());
+            LogThrottledRegistration(logger, address!.ToString());
             return null;
         }
 
@@ -129,11 +133,11 @@ public sealed partial class SignalingEndpoint(
         // Counted once the identity exists, which is the point this server has spent something on the device, whether
         // the identity is new or one the registry already had.
         metrics.Registered();
-        if (!registration.Created && address is not null)
+        if (!registration.Created && budgetKey is not null)
         {
             // A known device coming back after a dropped connection, a sleep or a server restart. It proved its key,
             // and it is not what the budget is there to slow down, so the token goes back.
-            registrationBudget.Refund(address);
+            registrationBudget.Refund(budgetKey);
         }
 
         var session = new DeviceSession(registration.DeviceId, fingerprint, message.Register.ClientCapabilities, socket);

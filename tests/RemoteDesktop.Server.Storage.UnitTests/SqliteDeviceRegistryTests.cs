@@ -127,7 +127,128 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
         Assert.True(second.Created);
     }
 
+    /// <summary>
+    /// "Last seen" is the last registration. The cache answers a reconnect without a query, and used to answer without
+    /// refreshing the timestamp too, so a device that reconnected every day showed the day it first registered.
+    /// </summary>
+    [Fact]
+    public async Task A_cached_device_that_registers_again_refreshes_last_seen_once_the_throttle_window_has_passed()
+    {
+        var time = new ManualTimeProvider();
+        using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
+        await registry.EnsureSchemaAsync(Ct);
+
+        var first = await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        var created = Assert.Single(await registry.ListAsync(0, 10, Ct)).LastSeenUnixMilliseconds;
+        Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds(), created);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        var again = await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        Assert.Equal(first.DeviceId, again.DeviceId);
+        Assert.False(again.Created);
+
+        // The touch is fire-and-forget, so wait for it rather than assume it has landed.
+        var expected = time.GetUtcNow().ToUnixTimeMilliseconds();
+        Assert.Equal(expected, await WaitForLastSeenAsync(registry, expected));
+        Assert.True(expected > created);
+    }
+
+    /// <summary>
+    /// Without a throttle a reconnect storm is a write per connection, and on PostgreSQL those writes are unbounded
+    /// background tasks. Inside the window the timestamp is left alone.
+    /// </summary>
+    [Fact]
+    public async Task A_device_that_registers_again_inside_the_throttle_window_does_not_cause_a_write()
+    {
+        var time = new ManualTimeProvider();
+        using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
+        await registry.EnsureSchemaAsync(Ct);
+
+        await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        var created = Assert.Single(await registry.ListAsync(0, 10, Ct)).LastSeenUnixMilliseconds;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        }
+
+        // 50 seconds in: a write would have changed the stamp, and has had time to land if it was going to.
+        await Task.Delay(500, Ct);
+        Assert.Equal(created, Assert.Single(await registry.ListAsync(0, 10, Ct)).LastSeenUnixMilliseconds);
+
+        // One more step passes the window, and the very next registration is written.
+        time.Advance(TimeSpan.FromSeconds(11));
+        await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        var expected = time.GetUtcNow().ToUnixTimeMilliseconds();
+        Assert.Equal(expected, await WaitForLastSeenAsync(registry, expected));
+    }
+
+    [Fact]
+    public async Task The_throttle_is_per_device()
+    {
+        var time = new ManualTimeProvider();
+        using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
+        await registry.EnsureSchemaAsync(Ct);
+
+        await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        time.Advance(TimeSpan.FromSeconds(30));
+        await registry.GetOrAllocateAsync("fingerprint-B", Ct);
+        time.Advance(TimeSpan.FromSeconds(31));
+
+        // A was last written 61 seconds ago, B 31: only A is due.
+        await registry.GetOrAllocateAsync("fingerprint-A", Ct);
+        await registry.GetOrAllocateAsync("fingerprint-B", Ct);
+
+        var now = time.GetUtcNow().ToUnixTimeMilliseconds();
+        var bWritten = now - 31_000;
+        await WaitForAsync(registry, records => records.Any(record => record.LastSeenUnixMilliseconds == now));
+        await Task.Delay(300, Ct);
+
+        var records = await registry.ListAsync(0, 10, Ct);
+        Assert.Equal(1, records.Count(record => record.LastSeenUnixMilliseconds == now));
+        Assert.Equal(1, records.Count(record => record.LastSeenUnixMilliseconds == bWritten));
+    }
+
+    private static async Task<long> WaitForLastSeenAsync(SqliteDeviceRegistry registry, long expected)
+    {
+        var records = await WaitForAsync(registry, list => list.Count == 1 && list[0].LastSeenUnixMilliseconds == expected);
+        return records[0].LastSeenUnixMilliseconds;
+    }
+
+    /// <summary>Polls the catalog until the condition holds, or returns the last page after a few seconds.</summary>
+    private static async Task<IReadOnlyList<DeviceRecord>> WaitForAsync(
+        SqliteDeviceRegistry registry,
+        Func<IReadOnlyList<DeviceRecord>, bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        IReadOnlyList<DeviceRecord> records;
+        do
+        {
+            records = await registry.ListAsync(0, 10, Ct);
+            if (condition(records))
+            {
+                break;
+            }
+
+            await Task.Delay(25, Ct);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        return records;
+    }
+
     private string NewPath() => Path.Combine(_folder, $"{Guid.NewGuid():N}.db");
+
+    /// <summary>A clock the test moves by hand.</summary>
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
 
     public void Dispose()
     {

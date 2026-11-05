@@ -938,6 +938,43 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Contains(notes, note => note.Contains("HTTPS gateway", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The gateway forwards to wherever the console was told to listen. Pinning it to port 5090 left a console moved
+    /// to another port unreachable through the gateway, which is the only way in from outside.
+    /// </summary>
+    [Theory]
+    [InlineData("http://127.0.0.1:5091", "http://127.0.0.1:5091")]
+    [InlineData("http://0.0.0.0:5091", "http://127.0.0.1:5091")]
+    [InlineData("http://[::]:5091", "http://127.0.0.1:5091")]
+    public void The_ops_gateway_forwards_to_the_port_the_console_listens_on(string opsListen, string expectedUpstream)
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "https://0.0.0.0:5443",
+            OpsListen = opsListen,
+        });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal(expectedUpstream, gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+        Assert.Contains(notes, note => note.Contains($"its upstream is {expectedUpstream}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_ops_gateway_follows_a_console_port_set_by_an_earlier_run()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsListen = "http://127.0.0.1:5091" });
+
+        // A later run that does not mention the console's address must not point the gateway back at 5090.
+        ServerSetup.Configure(_folder, new ServerSetupOptions { GatewayListen = "https://0.0.0.0:5443" });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal("http://127.0.0.1:5091", gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+    }
+
     [Fact]
     public void The_ops_gateway_refuses_plain_http_before_writing_any_settings()
     {

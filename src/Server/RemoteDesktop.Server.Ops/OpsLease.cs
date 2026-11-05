@@ -27,4 +27,28 @@ public sealed class OpsLease(OpsStore store, TimeProvider time)
             now.Add(duration).ToUnixTimeMilliseconds(),
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Gives <paramref name="name"/> up if this process holds it, so a restarted instance does not wait out the lease.
+    /// </summary>
+    public async Task ReleaseAsync(string name, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        await store.ReleaseLeaseAsync(name, _holder, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The lease length for a task that polls every <paramref name="pollInterval"/>: three intervals, at least thirty seconds.
+    /// </summary>
+    /// <remarks>
+    /// Long enough that one slow or missed pass does not hand the work to another instance, short enough that a process
+    /// that died without releasing the lease is replaced within a few polls rather than minutes.
+    /// </remarks>
+    public static TimeSpan DurationFor(TimeSpan pollInterval)
+    {
+        var minimum = TimeSpan.FromSeconds(30);
+        var threeIntervals = pollInterval * 3;
+        return threeIntervals > minimum ? threeIntervals : minimum;
+    }
 }

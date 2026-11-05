@@ -180,6 +180,57 @@ public class StorageMaintenanceTests
         Assert.True(AuditVerifier.Verify(records).IsValid, "the chain must not fork when two stores append concurrently");
     }
 
+    [Fact]
+    public async Task A_second_process_cannot_take_a_live_lease_but_can_once_it_expires()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var time = new ManualClock();
+        var first = new OpsLease(db.Store, time);
+        var second = new OpsLease(db.Store, time);
+        var duration = TimeSpan.FromSeconds(90);
+
+        Assert.True(await first.TryAcquireAsync("scrape", duration, Ct));
+        Assert.False(await second.TryAcquireAsync("scrape", duration, Ct));
+        Assert.True(await first.TryAcquireAsync("scrape", duration, Ct), "the holder renews its own lease");
+
+        time.Advance(duration + TimeSpan.FromSeconds(1));
+        Assert.True(await second.TryAcquireAsync("scrape", duration, Ct));
+        Assert.False(await first.TryAcquireAsync("scrape", duration, Ct));
+    }
+
+    [Fact]
+    public async Task A_released_lease_can_be_taken_immediately_and_only_by_its_holder_to_release()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var time = new ManualClock();
+        var first = new OpsLease(db.Store, time);
+        var second = new OpsLease(db.Store, time);
+        var duration = TimeSpan.FromMinutes(5);
+
+        Assert.True(await first.TryAcquireAsync("alerts", duration, Ct));
+
+        // A process that does not hold the lease cannot free it for the real holder.
+        await second.ReleaseAsync("alerts", Ct);
+        Assert.False(await second.TryAcquireAsync("alerts", duration, Ct));
+
+        await first.ReleaseAsync("alerts", Ct);
+        Assert.True(await second.TryAcquireAsync("alerts", duration, Ct), "a restarted console must not wait out the old lease");
+
+        // Releasing a lease that is not held, or twice, is not an error.
+        await first.ReleaseAsync("alerts", Ct);
+        await first.ReleaseAsync("never-taken", Ct);
+    }
+
+    [Theory]
+    [InlineData(1, 30)]
+    [InlineData(10, 30)]
+    [InlineData(30, 90)]
+    [InlineData(60, 180)]
+    public void A_lease_lasts_three_polling_intervals_but_never_less_than_thirty_seconds(int intervalSeconds, int expectedSeconds)
+    {
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), OpsLease.DurationFor(TimeSpan.FromSeconds(intervalSeconds)));
+    }
+
     private static OpsEventEnvelope Event(string id, DateTimeOffset at, string correlation) => new()
     {
         V = 1,
@@ -212,6 +263,15 @@ public class StorageMaintenanceTests
         null,
         null,
         null);
+
+    private sealed class ManualClock : TimeProvider
+    {
+        private DateTimeOffset _now = DateTimeOffset.UtcNow;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
 
     private sealed class TempDatabase : IAsyncDisposable
     {

@@ -3,7 +3,7 @@ namespace RemoteDesktop.Server.Storage;
 /// <summary>One registered device, with the facts the console's device page shows.</summary>
 /// <param name="DeviceId">The nine-digit id handed to the device.</param>
 /// <param name="FirstSeenUnixMilliseconds">When the id was allocated.</param>
-/// <param name="LastSeenUnixMilliseconds">The last time that device registered.</param>
+/// <param name="LastSeenUnixMilliseconds">The last time that device registered, to within about a minute: a store writes it at most once a minute per device.</param>
 /// <param name="Revoked">Whether an operator revoked it; the server refuses its next registration.</param>
 public readonly record struct DeviceRecord(uint DeviceId, long FirstSeenUnixMilliseconds, long LastSeenUnixMilliseconds, bool Revoked);
 

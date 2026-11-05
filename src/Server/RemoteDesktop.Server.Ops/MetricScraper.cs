@@ -24,13 +24,15 @@ public sealed partial class MetricScraper(
 
     private const string LeaseName = "scrape";
 
+    private TimeSpan ScrapeInterval => TimeSpan.FromSeconds(Math.Max(1, options.ScrapeIntervalSeconds));
+
     /// <summary>
     /// Scrapes every enabled node once and returns how many answered. Public so a test can drive one pass without
     /// waiting for the timer.
     /// </summary>
     public async Task<int> RunOnceAsync(CancellationToken cancellationToken)
     {
-        if (!await lease.TryAcquireAsync(LeaseName, TimeSpan.FromMinutes(5), cancellationToken).ConfigureAwait(false))
+        if (!await lease.TryAcquireAsync(LeaseName, OpsLease.DurationFor(ScrapeInterval), cancellationToken).ConfigureAwait(false))
         {
             return 0;
         }
@@ -49,7 +51,28 @@ public sealed partial class MetricScraper(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(1, options.ScrapeIntervalSeconds)), time);
+        try
+        {
+            await RunLoopAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Give the lease up so a restarted console does not sit idle until the old one expires. The token is
+            // already cancelled here, and a failed release only costs that wait.
+            try
+            {
+                await lease.ReleaseAsync(LeaseName, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LeaseReleaseFailed(logger, ex);
+            }
+        }
+    }
+
+    private async Task RunLoopAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(ScrapeInterval, time);
 
         do
         {
@@ -195,6 +218,9 @@ public sealed partial class MetricScraper(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record the failed scrape of {Node}; the node card may show a stale status.")]
     private static partial void ScrapeStatusFailed(ILogger logger, string node, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release the scrape lease; a restarted console may wait for it to expire.")]
+    private static partial void LeaseReleaseFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A scrape pass failed; will try again next interval.")]
     private static partial void ScrapePassFailed(ILogger logger, Exception exception);

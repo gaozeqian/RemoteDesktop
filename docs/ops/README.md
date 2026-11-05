@@ -520,7 +520,7 @@ Import-Certificate -FilePath rd.lan.cer -CertStoreLocation Cert:\LocalMachine\Ro
 |---|---|---|
 | `Rendezvous:MaxConnections` | 4096 | 同时服务多少台设备；超出的在 WebSocket 升级前就被拒，不占内存 |
 | `Rendezvous:MaxConnectionsPerAddress` | 256 | 一个来源地址最多占多少条连接 |
-| `Rendezvous:RegistrationBurst` / `RegistrationRefill` | 256 / 5 秒 | 一个来源地址注册设备的速度。注册就是领一个身份，而"每设备"的限额都以身份计数，所以这条最要紧 |
+| `Rendezvous:RegistrationBurst` / `RegistrationRefill` | 256 / 5 秒 | 一个来源地址注册设备的速度（IPv6 按 /64 合并计数，IPv4 映射地址按其 IPv4 形式计数，与每地址连接数上限一致）。注册就是领一个身份，而"每设备"的限额都以身份计数，所以这条最要紧 |
 | `Rendezvous:ConnectRequestBurst` / `ConnectRequestRefill` | 10 / 3 秒 | 一台设备发起连接请求的速度（防止拿它去轰炸别人的弹窗） |
 | `Rendezvous:MaxPendingRequestsPerDevice` | 8 | 一台设备同时挂起的连接请求数 |
 | `Rendezvous:MaxPendingRequests` | 4096 | 全服务器同时挂起的连接请求数 |
@@ -879,7 +879,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| `Ops:Listen` | `http://127.0.0.1:5090` | 控制台自身的 Kestrel 监听地址；保持回环，对外只经过 Gateway |
+| `Ops:Listen` | `http://127.0.0.1:5090` | 控制台自身的 Kestrel 监听地址；保持回环，对外只经过 Gateway。配置步骤（`--configure-system`）会把 Gateway 的转发目标同步成它的回环形式；手工改了这个端口后要重新运行配置步骤，否则 Gateway 仍转发到旧端口 |
 | `Gateway:Listen` | `https://0.0.0.0:5443` | 安装包内置的 HTTPS Gateway 监听地址；证书自动生成并包含本机 IPv4 IP SAN |
 | `GATEWAYHOSTNAME` / `--gateway-hostname` | 空 | 安装参数：给生成证书追加 IP/DNS；本机 IPv4 已自动包含 |
 | `Ops:Database:Provider` / `Path` | `sqlite` / `ops.db` | 控制台自己的库；换成 `postgres` 时填 `ConnectionString`。Docker 的 ops overlay 用 PostgreSQL，与设备注册表同库 |
@@ -923,7 +923,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 
 #### 反向代理
 
-服务端安装包自带一个专用 Gateway：它只监听 HTTPS，固定转发到 `http://127.0.0.1:5090`，覆盖客户端伪造的
+服务端安装包自带一个专用 Gateway：它只监听 HTTPS，固定转发到控制台的回环地址（默认 `http://127.0.0.1:5090`，随 `Ops:Listen` 的端口变化），覆盖客户端伪造的
 `X-Forwarded-*` 头，并把 `127.0.0.1` 写入 `Ops:TrustedProxies`。Windows 的 MSI 会为 TCP 5443 添加规则；
 Linux 的 `/etc/default/remotedesktop-server` 用 `RD_GATEWAY_LISTEN`、`RD_GATEWAY_HOSTNAME` 配置，并在
 `RD_OPEN_FIREWALL=1` 时放行 5443；macOS 的 `configure-server.sh` 使用 `--gateway-listen` 和

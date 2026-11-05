@@ -746,7 +746,8 @@ public static class ServerSetup
             && Uri.TryCreate(listen, UriKind.Absolute, out var uri)
             && uri.Scheme is "http" or "https")
         {
-            var host = uri.Host is "0.0.0.0" or "::" ? "127.0.0.1" : uri.Host;
+            // Uri keeps the brackets on an IPv6 host, so the wildcard spelling is "[::]".
+            var host = uri.Host is "0.0.0.0" or "::" or "[::]" ? "127.0.0.1" : uri.Host;
             return new UriBuilder(uri.Scheme, host, uri.Port).Uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
         }
 
@@ -863,6 +864,10 @@ public static class ServerSetup
             throw new InvalidOperationException($"The Ops gateway address must be an HTTPS URL without a path (got '{listen}').");
         }
 
+        // Where the console really listens, as a loopback address: ConfigureOps has already applied --ops-listen to
+        // `ops`, and a value from an earlier run is still in it. The default stays 5090 when nothing says otherwise.
+        var upstream = LocalOpsEventsEndpoint(ops);
+
         section["Listen"] = listen;
 
         // The proxy is not a general-purpose forwarder: its one route and one loopback destination are rewritten on
@@ -878,7 +883,7 @@ public static class ServerSetup
         var cluster = Section(clusters, "ops");
         var destinations = Section(cluster, "Destinations");
         var loopback = Section(destinations, "loopback");
-        loopback["Address"] = DefaultGatewayUpstream;
+        loopback["Address"] = upstream;
 
         var certificates = Section(Section(Section(settings, "Kestrel"), "Certificates"), "Default");
         foreach (var stale in (string[])["Path", "KeyPath", "Password", "Subject", "Store", "Location", "AllowInvalid"])
@@ -927,7 +932,7 @@ public static class ServerSetup
             trusted.Add(IPAddress.Loopback.ToString());
         }
 
-        notes.Add($"The Ops console is available through the HTTPS gateway on {listen}; its upstream is {DefaultGatewayUpstream}.");
+        notes.Add($"The Ops console is available through the HTTPS gateway on {listen}; its upstream is {upstream}.");
         notes.Add($"Ops gateway clients must trust {publicCertificate}; the certificate contains this machine's IPv4 addresses as IP SAN entries.");
         return changed;
     }

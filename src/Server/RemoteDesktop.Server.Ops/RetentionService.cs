@@ -26,6 +26,27 @@ public sealed partial class RetentionService(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await RunLoopAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Give the lease up so a restarted console does not sit idle until the old one expires. The token is
+            // already cancelled here, and a failed release only costs that wait.
+            try
+            {
+                await lease.ReleaseAsync(LeaseName, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LeaseReleaseFailed(logger, ex);
+            }
+        }
+    }
+
+    private async Task RunLoopAsync(CancellationToken stoppingToken)
+    {
         var interval = TimeSpan.FromMinutes(options.Retention.IntervalMinutes);
         using var timer = new PeriodicTimer(interval, time);
 
@@ -142,6 +163,9 @@ public sealed partial class RetentionService(
         int events,
         int projectedSessions,
         int alerts);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release the retention lease; a restarted console may wait for it to expire.")]
+    private static partial void LeaseReleaseFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Retention pass failed; the next pass will try again.")]
     private static partial void RetentionFailed(ILogger logger, Exception exception);

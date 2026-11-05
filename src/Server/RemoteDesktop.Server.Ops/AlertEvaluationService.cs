@@ -69,7 +69,30 @@ public sealed partial class AlertEvaluationService(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds)), time);
+        try
+        {
+            await RunLoopAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Give the lease up so a restarted console does not sit idle until the old one expires. The token is
+            // already cancelled here, and a failed release only costs that wait.
+            try
+            {
+                await lease.ReleaseAsync(LeaseName, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LeaseReleaseFailed(logger, ex);
+            }
+        }
+    }
+
+    private TimeSpan EvaluationInterval => TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds));
+
+    private async Task RunLoopAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(EvaluationInterval, time);
 
         do
         {
@@ -95,7 +118,7 @@ public sealed partial class AlertEvaluationService(
     /// <summary>One pass, public so a test can drive it without waiting for the timer.</summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        if (!await lease.TryAcquireAsync(LeaseName, TimeSpan.FromMinutes(5), cancellationToken).ConfigureAwait(false))
+        if (!await lease.TryAcquireAsync(LeaseName, OpsLease.DurationFor(EvaluationInterval), cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -121,6 +144,9 @@ public sealed partial class AlertEvaluationService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Alert evaluation opened {Opened} and resolved {Resolved} alerts.")]
     private static partial void Evaluated(ILogger logger, int opened, int resolved);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release the alert evaluation lease; a restarted console may wait for it to expire.")]
+    private static partial void LeaseReleaseFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Alert evaluation failed; will try again next pass.")]
     private static partial void EvaluationFailed(ILogger logger, Exception exception);

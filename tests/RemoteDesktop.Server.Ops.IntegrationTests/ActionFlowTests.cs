@@ -140,6 +140,66 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         }
     }
 
+    [Fact]
+    public async Task The_execute_audit_entry_says_success_when_the_node_carried_the_action_out()
+    {
+        await using var node = await FakeRendezvous.StartAsync(_delivered);
+        var nodeId = await RegisterNodeAsync(node.BaseUrl, "rdvz-audit-ok");
+
+        var (actionId, state) = await RequestAndApproveRevokeAsync(nodeId, "310000001");
+
+        Assert.Equal("executed", state);
+        Assert.Equal("success", await ExecuteAuditResultAsync(actionId));
+    }
+
+    [Fact]
+    public async Task The_execute_audit_entry_says_failed_when_the_node_refused_the_action()
+    {
+        await using var node = await FakeRendezvous.StartAsync(_delivered, failWith500: true);
+        var nodeId = await RegisterNodeAsync(node.BaseUrl, "rdvz-audit-fail");
+
+        var (actionId, state) = await RequestAndApproveRevokeAsync(nodeId, "310000002");
+
+        Assert.Equal("failed", state);
+        Assert.Equal("failed", await ExecuteAuditResultAsync(actionId));
+
+        // Requesting and approving did happen, so those entries stay successful.
+        var chain = await fixture.Services.GetRequiredService<OpsStore>().ReadAuditChainAsync(Ct);
+        Assert.All(
+            chain.Where(record => record.Target == actionId && record.Action != "action.execute"),
+            record => Assert.Equal("success", record.Result));
+    }
+
+    private async Task<(string ActionId, string State)> RequestAndApproveRevokeAsync(string nodeId, string deviceId)
+    {
+        var (operatorClient, operatorCookies) = await SignInAsync("operator", fixture.OperatorSecret);
+        string actionId;
+        using (operatorClient)
+        {
+            var created = await PostWithCsrfAsync(operatorClient, operatorCookies, "/api/actions", new
+            {
+                kind = "revoke_device",
+                nodeId,
+                deviceId,
+            });
+            actionId = (await created.Content.ReadFromJsonAsync<ActionDto>(Ct))!.Id;
+        }
+
+        var (adminClient, adminCookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (adminClient)
+        {
+            var approved = await PostWithCsrfAsync(adminClient, adminCookies, $"/api/actions/{actionId}/approve", null);
+            Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+            return (actionId, (await approved.Content.ReadFromJsonAsync<ActionDto>(Ct))!.State);
+        }
+    }
+
+    private async Task<string> ExecuteAuditResultAsync(string actionId)
+    {
+        var chain = await fixture.Services.GetRequiredService<OpsStore>().ReadAuditChainAsync(Ct);
+        return Assert.Single(chain, record => record.Action == "action.execute" && record.Target == actionId).Result;
+    }
+
     private async Task<string> RegisterNodeAsync(string baseUrl, string name)
     {
         var (admin, cookies) = await SignInAsync("admin", fixture.AdminSecret);
@@ -193,7 +253,7 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
     {
         private readonly WebApplication _app;
 
-        private FakeRendezvous(WebApplication app, ConcurrentQueue<(string Path, string Body)> delivered)
+        private FakeRendezvous(WebApplication app, ConcurrentQueue<(string Path, string Body)> delivered, bool failWith500)
         {
             _app = app;
 
@@ -208,18 +268,18 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
             {
                 var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
                 delivered.Enqueue(("/internal/v1/admin/revoke", body));
-                return Results.Ok(new { revoked = true });
+                return failWith500 ? Results.StatusCode(StatusCodes.Status500InternalServerError) : Results.Ok(new { revoked = true });
             });
         }
 
         public string BaseUrl { get; private set; } = string.Empty;
 
-        public static async Task<FakeRendezvous> StartAsync(ConcurrentQueue<(string, string)> delivered)
+        public static async Task<FakeRendezvous> StartAsync(ConcurrentQueue<(string, string)> delivered, bool failWith500 = false)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["urls"] = "http://127.0.0.1:0" });
             var app = builder.Build();
-            var node = new FakeRendezvous(app, delivered);
+            var node = new FakeRendezvous(app, delivered, failWith500);
             await app.StartAsync(TestContext.Current.CancellationToken);
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
             node.BaseUrl = address;

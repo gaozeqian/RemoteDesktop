@@ -149,7 +149,16 @@ public static class ActionEndpoints
             // away, which is one of the ways an action used to be left approved forever.
             await store.CompleteActionAsync(approved.Id, outcome.State, time.GetUtcNow().ToUnixTimeMilliseconds(), outcome.Error, CancellationToken.None)
                 .ConfigureAwait(false);
-            await AuditAsync(store, context, actor, "action.execute", approved.Id, $"{outcome.State} {approved.Kind}", time.GetUtcNow(), CancellationToken.None)
+            await AuditAsync(
+                    store,
+                    context,
+                    actor,
+                    "action.execute",
+                    approved.Id,
+                    $"{outcome.State} {approved.Kind}",
+                    time.GetUtcNow(),
+                    CancellationToken.None,
+                    outcome.State == ActionStates.Executed ? "success" : "failed")
                 .ConfigureAwait(false);
 
             return Results.Ok(Describe((await store.FindActionAsync(approved.Id, cancellationToken).ConfigureAwait(false))!));
@@ -238,7 +247,8 @@ public static class ActionEndpoints
         string target,
         string detail,
         DateTimeOffset at,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string result = "success") =>
         store.AppendAuditAsync(
             new OpsAuditEntry(
                 Guid.NewGuid().ToString("N"),
@@ -248,6 +258,6 @@ public static class ActionEndpoints
                 target,
                 JsonSerializer.Serialize(new { detail, ip = context.Connection.RemoteIpAddress?.ToString() }, OpsEventJson.Options),
                 context.Connection.RemoteIpAddress?.ToString() ?? "-",
-                "success"),
+                result),
             cancellationToken);
 }

@@ -36,4 +36,25 @@ public sealed partial class OpsStore
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
     }
+
+    /// <summary>
+    /// Gives a lease up so the next holder does not have to wait for it to expire, true when this holder owned it.
+    /// </summary>
+    /// <remarks>
+    /// Called when a background service stops. Without it a restarted single instance is a stranger to the lease its
+    /// previous process left behind and would sit idle until that lease ran out. A lease held by someone else is left
+    /// alone: the holder column is part of the match.
+    /// </remarks>
+    public async Task<bool> ReleaseLeaseAsync(string name, string holder, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(holder);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM ops_lease WHERE name = @name AND holder = @holder;";
+        Bind(command, ("@name", name), ("@holder", holder));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
 }

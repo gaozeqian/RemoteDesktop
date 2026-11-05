@@ -130,6 +130,65 @@ public class RelayBindTests
         Assert.True(await WaitUntilAsync(() => logger.Warnings == 2, TimeSpan.FromSeconds(5)), "the next window writes another summary");
     }
 
+    /// <summary>
+    /// The receive loop is the whole relay. An exception out of packet handling (here, the console's event sink
+    /// failing while a pairing is announced) used to end it, and the host's default is to stop the process.
+    /// </summary>
+    [Fact]
+    public async Task A_failure_while_handling_a_packet_does_not_stop_the_relay()
+    {
+        var sink = new ThrowingEventSink();
+        await using var relay = await TestRelay.StartAsync(events: sink);
+
+        Assert.True(await relay.BindAsync(RelayRole.Controller));
+
+        // The second bind completes the pairing, which publishes an event, which throws. No ack for that packet.
+        Assert.False(await relay.BindAsync(RelayRole.Host));
+        Assert.True(sink.Published > 0, "the failing path must have been reached");
+        Assert.True(relay.Running, "one bad packet must not end the receive loop");
+
+        // The same relay still answers, and the host's retransmitted bind is acknowledged as a retransmission.
+        Assert.True(await relay.BindAsync(RelayRole.Host));
+        Assert.Equal(1, relay.Relay.ActivePairings);
+    }
+
+    /// <summary>The idle sweep runs on the relay's own timer and publishes too; it gets the same protection.</summary>
+    [Fact]
+    public async Task A_failure_while_closing_an_idle_pairing_does_not_stop_the_relay()
+    {
+        var sink = new ThrowingEventSink();
+        await using var relay = await TestRelay.StartAsync(cleanupInterval: TimeSpan.FromMilliseconds(100), events: sink);
+
+        Assert.True(await relay.BindAsync(RelayRole.Controller));
+        Assert.False(await relay.BindAsync(RelayRole.Host));
+        var publishedBefore = sink.Published;
+
+        relay.Advance(TimeSpan.FromMinutes(3));
+        Assert.True(
+            await WaitUntilAsync(() => relay.Relay.ActivePairings == 0 && sink.Published > publishedBefore, TimeSpan.FromSeconds(5)),
+            "the sweep must have closed the pairing and tried to announce it");
+
+        Assert.True(relay.Running, "a failing sweep must not end the receive loop");
+
+        // The first ticket has expired by now; a fresh one proves the relay still answers.
+        Assert.True(await relay.BindAsync(RelayRole.Controller, relay.FreshTicket()));
+    }
+
+    private sealed class ThrowingEventSink : IOpsEventSink
+    {
+        private int _published;
+
+        public int Published => Volatile.Read(ref _published);
+
+        public bool Enabled => true;
+
+        public void Publish(OpsEventEnvelope envelope)
+        {
+            Interlocked.Increment(ref _published);
+            throw new InvalidOperationException("the event queue is broken");
+        }
+    }
+
     /// <summary>A relay of its own on loopback, with a ticket this test signed and a clock it controls.</summary>
     private sealed class TestRelay : IAsyncDisposable
     {
@@ -156,11 +215,20 @@ public class RelayBindTests
 
         public byte[] Ticket { get; }
 
+        /// <summary>A ticket for a new session that is valid at the relay's current time.</summary>
+        public byte[] FreshTicket() => new RelayTicket(Guid.NewGuid(), _time.GetUtcNow() + TimeSpan.FromMinutes(2)).Sign(Key);
+
         public DateTimeOffset Now { get; }
 
         public IPEndPoint ClientEndPoint => (IPEndPoint)_client.Client.LocalEndPoint!;
 
-        public static Task<TestRelay> StartAsync(TimeSpan? cleanupInterval = null, Microsoft.Extensions.Logging.ILogger<UdpRelay>? logger = null)
+        /// <summary>False once the receive loop has returned or faulted.</summary>
+        public bool Running => !_loop.IsCompleted;
+
+        public static Task<TestRelay> StartAsync(
+            TimeSpan? cleanupInterval = null,
+            Microsoft.Extensions.Logging.ILogger<UdpRelay>? logger = null,
+            IOpsEventSink? events = null)
         {
             var time = new FakeTimeProvider();
             var relay = new UdpRelay(
@@ -168,7 +236,7 @@ public class RelayBindTests
                 Key,
                 TimeSpan.FromMinutes(2),
                 time,
-                new NoopOpsEventSink(),
+                events ?? new NoopOpsEventSink(),
                 "relay-test",
                 logger ?? NullLogger<UdpRelay>.Instance,
                 cleanupInterval);
@@ -178,21 +246,22 @@ public class RelayBindTests
         }
 
         /// <summary>The whole two-step bind, the way a client does it: ask, then present what came back.</summary>
-        public async Task<bool> BindAsync(RelayRole role)
+        public async Task<bool> BindAsync(RelayRole role, byte[]? ticket = null)
         {
-            var answer = await ExchangeAsync(UdpControlPacket.CreateRelayBind((byte)role, [], Ticket));
+            ticket ??= Ticket;
+            var answer = await ExchangeAsync(UdpControlPacket.CreateRelayBind((byte)role, [], ticket));
             if (!UdpControlPacket.TryParse(answer, out var type, out var body) || type != UdpControlPacketType.RelayBindChallenge)
             {
                 return false;
             }
 
-            return await BindWithAsync(role, body.ToArray());
+            return await BindWithAsync(role, body.ToArray(), ticket);
         }
 
         /// <summary>The second step on its own, for the tests that present a token the relay did not issue.</summary>
-        public async Task<bool> BindWithAsync(RelayRole role, byte[] cookie)
+        public async Task<bool> BindWithAsync(RelayRole role, byte[] cookie, byte[]? ticket = null)
         {
-            var answer = await ExchangeAsync(UdpControlPacket.CreateRelayBind((byte)role, cookie, Ticket), expectAnswer: false);
+            var answer = await ExchangeAsync(UdpControlPacket.CreateRelayBind((byte)role, cookie, ticket ?? Ticket), expectAnswer: false);
             return answer.Length > 0 &&
                 UdpControlPacket.TryParse(answer, out var type, out _) &&
                 type == UdpControlPacketType.RelayBindAck;

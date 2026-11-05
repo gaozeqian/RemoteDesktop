@@ -46,6 +46,13 @@ public sealed partial class UdpRelay : IDisposable
     private long _rejectedCookies;
     private long _rejectedForCapacity;
 
+    // Faults in packet handling are summarized the same way, and receive errors are reported once until a receive
+    // succeeds again, so a persistent failure cannot flood the log while the loop waits it out.
+    private static readonly TimeSpan ReceiveRetryDelay = TimeSpan.FromMilliseconds(100);
+    private DateTimeOffset _nextHandlerFaultLog;
+    private long _handlerFaults;
+    private bool _receiveFaulted;
+
     // Exported numbers. The receive loop owns the tables above and runs on one thread; these five are read from an HTTP
     // thread, so they are touched only through Interlocked/Volatile and never while holding a reference to a pairing.
     private long _bytesToController;
@@ -117,7 +124,7 @@ public sealed partial class UdpRelay : IDisposable
                     // console never received its relay_closed event.
                     receiveWindow.Dispose();
                     receiveWindow = null;
-                    CleanupIfDue();
+                    CleanupGuarded();
                     continue;
                 }
                 catch (OperationCanceledException)
@@ -129,16 +136,104 @@ public sealed partial class UdpRelay : IDisposable
                     // ICMP port unreachable from a peer that went away; keep serving the others.
                     continue;
                 }
+                catch (SocketException ex)
+                {
+                    // Any other receive error (a network interface going away, no buffer space, a transient driver
+                    // fault) used to leave this method, and the worker's default is to stop the whole process. The
+                    // socket is usually usable again a moment later; the pause keeps a persistent error from spinning.
+                    if (!_receiveFaulted)
+                    {
+                        _receiveFaulted = true;
+                        LogReceiveFailed(_logger, ex.SocketErrorCode, ex);
+                    }
+
+                    try
+                    {
+                        await Task.Delay(ReceiveRetryDelay, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The socket was closed under the loop: the relay is being disposed.
+                    break;
+                }
+
+                if (_receiveFaulted)
+                {
+                    _receiveFaulted = false;
+                    LogReceiveRecovered(_logger);
+                }
 
                 var from = (IPEndPoint)received.RemoteEndPoint;
-                await HandleAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false);
-                CleanupIfDue();
+                if (!await HandleGuardedAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+
+                CleanupGuarded();
             }
         }
         finally
         {
             receiveWindow?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Handles one packet and keeps the loop alive when that fails. A packet comes from the public internet and the
+    /// handler reaches into the console's event queue, so neither a malformed packet nor a broken sink may take the
+    /// relay down with every other session on it. Cancellation is not a failure and is left to propagate.
+    /// </summary>
+    /// <returns><c>false</c> when the relay is shutting down and the loop should end.</returns>
+    private async ValueTask<bool> HandleGuardedAsync(ReadOnlyMemory<byte> packet, IPEndPoint from, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleAsync(packet, from, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            RecordHandlerFault(ex);
+            return true;
+        }
+    }
+
+    private void CleanupGuarded()
+    {
+        try
+        {
+            CleanupIfDue();
+        }
+        catch (Exception ex)
+        {
+            RecordHandlerFault(ex);
+        }
+    }
+
+    /// <summary>Logs the first fault at once, then at most one line a minute saying how many more there were.</summary>
+    private void RecordHandlerFault(Exception exception)
+    {
+        _handlerFaults++;
+        var now = _time.GetUtcNow();
+        if (now < _nextHandlerFaultLog)
+        {
+            return;
+        }
+
+        LogHandlerFailed(_logger, _handlerFaults, exception);
+        _nextHandlerFaultLog = now + RejectedBindLogInterval;
+        _handlerFaults = 0;
     }
 
     private async ValueTask HandleAsync(ReadOnlyMemory<byte> packet, IPEndPoint from, CancellationToken cancellationToken)
@@ -417,6 +512,15 @@ public sealed partial class UdpRelay : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay binds since the last summary: {Tickets} invalid or expired ticket, {Cookies} token that did not match the address, {Capacity} refused because {Sessions} sessions are open (most recently from {EndPoint}).")]
     private static partial void LogRejectedBinds(ILogger logger, IPEndPoint endPoint, long tickets, long cookies, long capacity, int sessions);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Relay receive failed with {Error}; retrying. Further receive errors are not logged until a receive succeeds.")]
+    private static partial void LogReceiveFailed(ILogger logger, SocketError error, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Relay receive is working again.")]
+    private static partial void LogReceiveRecovered(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Relay packet handling failed ({Count} failures since the last report); the relay keeps serving.")]
+    private static partial void LogHandlerFailed(ILogger logger, long count, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId}: {Role} moved from {Previous} to {Current}.")]
     private static partial void LogRebind(ILogger logger, Guid sessionId, RelayRole role, IPEndPoint previous, IPEndPoint current);

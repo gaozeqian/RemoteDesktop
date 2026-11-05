@@ -20,6 +20,9 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     private const int MaxAllocationAttempts = 10;
     private const uint LowestDeviceId = 100_000_000;
 
+    /// <summary>The shortest gap between two writes of one device's <c>last_seen_at</c>.</summary>
+    private static readonly TimeSpan TouchInterval = TimeSpan.FromSeconds(60);
+
     /// <summary>Exclusive: ids are nine digits, so the last one is 999 999 999.</summary>
     private const uint HighestDeviceIdExclusive = 1_000_000_000;
 
@@ -34,6 +37,10 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     private readonly ILogger _logger;
     private readonly Func<uint> _allocateId;
     private readonly ConcurrentDictionary<string, uint> _cache = new(StringComparer.Ordinal);
+
+    /// <summary>When (Unix milliseconds) each fingerprint's <c>last_seen_at</c> was last written, to throttle the touches.</summary>
+    private readonly ConcurrentDictionary<string, long> _lastTouched = new(StringComparer.Ordinal);
+    private readonly TimeProvider _time;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private bool _disposed;
 
@@ -41,7 +48,8 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         DbDataSource dataSource,
         IDeviceRegistryDialect dialect,
         ILogger logger,
-        Func<uint>? allocateId = null)
+        Func<uint>? allocateId = null,
+        TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentNullException.ThrowIfNull(dialect);
@@ -50,6 +58,7 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         _dataSource = dataSource;
         _dialect = dialect;
         _logger = logger;
+        _time = time ?? TimeProvider.System;
         _allocateId = allocateId ?? (() => (uint)RandomNumberGenerator.GetInt32((int)LowestDeviceId, (int)HighestDeviceIdExclusive));
     }
 
@@ -205,6 +214,9 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
 
         if (_cache.TryGetValue(fingerprint, out var cached))
         {
+            // A device that reconnects is seen again: last_seen_at is "the last registration", and the cache must not
+            // freeze it at the first one. Throttled per fingerprint, see Touch.
+            Touch(fingerprint);
             return new DeviceRegistration(cached, Created: false);
         }
 
@@ -275,9 +287,17 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
                 command.CommandText = _dialect.InsertIfAbsentSql;
                 AddParameter(command, "@fingerprint", fingerprint);
                 AddParameter(command, "@device_id", (long)deviceId);
-                AddParameter(command, "@now", DateTimeOffset.UtcNow);
+                var now = _time.GetUtcNow();
+                AddParameter(command, "@now", now);
 
-                return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+                var inserted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+                if (inserted)
+                {
+                    // The row was created with this timestamp, so a reconnect straight afterwards has nothing to refresh.
+                    _lastTouched[fingerprint] = now.ToUnixTimeMilliseconds();
+                }
+
+                return inserted;
             },
             cancellationToken);
 
@@ -287,15 +307,26 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     /// <remarks>
     /// The timestamp feeds the console's device page, which is why it is refreshed at all — but it is still best effort:
     /// it must not become a backlog. On a store with a single writer, a burst of reconnects would otherwise leave one
-    /// touch per reconnect waiting behind the writer; here the touch is simply skipped when the writer is busy.
+    /// touch per reconnect waiting behind the writer; here the touch is simply skipped when the writer is busy. A store
+    /// without that lock (PostgreSQL) would instead start one unbounded background write per reconnect, so a
+    /// fingerprint is written at most once per <see cref="TouchInterval"/>: the device page does not need finer
+    /// resolution than that, and a reconnect storm costs one write per device rather than one per connection.
     /// </remarks>
     private void Touch(string fingerprint)
     {
+        var now = _time.GetUtcNow().ToUnixTimeMilliseconds();
+        if (!ReserveTouch(fingerprint, now))
+        {
+            return;
+        }
+
         var holdsLock = false;
         if (_dialect.SerializeWrites)
         {
             if (!_writeLock.Wait(0))
             {
+                // Not written, so the next reconnect may try again instead of waiting out the interval.
+                _lastTouched.TryRemove(new KeyValuePair<string, long>(fingerprint, now));
                 return;
             }
 
@@ -303,6 +334,33 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         }
 
         _ = TouchAsync(fingerprint, holdsLock);
+    }
+
+    /// <summary>Claims the right to write this fingerprint's timestamp, false when it was written recently enough.</summary>
+    private bool ReserveTouch(string fingerprint, long now)
+    {
+        while (true)
+        {
+            if (!_lastTouched.TryGetValue(fingerprint, out var last))
+            {
+                if (_lastTouched.TryAdd(fingerprint, now))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (now - last < TouchInterval.TotalMilliseconds)
+            {
+                return false;
+            }
+
+            if (_lastTouched.TryUpdate(fingerprint, now, last))
+            {
+                return true;
+            }
+        }
     }
 
     private async Task TouchAsync(string fingerprint, bool holdsLock)
@@ -313,7 +371,7 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
             await using var command = connection.CreateCommand();
             command.CommandText = _dialect.TouchLastSeenSql;
             AddParameter(command, "@fingerprint", fingerprint);
-            AddParameter(command, "@now", DateTimeOffset.UtcNow);
+            AddParameter(command, "@now", _time.GetUtcNow());
             await command.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
