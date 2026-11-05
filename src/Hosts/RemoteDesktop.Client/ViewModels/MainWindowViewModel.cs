@@ -1277,9 +1277,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? null
             : OperatingSystem.IsWindows()
                 ? "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
-                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/ops/README.md）。"
+                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务。"
                 : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
-                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/ops/README.md）。";
+                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
         // Windows with the service installed points at it. Without one — and on Linux or macOS — the controlled end
         // runs inside this process, so the row says that instead of going blank: a blank row reads like a missing
