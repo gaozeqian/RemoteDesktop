@@ -38,7 +38,8 @@ build/
 | macOS | `client`、`host`、`server` | 两个独立组件：`Remote Desktop.app`（完整客户端，在 `/Applications`）与 `Remote Desktop Host.app`（LSUIElement、无窗口、只被控，藏在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”）；host 包另装登录项 |
 
 Windows 的 `host` 走的是 `client/Build-ClientInstaller.ps1 -HostOnly`：服务定义、崩溃重启、防火墙规则与机器清理
-步骤只有一份，两个包不会各改一半。两个包共用服务名，所以一台机器只能装一个（安装程序会拒绝第二个）。
+步骤只有一份，两个包不会各改一半。两个包共用服务名、不能同机共存，规则见
+[`docs/ops/README.md`](../docs/ops/README.md#2-安装)（§四 2）。
 macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote Desktop Host.app`：里面是同一个
 `RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。它安装到
 `/Library/Application Support/RemoteDesktop/Host`，而不是 `/Applications`：没有窗口的组件不应看起来像一个
@@ -110,13 +111,11 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 
 ## 产物落在哪里
 
-不在这里。所有构建与打包产物都写到仓库根的 `artifacts/`，按 `<类别>/<平台>/` 组织，见 `CONTRIBUTING.md`。
-
-唯一的例外是 `installer/windows/` 下的 WiX 与 net48 `CustomActions` 工程：它们带着自己那份（故意留空的）
-`Directory.Build.props`，不导入根目录的构建属性，所以**中间产物**（`obj/`、`bin/x64/`）留在工程目录内，删
-`artifacts/bin` 清不掉它们。但最终产物不留在那里——`.msi` 由两个打包脚本用 `-p:OutputPath=` 写进
-`artifacts/installer/windows/`，而 `.wixpdb` 是调试符号、不是交付物，被 `-p:PdbOutputDir=` 留在工程的 `obj/` 里，
-不跟着进交付物目录。
+不在这里。所有构建与打包产物都写到仓库根的 `artifacts/`，按 `<类别>/<平台>/` 组织；布局，以及
+`installer/windows/` 下 WiX 与 net48 `CustomActions` 工程因自带空 `Directory.Build.props` 而把中间产物留在工程目录的
+例外，见 [`CONTRIBUTING.md`](../CONTRIBUTING.md#-构建产物布局)。最终产物不留在工程目录：`.msi` 由两个打包脚本用
+`-p:OutputPath=` 写进 `artifacts/installer/windows/`，而 `.wixpdb` 是调试符号、不是交付物，被 `-p:PdbOutputDir=`
+留在工程的 `obj/` 里，不跟着进交付物目录。
 
 同一类还有三个**生成物是写进这棵源码树**的，都不在 `artifacts/` 下，也都在 `.gitignore` 里——它们由打包脚本每次
 构建时重造，不需要提交，也不该提交：

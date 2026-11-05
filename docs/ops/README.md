@@ -29,7 +29,7 @@
 
 | 机器 | 需要什么 |
 |---|---|
-| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明），或 macOS（arm64）；.NET 10 运行时（或自包含发布，不需要装运行时）；开放 TCP 5080、UDP 5081、UDP 5082；要从别的电脑访问运维监控台，再开放网关的 TCP 5443 |
+| 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明），或 macOS（arm64）；.NET 10 运行时（或自包含发布，不需要装运行时）；按 [§二 8](#8-防火墙) 的端口表开放端口（信令、地址反射、中继；要从别的电脑访问运维监控台，再开放网关） |
 | 被控端（Windows） | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
 | 被控端（Linux） | **Ubuntu 26.04+**（x64，FFmpeg 8 的 soname 固定）或有 Wayland 会话与 portal 的同等发行版；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
 | 控制端 | Windows 11 / Windows Server 2022+（x64），或 **Ubuntu 26.04+**（x64） |
@@ -125,7 +125,7 @@ curl http://127.0.0.1:5090/health
 | `RD_OPEN_FIREWALL` | `1` 且 ufw 处于 active 时放行端口，默认 `0` |
 
 **防火墙默认不动。** `postinst` 只有在 `/etc/default/remotedesktop-server` 里设了 `RD_OPEN_FIREWALL="1"`（默认
-`0`）**并且** ufw 处于 active 时，才放行 5080/tcp、5081/udp、5082/udp、5443/tcp 四条规则，不动 nftables/iptables；
+`0`）**并且** ufw 处于 active 时，才放行 [§二 8](#8-防火墙) 表里需要对外开放的那四个端口（四条规则），不动 nftables/iptables；
 purge 时只删除安装时加过的那四条（用数据目录里的标记判断）。所以装完后别的机器连不上，先检查防火墙有没有放行。
 
 #### Windows：MSI
@@ -154,7 +154,7 @@ msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
 它做的事：把四个服务器（信令、中继、监控台和 Ops HTTPS 网关，各自自包含）装进
 `%ProgramFiles%\Remote Desktop Server`，注册四个自动启动、崩溃后自动重启的服务
 （`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`、`RemoteDesktopGateway`），
-加四条入站规则（TCP 5080、UDP 5081、UDP 5082、TCP 5443），并按下面的属性写好信令与中继的设置。
+加四条入站规则（端口见 [§二 8](#8-防火墙)），并按下面的属性写好信令与中继的设置。
 **真正生效的设置、数据库、TLS 公钥和 `server-setup.log` 在 `%ProgramData%\Remote Desktop Server\`**，
 不在 Program Files：MSI 的大版本升级会先删除旧产品在 Program Files 里的文件，放在那里的
 `appsettings.json` 会在每次升级时丢失。ProgramData 下的目录只有 SYSTEM 和 Administrators 能读。
@@ -195,7 +195,7 @@ PowerShell 里执行）。
   要回到内存模式（每次重启换码）用 `DATABASEPROVIDER=none`。
 - **中继装在另一台机器上时**，那把自动生成的密钥要抄过去：两边都传 `RELAYSHAREDKEY=<同一个值>`，
   或者把 `Rendezvous:RelaySharedKey` 的值填进那台的 `Relay\appsettings.json` 的 `Relay:SharedKey`。
-- **改了端口就要自己改防火墙规则**：四条规则是按 5080/tcp、5081/udp、5082/udp 和网关的 5443/tcp 开的，
+- **改了端口就要自己改防火墙规则**：四条规则是按 [§二 8](#8-防火墙) 里的默认端口开的，
   `RENDEZVOUSURL`、中继端口或 `GATEWAYLISTEN` 改了它们就对不上。
 
 升级：同版本号重装即可，**`%ProgramData%\Remote Desktop Server` 下的设置、数据库和证书都保留**，
@@ -266,7 +266,7 @@ curl http://127.0.0.1:5090/health      # 监控台
 **三件与 Windows 不同的事**：
 
 - **防火墙**：macOS 没有"给某个程序开某个端口"的安装步骤（它的应用防火墙默认关闭，且是按应用授权）。
-  别的机器要连这台，自己按需放通 TCP 5080 / UDP 5081 / UDP 5082；要从别的电脑访问监控台，再放通网关的 TCP 5443。
+  别的机器要连这台，自己按 [§二 8](#8-防火墙) 的端口表按需放通；要从别的电脑访问监控台，再放通网关的端口。
 - **卸载**：`.pkg` 不带卸载器，安装目录里有 `uninstall-server.sh`（停守护进程、删 plist、安装目录、
   文档目录与安装回执；`--keep-settings` 可只删程序）。`_remotedesktop` 账号与组会留下，和 Linux 上
   `remotedesktop` 账号的处理一致——重装后同一份数据仍然属于它。
@@ -620,9 +620,10 @@ docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-
 
 #### 端口与防火墙
 
-- `5080/tcp`：信令 + `/health`，默认只绑回环；TLS overlay 通过 Caddy 暴露 443。
-- `5081/udp`：地址反射。**必须放通**，否则直连打洞拿不到自己的公网地址。
-- `5082/udp`：中继。**必须放通**，否则直连失败的连接没有退路。
+各端口的用途与是否需要对外开放见 [§二 8](#8-防火墙)，Docker 部署特有的几点是：
+
+- `5080/tcp`：默认只绑回环；TLS overlay 通过 Caddy 暴露 443。
+- `5081/udp`、`5082/udp`：**必须放通**（原因见 §二 8）。
 - `5443/tcp`：加载 `docker-compose.ops.yml` 后的 Ops HTTPS 网关（宿主机端口用 `OPS_GATEWAY_PORT` 改，默认 5443；
   监听的网卡用 `OPS_GATEWAY_BIND_IP`）。Ops 的 5090 不再发布到宿主机。
 - 中继的 HTTP 面（`/health`、`/metrics`，见 `Relay:HttpEndpoint`）默认只在容器内回环，不对外发布；加载 ops overlay
@@ -741,6 +742,19 @@ docker compose up -d --build
 那组默认值的起点，调大 `MaxConnections` 之类时一起调。
 
 ### 8. 防火墙
+
+整套服务只用下面这几个端口，本文其他地方提到端口时以这张表为准：
+
+| 端口 | 协议 | 用途 | 是否需要对外开放 |
+|---|---|---|---|
+| 5080 | TCP | 信令（`/ws`）与 `/health`，即 `Urls` 的默认端口 | 是：客户端与被控端都连它；前面放了反向代理或 Caddy 时，对外开放的是代理的 443，5080 本身只让代理连 |
+| 5081 | UDP | 地址反射（`Rendezvous:ReflectorPort`） | 是，必须：否则直连打洞拿不到自己的公网地址 |
+| 5082 | UDP | 中继（`Relay:Port`） | 是，必须：否则直连失败的连接没有退路 |
+| 5443 | TCP | Ops HTTPS 网关（`Gateway:Listen`） | 只在要从别的电脑访问监控台时开放 |
+| 5083 | TCP | 中继的 HTTP 面（`Relay:HttpEndpoint`：`/health`、`/metrics`） | 否：默认只在回环，仅供监控台抓取 |
+| 5090 | TCP | 监控台自身（`Ops:Listen`） | 否：只在回环，对外只经过 Gateway 的 5443 |
+
+改了端口，防火墙规则要跟着改。下面是 Windows 手工部署时的开放命令：
 
 ```powershell
 netsh advfirewall firewall add rule name="RemoteDesktop Rendezvous" dir=in action=allow protocol=TCP localport=5080
@@ -1078,8 +1092,8 @@ sudo security add-trusted-cert -d -r trustRoot \
 命名约定（角色词一律写全；架构词各平台用自己的说法，Linux 那个与包内 `Architecture` 字段同源）见
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的"构建产物布局"。
 
-同一个平台上的包版本号相同。三个角色各自装在不同的机器上是常态；Windows 的客户端包与被控端包共用
-`RemoteDesktopHost` 服务名，**一台机器只能装其中一个**（装第二个会被安装程序拒绝），而服务端包和它们互不影响。
+同一个平台上的包版本号相同。三个角色各自装在不同的机器上是常态；Windows 的客户端包与被控端包不能同机共存
+（见 [§四 2](#2-安装)），而服务端包和它们互不影响。
 
 发布前要准备好下面这些。**没有哪一件是必填的**，但流水线会根据你配了什么调整产物，并把结果写在 Release 说明
 最前面：
@@ -1113,11 +1127,9 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 *(如果不配置这些 Secrets，流水线会自动跳过签名步骤并正常打包)*
 
-配置好之后，流水线用这个 `.pfx` 给客户端的 exe/dll 和 MSI 签名（Windows 自带的方式，不需要额外装工具）。
-如果这张证书是**自签名**的，构建还会把它的公开部分一起打进 MSI：安装时安装程序会把它装进目标机器的
-"受信任的根证书颁发机构"，卸载时移除——UIAccess 要求签名链能被本机信任，这一步让装好的机器立刻满足这个条件，
-不需要再手工 `certutil -addstore`。CA 签发的证书不会被这样做（它的链本来就受信任）。详见
-[build/signing/README.md](../../build/signing/README.md)。
+配置好之后，流水线用这个 `.pfx` 给客户端的 exe/dll 和 MSI 签名。自签名证书还会随 MSI 装进目标机器的受信任根
+（UIAccess 要求签名链能被本机信任），机制见
+[build/signing/README.md](../../build/signing/README.md#用安装包装的机器不用手工装-cer)。
 
 ### 2. 配置默认服务器地址（可选）
 
@@ -1165,9 +1177,8 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 ### 1. 构建安装包时给出默认服务器地址
 
-先按 §八 把包装出来。**构建时最好给 `-RendezvousUri`**：不加时默认是
-`ws://127.0.0.1:5080/ws`，脚本会给出警告。安装时可以在图形界面第一页改，或者给静默安装传
-`RENDEZVOUSURI`。
+构建方法见 [§八](#八安装包怎么构建三平台) 的 Windows 一节，**构建时最好给 `-RendezvousUri`**（不给时的默认值与警告也在那里）。
+安装时可以在图形界面第一页改，或者给静默安装传 `RENDEZVOUSURI`。
 
 ### 2. 安装
 
@@ -1284,34 +1295,17 @@ msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /l*v "$env:TEMP\rd-inst
 
 ### 5. 签名
 
-打包脚本自动在当前用户和本机证书存储里找可用的代码签名证书（有私钥、未过期、用途是代码签名），
-**只自动使用名字里含 `RemoteDesktop`** 的证书——别的产品的证书不会被默默拿来用，那种情况会列出候选让你指定：
-
-```powershell
-... -SignCertificate <证书指纹>          # 或 -SignCertificate "CN=你的公司"
-... -SkipSigning                          # 明确不签名
-```
-
-签名分两步：先签发布目录里本产品自己的 exe/dll（这样**装到机器上的程序**也带签名），再签 MSI。
-
-不签名时 SmartScreen 和企业策略可能拦住安装；自签名证书在装过它 `.cer` 的机器之前只会得到一条"不受信任的根"的
-**警告**，构建不会失败。完整说明（怎么买证书、有哪些替代方案、怎么检查签名、osslsigncode 怎么用）见
-[`build/signing/README.md`](../../build/signing/README.md)；
-本地测试签名用 `build/signing/windows/New-SigningCertificate.ps1` 生成证书、`build/signing/windows/Install-TrustedCertificate.ps1` 让机器信任它。
+打包脚本会自动找证书并分两步签名（先程序、再 MSI）；用 `-SignCertificate <证书指纹>`（或 `"CN=你的公司"`）指定证书，
+用 `-SkipSigning` 明确不签名。自动选证书的规则、不签名的后果、怎么买证书、有哪些替代方案、怎么检查签名，以及本地测试用的
+自签名证书（`New-SigningCertificate.ps1` / `Install-TrustedCertificate.ps1`），见
+[`build/signing/README.md`](../../build/signing/README.md)。
 
 ## 五、部署客户端 / 被控端（Debian 包，Linux）
 
 ### 1. 构建
 
-控制端与被控端两个包各装各的：一台机器按需要选一个，或者两个都装。
-
-```sh
-build/installer/linux/client/build-deb.sh   # 用来控制别人
-build/installer/linux/host/build-deb.sh     # 允许被别人控制
-```
-
-`build-deb.sh` 自包含发布，所以**目标机器不需要装 .NET**，也不需要 `LD_LIBRARY_PATH`——
-`libmsquic` 随包放在可执行文件旁边，那是自包含程序会找的地方、别的程序不会找的地方。
+控制端与被控端两个包各装各的：一台机器按需要选一个，或者两个都装。构建命令见
+[§八](#八安装包怎么构建三平台) 的 Linux 一节：自包含发布，**目标机器不需要装 .NET**，也不需要 `LD_LIBRARY_PATH`。
 
 ### 2. 服务器地址与证书
 
@@ -1483,15 +1477,7 @@ macOS 没有 Windows 那种“服务 + Agent”的拆分，但不等于只能有
   代码互相踢下线。client 启动时如果 Host 包已安装，最多等 3 秒让服务创建控制 socket；如果服务在窗口打开后
   才启动，界面会提示重启客户端以交给 Host 托管。卸载 Host 后也要重启 client 才会在当前进程内重新承担被控端。
 
-```bash
-# 控制端
-build/installer/macos/client/make-pkg.sh --configuration Release
-# 产物：artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-<版本>.pkg
-
-# 被控端：独立的 Remote Desktop Host.app（隐藏在 Library/Application Support）+ 登录项
-build/installer/macos/host/make-pkg.sh --configuration Release
-# 产物：artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-<版本>.pkg
-```
+两个包的构建命令见 [§八](#八安装包怎么构建三平台) 的 macOS 一节，产物在 `artifacts/installer/macos/`。
 
 | 装的包 | 文件 | 登录行为 | 能做什么 |
 |---|---|---|---|
@@ -1540,8 +1526,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 
 - **包默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
   "无法打开，因为来自身份不明的开发者"，**右键 → 打开**即可（或在「系统设置 → 隐私与安全性」里放行）。
-  有证书时加 `--distribution` 与 `--notarize` 做签名 + 公证，下载即开；证书与凭据的配置见
-  [build/signing/README.md](../../build/signing/README.md) 的 macOS 一节。
+  有证书时的签名与公证（下载即开）见 [build/signing/README.md](../../build/signing/README.md) 的 macOS 一节。
 - **被控端需要手动授权两项权限**：在「系统设置 → 隐私与安全性」里把 **Remote Desktop Host** 勾进
   **屏幕录制**（截屏与系统声音环回）和 **辅助功能**（远程键鼠）。host 没有窗口；安装器已经在当前图形
   会话里启动它，首次启动时系统会弹提示，也可以在系统设置里手动添加
@@ -1604,7 +1589,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 
 ```powershell
 # 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
-# 正式发布请带上自己服务器的地址（不带就用内置的 127.0.0.1，装到别的机器上连不上）
+# 正式发布请带上自己服务器的地址（不带就用内置的 ws://127.0.0.1:5080/ws 并给出警告，装到别的机器上连不上）
 .\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
 
 # 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
@@ -1622,7 +1607,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 
 两个包走同一个脚本（`Build-ClientInstaller.ps1 -HostOnly`）：服务定义、崩溃重启、UDP 防火墙规则和
 `--configure-system` 只有一份，所以不会出现"客户端那个修好了、被控端那个还是旧行为"。产品名与 UpgradeCode
-各自独立，但因为共用服务名，一台机器只能装其中一个——第二个会拒绝安装并说明先卸哪个。
+各自独立；两者共用服务名、不能同机共存，规则见 [§四 2](#2-安装)。
 
 **Host 包的安装向导多一页“无人值守设置”**：host 装完没有窗口，临时密码只存在进程内存里，所以这一页是全新
 机器唯一能直接输入固定密码的地方。留空表示不修改已有密码；勾选“清除已设置”则清掉。静默安装等价于：
@@ -1699,10 +1684,9 @@ build/installer/macos/host/make-pkg.sh --configuration Release
 build/installer/macos/server/make-pkg.sh --configuration Release
 ```
 
-`.pkg` **默认未签名**（没有 Apple Developer ID 证书）：在别人的 Mac 上 Gatekeeper 会提示
-"unidentified developer"，需要右键 → 打开。有证书时加 `--distribution`（Developer ID Installer 签 `.pkg`，
-Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提交 Apple 公证并 staple）即可做到下载即开
-——证书与公证凭据的配置见 [`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
+`.pkg` **默认未签名**（未签名时的 Gatekeeper 提示与放行方法见 §六 1）。有证书时加 `--distribution` 与
+`--notarize` 即可做到下载即开，两张证书各签什么、公证凭据怎么配，见
+[`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
 
 macOS 打包有三处值得知道的构建细节：
 
@@ -1710,8 +1694,7 @@ macOS 打包有三处值得知道的构建细节：
   `native/macos/rd_installer_plugin.m`，三个 make-pkg 都会调用它，并用 `productbuild --plugins` 放进产品归档。
   它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
 - **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（四个 apphost 与原生库）
-  执行 `codesign --options runtime --timestamp`，apphost 带
-  `build/installer/macos/server/entitlements.plist` 的 JIT 权限。只签外层 `.pkg` 无法通过公证。
+  单独签名；做法与原因见 [`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
 - **一次性密码不进包**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`。安装期答案由
   面板或 `install-answers.plist` 提供，见 §二 1 的 macOS 一节。
 
@@ -1725,7 +1708,8 @@ build/installer/linux/host/build-deb.sh     # 允许被别人控制
 build/installer/linux/server/build-deb.sh   # 信令、中继、监控台与网关
 ```
 
-`libmsquic` 随包放在可执行文件旁，所以装出来的包不需要设 `LD_LIBRARY_PATH`。安装与服务管理见 §五。
+`libmsquic` 随包放在可执行文件旁（自包含程序会在那里找原生库，别的程序不会），所以装出来的包不需要设
+`LD_LIBRARY_PATH`。安装与服务管理见 §五。
 
 客户端和被控端构包时可以给安装问题一个站点默认值：
 
@@ -1740,13 +1724,8 @@ build/installer/linux/client/build-deb.sh
 
 ### 产物在哪
 
-一律在 `artifacts/installer/<平台>/`，角色写在**文件名**里，不另开子目录。发布时 `release.yml` 会把它们改名成
-用户看到的那份资产，形状是 `<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`：九个资产一个形状。
-
-构建产物与发布资产名形状相同，只有版本形态不同：构建产物是
-`RemoteDesktop-Client-Windows-x64-<四段版本>.msi`，发布时改名为
-`RemoteDesktop-Client-Windows-x64-<tag>.msi`。
-完整的四类产物路径与 SDK 自己的四层布局见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) §构建产物布局。
+一律在 `artifacts/installer/<平台>/`，文件名的形状、发布时的改名，以及完整的产物路径与 SDK 自己的四层布局，见
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#-构建产物布局)；构建产物与发布资产名各平台的版本形态见 [§三](#三自动化发布到-github-releases) 开头的版本表。
 
 ## 九、客户端本机的存储（设备列表）
 

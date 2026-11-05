@@ -247,6 +247,11 @@ macOS 的签名不走本目录的脚本，而在打包流程里：`make-app.sh` 
 两者都要**付费 Apple Developer Program 账号**（$99/年）才能签发。开发用的 "Apple Development" 证书**不能**用于
 分发——`make-app.sh --distribution` 会直接拒绝它（只对本地开发有意义）。
 
+没有这两张证书时 `.pkg` 默认**未签名**：在别人的 Mac 上 Gatekeeper 会提示"无法打开，因为来自身份不明的开发者"
+（"unidentified developer"），**右键 → 打开**即可，或在「系统设置 → 隐私与安全性」里放行。有证书时加 `--distribution`
+（Developer ID Installer 签 `.pkg`，Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提交 Apple
+公证并 staple）即可做到下载即开。
+
 **Installer 证书不是 code-signing 身份。** 它没有 Code Signing EKU，`security find-identity -p codesigning`
 不会列出它——用这个过滤器找 Installer 证书，在真正配了证书的机器上必然失败。
 所以 `make-pkg.sh` 用 `security find-identity -v`（不过滤）找 Installer，用 `-p codesigning` 找 Application；
@@ -254,8 +259,9 @@ Apple DTS 的原话见
 [论坛 822661](https://developer.apple.com/forums/thread/822661)。
 
 **server 包的载荷必须逐个签名。** 公证要求提交物里的每个可执行文件都用 Developer ID Application 签名、
-带安全时间戳并启用硬化运行时；只签外层 `.pkg` 不够。`server/make-pkg.sh --distribution` 会遍历 payload 里
-所有 Mach-O，apphost 带 `server/entitlements.plist` 的 JIT 权限，dylib 不带；签名后逐个
+带安全时间戳并启用硬化运行时（`codesign --options runtime --timestamp`）；只签外层 `.pkg` 不够。
+`server/make-pkg.sh --distribution` 会遍历 payload 里所有 Mach-O（四个 apphost 与原生库），apphost 带
+`server/entitlements.plist`（`build/installer/macos/server/entitlements.plist`）的 JIT 权限，dylib 不带；签名后逐个
 `codesign --verify --strict`。`--notarize` 在没有 Application 证书时直接拒绝。
 
 ### GitHub Secrets 与变量
