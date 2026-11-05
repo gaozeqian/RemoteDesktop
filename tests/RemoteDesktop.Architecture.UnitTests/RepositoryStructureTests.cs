@@ -284,6 +284,21 @@ public class RepositoryStructureTests
         Assert.True(refusal < stop, "The directory must be validated before the service is stopped.");
     }
 
+    /// <summary>
+    /// Both installers generate WiX source from the publish folders. A folder name goes into an XML attribute, so it has
+    /// to be escaped; the server script once wrote it raw while the client script escaped it.
+    /// </summary>
+    [Theory]
+    [InlineData("client", "Build-ClientInstaller.ps1")]
+    [InlineData("server", "Build-ServerInstaller.ps1")]
+    public void The_installer_file_list_escapes_folder_names_written_into_wix_source(string role, string script)
+    {
+        var text = File.ReadAllText(Path.Combine(Root, "build", "installer", "windows", role, script));
+
+        Assert.Contains("SecurityElement]::Escape($directory.Name)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Name=\"\"$($directory.Name)\"\"", text, StringComparison.Ordinal);
+    }
+
     /// <summary>Fails with every offending path listed; xunit's own formatting truncates a long collection.</summary>
     private static void AssertNoOffenders(string[] offenders, string rule)
     {

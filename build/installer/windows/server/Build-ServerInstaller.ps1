@@ -221,7 +221,10 @@ function New-FileList {
                 $id = "dir$($count.Directories)"
             }
 
-            [void]$directories.AppendLine("$Indent<Directory Id=""$id"" Name=""$($directory.Name)"">")
+            # The lookup above uses the real name; only the attribute written into the WiX source is escaped, as in the
+            # client script: a folder name with an ampersand would otherwise produce a source that does not parse.
+            $name = [System.Security.SecurityElement]::Escape($directory.Name)
+            [void]$directories.AppendLine("$Indent<Directory Id=""$id"" Name=""$name"">")
             Add-Directory -Path $directory.FullName -Indent "$Indent  " -Depth ($Depth + 1)
             [void]$directories.AppendLine("$Indent</Directory>")
 
