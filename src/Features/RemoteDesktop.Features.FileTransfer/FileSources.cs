@@ -60,6 +60,9 @@ public sealed class LocalFileSource : IFileSource
 /// </param>
 public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? requestTimeout = null) : IFileSource, IAsyncDisposable
 {
+    private const string OutcomeUnknownMessage =
+        "The connection to the remote computer was lost; the operation may already have taken effect. Refresh the list to check.";
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private IChannel? _channel;
 
@@ -174,14 +177,18 @@ public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? reque
     }
 
     /// <remarks>
-    /// Only a channel that worked before is retried on a fresh one: when a brand-new channel fails, asking again would
-    /// not help, and repeating a folder operation that may already have happened would be wrong.
+    /// A brand-new channel that fails is never retried: asking again would not help. A reused channel (one that
+    /// answered before) may simply have gone stale, so a read-only request (list, places) is repeated once on a fresh
+    /// channel. A changing request (make directory, rename, delete) is not: the host may have carried it out before the
+    /// connection broke, and repeating it would report a misleading "not found" or "already exists". It fails instead,
+    /// saying the outcome is unknown.
     /// </remarks>
     private async Task<FileResponse> RequestAsync(FileRequest request, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var idempotent = request.BodyCase is FileRequest.BodyOneofCase.List or FileRequest.BodyOneofCase.Places;
             for (var reused = _channel is not null; ; reused = false)
             {
                 try
@@ -198,10 +205,15 @@ public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? reque
                         cancellationToken,
                         requestTimeout).ConfigureAwait(false);
                 }
-                catch (TimeoutException) when (reused)
+                catch (TimeoutException) when (reused && idempotent)
                 {
                     // A channel that used to answer and now says nothing is as good as broken: ask again on a fresh one.
                     await DropChannelAsync().ConfigureAwait(false);
+                }
+                catch (TimeoutException ex) when (reused)
+                {
+                    await DropChannelAsync().ConfigureAwait(false);
+                    throw new FileOperationException(FileError.Io, OutcomeUnknownMessage, ex);
                 }
                 catch (TimeoutException ex)
                 {
@@ -214,6 +226,11 @@ public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? reque
                     if (!reused)
                     {
                         throw new FileOperationException(FileError.Io, "The connection to the remote computer failed.", ex);
+                    }
+
+                    if (!idempotent)
+                    {
+                        throw new FileOperationException(FileError.Io, OutcomeUnknownMessage, ex);
                     }
                 }
             }

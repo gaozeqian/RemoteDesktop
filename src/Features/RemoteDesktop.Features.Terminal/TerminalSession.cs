@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Features.Terminal.Emulation;
 using RemoteDesktop.Transport;
 
@@ -42,9 +43,10 @@ public sealed class TerminalSession : IAsyncDisposable
         int columns,
         int rows,
         CancellationToken cancellationToken,
-        int scrollbackLines = TerminalEmulator.DefaultScrollback)
+        int scrollbackLines = TerminalEmulator.DefaultScrollback,
+        ILogger? logger = null)
     {
-        var client = await TerminalClient.OpenAsync(connection, shell, columns, rows, cancellationToken).ConfigureAwait(false);
+        var client = await TerminalClient.OpenAsync(connection, shell, columns, rows, cancellationToken, logger).ConfigureAwait(false);
         return new TerminalSession(client, new TerminalEmulator(columns, rows, scrollbackLines));
     }
 

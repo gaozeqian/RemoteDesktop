@@ -1089,7 +1089,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                         return;
                     }
 
-                    var terminal = new TerminalWindowViewModel(session.Context.Connection);
+                    var terminal = new TerminalWindowViewModel(session.Context.Connection, _loggers.CreateLogger<TerminalSession>());
                     await terminal.InitializeAsync();
                     StatusMessage = $"已连接 {target.ToDisplayString()} · 终端";
                     session.Closed += (_, _) => Dispatcher.UIThread.Post(() => StatusMessage = "终端会话已结束。");

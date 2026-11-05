@@ -252,7 +252,7 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     {
         if (_terminal is null)
         {
-            _terminal = new TerminalWindowViewModel(_session.Context.Connection);
+            _terminal = new TerminalWindowViewModel(_session.Context.Connection, _logger);
             _ = _terminal.InitializeAsync();
         }
 
