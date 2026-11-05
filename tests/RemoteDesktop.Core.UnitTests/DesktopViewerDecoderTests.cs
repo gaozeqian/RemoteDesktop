@@ -78,6 +78,30 @@ public sealed class DesktopViewerDecoderTests
         Assert.False(rig.Closed);
     }
 
+    [Fact]
+    public async Task A_malformed_video_frame_is_dropped_and_the_stream_goes_on()
+    {
+        await using var rig = await Rig.StartAsync();
+        rig.Factory.ProducePictures = true;
+
+        // Shorter than the video frame header: Parse refuses it. That costs one frame, not the whole viewer.
+        await rig.SendRawVideoFrameAsync(new byte[3]);
+        await rig.SendKeyFrameAsync();
+
+        Assert.True(await WaitUntilAsync(() => rig.Viewer.FrameNumber >= 1), "a picture still arrives after the bad frame");
+        Assert.False(rig.Closed);
+    }
+
+    [Fact]
+    public async Task A_stream_description_that_cannot_be_used_still_ends_the_viewer()
+    {
+        await using var rig = await Rig.StartAsync();
+
+        await rig.SendStreamInfoAsync(width: 0, height: 0);
+
+        Assert.True(await WaitUntilAsync(() => rig.Closed), "an unusable stream description cannot be recovered from");
+    }
+
     private static async Task<bool> WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
@@ -137,6 +161,15 @@ public sealed class DesktopViewerDecoderTests
 
         public ValueTask SendKeyFrameAsync() => SendAsync(isKeyFrame: true);
 
+        public ValueTask SendRawVideoFrameAsync(byte[] payload) =>
+            FrameCodec.WriteAsync(_host, new Frame(VideoDataFrame.MessageType, payload), Ct);
+
+        public ValueTask SendStreamInfoAsync(uint width, uint height) =>
+            ProtobufFrames.WriteAsync(
+                _host,
+                new VideoControl { StreamInfo = new VideoStreamInfo { Width = width, Height = height, DisplayId = "d", EncoderName = "fake" } },
+                Ct);
+
         public async ValueTask SendDeltaFramesAsync(int count)
         {
             for (var i = 0; i < count; i++)
@@ -172,6 +205,9 @@ public sealed class DesktopViewerDecoderTests
 
         public bool FailNextCreate { get; set; }
 
+        /// <summary>When set, decoders answer every unit with a picture instead of nothing.</summary>
+        public bool ProducePictures { get; set; }
+
         public List<FakeDecoder> Decoders { get; } = [];
 
         public int Created => Volatile.Read(ref _created);
@@ -191,7 +227,7 @@ public sealed class DesktopViewerDecoderTests
                 throw new InvalidOperationException("No decoder left.");
             }
 
-            var decoder = new FakeDecoder(() => Interlocked.Increment(ref _decodes));
+            var decoder = new FakeDecoder(() => Interlocked.Increment(ref _decodes), () => ProducePictures);
             lock (Decoders)
             {
                 Decoders.Add(decoder);
@@ -202,8 +238,8 @@ public sealed class DesktopViewerDecoderTests
         }
     }
 
-    /// <summary>A decoder that has lost sync for good: it takes everything and shows nothing.</summary>
-    private sealed class FakeDecoder(Action onDecode) : IVideoDecoder
+    /// <summary>By default a decoder that has lost sync for good: it takes everything and shows nothing.</summary>
+    private sealed class FakeDecoder(Action onDecode, Func<bool> producePicture) : IVideoDecoder
     {
         public string Name => "fake";
 
@@ -212,7 +248,7 @@ public sealed class DesktopViewerDecoderTests
         public VideoFrame? Decode(EncodedVideoFrame frame)
         {
             onDecode();
-            return null;
+            return producePicture() ? new MemoryVideoFrame(64, 64, PixelFormat.Nv12, TimeSpan.Zero) : null;
         }
 
         public void Dispose() => Disposed = true;

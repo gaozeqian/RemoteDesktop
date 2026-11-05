@@ -447,7 +447,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     public async Task LoadRecentDevicesAsync()
     {
-        var entries = await _recentDevicesStore.GetAllAsync();
+        IReadOnlyList<RecentDeviceEntry> entries;
+        try
+        {
+            entries = await _recentDevicesStore.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            // Called fire-and-forget at start-up and from the refresh button, so nothing above could report this. The
+            // list stays as it is on screen, and the file on disk was left untouched by the failed read.
+            LogDeviceListReadFailed(_logger, ex);
+            StatusMessage = "无法读取设备列表：读取设备列表文件失败。";
+            return;
+        }
 
         var edited = RecentDevices.ToDictionary(item => item.DeviceId, StringComparer.Ordinal);
         var selectedId = SelectedRecentDevice?.DeviceId;
@@ -1132,13 +1144,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try
         {
-            var savedPwd = (targetDevice?.RememberPassword ?? RememberPassword) ? password : null;
-            await _recentDevicesStore.SaveOrUpdateAsync(target.ToDisplayString(), alias: targetDevice?.Alias, password: savedPwd, cancellationToken: cancellationToken);
+            var remember = targetDevice?.RememberPassword ?? RememberPassword;
+            await RecordConnectedDeviceAsync(_recentDevicesStore, target.ToDisplayString(), targetDevice?.Alias, password, remember, cancellationToken);
             await LoadRecentDevicesAsync();
         }
         catch (Exception ex)
         {
             LogDeviceListWriteFailed(_logger, ex);
+        }
+    }
+
+    /// <summary>
+    /// Saves the device and applies the "remember password" choice to what is stored. <c>SaveOrUpdateAsync</c> reads a
+    /// null password as "leave it alone", so unticking the box has to clear the stored password explicitly or it would
+    /// be read back and prefilled on the next load.
+    /// </summary>
+    internal static async Task RecordConnectedDeviceAsync(
+        IRecentDevicesStore store,
+        string deviceId,
+        string? alias,
+        string password,
+        bool rememberPassword,
+        CancellationToken cancellationToken)
+    {
+        await store.SaveOrUpdateAsync(deviceId, alias: alias, password: rememberPassword ? password : null, cancellationToken: cancellationToken);
+        if (!rememberPassword)
+        {
+            await store.UpdatePasswordAsync(deviceId, null, cancellationToken);
         }
     }
 
@@ -1359,6 +1391,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not open {Feature} for {Device} after connecting; the session was closed again.")]
     private static partial void LogFeatureOpenFailed(ILogger logger, Exception ex, string feature, string device);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read the recent devices list.")]
+    private static partial void LogDeviceListReadFailed(ILogger logger, Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not write the recent devices list.")]
     private static partial void LogDeviceListWriteFailed(ILogger logger, Exception ex);

@@ -1732,7 +1732,7 @@ build/installer/linux/client/build-deb.sh
 `~/.local/share/RemoteDesktop/`，macOS `~/Library/Application Support/RemoteDesktop/`），运维上只需要知道这几件事：
 
 - **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在平台的密钥存储里（Windows 是 DPAPI，macOS 是 Keychain，Linux 是数据目录下 `secrets/` 里仅属主可读的 0600 文件），换一台机器不会跟着走。备份 `recent_devices.json` 就是备份设备列表，密码需要重新输入；Linux 上备份整个数据目录则会连密码一起带走。
-- **解析失败的文件会被保留。** 解析失败，或文件版本比程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
+- **解析失败的文件会被保留。** 解析失败、条目不合格，或文件版本比程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回；文件只是暂时被占用（打不开）时则原样保留，不会被当成空列表覆盖。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
 - 没有账号体系，也没有跨机器同步。数据格式和"为什么不放密码"见 [系统设计](../design/README.md) 的
   "客户端本机存储"一节。
 

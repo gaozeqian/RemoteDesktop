@@ -651,8 +651,12 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 
 * **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会留下一个截断的文件，也就不会出现
   "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
-* **读不出来的文件会被让开**：解析失败或版本比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>`
-  保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
+* **读不出来的文件会被让开**：解析失败、条目不合格（例如缺少必填的 `UpdatedAtUtc`）或版本比自己新时，文件被改名为
+  `recent_devices.json.corrupt-<时间戳>` 保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
+  不合格的条目不会被"跳过再保存"——那样会无声丢条目，所以是整份文件让开。
+* **暂时打不开的文件不会被当成空列表**：文件存在但被别的进程占着（杀毒软件、第二个实例）时，读取会短暂重试几次，
+  仍失败就把 `IOException` / `UnauthorizedAccessException` 抛给调用方，**不**返回空列表——否则紧接着的保存会用
+  一个只有一条记录的列表替换整份旧列表。界面把这类失败记进日志并在状态栏提示，列表原样保留。
 * **旧格式会被迁移**：早期文件是一个裸数组，条目里还带着明文 `SavedPassword`。读到这种文件时，密码被搬进
   系统保护的密钥库；含密码时文件立即重写成上面的带版本结构——明文随升级从磁盘上拿掉，而不是等用户下次改点什么。
 
@@ -673,8 +677,11 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 
 所以密码存在 `ISecretStore`（Windows 是数据目录下 `secrets/` 里的 DPAPI 文件，macOS 是 Keychain，Linux 是 `secrets/` 里的 0600 文件）里，
 名字为 `recent-device-<设备代码去掉空格后的数字 id>`，
-由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。接口上 `UpdatePasswordAsync(id, null)` 会
-**删除**密钥，但界面目前没有调用它：取消"记住密码"现在只是不再写入，已存的密码不会因此被清掉。
+由 `IRecentDevicesStore.GetPasswordAsync` / `UpdatePasswordAsync` 读写。`UpdatePasswordAsync(id, null)` 会
+**删除**密钥。连接成功后记录设备时（`MainWindowViewModel.RecordConnectedDeviceAsync`），如果该设备的"记住密码"
+没有勾选，就会调用它：设备条目照常保存，但此前存下的密码被清掉，下次不会再预填。副作用是：对一台之前存过密码
+的设备取消勾选后再连一次，会抹掉之前存的那个密码（包括固定密码）。"记住密码"这个勾选本身仍只是内存里的状态，
+不会持久化；`SaveOrUpdateAsync` 对 null/空密码的含义依旧是"不动"。
 
 ### 字段语义
 

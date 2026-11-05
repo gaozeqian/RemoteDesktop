@@ -36,6 +36,8 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 {
     private const int CurrentVersion = 1;
     private const string FileName = "recent_devices.json";
+    private const int ReadAttempts = 3;
+    private static readonly TimeSpan ReadRetryDelay = TimeSpan.FromMilliseconds(50);
 
     private readonly string _filePath;
     private readonly string _secretPrefix;
@@ -256,32 +258,65 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
         JsonDocument document;
         try
         {
-            // Closed again before anything else runs: migrating a legacy file rewrites it, and that cannot happen
-            // while this read handle is still on it.
-            await using (var stream = File.OpenRead(_filePath))
-            {
-                document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
+            document = await ReadDocumentAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (JsonException)
         {
             PreserveUnreadableFile();
             return [];
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+            // Gone since the existence check: there is nothing on disk that a save could destroy.
             return [];
         }
 
+        // Any other IOException or UnauthorizedAccessException escapes from ReadDocumentAsync on purpose. A file that
+        // exists but cannot be read right now (locked by a scanner or a second instance) must not be treated as an
+        // empty list: the next save would replace the whole thing with one entry.
         using (document)
         {
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Array)
+            try
             {
-                return await MigrateLegacyAsync(root, cancellationToken).ConfigureAwait(false);
-            }
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return await MigrateLegacyAsync(root, cancellationToken).ConfigureAwait(false);
+                }
 
-            return root.ValueKind == JsonValueKind.Object ? ReadCurrentFile(root) : [];
+                return root.ValueKind == JsonValueKind.Object ? ReadCurrentFile(root) : [];
+            }
+            catch (JsonException)
+            {
+                // Valid JSON that is not a valid list (an entry missing a required field, a wrongly typed value).
+                // Skipping the bad entries would silently drop them on the next save, so set the whole file aside.
+                PreserveUnreadableFile();
+                return [];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parses the file. A transient lock is retried a couple of times, briefly; if it persists the IOException or
+    /// UnauthorizedAccessException is allowed to escape.
+    /// </summary>
+    private async Task<JsonDocument> ReadDocumentAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                // Closed again before anything else runs: migrating a legacy file rewrites it, and that cannot happen
+                // while this read handle is still on it.
+                await using var stream = File.OpenRead(_filePath);
+                return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                && ex is not (FileNotFoundException or DirectoryNotFoundException)
+                && attempt < ReadAttempts)
+            {
+                await Task.Delay(ReadRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

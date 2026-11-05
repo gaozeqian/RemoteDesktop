@@ -219,17 +219,21 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     continue;
                 }
 
-                var (encoded, capturedAt) = VideoDataFrame.Parse(frame);
-                windowBytes += frame.Payload.Length;
-                if (_waitingForKeyFrame && !encoded.IsKeyFrame)
-                {
-                    continue;
-                }
-
-                var decodeStarted = clock.Elapsed;
+                // A frame the peer sent malformed costs that frame, not the viewer: it is handled like a decode error.
+                EncodedVideoFrame encoded;
+                DateTimeOffset capturedAt;
+                TimeSpan decodeStarted;
                 VideoFrame? picture;
                 try
                 {
+                    (encoded, capturedAt) = VideoDataFrame.Parse(frame);
+                    windowBytes += frame.Payload.Length;
+                    if (_waitingForKeyFrame && !encoded.IsKeyFrame)
+                    {
+                        continue;
+                    }
+
+                    decodeStarted = clock.Elapsed;
                     picture = _decoder.Decode(encoded);
                 }
                 catch (InvalidDataException ex)
@@ -304,9 +308,16 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException or ObjectDisposedException
-                                       or Google.Protobuf.InvalidProtocolBufferException)
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
+            // The channel closed or the viewer was disposed: the ordinary way for the stream to end.
+            LogStreamEnded(_logger, ex);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or Google.Protobuf.InvalidProtocolBufferException)
+        {
+            // Nothing that can be skipped: an unusable stream description (or a control message that does not parse)
+            // leaves no way to carry on, so the viewer ends, but not without saying why.
+            LogStreamMalformed(_logger, ex);
         }
 #pragma warning disable CA1031 // Decoder setup can fail in many backend-specific ways; the viewer just closes.
         catch (Exception ex)
@@ -497,6 +508,12 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A new decoder could not be created; keeping the old one and requesting a key frame.")]
     private static partial void LogDecoderRebuildFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The remote desktop stream ended.")]
+    private static partial void LogStreamEnded(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The remote desktop stream ended because the host sent data that cannot be used.")]
+    private static partial void LogStreamMalformed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Remote desktop stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
