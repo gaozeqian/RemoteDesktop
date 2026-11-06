@@ -86,12 +86,19 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
                 // The handshake and the registration exchange are the two places where a server that accepts the
                 // socket but never answers would otherwise park this loop for ever: the outer token lives as long as
-                // the process. Both are bounded, and a timeout is treated as a retryable connection loss.
-                using (var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                // the process. Both are bounded, and a timeout is turned into an ordinary connection failure so the
+                // loop backs off and retries instead of ending the host.
+                try
                 {
+                    using var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     handshake.CancelAfter(options.SignalingTimeout);
                     await socket.ConnectAsync(options.RendezvousUri, handshake.Token).ConfigureAwait(false);
                     await RegisterAsync(socket, handshake.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"The rendezvous handshake did not complete within {options.SignalingTimeout}.");
                 }
 
                 _socket = socket;
@@ -118,12 +125,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
             {
                 break;
             }
-            catch (OperationCanceledException)
-            {
-                // Only the handshake token can be cancelled here; the loop token is covered above.
-                LogHandshakeTimedOut(logger, options.SignalingTimeout);
-            }
-            catch (Exception ex) when (ex is WebSocketException or InvalidDataException or SocketException or HttpRequestException)
+            catch (Exception ex) when (ex is WebSocketException or InvalidDataException or SocketException or HttpRequestException or TimeoutException)
             {
                 LogConnectionLost(logger, ex.Message);
             }
@@ -493,9 +495,6 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Rendezvous connection lost: {Reason}.")]
     private static partial void LogConnectionLost(ILogger logger, string reason);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The rendezvous server did not complete the handshake within {Timeout}; retrying.")]
-    private static partial void LogHandshakeTimedOut(ILogger logger, TimeSpan timeout);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "The server did not answer a presence query; device states are unknown.")]
     private static partial void LogPresenceUnanswered(ILogger logger);
