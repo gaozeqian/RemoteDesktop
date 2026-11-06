@@ -30,7 +30,7 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | BouncyCastle.Cryptography | 2.7.0 | MIT | https://www.bouncycastle.org/stable/nuget/csharp/website |
 | CommunityToolkit.Mvvm | 8.4.2 | MIT | https://github.com/CommunityToolkit/dotnet |
 | Concentus | 2.2.2 | 见项目主页 | https://github.com/lostromb/concentus |
-| FFmpeg.AutoGen | 8.0.0 | 见项目主页 | https://github.com/Ruslan-B/FFmpeg.AutoGen |
+| FFmpeg.AutoGen | 8.1.0 | 见项目主页 | https://github.com/Ruslan-B/FFmpeg.AutoGen |
 | Google.Protobuf | 3.36.2 | BSD-3-Clause | https://github.com/protocolbuffers/protobuf |
 | HarfBuzzSharp | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | HarfBuzzSharp.NativeAssets.Linux | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
