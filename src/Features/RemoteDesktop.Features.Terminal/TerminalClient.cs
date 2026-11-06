@@ -43,16 +43,17 @@ public sealed partial class TerminalClient : IAsyncDisposable
 {
     private const int MaxEventBytes = 64 * 1024;
 
-    /// <summary>At most 4 MiB of input may wait for the channel (1024 frames of up to 4 KiB).</summary>
-    private const int MaxQueuedFrames = 1024;
+    /// <summary>At most 4 MiB of input may wait for the channel (256 frames of up to 16 KiB).</summary>
+    private const int MaxQueuedFrames = 256;
 
     private readonly IChannel _channel;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
+    // Wait mode on purpose: TryWrite then returns false when the queue is full, which is the signal Send needs.
+    // DropWrite would accept the write and discard it silently.
     private readonly Channel<Frame> _outgoing = Channel.CreateBounded<Frame>(new BoundedChannelOptions(MaxQueuedFrames)
     {
         SingleReader = true,
-        FullMode = BoundedChannelFullMode.DropWrite,
     });
 
     private readonly Task _writer;
@@ -61,7 +62,7 @@ public sealed partial class TerminalClient : IAsyncDisposable
     private int _closed;
     private long _droppedFrames;
 
-    private TerminalClient(IChannel channel, string shell, ILogger logger)
+    internal TerminalClient(IChannel channel, string shell, ILogger logger)
     {
         _channel = channel;
         _logger = logger;

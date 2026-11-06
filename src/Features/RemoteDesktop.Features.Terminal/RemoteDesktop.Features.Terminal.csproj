@@ -2,4 +2,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The bounded input queue is easiest to exercise without a real transport. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Core.UnitTests" />
+  </ItemGroup>
 </Project>

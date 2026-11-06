@@ -78,8 +78,74 @@ public sealed class TerminalClientTests
         Block,
     }
 
+    [Fact]
+    public async Task A_full_input_queue_drops_the_tail_and_is_logged_once()
+    {
+        var logger = new RecordingLogger();
+        await using var client = new TerminalClient(new BlockingChannel(), "fake", logger);
+
+        var payload = new byte[TerminalDataFrame.MaxLength];
+        var queued = 0;
+        for (var i = 0; i < 300; i++)
+        {
+            if (client.Send(payload))
+            {
+                queued++;
+            }
+        }
+
+        Assert.InRange(queued, 1, 299);
+        Assert.True(client.DroppedFrames > 0);
+        Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("input queue is full", StringComparison.Ordinal));
+    }
+
     private static Task<TerminalClient> OpenAsync(Script script, ILogger logger) =>
         TerminalClient.OpenAsync(new ScriptedConnection(script), null, 80, 24, TestContext.Current.CancellationToken, logger);
+
+    /// <summary>A channel whose writes never complete, so the writer cannot drain the input queue.</summary>
+    private sealed class BlockingChannel : IChannel
+    {
+        public ChannelType Type => ChannelType.Terminal;
+
+        public Stream Stream { get; } = new BlockingStream();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingStream : Stream
+    {
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.Delay(Timeout.Infinite, cancellationToken);
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            new(Task.Delay(Timeout.Infinite, cancellationToken));
+    }
 
     private static byte[] Opened() => Encode(ProtobufFrames.EnvelopeMessageType, new TerminalEvent { Opened = new TerminalOpened { Shell = "fake" } }.ToByteArray());
 
