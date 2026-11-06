@@ -234,9 +234,8 @@ WiX 转义等），改这些脚本前先看一眼那个测试文件。
 1. **新文档要进索引**（[`docs/README.md`](docs/README.md)）。索引只有一份，漏加会让 `dotnet test` 变红。
 2. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
 
-能机器判断的部分已经是断言（`tests/RemoteDesktop.Architecture.UnitTests/DocumentationTests.cs`）：必备文件、
-一个文件一个 H1、`docs/` 下没有孤儿文档、相对链接可解析、文件命名规范。**格式**（空行、缩进、代码块标注）
-由 CI 的 `docs` 作业跑 markdownlint。所以只改了文档也要跑一次测试：
+哪些规则由测试强制、哪些交给 markdownlint，以及测试文件在哪，见 STYLE 的 §6（不要在这里再列一份）。
+**格式**（空行、缩进、代码块标注）由 CI 的 `docs` 作业跑。所以只改了文档也要跑一次测试：
 
 ```bash
 dotnet test tests/RemoteDesktop.Architecture.UnitTests
