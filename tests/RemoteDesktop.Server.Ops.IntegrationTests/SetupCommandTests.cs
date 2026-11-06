@@ -201,6 +201,39 @@ public class SetupCommandTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A connection string the driver cannot parse (an unbalanced quote in a password, say) used to escape as an
+    /// unhandled exception: the installer printed a stack trace and the process aborted. The command has to say what
+    /// is wrong and return a code instead.
+    /// </summary>
+    [Theory]
+    [InlineData("--seed-local-nodes")]
+    [InlineData("--sync-local-nodes")]
+    [InlineData("--create-admin")]
+    public async Task A_database_that_cannot_be_opened_is_reported_instead_of_crashing(string command)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(_directory, "appsettings.json"),
+            """
+            {
+              "Ops": {
+                "Database": { "Provider": "postgres", "ConnectionString": "Host=db;Password=\"unterminated" }
+              }
+            }
+            """,
+            Ct);
+
+        var arguments = command == "--create-admin"
+            ? new[] { command, "admin", "--config-directory", _directory }
+            : [command, "--config-directory", _directory, "--rendezvous-base-url", "http://127.0.0.1:5080"];
+
+        var output = new StringWriter();
+        Assert.True(SetupCommands.TryRun(arguments, output, out var exitCode));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("数据库", output.ToString(), StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

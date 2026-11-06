@@ -35,35 +35,54 @@ public static class SetupCommands
 
         if (string.Equals(args[0], "--create-admin", StringComparison.Ordinal))
         {
-            exitCode = CreateAdminAsync(args, output).GetAwaiter().GetResult();
+            exitCode = Run(() => CreateAdminAsync(args, output), output);
             return true;
         }
 
         if (string.Equals(args[0], "--reset-password", StringComparison.Ordinal))
         {
-            exitCode = ResetPasswordAsync(args, output).GetAwaiter().GetResult();
+            exitCode = Run(() => ResetPasswordAsync(args, output), output);
             return true;
         }
 
         if (string.Equals(args[0], "--reset-totp", StringComparison.Ordinal))
         {
-            exitCode = ResetTotpAsync(args, output).GetAwaiter().GetResult();
+            exitCode = Run(() => ResetTotpAsync(args, output), output);
             return true;
         }
 
         if (string.Equals(args[0], "--seed-local-nodes", StringComparison.Ordinal))
         {
-            exitCode = SeedLocalNodesAsync(args, output).GetAwaiter().GetResult();
+            exitCode = Run(() => SeedLocalNodesAsync(args, output), output);
             return true;
         }
 
         if (string.Equals(args[0], "--sync-local-nodes", StringComparison.Ordinal))
         {
-            exitCode = SyncLocalNodesAsync(args, output).GetAwaiter().GetResult();
+            exitCode = Run(() => SyncLocalNodesAsync(args, output), output);
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Runs a command and turns a database that cannot be reached or configured into a message and a code. These run
+    /// from an installer's post-install step, where an unhandled exception is a stack trace on the operator's screen
+    /// and an aborted process, for a problem (a mistyped connection string, a database that is not up yet) that the
+    /// operator can fix and that the message can name.
+    /// </summary>
+    private static int Run(Func<Task<int>> command, TextWriter output)
+    {
+        try
+        {
+            return command().GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is System.Data.Common.DbException or ArgumentException or InvalidOperationException)
+        {
+            output.WriteLine($"无法使用数据库：{ex.Message}");
+            return 1;
+        }
     }
 
     private static async Task<int> CreateAdminAsync(string[] args, TextWriter output)
