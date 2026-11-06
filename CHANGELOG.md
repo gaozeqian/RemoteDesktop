@@ -194,7 +194,8 @@
 
 **Windows 安装包（在 Windows Sandbox 中实测）**
 
-- **固定密码不再禁止双引号**：这条限制来自旧实现——密码当时作为 `--set-fixed-password` 的参数放在命令行上，双引号会破坏命令。现在密码由立即动作写到仅 SYSTEM/Administrators 可读的临时文件、再以 `--set-fixed-password-file` 交给服务；实测含双引号、`$`、反引号、反斜杠、`;`、`&`、`<`、`>` 的 13 位口令从 MSI 属性一路到服务的 DPAPI 密钥库逐字符一致（Host MSI），安装向导说明、源码注释与运维文档随之更新；静默安装时仍按所用 shell 的引号规则书写。
+- **固定密码不再禁止双引号**：这条限制来自旧实现——密码当时作为 `--set-fixed-password` 的参数放在命令行上，双引号会破坏命令。现在密码由立即动作写到仅 SYSTEM/Administrators 可读的临时文件、再以 `--set-fixed-password-file` 交给服务；实测含双引号、`$`、反引号、反斜杠、`;`、`&`、`<`、`>` 的 13 位口令从 MSI 属性一路到服务的 DPAPI 密钥库逐字符一致（Host MSI）。安装向导说明、源码注释与运维文档随之更新；静默安装时值里的 `"` 要写成 `""` 并按单个参数传给 msiexec——PowerShell 5.1 的自然写法或 `Start-Process -ArgumentList` 数组会让 msiexec 无声挂起，文档给了 cmd 与 PowerShell 的可复制示例。
+- **运维文档的静默安装示例改用 `wss://`**：非回环明文 `ws://` 会被客户端/被控端拒绝，实测这样安装会在服务启动时失败并让整个 MSI 回滚（错误 1920 / 1603），而不是在参数阶段报错。Windows 的 build 与静默安装示例、macOS 答案文件说明、Docker 局域网一节同步修正，并写明明文需要显式 `Transport:AllowInsecureSignaling`。
 
 **Linux 安装包（在 Ubuntu 26.04 上实测）**
 

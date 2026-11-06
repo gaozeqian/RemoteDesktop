@@ -598,7 +598,8 @@ Caddy 为该域名申请并续期证书，只转发 `/ws` 与 `/health`；`/inte
 RENDEZVOUS_BIND_IP=0.0.0.0 docker compose up -d --build
 ```
 
-客户端用 `ws://<服务器>:5080/ws`。这是**明文**：设备码、在线状态、谁在连谁以及中继票据都在线上可读。不要把它
+客户端用 `ws://<服务器>:5080/ws`，并在客户端/被控端设置 `Transport:AllowInsecureSignaling=true`（非回环明文
+默认被拒绝）。这是**明文**：设备码、在线状态、谁在连谁以及中继票据都在线上可读。不要把它
 用在公网；公网请用上一节的 TLS overlay。把信令发布到可信网络之外之前，要先加上 TLS overlay 或下面的 selfsigned overlay。
 
 #### 局域网：自签 TLS（selfsigned overlay）
@@ -1511,7 +1512,7 @@ launchctl kickstart -k gui/$(id -u)/com.remotedesktop.host
 
 | 键 | 值 |
 |---|---|
-| `RendezvousUri` | `ws://主机:5080/ws` 或 `wss://主机:5080/ws`；整个地址里不能有空白、控制字符、双引号或反斜杠，否则安装失败 |
+| `RendezvousUri` | `wss://主机:5080/ws`（非回环地址必须是 `wss://`，明文 `ws://` 只允许回环或显式设 `Transport:AllowInsecureSignaling`）；整个地址里不能有空白、控制字符、双引号或反斜杠，否则安装失败 |
 | `ServerCertificatePath` | 自签名服务器证书的绝对路径（PEM/DER），仅在 `wss://` 时需要 |
 | `UnattendedPassword` | 仅 host 包：写入当前登录用户钥匙串的无人值守密码（至少 8 位）；不填则保持现有密码不变 |
 
@@ -1597,7 +1598,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 ```powershell
 # 管理员 PowerShell 或普通 PowerShell（MSI 自己会请求提升）
 # 正式发布请带上自己服务器的地址（不带就用内置的 ws://127.0.0.1:5080/ws 并给出警告，装到别的机器上连不上）
-.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+# 非回环地址必须是 wss://（明文 ws:// 只允许回环，或显式设置 Transport:AllowInsecureSignaling）
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
 
 # 指定用哪张证书签名（不指定就在证书存储里自动找一张可用的）
 .\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
@@ -1608,7 +1610,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 
 ```powershell
 .\build\installer\windows\host\Build-HostInstaller.ps1 `
-    -RendezvousUri ws://<服务器>:5080/ws
+    -RendezvousUri wss://<服务器>:5080/ws
 # 产出 artifacts/installer/windows/RemoteDesktop-Host-Windows-x64-<版本>.msi
 ```
 
@@ -1621,7 +1623,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 
 ```powershell
 msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
-  RENDEZVOUSURI="ws://rd.example.com:5080/ws" `
+  RENDEZVOUSURI="wss://rd.example.com:5080/ws" `
   FIXEDPASSWORD="至少8位"
 # 清除已有固定密码：CLEARFIXEDPASSWORD=1
 ```
@@ -1629,9 +1631,33 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 密码先由立即动作 `WriteFixedPasswordFile` 写到 `%ProgramData%\RemoteDesktop\.fixed-password`（仅 SYSTEM 与
 Administrators 可读），再由 deferred 自定义动作用 `--set-fixed-password-file` 让服务读入自己的 DPAPI
 **LocalMachine** 密钥库，随后另一个动作把该文件删除；`FIXEDPASSWORD` 在
-`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码经文件传给服务、不经过命令行，因此
-可以包含双引号等字符（静默安装时按所用 shell 的引号规则书写）；少于 8 位时安装会失败并在日志里说明，而不是
-装出一个连不上的 host。
+`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码本身没有字符集限制（至少 8 位），
+因为它经文件传给服务、不经过产品自己的命令行；少于 8 位时安装会失败并在日志里说明，而不是装出一个连不上的
+host。
+
+静默安装时密码仍要穿过 `msiexec` 的**属性语法**：值里的 `"` 写成 `""`，并且整个 `FIXEDPASSWORD="…"` 作为
+一个参数传给 `msiexec`。cmd 里直接这样写：
+
+```cmd
+msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn FIXEDPASSWORD="ab""cd"
+```
+
+Windows PowerShell 5.1 里**不要**写成自然的 `"FIXEDPASSWORD=$p"`，也不要用 `Start-Process -ArgumentList` 的
+数组：实测这两种写法会让 msiexec 无声挂起（没有日志、没有错误码）。要手工双写并按单个参数传：
+
+```powershell
+$p = 'ab"cd'
+$arg = 'FIXEDPASSWORD="' + ($p -replace '"','""') + '"'
+& msiexec.exe /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn $arg
+```
+
+含 `& | < > ;` 等 shell 元字符时同理：它们在 MSI 属性值内部不需要转义，但必须整体留在上面的引号里。拿不准时
+用安装向导输入，或装完后运行
+`"C:\Program Files\RemoteDesktop\RemoteDesktop.HostService.exe" --set-fixed-password-file <口令文件>`
+（安装包内部走的也是这条路）。
+
+静默安装传入的地址不合法时（例如明文 `ws://` 指向非回环主机），MSI 不会在参数阶段拦下：服务启动失败会让
+整个安装回滚（日志里的错误 1920 / 1603）。静默部署前先确认地址是 `wss://`（或确实是回环地址）。
 
 设备码在服务的日志里：`%ProgramData%\RemoteDesktop\logs\service-<日期>.log`，搜索
 `Registered with the rendezvous server as`。host 没有 UI 可以显示它。
