@@ -62,63 +62,17 @@ public sealed partial class AlertEvaluationService(
     OpsOptions options,
     OpsLease lease,
     TimeProvider time,
-    ILogger<AlertEvaluationService> logger) : BackgroundService
+    ILogger<AlertEvaluationService> logger)
+    : LeasedPeriodicService(lease, "alerts", time, logger)
 {
-    private const string LeaseName = "alerts";
+    protected override TimeSpan Interval => TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds));
 
-    /// <inheritdoc />
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        try
-        {
-            await RunLoopAsync(stoppingToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            // Give the lease up so a restarted console does not sit idle until the old one expires. The token is
-            // already cancelled here, and a failed release only costs that wait.
-            try
-            {
-                await lease.ReleaseAsync(LeaseName, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                LeaseReleaseFailed(logger, ex);
-            }
-        }
-    }
-
-    private TimeSpan EvaluationInterval => TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds));
-
-    private async Task RunLoopAsync(CancellationToken stoppingToken)
-    {
-        using var timer = new PeriodicTimer(EvaluationInterval, time);
-
-        do
-        {
-            try
-            {
-                await RunOnceAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                // A database hiccup or one bad rule must not fault the worker: the default host behaviour for an
-                // unhandled BackgroundService exception is to stop the console, and a monitoring console that goes
-                // down when the thing it monitors misbehaves is worse than no console.
-                EvaluationFailed(logger, ex);
-            }
-        }
-        while (await WaitAsync(timer, stoppingToken).ConfigureAwait(false));
-    }
+    protected override Task RunPassAsync(CancellationToken cancellationToken) => RunOnceAsync(cancellationToken);
 
     /// <summary>One pass, public so a test can drive it without waiting for the timer.</summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        if (!await lease.TryAcquireAsync(LeaseName, OpsLease.DurationFor(EvaluationInterval), cancellationToken).ConfigureAwait(false))
+        if (!await Lease.TryAcquireAsync(LeaseName, LeaseDuration, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -130,24 +84,6 @@ public sealed partial class AlertEvaluationService(
         }
     }
 
-    private static async Task<bool> WaitAsync(PeriodicTimer timer, CancellationToken stoppingToken)
-    {
-        try
-        {
-            return await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
-    }
-
     [LoggerMessage(Level = LogLevel.Information, Message = "Alert evaluation opened {Opened} and resolved {Resolved} alerts.")]
     private static partial void Evaluated(ILogger logger, int opened, int resolved);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release the alert evaluation lease; a restarted console may wait for it to expire.")]
-    private static partial void LeaseReleaseFailed(ILogger logger, Exception exception);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Alert evaluation failed; will try again next pass.")]
-    private static partial void EvaluationFailed(ILogger logger, Exception exception);
 }
