@@ -165,6 +165,10 @@ public class RecentDevicesTests
     [Fact]
     public async Task RecentDevicesStore_does_not_replace_the_list_when_the_file_cannot_be_opened()
     {
+        // The lock below relies on Windows sharing semantics: opening with FileShare.Delete and no read share makes
+        // the store's read fail. On Unix share modes are advisory and the same open succeeds.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows file-sharing semantics.");
+
         var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         try
