@@ -1613,7 +1613,8 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 .\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
 ```
 
-**客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物约 59 MB。
+**客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物数十 MB
+（随 SDK 与运行时更新变化）。
 只做被控端的机器用**另一个**包：它只装服务与 Agent，没有客户端窗口，也没有开始菜单项。
 
 ```powershell
@@ -2004,7 +2005,7 @@ echo "$XDG_SESSION_TYPE"
 ### V7 · 被控端：QUIC listener 泄漏（P2，观察）
 
 **背景**：被控端每准备一次入站连接就会新建一个 `QuicListener`，.NET/MsQuic 侧有一个已知的原生泄漏
-（约 1.2 MB/次，已报上游），来龙去脉见 [系统设计](../design/README.md) 的“还没有做的事”第一条。
+（约 1.2 MB/次，2026-10-12 实测；本仓库不保存上游链接），来龙去脉见 [系统设计](../design/README.md) 的“还没有做的事”第一条。
 信令服务器走 WebSocket，不跑 QuicListener，不受影响，所以要量的是**被控端的 `RemoteDesktop.HostService` 进程**。
 这一条不是通过/失败，而是长期开机的体检。
 
