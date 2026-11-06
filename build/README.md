@@ -28,7 +28,7 @@ build/
 
 平台名取 `windows` / `macos` / `linux`——是**平台**，不是发行版也不是包格式。`.deb` 因此归在
 `installer/linux/` 而不是 `installer/debian/`，和 `artifacts/installer/<平台>/` 的取法一致（见 `CONTRIBUTING.md`
-§构建产物布局）。
+的“构建产物布局”一节）。
 
 三平台的**角色集合是一样的**：`client`（控制端）、`host`（被控端）、`server`（Rendezvous + Relay + Ops + Gateway）。
 角色目录仍然只为该平台真实存在的东西而建，三个平台都有这三样：
@@ -41,7 +41,7 @@ build/
 
 Windows 的 `host` 走的是 `client/Build-ClientInstaller.ps1 -HostOnly`：服务定义、崩溃重启、防火墙规则与机器清理
 步骤只有一份，两个包不会各改一半。两个包共用服务名、不能同机共存，规则见
-[`docs/ops/README.md`](../docs/ops/README.md#2-安装)（§四 2）。
+[`docs/ops/README.md`](../docs/ops/README.md#2-安装)的“安装”一节。
 macOS 的 `host/make-pkg.sh` 用 `host/make-app.sh` 组装**独立的** `Remote Desktop Host.app`：里面是同一个
 `RemoteDesktop.HostService`，外面是 `LSUIElement` 的空壳，bundle id 是 `com.remotedesktop.host`。它安装到
 `/Library/Application Support/RemoteDesktop/Host`，而不是 `/Applications`：没有窗口的组件不应看起来像一个
@@ -83,7 +83,7 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 版本本身仍来自根 `Directory.Build.props` 的 `<Version>`；这个脚本负责空值、三段数字与 MSI 数值上限的检查，
 让 macOS/Linux 在本地打包时也得到与 Windows 相同的失败，而不是各自回退到 `0.0.0` 或用另一种解释接受它。
 Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的最终形态见
-[`docs/ops/README.md`](../docs/ops/README.md) §三开头的版本表。
+[`docs/ops/README.md`](../docs/ops/README.md) “自动化发布到 GitHub Releases”开头的版本表。
 
 `installer/windows/Import-SigningHelpers.ps1` 是同一条规则在平台层的例子，但它**不是脚本**，而是一组函数：
 `Find-SigningCertificate`、`Resolve-SigningTool`、`Get-SigningCertificate`、`Read-PfxCertificate`、`Invoke-Signing` 与

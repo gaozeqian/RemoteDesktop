@@ -14,13 +14,13 @@ namespace RemoteDesktop.Architecture.UnitTests;
 ///
 /// Formatting (blank lines around headings and lists, code fences tagged with a language) is deliberately *not*
 /// here — that is markdownlint's job in CI. This class checks meaning: does the file belong there, and does the
-/// link go anywhere. The split is spelled out in docs/STYLE.md §6.
+/// link go anywhere. The split is spelled out in the “靠测试，不靠自觉” section of docs/STYLE.md.
 /// </summary>
 public class DocumentationTests
 {
     private static readonly string Root = FindRepositoryRoot();
 
-    /// <summary>docs/STYLE.md §4 — the entry points a reader is expected to be able to reach.</summary>
+    /// <summary>The entry points a reader is expected to be able to reach (“必备文件” in docs/STYLE.md).</summary>
     private static readonly string[] RequiredDocuments =
     [
         "README.md",
@@ -38,7 +38,7 @@ public class DocumentationTests
     ];
 
     /// <summary>
-    /// The only names allowed at the repository root (docs/STYLE.md §3): every one of them is a name GitHub or
+    /// The only names allowed at the repository root (“叫什么：文件名规范” in docs/STYLE.md): every one of them is a name GitHub or
     /// convention fixes, so a new one appearing here is a decision nobody made.
     /// CODE_OF_CONDUCT.md is on the list because it is the one that will be added if this ever takes outside
     /// contributors; it is not required.
@@ -53,10 +53,10 @@ public class DocumentationTests
         "CODE_OF_CONDUCT.md",
     ];
 
-    /// <summary>docs/STYLE.md §2 — the index and the style guide, and nothing else.</summary>
+    /// <summary>The index and the style guide, and nothing else (“放哪：按读者分目录” in docs/STYLE.md).</summary>
     private static readonly string[] DocsRootAllowance = ["docs/README.md", "docs/STYLE.md"];
 
-    /// <summary>The three sections an outside reader looks for first (docs/STYLE.md §5).</summary>
+    /// <summary>The three sections an outside reader looks for first (“怎么写：README 是落地页” in docs/STYLE.md).</summary>
     private static readonly string[] RequiredReadmeSections = ["构建与测试", "文档", "许可证"];
 
     /// <summary>
@@ -73,7 +73,7 @@ public class DocumentationTests
             .Where(relative => !File.Exists(Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar))))
             .ToArray();
 
-        AssertNoOffenders(missing, "documents docs/STYLE.md §4 requires but which do not exist:");
+        AssertNoOffenders(missing, "documents the “必备文件” section of docs/STYLE.md requires but which do not exist:");
     }
 
     /// <summary>
@@ -178,7 +178,7 @@ public class DocumentationTests
     }
 
     /// <summary>
-    /// docs/STYLE.md §3. docs/ and the script trees are lower-case kebab-case; the repository root and .github/ are
+    /// The naming rules in docs/STYLE.md (“叫什么：文件名规范”). docs/ and the script trees are lower-case kebab-case;
     /// the two places where the name is fixed by GitHub rather than by us.
     /// </summary>
     [Fact]
@@ -189,11 +189,11 @@ public class DocumentationTests
             .Where(relative => !FollowsNamingRule(relative))
             .ToArray();
 
-        AssertNoOffenders(offenders, "documents whose name does not follow docs/STYLE.md §3:");
+        AssertNoOffenders(offenders, "documents whose name does not follow the “叫什么：文件名规范” section of docs/STYLE.md:");
     }
 
     /// <summary>
-    /// docs/STYLE.md §2. The root of docs/ is the index and the rules, nothing else; the moment a third file lands
+    /// docs/STYLE.md 的“放哪：按读者分目录”一节. The root of docs/ is the index and the rules, nothing else; the moment a third file lands
     /// there, "everything is in docs/" stops being true for the reader who skims.
     /// </summary>
     [Fact]
@@ -208,7 +208,7 @@ public class DocumentationTests
         AssertNoOffenders(extras, "files at the root of docs/ that belong in a subdirectory:");
     }
 
-    /// <summary>docs/STYLE.md §5 — README is a landing page; these are the things people come to it for.</summary>
+    /// <summary>docs/STYLE.md 的“怎么写：README 是落地页”一节 — README is a landing page; these are the things people come to it for.</summary>
     [Fact]
     public void Readme_carries_the_required_sections()
     {

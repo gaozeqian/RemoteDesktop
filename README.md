@@ -75,7 +75,7 @@ build/installer/linux/server/build-deb.sh
 ## 快速开始
 
 下面的命令适用于 Windows 与 Linux；**macOS 不需要 `dotnet run`**，改用服务端 `.pkg` 加直接运行 bundle 里的
-可执行文件，见 [`CONTRIBUTING.md`](CONTRIBUTING.md) §本地联调。
+可执行文件，见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 的“本地联调”一节。
 
 每条 `dotnet run` 都会一直运行，所以下面四条各开一个终端。
 
@@ -102,7 +102,7 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory "$env:TEM
 客户端默认连 `ws://127.0.0.1:5080/ws`，所以服务端一起来就能联调：两个窗口互相输入对方的设备代码和临时密码。
 
 跨机器测试**不是**放通端口、改个服务器地址就行：信令默认只监听回环，客户端也默认拒绝连非回环的 `ws://`，
-两端要显式放开（或改用 `wss://`）。步骤、端口和启动参数见 [`CONTRIBUTING.md`](CONTRIBUTING.md) §本地联调
+两端要显式放开（或改用 `wss://`）。步骤、端口和启动参数见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 的“本地联调”一节
 的"跨机器测试"。**生产环境必须为两个服务配置新的 `RelaySharedKey`，并且信令要走 `wss://`**——做法见
 [`docs/ops/README.md`](docs/ops/README.md)。各平台的联调细节（Windows 的 PowerShell 写法、Linux 的 libmsquic
 `LD_LIBRARY_PATH`、macOS 怎么跑两个实例）也在 `CONTRIBUTING.md` 的同一节。

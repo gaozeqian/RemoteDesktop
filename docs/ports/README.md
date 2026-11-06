@@ -21,9 +21,6 @@
 | 屏幕 | DXGI Desktop Duplication（失败时回退 GDI） | ScreenCaptureKit | portal + PipeWire |
 | 输入 | `SendInput` / `SendSAS` | CGEvent | libei（EIS） |
 | 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / VA-API / x264） |
-| 剪贴板 | Win32 剪贴板 | NSPasteboard | portal 剪贴板（每次连接随键鼠授权） |
-| 文件传输 | 同一套文件通道 | 同一套 | 同一套 |
-| 多显示器 | DXGI 输出枚举 | ScreenCaptureKit 显示器列表 | 仅 Mutter 枚举；只能串流共享对话框里勾选的屏 |
 | 音频 | WASAPI 环回 | ScreenCaptureKit 环回 + AudioQueue | PulseAudio |
 | 摄像头 | Media Foundation | AVFoundation | portal 摄像头节点 + PipeWire |
 | 录制 | Media Foundation（`MfVideoRecorder`） | AVAssetWriter | libavcodec（`FfmpegVideoRecorder`） |
@@ -31,11 +28,12 @@
 | 密钥 | DPAPI | Keychain | 0600 文件 |
 | 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 | logind `Inhibit` |
 | 登录前 / 安全桌面 | 支持（换 Agent 接管） | **不支持** | **不支持** |
-| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定，见 §4） |
+| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定，见“Linux (Wayland)”一节） |
 | 打包 | MSI（WiX v5） | `.app` + `.pkg` | `.deb` + systemd |
 | 原生代码 | 手写 P/Invoke + Vortice 生成的 DXGI / Media Foundation 绑定，无编译型原生库 | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
 
-产品形态为什么不同、每个平台不支持什么，见 [使用说明](../usage/README.md) §1。
+能力是否支持（剪贴板、文件传输、多显示器等）以 [使用说明](../usage/README.md) 的“支持矩阵”为准；本表只列
+实现方式与硬约束，不重复那份矩阵。
 
 ## 2. 两个移植共用的做法
 
@@ -51,7 +49,7 @@
   不同的只有常量与入口点。0600 文件密钥库与 Unix 用户上下文守卫同理。
   `Platform.Linux → Platform.Posix` 不违反分层规则（规则表不含 `Platform` 自身，一行未改）。
 - **原生互操作保留 `net10.0` 单一 TFM，手写 P/Invoke。** 不用 `net10.0-macos` / `net10.0-linux` TFM，
-  不引入绑定生成器。只有 macOS 的 ObjC-only 框架额外需要一个小的辅助库暴露扁平 C ABI（见 §3）。
+  不引入绑定生成器。只有 macOS 的 ObjC-only 框架额外需要一个小的辅助库暴露扁平 C ABI（见“macOS (Apple Silicon)”一节）。
 - **架构规则会自动覆盖新平台**：`DependencyRuleTests` 按前缀加载程序集
   （`LoadAssemblies("RemoteDesktop.Platform")`），新增 `Platform.X` 无需改测试。
 - **端口按阶段逐个注册，不预先铺桩。** 每个端口都要先是真实现才有意义——构造函数抛异常的桩只会把
@@ -71,7 +69,7 @@
 |---|---|
 | 原生互操作方式 | **混合方案 C**：`net10.0` + C 框架 P/Invoke + 小型 ObjC 辅助库 |
 | 交付范围 | 全功能一次到位（P1–P10） |
-| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；公证的验证状态见 §5） |
+| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；公证的验证状态见“未验证与已知缺口”一节） |
 | 无人值守 | `SMAppService`（client）或 LaunchAgent（host 包）；新增 `ILoginItem` 端口 |
 | 最低系统版本 | **macOS 26 (Tahoe)**（成因见下方硬约束） |
 
@@ -275,7 +273,7 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | **Linux 摄像头的授权** | 采集链路已在 Ubuntu 26.04 + 4K USB 摄像头上验证；但后台宿主无法弹出 portal 的摄像头授权框（GNOME 只允许焦点应用弹），需要显式允许一次：客户端「高级设置 → 安全 → 摄像头权限」或 `RemoteDesktop.HostService --camera-access allow` |
 | Linux 硬件编码 | NVENC 已在 NVIDIA RTX A4000（驱动 595）上端到端验证（摄像头与桌面流）；软件 x264 已验证；VA-API 仍未在真硬件上跑过 |
 | Linux X11 会话 | 只在 Wayland 上验证过，portal 路径在 X11 下大概率能用，但不作承诺 |
-| Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见 §4 |
+| Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见“Linux (Wayland)”一节 |
 | macOS 公证（notarization） | 打包脚本已补：`.app`、Installer 面板与 server 载荷的 Mach-O 逐个 Developer ID 签名，`--notarize` 提交并 staple；尚未用真实证书与公证凭据实跑 |
 | 长时间对抗性测试 | 握手洪泛上限、限流窗口这些数字按常见情况选的，没在真实攻击流量下压过 |
 

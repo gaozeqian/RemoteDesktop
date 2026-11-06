@@ -96,7 +96,7 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 ### 跨机器测试
 
-先按 [`docs/ops/README.md`](docs/ops/README.md) 的"防火墙"一节（§二 8）放通服务器的信令、地址反射和中继三个端口。**信令默认只监听回环，客户端默认也拒绝连非回环的
+先按 [`docs/ops/README.md`](docs/ops/README.md) 的“防火墙”一节放通服务器的信令、地址反射和中继三个端口。**信令默认只监听回环，客户端默认也拒绝连非回环的
 `ws://`**，所以只放通端口、改服务器地址是连不上的——两端都要显式放开（只限隔离的明文实验网；其余情况改走 `wss://`）：
 
 ```bash
@@ -208,7 +208,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 
 | 规则 | 出处 |
 |---|---|
-| `src/` 与 `tests/` 下的项目，目录名 == `.csproj` 名；`tests/` 下的项目名一律 `<区域>.<种类>Tests` | §测试项目命名 |
+| `src/` 与 `tests/` 下的项目，目录名 == `.csproj` 名；`tests/` 下的项目名一律 `<区域>.<种类>Tests` | “测试项目命名”一节 |
 | `.cs` 文件名要么是它声明的类型，要么是它分组的概念（此时必须声明 **两个以上** 类型） | 见下 |
 | `.sh` 用 kebab-case；`.ps1` 用 Verb-Noun，动词取自 PowerShell 的批准动词表 | `build/README.md` |
 | `build/installer/<平台>/<角色>/`、`build/service/<平台>/`，平台取 `windows`/`macos`/`linux` | `build/README.md` |
@@ -234,7 +234,7 @@ WiX 转义等），改这些脚本前先看一眼那个测试文件。
 1. **新文档要进索引**（[`docs/README.md`](docs/README.md)）。索引只有一份，漏加会让 `dotnet test` 变红。
 2. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
 
-哪些规则由测试强制、哪些交给 markdownlint，以及测试文件在哪，见 STYLE 的 §6（不要在这里再列一份）。
+哪些规则由测试强制、哪些交给 markdownlint，以及测试文件在哪，见 STYLE 的“靠测试，不靠自觉”一节（不要在这里再列一份）。
 **格式**（空行、缩进、代码块标注）由 CI 的 `docs` 作业跑。所以只改了文档也要跑一次测试：
 
 ```bash

@@ -22,7 +22,7 @@ public class RepositoryStructureTests
     private static readonly string[] PackagedTrees = ["installer", "service"];
 
     /// <summary>
-    /// <c>&lt;区域&gt;.&lt;种类&gt;Tests</c>, with the kind from a closed set (CONTRIBUTING.md §测试项目命名).
+    /// <c>&lt;区域&gt;.&lt;种类&gt;Tests</c>, with the kind from a closed set (“测试项目命名” in CONTRIBUTING.md).
     /// The rule exists so that filtering by kind — <c>**/*.UnitTests</c> — is a thing you can rely on; a project
     /// outside the set is missed by that filter, and missed silently, which is the whole reason it is checked.
     /// </summary>
@@ -33,7 +33,7 @@ public class RepositoryStructureTests
             .Where(name => !Regex.IsMatch(name, @"^RemoteDesktop\..+\.(Unit|Integration)Tests$"))
             .ToArray();
 
-        AssertNoOffenders(offenders, "tests/ projects outside the closed set of kinds (CONTRIBUTING.md §测试项目命名):");
+        AssertNoOffenders(offenders, "tests/ projects outside the closed set of kinds (“测试项目命名” in CONTRIBUTING.md):");
     }
 
     /// <summary>

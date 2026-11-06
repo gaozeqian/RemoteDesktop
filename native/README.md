@@ -49,7 +49,7 @@ Windows 没有对应脚本——`msquic.dll` 由运行时包提供。
 不在这里。两个 `fetch` 脚本与 `build-native.sh` 的输出都写到仓库根的 `artifacts/lib/<平台>/`
 （已 gitignore）。产物目录特意不叫 `artifacts/native/`：
 与这棵源码树同名会让"删了就没了的源码"和"删了可以再生的产物"看起来像一回事。约定见
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) §构建产物布局。
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) 的“构建产物布局”一节。
 
 安装器面板是例外：它不是随应用运行的原生库，而是打包时才编、装进 `.pkg` 的 Installer 插件。
 `build-installer-plugin.sh --role … --output …` 把它写到调用方给的目录（三个 `make-pkg.sh` 用的是

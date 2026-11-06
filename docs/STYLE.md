@@ -7,7 +7,7 @@
 
 > **为什么要有这份文件。** 在此之前，文档约定散在三处：`CONTRIBUTING.md` 讲了一点、`build/README.md` 讲了一点、
 > `docs/README.md` 又讲了一点。约定分散在三处，就会各说各话、逐渐分叉（索引漏项、命名不一致），
-> 因为"写在哪"本身就是分散的。现在收成一份，并且**其中能机器判断的部分已经变成测试**（见 §6）。
+> 因为"写在哪"本身就是分散的。现在收成一份，并且**其中能机器判断的部分已经变成测试**（见 “靠测试”）。
 
 ## 1. 文档是活的，与代码同步改动
 
@@ -43,7 +43,7 @@
 一律**小写 kebab-case**。不用 CamelCase、不用下划线、不用中文。
 理由很实际：跨平台、大小写不敏感的机器上不会撞名，URL 里也不用转义。
 
-两个名字例外，因为它们是**约定**而不是决定：`README.md`（每个目录的主文档与入口，见 §2）与
+两个名字例外，因为它们是**约定**而不是决定：`README.md`（每个目录的主文档与入口，见 “放哪”）与
 `STYLE.md`（本文件）。仓库根与 `.github/` 下的文件名由 GitHub 固定（`CONTRIBUTING.md`、
 `PULL_REQUEST_TEMPLATE.md`），也照它的来。
 
@@ -64,7 +64,7 @@
 | `CHANGELOG.md` | 版本变更（[Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)） | 使用者、发布者 |
 | `LICENSE` | 许可条款 | 法务、使用者 |
 | `docs/README.md` | 文档索引 | 想找文档的人 |
-| `docs/*/README.md` | 四份读者主文档（使用 / 设计 / 运维 / 移植），见 §2 | 各自那一类读者 |
+| `docs/*/README.md` | 四份读者主文档（使用 / 设计 / 运维 / 移植），见 “放哪” | 各自那一类读者 |
 | `docs/STYLE.md` | 本文件 | 写文档的人 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 要回答的问题 | 提交 PR 的人 |
 
@@ -84,33 +84,36 @@ README 的职责是**让人在三十秒内知道这是什么、怎么跑起来�
 其他通用写作规则：
 
 - **一个文件一个 H1**，就是标题；且它必须是文件的第一个非空行。层级不要跳（`##` 下面直接 `####` 是错的）。
-- **代码块必须标语言**（` ```bash `、` ```text `），否则 CI 会拦（见 §6）。
+- **代码块必须标语言**（` ```bash `、` ```text `），否则 CI 会拦（见 “靠测试”）。
 - **链接用相对路径**，且必须真的存在。指向另一个文档的正文引用写成 `[标题](相对路径.md)`，不要写成行内代码
   ——行内代码的路径不会被检查，会静默腐烂。
-- **代码注释引用文档时按小节名引**（`见 docs/ports/README.md 的"……"一节`），不写 `§3.4` 这类编号——
+- **代码注释引用文档时按小节名引**（`见 docs/ports/README.md 的"……"一节`），不写 `3.4` 这类编号——
   文档重排后编号必烂。注意这条路**没有任何测试兜底**（链接检查只扫 `.md`），所以被引用的小节改名时，
-  要全仓搜一遍 `.cs` / `.sh` / `.yml` 的注释（见 §7 检查清单）。
+  要全仓搜一遍 `.cs` / `.sh` / `.yml` 的注释（见“改文档时的检查清单”）。
 - **中文正文里用中文标点**；英文缩写、代码标识符、路径保持原样。产品名按 `CONTRIBUTING.md` 的拼写规矩
   （路径全小写、C# 标识符 PascalCase、散文写 Apple 的 `macOS`）。
+- **三个角色与监控台各有固定叫法**：**控制端**（client，发起连接的一方）、**被控端**（host，被控制的一方）、
+  **监控台**（`RemoteDesktop.Server.Ops`，看数字与管设备）。`控制台` 只用于 Windows 控制台会话 / ConPTY
+  这类操作系统概念，不用来指监控台。
 - 表格用来做对照（A 平台 vs B 平台），不要用来塞长段落。
 - 命令一律给完整、可直接粘贴的形式；有前提（管理员、需要装的东西）就写在命令上面一行。
 
 ## 6. 靠测试，不靠自觉
 
-写下来的规则会腐烂，除非有人在你违反时报错。本仓库的态度和 `CONTRIBUTING.md` §仓库结构规则 一致：
+写下来的规则会腐烂，除非有人在你违反时报错。本仓库的态度和 `CONTRIBUTING.md` 的“仓库结构规则”一节一致：
 **能机器判断的，就变成断言或 CI 作业。**
 
 | 规则 | 谁来管 | 在哪 | 违反时 |
 |---|---|---|---|
-| 必备文件存在（§4） | `DocumentationTests` | `dotnet test` | 构建红 |
-| 一个文件一个 H1（§5；不检查 `.github/` 下的文件） | `DocumentationTests` | 同上 | 构建红 |
-| `docs/` 下每个文档都被索引（§2；测试整体跳过各目录的 `README.md`，它们是否被索引靠评审） | `DocumentationTests` | 同上 | 构建红 |
-| `docs/` 根只放索引与本文件（§2） | `DocumentationTests`（`Docs_root_holds_only_the_index_and_the_style_guide`） | 同上 | 构建红 |
-| 相对链接可解析（§5） | `DocumentationTests` | 同上 | 构建红 |
-| `#锚点` 指向真实标题（§5） | `DocumentationTests` | 同上 | 构建红 |
-| 文件名规范（§3） | `DocumentationTests` | 同上 | 构建红 |
-| 仓库根的 Markdown 文件名取固定集合（§3） | `DocumentationTests` | 同上 | 构建红 |
-| README 必备章节（§5） | `DocumentationTests` | 同上 | 构建红 |
+| 必备文件存在 | `DocumentationTests` | `dotnet test` | 构建红 |
+| 一个文件一个 H1（不检查 `.github/` 下的文件） | `DocumentationTests` | 同上 | 构建红 |
+| `docs/` 下每个文档都被索引（测试整体跳过各目录的 `README.md`，它们是否被索引靠评审） | `DocumentationTests` | 同上 | 构建红 |
+| `docs/` 根只放索引与本文件 | `DocumentationTests`（`Docs_root_holds_only_the_index_and_the_style_guide`） | 同上 | 构建红 |
+| 相对链接可解析 | `DocumentationTests` | 同上 | 构建红 |
+| `#锚点` 指向真实标题 | `DocumentationTests` | 同上 | 构建红 |
+| 文件名规范 | `DocumentationTests` | 同上 | 构建红 |
+| 仓库根的 Markdown 文件名取固定集合 | `DocumentationTests` | 同上 | 构建红 |
+| README 必备章节 | `DocumentationTests` | 同上 | 构建红 |
 | 代码块标语言、列表/标题空行等**格式** | [markdownlint](https://github.com/DavidAnson/markdownlint) | CI 的 `docs` 作业 | PR 红 |
 | 文档与代码一致（"现在怎么做"） | 人 | review | —— |
 
@@ -124,17 +127,17 @@ markdownlint 管**格式**（空行、缩进、代码块标注）。前者需要
 
 提交前过一遍：
 
-1. 放在对的目录里吗？（§2）
+1. 放在对的目录里吗？
 2. 新文件加进 `docs/README.md` 索引了吗？（漏了 `DocumentationTests` 会拦）
 3. 移动或改名了文件？**全仓搜一遍旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
-4. 改了被代码注释引用的小节名？同样全仓搜——`.cs` / `.sh` / `.yml` 注释里的小节名引用没有任何测试兜底（§5）。
+4. 改了被代码注释引用的小节名？同样全仓搜——`.cs` / `.sh` / `.yml` 注释里的小节名引用没有任何测试兜底。
 5. 改了链接？`dotnet test` 里那条链接检查跑过了吗？
 
 ## 8. 加一份新文档
 
 ```text
-# 1. 决定目录（§2），选好名字（§3）
-# 2. 写正文：一个 H1、代码块标语言、相对链接（§5）
+# 1. 决定目录，选好名字
+# 2. 写正文：一个 H1、代码块标语言、相对链接
 # 3. 把它加进索引
 $EDITOR docs/README.md
 # 4. 本地验证：结构、命名、链接
@@ -143,4 +146,4 @@ dotnet test --project tests/RemoteDesktop.Architecture.UnitTests
 npx --yes markdownlint-cli2@0.23.3 "**/*.md"
 ```
 
-第 4 步是必须的——它会替你检查本文档里 §6 那张表的上半部分。
+第 4 步是必须的——它会替你检查本文档里 “靠测试” 那张表的上半部分。

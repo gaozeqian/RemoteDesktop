@@ -2,9 +2,9 @@
 
 给**要改代码的人**：系统怎么分层、线协议长什么样、安全边界画在哪。
 
-三块主要内容读法不同：**§1 分层**决定你把代码放哪；**§2 协议**是跨端契约，改动要两端一起动；**§3 安全**是
-"保护了什么、还没保护什么"的清单，其中"还没有做的事"一节是读这份文档最该看的地方。§4 讲运维监控台的构成，
-§5 讲客户端本机存的"最近设备列表"。
+三块主要内容读法不同：**分层与模块职责**决定你把代码放哪；**通信协议**是跨端契约，改动要两端一起动；
+**安全边界**是"保护了什么、还没保护什么"的清单，其中"还没有做的事"一节是读这份文档最该看的地方。
+**运维监控台**一节讲它的构成，**客户端本机存储**一节讲本机存的"最近设备列表"。
 
 依赖规则不是靠自觉：`tests/RemoteDesktop.Architecture.UnitTests` 会在违反时让构建变红。
 
@@ -46,7 +46,7 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
 * **`RemoteDesktop.Signaling`**: 信令层协议。负责 WebSocket 通信机制和 Rendezvous 的 Envelope 消息定义
   （`ClientMessage` / `ServerMessage`），以及底层的 UDP 控制包解析。无任何内部项目依赖，服务端与客户端共用。
 
-这两层在线上长什么样，见 §2。
+这两层在线上长什么样，见“通信协议”一节。
 
 ### 网络与应用逻辑层 (Middle Layer)
 
@@ -104,7 +104,7 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
   * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared`；Rendezvous 还引用
     `Server.Storage`（见下）。
   * `Server.Storage`：设备注册表的持久化，没有项目依赖。
-  * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见 §4。依赖只向内：`Ops.Core` →
+  * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见“运维监控台”一节。依赖只向内：`Ops.Core` →
     `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared`；三者都**不**引用
     `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
   * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared`。
@@ -134,7 +134,7 @@ Rendezvous ──▶ Storage ──▶ Npgsql
 ```
 
 * **三个端口。** `IDeviceRegistry` 是"指纹换设备码"，另带 `IsRevokedAsync` / `SetRevokedAsync`（封禁，在下一次
-  注册时生效）；`IDeviceRegistryStore` 在它之上加"建表"和"探活"；`IDeviceCatalog` 给控制台的设备列表做分页读取。
+  注册时生效）；`IDeviceRegistryStore` 在它之上加"建表"和"探活"；`IDeviceCatalog` 给监控台的设备列表做分页读取。
   内存实现**不**实现 `IDeviceRegistryStore`——于是宿主判断"要不要建表、要不要挂健康检查"的依据是配置里的
   `Provider != none`（`RendezvousServer`），而不是 `is PostgresDeviceRegistry` 这样的类型嗅探。
 * **一份算法，每种数据库一个方言。** 缓存、随机九位数、撞车重试、"这次调用是不是它给了设备码"都在
@@ -150,8 +150,8 @@ Rendezvous ──▶ Storage ──▶ Npgsql
   若还要让 `--configure-system` 能选它，再改 `Server.Shared` 的 `ServerSetup.cs`（`Provider` 常量与 `Decide`）。
   端口与 Rendezvous 宿主不用动。
 * **监控台是另一套 provider。** `OpsStore.Open` 只认 `sqlite` / `postgres`，`ServerSetup` 对 ops 配置也只写这两种；
-  新增方言时控制台不要求跟随，但要在 `ServerSetup` 里明确决定，否则 `--configure-system` 会把控制台静默落回
-  SQLite。反过来，只改控制台也不会影响设备注册表。
+  新增方言时监控台不要求跟随，但要在 `ServerSetup` 里明确决定，否则 `--configure-system` 会把监控台静默落回
+  SQLite。反过来，只改监控台也不会影响设备注册表。
 * **配置是显式的**：`Rendezvous:Database:{Provider,ConnectionString,Path}`，`Provider` 取
   `none` / `postgres` / `sqlite`。旧的 `Rendezvous:PostgresConnectionString` 与
   `ConnectionStrings:Postgres` 仍然生效且含义不变——它们是已装机器的配置，读它们就是升级不换设备码。
@@ -209,7 +209,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 5. **打洞与中继票据**：服务器把被控端的指纹、候选地址和中继信息用 `ConnectReady` 交给控制端（用于 NAT 打洞），
    中继信息里带**中继票据 (Relay Ticket)**，以备直连失败时使用；目标不在线、被拒绝或超时则回 `ConnectFailed`
    （带 `FailureReason`）。
-6. **遥测与管理**（可选）：设备可用 `TelemetryReport` / `SessionEndedReport` 上报会话质量与结束事实（见 §4），
+6. **遥测与管理**（可选）：设备可用 `TelemetryReport` / `SessionEndedReport` 上报会话质量与结束事实（见“运维监控台”一节），
    服务器可经 `AdminCommand` 下发管理动作（如断开会话，仅对声明了该能力的设备）。
 
 ### 传输层 (Transport)
@@ -465,7 +465,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
    能设多长就设多长，并依赖失败限流阻止持续在线猜测。
 5. **排查问题时注意日志里有文件路径**（不含内容）。
 6. **内部管理 API 要设置 token**（`Rendezvous:NodeToken`、`Relay:NodeToken`、`Ops:NodeToken`，三处同值）。
-   Rendezvous 的这组接口与信令共用 5080；Relay 的内部 API 默认只监听 `127.0.0.1:5083`，Ops 控制台默认 `127.0.0.1:5090`。未配置时节点只接受回环调用，跨机或容器里的控制台因此不可用，而把它误当成“不校验”
+   Rendezvous 的这组接口与信令共用 5080；Relay 的内部 API 默认只监听 `127.0.0.1:5083`，Ops 监控台默认 `127.0.0.1:5090`。未配置时节点只接受回环调用，跨机或容器里的监控台因此不可用，而把它误当成“不校验”
    暴露到公网，等于把设备枚举、封禁与断开会话交出去。Docker 的 compose 用必填的 `NODE_TOKEN` 把三处接起来。
 
 ### 还没有做的事（按重要程度）
@@ -490,7 +490,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   共享了多块而请求的不在其中时，直接报错并列出已共享的尺寸，不再拿别的显示器冒充。剩下的缺口是"请求未共享的
   显示器"仍必须由操作员重新授权，控制端不会因此看到错误的画面或错位的指针。
 * **运维节点的 URL 由管理员填写，抓取时会带上该节点的令牌**：管理员（或拿到管理员会话的人）可以把节点指向
-  任意地址，控制台会向那里发请求并附上令牌。`Ops:NodeTokenHosts` 把令牌的出口收窄到自有的几台服务器（列表外的
+  任意地址，监控台会向那里发请求并附上令牌。`Ops:NodeTokenHosts` 把令牌的出口收窄到自有的几台服务器（列表外的
   地址在登记、改地址、抓取与执行管理动作时都被拒绝），所以公网部署应当把它设上（回环地址总是放行）；不设时仍按"https 或回环"放行，明文 http 到非回环地址另需 `Ops:AllowInsecureNodeHttp`。
   每节点令牌可以给单个节点单独配密钥，但**默认仍是部署级**：没配独立令牌的节点共用 `Ops:NodeToken`，因此泄露
   一份节点配置仍可能暴露其余节点，直到它们都换成各自的令牌。
@@ -538,7 +538,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 ### 定位与边界
 
-第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：控制台宕机、重启、升级，
+第三个服务 `RemoteDesktop.Server.Ops`，与信令、中继并列部署。它**采集不碰数据面**：监控台宕机、重启、升级，
 不影响任何一次远程连接。
 
 **做什么**：节点健康与全部已抓取指标、节点版本/uptime、在线设备、会话、告警（含比值规则）、审计，浅色/深色主题。
@@ -547,7 +547,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 ### 为什么独立成一个进程
 
-1. 控制台要跨节点聚合，而每个信令实例只持有自己的在线状态和待处理的握手（都在进程内，只有设备码可以共库）——UI 和库塞进去等于给信令加一个必须跨实例一致的状态。
+1. 监控台要跨节点聚合，而每个信令实例只持有自己的在线状态和待处理的握手（都在进程内，只有设备码可以共库）——UI 和库塞进去等于给信令加一个必须跨实例一致的状态。
 2. 信令在连接建立路径上，管理面的一次错误查询、一次库锁，都不该有机会影响握手。
 3. 认证面独立：后台账号被盗不该等于信令被接管。
 
@@ -555,9 +555,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 | 边界 | 方向 | 协议 | 用途 |
 |---|---|---|---|
-| 指标 | 控制台 → 节点 | Prometheus 文本 | 数字、趋势 |
-| 对象查询 / 管理 | 控制台 → 节点 | JSON `/internal/v1`，Bearer | 设备列表、断开会话、封禁 |
-| 事件 | 节点 → 控制台 | JSON 批量 POST，HMAC | 会话事实 |
+| 指标 | 监控台 → 节点 | Prometheus 文本 | 数字、趋势 |
+| 对象查询 / 管理 | 监控台 → 节点 | JSON `/internal/v1`，Bearer | 设备列表、断开会话、封禁 |
+| 事件 | 节点 → 监控台 | JSON 批量 POST，HMAC | 会话事实 |
 
 ### 数据从哪来（范围合同）
 
@@ -584,11 +584,11 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 | `RemoteDesktop.Server.Ops` | Web 宿主：端点、认证、静态页、后台任务 |
 | `RemoteDesktop.Server.Ops.Core` | 纯逻辑：Prometheus 解析、会话投影、告警规则与状态机（求值在宿主的 `AlertService`）、TOTP、审计链 |
 | `RemoteDesktop.Server.Ops.Storage` | 表结构、方言、读写 |
-| `RemoteDesktop.Server.Gateway` | 控制台的 HTTPS 入口：只监听 HTTPS，经 YARP 固定转发到回环上的控制台 |
+| `RemoteDesktop.Server.Gateway` | 监控台的 HTTPS 入口：只监听 HTTPS，经 YARP 固定转发到回环上的监控台 |
 | `RemoteDesktop.Server.Ops.UnitTests` / `.IntegrationTests` | 纯逻辑单测 / 真宿主 + 假节点 |
 
 两条强制的依赖规则（架构测试兜底）：`Ops.Core` 只依赖 BCL + `Server.Shared`（契约），不碰 Storage/宿主/ASP.NET；
-`Ops.Storage` 不依赖宿主。**不引用 `Server.Storage`**：设备注册表是信令服务的库，控制台经内部 API 拿设备数据，
+`Ops.Storage` 不依赖宿主。**不引用 `Server.Storage`**：设备注册表是信令服务的库，监控台经内部 API 拿设备数据，
 不直连对方数据库。
 
 ### 事件与投影
@@ -598,7 +598,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   只接受合法 UUID）——**绝不用客户端自选的 `RequestId`**（可被构造，能撞别人的时间线）。
 * 事件是事实（`ops_event`），会话是投影（`ops_session`），同事务写；投影可由事件重放重建。
 * `source ∈ {relay, signaling, client}` 是诚实性字段：不把三者加成一个"活跃会话总数"。
-* **会话结束由客户端上报**：信令新增 `ClientMessage.session_ended`（字段 7），两端各报一次，控制台按同一个
+* **会话结束由客户端上报**：信令新增 `ClientMessage.session_ended`（字段 7），两端各报一次，监控台按同一个
   `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
   中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
   被控端无论会话怎么结束（本机点断开、控制端正常离开、断网）都会上报，心跳也随之停止。结束报告描述的是 QUIC 会话，
@@ -619,7 +619,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 `ops_audit_log`（哈希链审计）、`ops_admin_action`（两段式复核）、`ops_lease`（单实例租约）、
 `ops_schema_version`（迁移版本）。
 
-### 控制台的认证与安全
+### 监控台的认证与安全
 
 | 项 | 决定 |
 |---|---|
@@ -660,7 +660,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   清理只覆盖上面这几类；`ops_admin_action`（管理动作记录）、已过期的 `ops_silence` 和 `ops_audit_log` 不在其中，
   会随使用缓慢增长。备份、归档与磁盘容量仍是运维自己的事：样本是每次抓取（默认 10 秒）、每个指标各存一条，
   默认只留 30 天（`SampleDays`），把它设为 `0` 会让样本一直累积。
-* Windows 侧控制台是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
+* Windows 侧监控台是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
   手工 `sc.exe create` 仍然可行，但不是安装包的做法。
 
 ## 5. 客户端本机存储（最近设备列表）
@@ -697,11 +697,10 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 
 * **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会留下一个截断的文件，也就不会出现
   "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
-* **读不出来的文件会被让开**：JSON 解析失败、条目反序列化失败（缺少必填的 `UpdatedAtUtc`、字段类型不对）或版本
-  比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，而不是留在原位等着被下一次保存覆盖。
-  不合格的条目不会被"跳过再保存"——那样会无声丢条目，所以是整份文件让开。
-* **两处例外要知道**：`Devices` 属性缺失或不是数组时，读取返回空列表且**不保留副本**，下一次保存会覆盖原文件；
-  `DeviceId` 为空字符串的条目会被跳过（反序列化本身成功），下次保存时消失。这两处目前没有恢复路径。
+* **读不出来的文件会被让开**：JSON 解析失败、条目反序列化失败（缺少必填的 `UpdatedAtUtc`、字段类型不对）、
+  `Devices` 缺失或不是数组、条目的 `DeviceId` 为空，或版本比自己新时，文件被改名为
+  `recent_devices.json.corrupt-<时间戳>` 保留，而不是留在原位等着被下一次保存覆盖。不合格的条目不会被"跳过再保存"
+  ——那样会无声丢条目，所以是整份文件让开。
 * **暂时打不开的文件不会被当成空列表**：文件存在但被别的进程占着（杀毒软件、第二个实例）时，读取会短暂重试几次，
   仍失败就把 `IOException` / `UnauthorizedAccessException` 抛给调用方，**不**返回空列表——否则紧接着的保存会用
   一个只有一条记录的列表替换整份旧列表。界面把这类失败记进日志并在状态栏提示，列表原样保留。
@@ -719,7 +718,7 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 1. **跨机器没有意义**。Windows 上密码用 DPAPI 以 `CurrentUser` 作用域加密、macOS 上放在登录 Keychain 里，
    换一台机器都解不开。Linux 上只是仅属主可读的 0600 文件（代码有意不用 libsecret），
    文件本身能被带走：备份数据目录会连同密码一起带走，所以这条理由在 Linux 上更多是"不该带走"而不是"带走了也解不开"。
-2. **服务器不该看到它**。本文 §3 把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
+2. **服务器不该看到它**。本文“安全边界”一节把中转服务器列为对手，整套设计是端到端加密、服务器只转发密文。
    把设备密码放上去，等于要求用户相信一个我们明确假设不可信的组件。
 3. **它是本机的事**。"记住密码"是这台机器上的便利，不是账号的属性。
 
@@ -746,6 +745,6 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 
 设备代码绑定证书指纹，设备重装就是新指纹、新代码，列表里的旧条目会变成死链接，不能假设 `device_id` 永远有效。
 界面显示 **在线 / 离线 / 状态未知** 三态，而**未知不等于离线**：服务器对"从未注册"和"当前离线"的回答故意完全相同
-（见本文 §3「部署者必须自己做的事」里关于在线状态查询的一段），所以界面只能说这么多。
+（见“安全边界”里“部署者必须自己做的事”关于在线状态查询的一段），所以界面只能说这么多。
 连接返回"对方设备不在线"时，界面只是把那一行置为离线并提示"对方设备不在线。"；"该设备可能已重新注册"这类提示目前**没有实现**。
 这三态只存在内存里，不写进 `recent_devices.json`：它是机器的观测值，不是用户的意图。
