@@ -55,7 +55,7 @@
     <!-- Database. Both drivers live in RemoteDesktop.Server.Storage: which one a deployment uses is a setting, so
          the host never references either of them, and adding a third is a package line in one project. -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <!-- The storage layer reads its own settings section and registers itself; it is a plain class library, so both
          abstractions are referenced rather than coming in with a framework reference. -->
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.13" />
