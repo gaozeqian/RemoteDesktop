@@ -84,6 +84,9 @@ docker rm -f rd-pg-test
 所以直接跑 bundle 里的可执行文件：
 
 ```bash
+# 客户端 .app 不会自己出现：先构建一次（也可以用 make-pkg.sh，它内部会调用这个脚本）
+build/installer/macos/client/make-app.sh --configuration Release
+
 sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
 curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
@@ -210,6 +213,10 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 | `.sh` 用 kebab-case；`.ps1` 用 Verb-Noun，动词取自 PowerShell 的批准动词表 | `build/README.md` |
 | `build/installer/<平台>/<角色>/`、`build/service/<平台>/`，平台取 `windows`/`macos`/`linux` | `build/README.md` |
 | Linux 服务端 `.deb` 的 `postinst` 要让监控台钉住本机节点自己的证书（含 `--ops-node-certificate-path` 与 `tls/signaling.crt`），对应 `The_linux_package_lets_the_console_pin_its_own_certificate` | `build/installer/linux/server/postinst` |
+
+表里只是最常碰到的五条；同一个文件里还有安装 / 发布脚本的安全断言（服务端包脚本的密文只走环境变量、
+macOS `apply-answers.sh` 拒符号链接并校验地址、`release.yml` 的 job 级 env 不得含 Secret、卸载脚本先校验目录、
+WiX 转义等），改这些脚本前先看一眼那个测试文件。
 
 第二条值得展开：一个文件承载"一个概念的接口族与它的 DTO"是允许的（`IAudio.cs` 里没有 `IAudio` 类型，
 但它是音频端口的整组契约），所以判据不是"文件名必须是类型名"，而是**"名字不是类型时，它必须是个分组"**。

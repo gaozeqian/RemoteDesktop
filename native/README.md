@@ -4,7 +4,7 @@
 
 | 目录 | 是什么 |
 |---|---|
-| [`macos/`](macos/) | macOS 的 Objective-C 辅助库源码（`rd_*.m` / `rd_*.h`，由 `build-native.sh` 编译成 `libRemoteDesktopMacNative.dylib`）、`fetch-libmsquic.sh`，以及安装器配置面板 `rd_installer_plugin.m` / `build-installer-plugin.sh` |
+| [`macos/`](macos/) | macOS 的 Objective-C 辅助库源码（除 `rd_installer_plugin.m` 外的 `rd_*.m` 与头文件，由 `build-native.sh` 编译成 `libRemoteDesktopMacNative.dylib`）、`fetch-libmsquic.sh`，以及安装器配置面板 `rd_installer_plugin.m` / `build-installer-plugin.sh` |
 | [`linux/`](linux/) | `fetch-libmsquic.sh`：从微软的 apt 源下载 `libmsquic` 的 `.deb`，取出 `libmsquic.so.<版本>` 并建好 `libmsquic.so.2` 软链 |
 
 `rd_*.h` 是**手写的契约头**，不是生成物：`rd_native.h` 声明扁平 C ABI，托管侧在

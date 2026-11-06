@@ -21,6 +21,9 @@
 | 屏幕 | DXGI Desktop Duplication（失败时回退 GDI） | ScreenCaptureKit | portal + PipeWire |
 | 输入 | `SendInput` / `SendSAS` | CGEvent | libei（EIS） |
 | 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / VA-API / x264） |
+| 剪贴板 | Win32 剪贴板 | NSPasteboard | portal 剪贴板（每次连接随键鼠授权） |
+| 文件传输 | 同一套文件通道 | 同一套 | 同一套 |
+| 多显示器 | DXGI 输出枚举 | ScreenCaptureKit 显示器列表 | 仅 Mutter 枚举；只能串流共享对话框里勾选的屏 |
 | 音频 | WASAPI 环回 | ScreenCaptureKit 环回 + AudioQueue | PulseAudio |
 | 摄像头 | Media Foundation | AVFoundation | portal 摄像头节点 + PipeWire |
 | 录制 | Media Foundation（`MfVideoRecorder`） | AVAssetWriter | libavcodec（`FfmpegVideoRecorder`） |
@@ -30,7 +33,7 @@
 | 登录前 / 安全桌面 | 支持（换 Agent 接管） | **不支持** | **不支持** |
 | 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定，见 §4） |
 | 打包 | MSI（WiX v5） | `.app` + `.pkg` | `.deb` + systemd |
-| 原生代码 | 无（纯 P/Invoke） | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
+| 原生代码 | 手写 P/Invoke + Vortice 生成的 DXGI / Media Foundation 绑定，无编译型原生库 | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
 
 产品形态为什么不同、每个平台不支持什么，见 [使用说明](../usage/README.md) §1。
 
@@ -56,7 +59,8 @@
 - **`--self-check` 是每个平台都要有的东西。** 原生子系统多数经 `DllImport` 接入，失败形式常常是没有任何
   上下文的 `DllNotFoundException` 或一个永不返回的调用，而**发现这件事的地方是已经坏了的那台机器**。
   自检要探到能力本身，而不只是列出"端口已注册"。各平台现状不同：macOS 的自检自己走一遍真实读写 / 真帧 / 真注入；
-  Linux 做只读的能力探测（会话、portal、PipeWire、libei、libavcodec 与可用编码器），不弹窗、不开始会话；
+  Linux 做不弹窗、不开始会话的能力探测（会话、portal、PipeWire、libei、libavcodec 与可用编码器；唯一写入是
+  数据目录里的可写性探针，写后即删）；
   Windows 只报告数据目录和传输层。
 
 ## 3. macOS (Apple Silicon)
@@ -73,7 +77,8 @@
 
 ### 硬约束与结论
 
-**最低系统版本是 macOS 26。** 由随包分发的 `libmsquic` / `openssl@4` bottle 记录的 `minos 26.0` 决定，
+**最低系统版本是 macOS 26。** 由随包分发的 `libmsquic` 及其 OpenSSL 依赖（当前是 `openssl@4`）的 bottle 记录的
+`minos 26.0` 决定，
 dyld 拒绝在更老的系统上加载它们。要降低下限只能改走"从源码构建 MsQuic"，
 或者让用户自己 `brew install libmsquic`（那就不能开箱即用）。打包脚本与 CI 都按这个下限写。
 
@@ -158,7 +163,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 | P5 剪贴板与防休眠 | ✅ NSPasteboard + IOKit 电源断言 |
 | P6 远程终端（PTY） | ✅ 落在共享 `Platform.Posix`，不用 `forkpty` |
 | P7 文件传输适配 | ✅ 两个真 bug 已修；受保护目录的 TCC 行为已联调 |
-| P8 远程摄像头（AVFoundation） | ✅ 含"能注册 ≠ 能用"的真帧探针 |
+| P8 远程摄像头（AVFoundation） | ✅ 枚举探针（只列名称与模式，不开摄像头，避免消耗首次授权） |
 | P9 音频采集与播放 | ✅ ScreenCaptureKit 环回 + AudioQueue |
 | P10 录制、打包与无人值守 | ✅ AVAssetWriter + `.app` / `.pkg` + `SMAppService` |
 
@@ -181,8 +186,9 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方。这也意味着「登录界面 / 登录前访问」
 没有对应物——GNOME greeter 是另一个用户、另一个 VT，私有用户会话既看不见也驱动不了。
 
-**显示枚举可以免授权。** 走合成器自己的 D-Bus 接口（GNOME 上是 Mutter 的 `DisplayConfig`）
-即返回完整布局，**无需 portal、无需授权**。所以"列出显示器"这件事不需要弹窗。
+**显示枚举可以免授权，但只在 Mutter 上。** 走合成器自己的 D-Bus 接口（GNOME 上是 Mutter 的 `DisplayConfig`）
+即返回完整布局，**无需 portal、无需授权**。其它合成器（KDE / wlroots）不回答时，枚举器报告"没有显示器"，
+工具栏也就没有可切换的项——这不是 bug，是这一节说的硬约束。所以"列出显示器"这件事在 GNOME 上不需要弹窗。
 
 **光标必须用 `Metadata` 模式，而且本机收不到元数据。** `cursor_mode` 必须选 `Metadata`（值是 4，
 **不是 2**——2 是 `Embedded`）：抽象接口写死了指针由客户端自己画，选 `Embedded` 会把指针烧进像素里，
@@ -219,9 +225,10 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限就是私钥与其他人之间唯一的屏障，
 所以它必须在相信那一点之前先把自己设成 0600。生成证书那一段是共用代码，**保存方式才是平台相关的部分**。
 
-**宿主控制通道在 Unix 上是共享目录里的命名管道。** `PipeHostControl` 用 `NamedPipeServerStream`，
-.NET 在 Unix 上把它映射到 `$TMPDIR/.dotnet/corefx/pipe/`（一个**共享**目录，谁先建谁以 0700 拥有，
-同机两个用户会互相干扰）；`WindowsPipes.CreateServer` 用的 `PipeSecurity` / SID 在 Unix 上不存在。
+**宿主控制通道在 Unix 上是每条用户运行时目录下的 Unix domain socket。** Windows 走命名管道（ACL / SID 由
+`WindowsPipes.CreateServer` 设置）；其余平台走 `XDG_RUNTIME_DIR/remotedesktop/<名字>.sock`（未设置时退回
+`$TMPDIR/remotedesktop-<用户名>/`），目录 0700、拒绝符号链接。.NET 的命名管道在 Unix 上会把 socket 放进
+一个**共享**临时目录（谁先建谁拥有），所以这里没有直接用它——同机两个用户因此不会互相干扰。
 
 **XDG 目录不能被 `SpecialFolder` 取代。** 中文桌面上 `SpecialFolder` 答的 `~/Desktop` **根本不存在**，
 必须读 `~/.config/user-dirs.dirs`（`XdgUserDirectories`）。另外 `ListDrives` 在 Unix 上按 `DriveFormat`

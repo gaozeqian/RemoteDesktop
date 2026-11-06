@@ -57,7 +57,7 @@ pwsh -File build/installer/windows/host/Build-HostInstaller.ps1
 pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
 
 # macOS .app / .pkg（需要 Xcode Command Line Tools）
-build/installer/macos/client/make-app.sh --configuration Release
+build/installer/macos/client/make-app.sh --configuration Release   # 可选：先单独出 .app；make-pkg.sh 内部也会调用
 build/installer/macos/client/make-pkg.sh --configuration Release
 build/installer/macos/host/make-pkg.sh   --configuration Release
 build/installer/macos/server/make-pkg.sh --configuration Release
@@ -116,5 +116,6 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory "$env:TEM
 
 ## 许可证
 
-专有许可，见 [`LICENSE`](LICENSE)。**包内许可页显示的文本就是这一份**，打包时由
-`build/installer/New-LicenseRtf.ps1` 转成 RTF，所以要改许可条款改这个文件就够了。
+专有许可，见 [`LICENSE`](LICENSE)。**包内许可页显示的文本就是这一份**：Windows MSI 的许可页由
+`build/installer/New-LicenseRtf.ps1` 转成 RTF，macOS 的 `.pkg` 与 Linux 包直接使用原文。要改许可条款改这个
+文件就够了。

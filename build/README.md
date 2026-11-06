@@ -24,6 +24,8 @@ build/
 └─ tools/                      仓库维护脚本（与平台无关，见下"tools/"一节）
 ```
 
+`signing/` 的签名与公证流程、CI 需要的 Secrets 与变量写在 [`signing/README.md`](signing/README.md)。
+
 平台名取 `windows` / `macos` / `linux`——是**平台**，不是发行版也不是包格式。`.deb` 因此归在
 `installer/linux/` 而不是 `installer/debian/`，和 `artifacts/installer/<平台>/` 的取法一致（见 `CONTRIBUTING.md`
 §构建产物布局）。
@@ -151,7 +153,7 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 # 依赖变化后重新生成第三方许可清单（写入仓库根，不要手改生成物）
 pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 
-# 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 文件读不到
+# 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 路径或参数不可用
 # MSI 部署：Program Files 下的是随包出厂默认，实际生效的配置在 %ProgramData%\Remote Desktop Server\<角色>\
 pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\Remote Desktop Server"
 
@@ -163,8 +165,9 @@ pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/wind
 适合手工解压或拷贝出来的部署。对 MSI 装出来的 `C:\Program Files\Remote Desktop Server` 它读到的是**随包出厂的默认值**，
 不是实际生效的配置（后者在 `%ProgramData%\Remote Desktop Server\`，升级不会覆盖），所以审 MSI 部署请把 `-InstallDirectory` 指向 `%ProgramData%\Remote Desktop Server`（上面第一条），或用 `-SettingsPath` 指向其中某一份。
 
-两个脚本的默认输出位置都相对**仓库根**解析（由脚本自身的 `$PSScriptRoot` 往上找），所以在哪个目录下敲命令都
-一样。它们只读文件、不调用平台专有 API，所以在 Linux 或 macOS 上可以用 `pwsh` 直接跑，审那边的服务端部署
+`Export-ThirdPartyNotices.ps1` 把清单写在**仓库根**（由脚本自身的 `$PSScriptRoot` 往上找）；
+`Invoke-SecurityAudit.ps1` 只读不写，它的路径参数同样以仓库根为基准解析，所以在哪个目录下敲命令都一样。
+两者都不调用平台专有 API，所以在 Linux 或 macOS 上可以用 `pwsh` 直接跑，审那边的服务端部署
 （配置在 `/etc/remotedesktop-server/` 下）。
 
 客户端图标不在这张表里：`src/Hosts/RemoteDesktop.Client/Assets/icon.svg` 是**原创矢量源**，

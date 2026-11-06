@@ -68,9 +68,12 @@ client / host 脚本的 `-RendezvousUri` 是客户端要**连**的 `ws://` / `ws
 CI 上最常见的用法（证书以 Base64 放在 Secrets 里，解码成 .pfx 再传给脚本）：
 
 ```powershell
-.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws `
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws `
     -CertificateFile .\sign.pfx -CertificatePassword $env:PFX_PASSWORD
 ```
+
+> 非回环地址不要烤 `ws://` 进去：客户端/被控端启动时会拒绝非回环明文。只有本机回环调试才用
+> `ws://127.0.0.1:5080/ws`；生产用 `wss://`，自签证书再加 `-ServerCertificate`。
 
 ### 用 osslsigncode 签名
 
@@ -84,12 +87,12 @@ brew install osslsigncode
 ```powershell
 # PKCS#12（.pfx/.p12）：-SigningTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
-    -RendezvousUri ws://<服务器>:5080/ws `
+    -RendezvousUri wss://<服务器>:5080/ws `
     -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # 指定 osslsigncode 也可以（Linux/macOS 上只有它），密码也可以放在环境变量 RD_SIGNING_PASSWORD 里
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
-    -RendezvousUri ws://<服务器>:5080/ws `
+    -RendezvousUri wss://<服务器>:5080/ws `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）——这一种只有 osslsigncode 支持
@@ -134,7 +137,7 @@ pwsh -File build/signing/windows/New-SigningCertificate.ps1 -Years 5
 #    → build/signing/windows/certificates/RemoteDesktop.pfx  .cer
 
 # 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
 #    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要
@@ -201,7 +204,7 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 
 ```powershell
 # 自动找证书并签名（默认行为）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
 
 # 指定证书（指纹或 CN 名称的一部分）
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SignCertificate 1A2B3C... 

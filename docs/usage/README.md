@@ -16,7 +16,7 @@
 | 观看模式 | ✅ | ✅ | ✅ |
 | 屏幕采集 | DXGI Desktop Duplication | ScreenCaptureKit | portal + PipeWire |
 | 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / x264；VA-API 🔬） |
-| 多显示器 | ✅ | ✅ | ✅（Wayland 会话） |
+| 多显示器 | ✅ | ✅ | ✅（Wayland；仅限共享对话框里勾选的屏） |
 | 剪贴板（文本 + 图片） | ✅ | ✅ | ✅（每次连接要授权） |
 | 音频（被控端声音回传） | WASAPI 环回 | ScreenCaptureKit 环回 | PulseAudio |
 | 文件传输 | ✅ | ✅ | ✅ |
@@ -120,7 +120,7 @@ Windows 的形态最复杂，因为它要跨越用户桌面 / 登录界面 / UAC
 三个平台的客户端都带一个自检开关，把该问的一次问完：
 
 ```bash
-remotedesktop --self-check                                           # 客户端
+remotedesktop --self-check                                           # 客户端（Windows 是 RemoteDesktop.Client.exe）
 /usr/lib/remotedesktop-host/RemoteDesktop.HostService --self-check   # Linux 被控端
 ```
 
@@ -128,9 +128,12 @@ Linux 上它检查数据目录、QUIC、会话类型、会话总线、运行时�
 PipeWire、libei、libavcodec 版本、可用的 H.264 编码器；Windows 上只报告数据目录和传输层；macOS 上先看进程是否在已签名的 `.app`
 里以及签名身份、QUIC 传输和屏幕录制 / 辅助功能 / 摄像头三项授权（缺屏幕录制或不在 `.app` 里算不通过，其余两项只提示），
 再按客户端实际的组装方式核对各平台端口是否注册，并逐项做真实探测（钥匙串读写、显示器与抓帧、防休眠、剪贴板、
-摄像头、音频、视频编解码往返、录像、登录项、输入注入、受保护目录、终端与文件权限）。自检**不弹任何对话框、不打开摄像头**，所以在一台还没授权过、甚至起不来的机器上照样能跑。
-唯一的写操作是数据目录的可写探测：它会创建数据目录（如果还不存在），并在里面写一个 `.writable` 空文件后立刻删除。
-有必需项不通过时退出码是 1。
+摄像头、音频、视频编解码往返、录像、登录项、输入注入、受保护目录、终端与文件权限）。自检**不打开摄像头**，
+但**不是没有副作用**：Windows 与 Linux 只有数据目录的可写探测（创建目录、写一个 `.writable` 空文件后立刻删除）；
+**macOS 还会**访问桌面 / 文稿 / 下载三个受保护目录（第一次会弹出系统的文件夹授权框，这是故意的）、向钥匙串
+写一条临时密码再删除、用临时剪贴板做一次文本与图片往返、写一个临时 `.mp4`、创建电源断言并注入一次指针事件。
+所以"在一台还没授权过的机器上照样能跑"只对 Linux / Windows 成立；macOS 至少要在已签名的 `.app` 里运行，
+报告才有意义。有必需项不通过时退出码是 1。
 
 `--output <文件>` 可以把整份报告同时写进文件。macOS 通过 `open -a` 启动时会丢掉命令行参数，这时改用环境变量：
 `RD_SELF_CHECK=1` 让每次启动都只自检然后退出，`RD_SELF_CHECK_OUTPUT=<文件>` 指定报告写到哪里（效果等同于加了
@@ -166,8 +169,9 @@ remotedesktop://902226105
 （服务器没有回应查询，例如它是一台旧版服务端）。这个状态由服务器提供，仅供参考，连接能否成功仍以实际结果为准，
 它也不会禁用任何按钮。
 
-命令行开关：`--Transport:ForceRelay true` 强制走中继，`--Transport:RendezvousUri ws://<服务器>:5080/ws`
-连接其他服务器，`--DataDirectory <目录>` 换一套设备身份，`--HostMode standalone` 不委托给本机已装的 host
+命令行开关：`--Transport:ForceRelay true` 强制走中继，`--Transport:RendezvousUri wss://<服务器>:5080/ws`
+连接其他服务器（非回环地址用 `ws://` 时还要加 `--Transport:AllowInsecureSignaling true`，只限隔离实验网），
+`--DataDirectory <目录>` 换一套设备身份，`--HostMode standalone` 不委托给本机已装的 host
 服务、由客户端这个进程自己托管被控端（Windows、macOS、Linux 都生效）。
 
 ## 3. 远程桌面窗口
@@ -238,7 +242,8 @@ remotedesktop://902226105
 - 操作：选中文字**不会**自动复制，要复制得再按 Ctrl+Shift+C、Ctrl+Insert，或有选中时按 Ctrl+C（双击选词，
   三击选行）；右键有选区时复制、没有选区时粘贴；Ctrl+V、Shift+Insert、中键粘贴**控制端**剪贴板的内容；Shift+PageUp / PageDown 或滚轮翻看历史；程序开启鼠标上报时按住
   Shift 可以照常选中文字。
-- 限制：被控端锁屏、注销或切换到安全桌面时 Agent 会被替换，终端随之结束（窗口会提示，重新开一个即可）。
+- 限制（Windows）：被控端锁屏、注销或切换到安全桌面时 Agent 会被替换，终端随之结束（窗口会提示，重新开一个即可）。
+  Linux / macOS 没有 Agent，锁屏或会话结束会直接结束终端。
 
 ## 6. 远程摄像头
 
@@ -302,7 +307,7 @@ remotedesktop://902226105
 
 - 关掉之后不会有任何**质量**上报，也不会启动定时器——不是"上报后丢弃"。
 - 心跳失败不影响会话：发送只是入队，队列满了就丢最旧的一条，断线期间整队清空。
-- 被控端也要打开才会出现在"平台分布"里；只开控制端时该面板为空，界面显示"—"而不是 0。
+- 被控端也要打开才会出现在「被控端平台」面板里；只开控制端时该面板保持为空，并提示"还没有心跳"。
 - **会话结束是例外，始终上报**：无论这个开关是否打开，会话正常结束时两端都会通过信令上报一次
   `session.ended`，内容只有会话 id、中继会话 id（`relaySessionId`，未配置中继时为空）、这一端的角色和结束原因（`closed`）。没有它，直连（P2P）会话在监控台里
   永远不会结束。它不是周期性的，也不含 RTT、平台或版本。

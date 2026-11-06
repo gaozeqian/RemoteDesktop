@@ -3,8 +3,10 @@ Type: string
 Default: @DEFAULT_RENDEZVOUS_URI@
 Description: Signaling server address:
  The WebSocket address of the server this machine connects to, for
- example ws://rd.example.com:5080/ws (no TLS) or
- wss://rd.example.com:5080/ws (TLS).
+ example wss://rd.example.com:5080/ws (TLS). Plain ws:// is only accepted
+ for a loopback address such as ws://127.0.0.1:5080/ws; a non-loopback
+ ws:// address is refused at startup unless Transport:AllowInsecureSignaling
+ is set explicitly.
  .
  127.0.0.1 only reaches a server on this machine. Both machines in a
  session must be pointed at the same server.

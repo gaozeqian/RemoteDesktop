@@ -83,7 +83,7 @@ README 的职责是**让人在三十秒内知道这是什么、怎么跑起来�
 
 其他通用写作规则：
 
-- **一个文件一个 H1**，就是标题；且它必须是文件的第一行。层级不要跳（`##` 下面直接 `####` 是错的）。
+- **一个文件一个 H1**，就是标题；且它必须是文件的第一个非空行。层级不要跳（`##` 下面直接 `####` 是错的）。
 - **代码块必须标语言**（` ```bash `、` ```text `），否则 CI 会拦（见 §6）。
 - **链接用相对路径**，且必须真的存在。指向另一个文档的正文引用写成 `[标题](相对路径.md)`，不要写成行内代码
   ——行内代码的路径不会被检查，会静默腐烂。
@@ -104,10 +104,12 @@ README 的职责是**让人在三十秒内知道这是什么、怎么跑起来�
 |---|---|---|---|
 | 必备文件存在（§4） | `DocumentationTests` | `dotnet test` | 构建红 |
 | 一个文件一个 H1（§5；不检查 `.github/` 下的文件） | `DocumentationTests` | 同上 | 构建红 |
-| `docs/` 下每个文档都被索引（§2；豁免各目录的 `README.md`，它们靠 `docs/README.md` 直接链接保证） | `DocumentationTests` | 同上 | 构建红 |
+| `docs/` 下每个文档都被索引（§2；测试整体跳过各目录的 `README.md`，它们是否被索引靠评审） | `DocumentationTests` | 同上 | 构建红 |
 | `docs/` 根只放索引与本文件（§2） | `DocumentationTests`（`Docs_root_holds_only_the_index_and_the_style_guide`） | 同上 | 构建红 |
 | 相对链接可解析（§5） | `DocumentationTests` | 同上 | 构建红 |
+| `#锚点` 指向真实标题（§5） | `DocumentationTests` | 同上 | 构建红 |
 | 文件名规范（§3） | `DocumentationTests` | 同上 | 构建红 |
+| 仓库根的 Markdown 文件名取固定集合（§3） | `DocumentationTests` | 同上 | 构建红 |
 | README 必备章节（§5） | `DocumentationTests` | 同上 | 构建红 |
 | 代码块标语言、列表/标题空行等**格式** | [markdownlint](https://github.com/DavidAnson/markdownlint) | CI 的 `docs` 作业 | PR 红 |
 | 文档与代码一致（"现在怎么做"） | 人 | review | —— |

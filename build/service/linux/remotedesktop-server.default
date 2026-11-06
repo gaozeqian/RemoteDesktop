@@ -11,7 +11,7 @@
 # (and this file) is unpacked:
 #
 #     debconf-set-selections <<'EOF'
-#     remotedesktop-server database-provider select postgres
+#     remotedesktop-server remotedesktop-server/database-provider select postgres
 #     ...
 #     EOF
 #

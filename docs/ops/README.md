@@ -68,9 +68,10 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 但目标机缺少其中任何一个依赖时包会停在未配置状态，需要再跑一次 `sudo apt-get -f install`。
 
 包把四个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops,Gateway}`，四个 **system** 单元装到
-`/lib/systemd/system`，装完即启用并启动。**配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
-升级不会覆盖运维改过的东西。Windows 也把生效中的设置放在 `%ProgramData%\Remote Desktop Server`，
-三平台在这一点上一致。
+`/lib/systemd/system`，装完即启用并启动。**Linux 的配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
+升级不会覆盖运维改过的东西。Windows 也把生效中的设置放在 `%ProgramData%\Remote Desktop Server`。
+**macOS 是例外**：它的设置就在安装根 `/usr/local/remotedesktop-server/<角色>/appsettings.json`，`.pkg`
+不删除自己没装过的文件，所以升级同样不会覆盖，但位置与 Linux/Windows 不同。
 
 安装过程会问两组问题（`dpkg -i` 也会问，不只是 `apt install`）：
 
@@ -94,9 +95,9 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 
 ```sh
 sudo dpkg-reconfigure remotedesktop-server
-# 非交互安装可以预先写入答案：
-# printf '%s\n' 'remotedesktop-server database-provider select postgres' \
-#   'remotedesktop-server postgres-connection password Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...' \
+# 非交互安装必须在安装前预置答案（第一列是包名，第二列是问题名）：
+# printf '%s\n' 'remotedesktop-server remotedesktop-server/database-provider select postgres' \
+#   'remotedesktop-server remotedesktop-server/postgres-connection password Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...' \
 #   | debconf-set-selections
 systemctl status remotedesktop-rendezvous remotedesktop-relay remotedesktop-ops remotedesktop-gateway
 # 这个包的默认答案是 generate，即自签 HTTPS；-k 是因为证书不是公共 CA 签的
@@ -110,9 +111,11 @@ curl http://127.0.0.1:5090/health
 时，PEM 证书的情况下指向复制后的 `tls/custom/<原文件名>`；PKCS#12 文件没有可直接固定的公钥，不写这个键
 （已有的固定保持不动，否则回退到系统信任库）。
 
-`/etc/default/remotedesktop-server` 是高级设置与非交互安装的入口；文件里的注释是各键的权威说明，下表只是摘要
-（默认值以该文件为准）。交互式改数据库或 TLS 请用 `dpkg-reconfigure`：文件里的数据库/TLS 键只是安装问题的预置值，
-地址、中继、共享密钥、网关和防火墙开关则是每次运行都从这里读。
+`/etc/default/remotedesktop-server` 是**运行期**高级设置的入口，也是安装提问的预置值；它**不是**非交互安装的
+入口——`apt`/`dpkg` 在解包这个文件之前就会提问（文件自己的注释也这么写）。非交互安装必须在安装前用
+`debconf-set-selections` 预置（见上）。文件里的注释是各键的权威说明，下表只是摘要（默认值以该文件为准）。
+交互式改数据库或 TLS 请用 `dpkg-reconfigure`：文件里的数据库/TLS 键只是安装问题的预置值，地址、中继、
+共享密钥、网关和防火墙开关则是每次运行都从这里读。
 
 | 键 | 含义 |
 |---|---|
@@ -432,7 +435,9 @@ dotnet publish src/Server/RemoteDesktop.Server.Gateway    -c Release -r win-x64 
 ```
 
 证书用 PEM 时给 `Path` 指证书、再加一个 `KeyPath` 指私钥。客户端地址改成 `wss://你的域名:5080/ws`。
-**证书里的域名要和客户端填的地址一致**：客户端走系统信任链校验，没有对信令服务器做指纹固定。
+**证书里的域名要和客户端填的地址一致**：客户端默认走系统信任链校验（`Transport:RendezvousCertificatePath`
+为空时），所以 SAN 必须匹配。若安装时钉住了服务器公钥（§四 的 `SERVERCERTIFICATEPATH` → 设置里的
+`Transport:RendezvousCertificatePath`），客户端只信任这一张证书、不再做主机名校验，那时域名对不上也能连。
 这条路径有集成测试（`tests/RemoteDesktop.Transport.IntegrationTests/TlsSignalingTests.cs`），
 用的是和上面完全相同的两个设置项。
 
@@ -539,7 +544,7 @@ sc.exe start RemoteDesktopRendezvous
 sc.exe start RemoteDesktopRelay
 ```
 
-- 作为服务运行时日志走**Windows 事件日志**（"应用程序"日志，来源是服务名），配置文件仍读可执行文件旁边的 `appsettings.json`。
+- 作为服务运行时日志走**Windows 事件日志**（"应用程序"日志，来源是程序名，如 `RemoteDesktop.Server.Rendezvous`；服务名是 `RemoteDesktopRendezvous`），配置文件仍读可执行文件旁边的 `appsettings.json`。
 - 想看控制台输出，就先停掉服务，再直接运行可执行文件（`.\RemoteDesktop.Server.Rendezvous.exe`），日志打到标准输出。
 - 手工 `sc.exe` 部署不带 Gateway（见上面 §二 2 的说明）；用安装包的话四个服务都由 MSI 注册。
 - Linux 用 systemd 单元调用同样的可执行文件即可（`Restart=always`）；服务生命周期那一层在非 Windows 上是空操作。
@@ -615,8 +620,9 @@ export OPS_GATEWAY_IP=192.168.1.10                        # 同时启用监控�
 docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-compose.ops.yml up -d --build
 ```
 
-`.pfx` 以只读方式挂进容器，而容器以 UID 1654 运行；仓库脚本生成的证书是 0600，要给该用户读权限，又不能让所有人
-可读：`setfacl -m u:1654:r-- <.pfx>`（证书重新生成后再来一次）。监听地址可用 `RENDEZVOUS_URLS` 覆盖，默认
+`.pfx` 以只读方式挂进容器，而容器以 UID 1654 运行。**仓库脚本不设置文件权限**（Linux 上按 umask，通常是 0644），
+所以私钥默认可能对所有人可读：先 `chmod 600 <.pfx>`，再给容器用户读权限、又不能让所有人可读：
+`setfacl -m u:1654:r-- <.pfx>`（证书重新生成后再来一次）。监听地址可用 `RENDEZVOUS_URLS` 覆盖，默认
 `https://0.0.0.0:5080;http://0.0.0.0:5082`。启用监控台时把 `OPS_RENDEZVOUS_NODE_URL` 设为 `http://rendezvous:5082`。
 
 #### 端口与防火墙
@@ -894,7 +900,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:ScrapeTimeoutSeconds` | `5` | 单次抓取的超时 |
 | `Ops:AlertIntervalSeconds` | `15` | 多久求值一次告警规则。配置校验只要求至少 1，但实际最小间隔是 5 秒（更小的值按 5 秒处理） |
 | `Ops:ActionStaleSeconds` | `60` | 处于 `approved` 超过这个秒数的动作由恢复任务标记失败并写审计；进程在批准与执行之间崩溃时不会永久卡住 |
-| `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知。失败后按 1/2/4/8 分钟重试，最多 5 次 |
+| `Ops:Notifications:WebhookUrl` | 空 | 告警开/恢复各 POST 一次 JSON；空 = 不通知。失败后按 1/2/4/8/16 分钟退避重试，最多 5 次 |
 | `Ops:Notifications:Smtp:Host` | 空 | 邮件投递的 SMTP 服务器；空 = 不发邮件。配了它就要给 `From`、`To`，否则启动时按配置错误拒绝 |
 | `Ops:Notifications:Smtp:Port` / `UseStartTls` | `587` / `true` | 提交端口与 STARTTLS。不支持 465 的隐式 TLS：那种部署请在前置一个本机中继 |
 | `Ops:Notifications:Smtp:From` / `To` | 空 | 信封与头部的发件人；收件人可用逗号或分号分隔多个 |
@@ -1193,8 +1199,8 @@ sudo security add-trusted-cert -d -r trustRoot \
 # 图形界面（推荐给一般用户）
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi
 
-# 静默安装，明文 ws://
-msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+# 静默安装，明文 ws://（只允许回环地址）
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://127.0.0.1:5080/ws"
 
 # 静默安装，wss:// + 自签名服务器证书（PEM/DER 公钥）
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws" SERVERCERTIFICATEPATH="C:\certs\signaling.cer"
@@ -1203,8 +1209,14 @@ msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss:
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws"
 
 # 静默安装到别的目录
-msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn INSTALLFOLDER="D:\Apps\RemoteDesktop" RENDEZVOUSURI="wss://rd.example.com:5080/ws"
 ```
+
+**`ws://` 只接受回环地址。** 给非回环地址（例如 `ws://192.168.1.10:5080/ws`）填明文，客户端/被控端
+启动时会以 `Transport:RendezvousUri uses plain ws:// to non-loopback host …` 拒绝，MSI 则在启动服务那一步
+失败并回滚。MSI 没有传 `AllowInsecureSignaling` 的属性；确实要在隔离实验网里用非回环明文，装完后改
+`%ProgramData%\RemoteDesktop\appsettings.json` 里的 `Transport:AllowInsecureSignaling`，再重启服务。
+生产环境用 `wss://`。
 
 `SERVERCERTIFICATEPATH` 只在地址是 `wss://` 时使用，且应指向**公钥**（`.cer`/`.crt`/`.pem`/`.der`，PEM 或 DER）。
 安装器只把公钥导出到 `%ProgramData%\RemoteDesktop\certificates\signaling.cer`，在
@@ -1227,8 +1239,8 @@ host 没有安装后的窗口，所以**服务器地址、TLS 证书和无人值
 `RemoteDesktop.HostService.exe --configure-system --rendezvous ...`，再重启服务。
 
 ```powershell
-# host，明文
-msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://192.168.1.10:5080/ws"
+# host，明文（只允许回环地址；非回环明文见上面的说明）
+msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="ws://127.0.0.1:5080/ws"
 
 # host，wss + 自签名服务器证书 + 无人值守密码
 msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://rd.example.com:5080/ws" SERVERCERTIFICATEPATH="C:\certs\signaling.cer" FIXEDPASSWORD="<至少 8 位>"
@@ -1313,10 +1325,11 @@ msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /l*v "$env:TEMP\rd-inst
 
 ### 2. 服务器地址与证书
 
-**安装时会问**（`dpkg -i` 也会问）：信令服务器地址，形如 `ws://主机:5080/ws` 或 `wss://主机:5080/ws`；
-当地址是 `wss://` 且服务端用自签证书时，再问证书文件（PEM）。答案是：
+**安装时会问**（`dpkg -i` 也会问）：信令服务器地址，形如 `wss://主机:5080/ws`，或本机回环的
+`ws://127.0.0.1:5080/ws`；当地址是 `wss://` 且服务端用自签证书时，再问证书文件（PEM）。答案是：
 
-- `ws://`：不需要证书；服务端也没开 TLS。
+- `ws://`：不需要证书；服务端也没开 TLS。**只接受回环地址**，填非回环地址（例如 `ws://192.168.1.10`）时
+  程序启动会拒绝，并写 `startup-error.log`。
 - `wss://` + 公共 CA 签的证书：证书问题留空。
 - `wss://` + 自签证书：把服务端 `/etc/remotedesktop-server/tls/signaling.crt` 拷到本机，安装时填写
   它的路径；包把它装进 `/usr/local/share/ca-certificates/` 并运行 `update-ca-certificates`。
@@ -1331,8 +1344,9 @@ printf '%s\n' \
   | debconf-set-selections
 ```
 
-已安装的包用 `dpkg-reconfigure` 改答案（`/etc/default/remotedesktop-{client,host}` 只在首次安装前预置或
-非交互安装时生效，装完再改它不会覆盖 debconf 里的答案）。同一版本重装会重新询问并保留上次的答案；
+已安装的包用 `dpkg-reconfigure` 改答案（`/etc/default/remotedesktop-{client,host}` 只在安装提问时作为
+预置值生效；非交互安装要在安装前用 `debconf-set-selections` 预置。装完再改它不会覆盖 debconf 里的答案）。
+同一版本重装会重新询问并保留上次的答案；
 版本升级不重新询问；`apt purge` 会清除答案，重装按全新安装询问：
 
 ```sh
@@ -1342,7 +1356,7 @@ sudo dpkg-reconfigure remotedesktop-client     # 被控端同理：remotedesktop
 **客户端和被控端读的最终值**来自随包的 `appsettings.json`（安装时写入），用户自己的那份可以覆盖它：
 
 ```text
-~/.local/share/RemoteDesktop/appsettings.json     # { "Transport": { "RendezvousUri": "ws://主机:5080/ws" } }
+~/.local/share/RemoteDesktop/appsettings.json     # { "Transport": { "RendezvousUri": "wss://主机:5080/ws" } }
 ```
 
 **客户端和被控端读的是同一个用户文件**，所以写一次两边都生效。
@@ -1630,10 +1644,10 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 
 密码先由立即动作 `WriteFixedPasswordFile` 写到 `%ProgramData%\RemoteDesktop\.fixed-password`（仅 SYSTEM 与
 Administrators 可读），再由 deferred 自定义动作用 `--set-fixed-password-file` 让服务读入自己的 DPAPI
-**LocalMachine** 密钥库，随后另一个动作把该文件删除；`FIXEDPASSWORD` 在
-`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码本身没有字符集限制（至少 8 位），
-因为它经文件传给服务、不经过产品自己的命令行；少于 8 位时安装会失败并在日志里说明，而不是装出一个连不上的
-host。
+**LocalMachine** 密钥库，随后另一个动作把该文件删除；`FIXEDPASSWORD` 用 `Hidden="yes"` 加进
+`MsiHiddenProperties`（这个属性本身不可直接编写，WiX 5 会报 WIX0070）、动作带 `HideTarget="yes"`，所以不进
+安装日志。密码本身没有字符集限制（至少 8 位），因为它经文件传给服务、不经过产品自己的命令行；少于 8 位时
+安装会失败并在日志里说明，而不是装出一个连不上的 host。
 
 静默安装时密码仍要穿过 `msiexec` 的**属性语法**：值里的 `"` 写成 `""`，并且整个 `FIXEDPASSWORD="…"` 作为
 一个参数传给 `msiexec`。cmd 里直接这样写：
@@ -1655,6 +1669,9 @@ $arg = 'FIXEDPASSWORD="' + ($p -replace '"','""') + '"'
 用安装向导输入，或装完后运行
 `"C:\Program Files\RemoteDesktop\RemoteDesktop.HostService.exe" --set-fixed-password-file <口令文件>`
 （安装包内部走的也是这条路）。
+
+静默安装期间口令仍会出现在 `msiexec` 的命令行上（`Hidden` 只遮安装日志），对本机其他管理员可见；装完后用
+`--set-fixed-password` 换一次口令，可以缩短这个窗口。
 
 静默安装传入的地址不合法时（例如明文 `ws://` 指向非回环主机），MSI 不会在参数阶段拦下：服务启动失败会让
 整个安装回滚（日志里的错误 1920 / 1603）。静默部署前先确认地址是 `wss://`（或确实是回环地址）。
@@ -1726,7 +1743,7 @@ macOS 打包有三处值得知道的构建细节：
 
 - **安装面板是编出来的**：`native/macos/build-installer-plugin.sh` 用 `clang` 编译
   `native/macos/rd_installer_plugin.m`，三个 make-pkg 都会调用它，并用 `productbuild --plugins` 放进产品归档。
-  它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
+  传 `--distribution` 且找到签名身份时，它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
 - **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（四个 apphost 与原生库）
   单独签名；做法与原因见 [`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
 - **一次性密码不进包**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`。安装期答案由
@@ -1773,7 +1790,7 @@ build/installer/linux/client/build-deb.sh
 `~/.local/share/RemoteDesktop/`，macOS `~/Library/Application Support/RemoteDesktop/`），运维上只需要知道这几件事：
 
 - **列表里没有密码。** 只有设备代码、别名和几个时间字段；"记住的密码"存在平台的密钥存储里（Windows 是 DPAPI，macOS 是 Keychain，Linux 是数据目录下 `secrets/` 里仅属主可读的 0600 文件），换一台机器不会跟着走。备份 `recent_devices.json` 就是备份设备列表，密码需要重新输入；Linux 上备份整个数据目录则会连密码一起带走。
-- **解析失败的文件会被保留。** 解析失败、条目不合格，或文件版本比程序新，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，列表因此总能人工找回；文件只是暂时被占用（打不开）时则原样保留，不会被当成空列表覆盖。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
+- **读不出来的文件多数会被保留。** 解析失败、版本比程序新或缺少 `Version` 时，文件会被改名为 `recent_devices.json.corrupt-<时间戳>` 保留；文件只是暂时被占用（打不开）时抛异常、原样保留，不会被当成空列表覆盖。**两处例外**：`Devices` 缺失或不是数组时会被当成空列表，下一次保存会覆盖原文件（不保留副本）；`DeviceId` 为空的条目会被跳过，下次保存时消失。写入是原子的、旧格式会自动迁移，细节见 [系统设计](../design/README.md) 的"客户端本机存储"一节。
 - 没有账号体系，也没有跨机器同步。数据格式和"为什么不放密码"见 [系统设计](../design/README.md) 的
   "客户端本机存储"一节。
 
@@ -1799,7 +1816,7 @@ remotedesktop --self-check                                           # 装了客
 | Ops 节点 `rendezvous-local` 显示"抓取失败"、设备管理为空 | ① 本机节点被登记成机器名/IP：没有 NodeToken 时 `/metrics` 与 `/internal/*` 只授权回环调用，非回环访问得到 401；② 地址已经是 `127.0.0.1` 且信令用 TLS：证书 SAN 里没有 `127.0.0.1`（Debian/Ubuntu 把主机名映射到 127.0.1.1），又没有配 `Ops:NodeCertificatePath`，握手报名称不匹配 | ① 在节点管理页「改地址」改回 `https://127.0.0.1:5080`（TLS）或 `http://127.0.0.1:5080`（明文）；远程节点配置 `Ops:NodeToken`（配了 token 时非回环 http 地址会被拒绝）；② 在 `Ops/appsettings.json` 的 `Ops` 段加 `"NodeCertificatePath": "/etc/remotedesktop-server/tls/signaling.crt"` 后重启 `remotedesktop-ops`；安装脚本会自动 pin，它新生成的证书也带 `127.0.0.1` |
 | 直连打洞失败、改走中继时连接被拒绝 | `Relay\appsettings.json` 的 `Relay:SharedKey` 与 `Rendezvous:RelaySharedKey` 不一致（旧包升级后 Relay 可能为空） | 安装新 server 包，升级时的配置步骤（`--configure-system`）会把两边对齐到同一把密钥（已有的保留）；或管理员 PowerShell 运行 `Set-ServerConfiguration` 后 `Restart-Service RemoteDesktopRelay` |
 | 设备反复掉线重连 | 反向代理把长连接掐了 | nginx 加 `proxy_read_timeout 1h`（见"生产环境：信令必须走 TLS"） |
-| 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见"内网也一样"） |
+| 客户端说证书错误 | 证书里的名字/地址与客户端填的地址对不上，或这台机器不信任那张证书 | 用 `New-ServerCertificate.ps1` 把客户端实际使用的地址加进去重新生成；机器没信任证书就装一次 `.cer`（见 §二 4「内网也一样」一段） |
 | 日志里成片 "Throttled registrations from {地址}"（连接请求、在线状态查询的限流日志则带设备代码） | 限额挡住了某人（或挡错了：代理没配 `TrustedProxies`，整个代理被当成一台机器） | 先确认 `TrustedProxies` 配上没有，再按需要调"公网上的限额"里的数字 |
 | 两台机器都有代码，但连接超时 | 双方都连到服务器了，但打洞和中继都不通 | 检查 `RelayEndpoint` 是否为客户端可达地址、UDP 5081/5082 是否放通；先试 `--Transport:ForceRelay true` 判断是不是打洞问题 |
 | 连接提示"密码错误" | 密码过期（临时密码刷新过）或被限流 | 在被控端界面刷新密码重试；按控制端设备计，5 分钟窗口内累计失败 5 次，窗口结束前拒绝 |
@@ -1856,7 +1873,7 @@ Get-Process RemoteDesktop.SessionAgent -IncludeUserName | Select-Object Id, User
 
 **预期**：`Status=Running`、`StartType=Automatic`；`LocalSystem`；第三行与第五行都能看到 `RemoteDesktop.SessionAgent`，
 `UserName` 是**登录用户名**而不是 `NT AUTHORITY\SYSTEM`。客户端「高级设置 → 服务器与托管」应显示被控端托管方式为
-"后台服务"，且"本机控制端代码"与主页的设备代码是两个不同的值。
+「由后台服务托管」，且"本机控制端代码"与主页的设备代码是两个不同的值。
 
 **失败看哪里**：`%ProgramData%\RemoteDesktop\logs\service-*.log`（服务起不来、起不了 agent）；同目录的
 `agent-user-*.log`（用户桌面的 agent 起来了但连不上服务或接管会话失败；登录/UAC 桌面的在 `agent-secure-*.log`）；`startup-error.log`（设置读不出来时服务直接退出）。

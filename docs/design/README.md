@@ -23,8 +23,8 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features 
       Platform.*  Media             Signaling（独立契约，无内部依赖）
 ```
 
-*说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 和 `Media` 等具体实现层只依赖 `Abstractions` 提供的接口
-（以及 `Domain` 的实体），不依赖其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`。
+*说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 依赖 `Abstractions` 提供的接口以及 `Domain` 的实体；`Media`
+只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`。
 `Features.Desktop` 与 `Features.Camera` 引用 `Media`；宿主（`Client`、`HostService`、`SessionAgent`）除了
 `Application` 与各 `Features.*`，还直接引用 `Media` 和 `Platform.*`，在启动时把它们接起来。`Signaling` 为了保证
 服务端不引入任何客户端依赖，是一个完全独立的协议包——`Transport` 与 `Server.Shared` 引用它，它不引用任何人。*
@@ -105,8 +105,8 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
     `Server.Storage`（见下）。
   * `Server.Storage`：设备注册表的持久化，没有项目依赖。
   * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见 §4。依赖只向内：`Ops.Core` →
-    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者；三者都**不**引用 `Server.Storage`
-    （`The_console_layers_only_point_inwards` 断言）。
+    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared`；三者都**不**引用
+    `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
   * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared`。
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
@@ -138,16 +138,20 @@ Rendezvous ──▶ Storage ──▶ Npgsql
   内存实现**不**实现 `IDeviceRegistryStore`——于是宿主判断"要不要建表、要不要挂健康检查"的依据是配置里的
   `Provider != none`（`RendezvousServer`），而不是 `is PostgresDeviceRegistry` 这样的类型嗅探。
 * **一份算法，每种数据库一个方言。** 缓存、随机九位数、撞车重试、"这次调用是不是它给了设备码"都在
-  `RelationalDeviceRegistry` 里；方言只提供七句 SQL（建表、查 id、
-  不存在才插入、刷新最后活跃时间、补 `revoked_at` 列、设置封禁、查封禁）、"列已存在"与"唯一冲突"的判定、以及是否需要串行写
-  （SQLite 只有一个写者）。插入用 `INSERT … ON CONFLICT (fingerprint) DO NOTHING` 加受影响行数，
-  而不是 `RETURNING` 猜 id——MySQL 没有 `RETURNING`，这个形状才搬得过去；时间戳由 .NET 传参，
-  方言里就没有 `NOW()` 与 `datetime('now')` 的差别。
-* **加一种数据库要动这几处**：`Directory.Packages.props` 加包、Storage 的 csproj 加引用、写一个
-  `XxxDeviceRegistry.cs`（子类 + 内嵌方言，现有两个各约 75 与 110 行）、`DeviceRegistryRegistration` 的 switch 加一支、
+  `RelationalDeviceRegistry` 里；方言提供七句 SQL（建表、查 id、
+  不存在才插入、刷新最后活跃时间、补 `revoked_at` 列、设置封禁、查封禁）、两个可选的建表锁语句
+  （`SchemaLockSql` / `SchemaUnlockSql`，PostgreSQL 用 `pg_advisory_lock` 防两个进程并发建表）、
+  "列已存在"与"唯一冲突"的判定、以及是否需要串行写（SQLite 只有一个写者）。插入用
+  `INSERT … ON CONFLICT (fingerprint) DO NOTHING` 加受影响行数，而不是 `RETURNING` 猜 id——MySQL 没有
+  `RETURNING`，这个形状才搬得过去；时间戳由 .NET 传参，方言里就没有 `NOW()` 与 `datetime('now')` 的差别。
+* **加一种数据库要动这几处**（信令库）：`Directory.Packages.props` 加包、Storage 的 csproj 加引用、写一个
+  `XxxDeviceRegistry.cs`（子类 + 内嵌方言）、`DeviceRegistryRegistration` 的 switch 加一支、
   `DatabaseSettings.cs`（名字常量、`Validate()`、`Canonical()`——后者对未知名字直接抛异常）、契约测试加一个派生类。
   若还要让 `--configure-system` 能选它，再改 `Server.Shared` 的 `ServerSetup.cs`（`Provider` 常量与 `Decide`）。
   端口与 Rendezvous 宿主不用动。
+* **监控台是另一套 provider。** `OpsStore.Open` 只认 `sqlite` / `postgres`，`ServerSetup` 对 ops 配置也只写这两种；
+  新增方言时控制台不要求跟随，但要在 `ServerSetup` 里明确决定，否则 `--configure-system` 会把控制台静默落回
+  SQLite。反过来，只改控制台也不会影响设备注册表。
 * **配置是显式的**：`Rendezvous:Database:{Provider,ConnectionString,Path}`，`Provider` 取
   `none` / `postgres` / `sqlite`。旧的 `Rendezvous:PostgresConnectionString` 与
   `ConnectionStrings:Postgres` 仍然生效且含义不变——它们是已装机器的配置，读它们就是升级不换设备码。
@@ -189,7 +193,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **协议**：WebSocket (`ws://` 或 `wss://`)，路径 `/ws`
 * **端口**：默认 TCP 5080
 * **数据格式**：二进制，直接发送 Protobuf 序列化后的 Envelope (`ClientMessage` / `ServerMessage`)，
-  一条 WebSocket 消息一个 Envelope，单条上限 64 KiB。
+  一条 WebSocket 消息一个 Envelope，单条上限 64 KiB（接收侧强制；发送侧不检查，超限会被对端断开）。
 * **Protobuf 定义**：`src/Core/RemoteDesktop.Signaling/signaling.proto`
 
 **核心流程**：
@@ -215,6 +219,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **协议**：QUIC (基于 TLS 1.3 的可靠 UDP 传输协议)，ALPN 为 `rd/1`
 * **加密机制**：端到端加密（E2EE）。双方在 QUIC 握手时强制验证对方的证书指纹（通过信令层提前获取到的
   指纹），防御中间人攻击。
+* **契约常量**：QUIC 的 `IdleTimeout` 30 秒、`KeepAliveInterval` 10 秒、单向/双向入站流各 64；信令 WebSocket
+  的 `KeepAlive` 30 秒，注册必须在 10 秒内完成，连接请求 20 秒超时。这些数字写在 `PeerTls`、`RendezvousClient`、
+  `SignalingEndpoint` 与 `RendezvousOptions` 里，改一处等于改两端契约。
 * **穿透方式**：
   * **地址反射与直连 (Hole Punching)**：端点先向信令服务器的 UDP 反射端口（默认 5081）查询自己的公网地址；
     控制端再向被控端发出的内网和公网 UDP 端口发送 UDP 探测包，尝试建立 P2P QUIC 连接。
@@ -259,12 +266,19 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 3. 控制端回 `AuthResponse`：每个槽一个 `SrpResponse`（客户端公值 A 与证据 M1）。密码**绝不明文传输**，双方
    证书指纹进入 SRP identity。
 4. 被控端回 `AuthResult`：是否通过、失败原因（`AuthFailure`）、授予的权限、匹配的槽下标 `credential_index`，以及
-   服务器证据 M2。控制端必须验证 M2，否则被控端未被认证。失败原因有：`BAD_PASSWORD`（口令错误）、
-   `TOO_MANY_ATTEMPTS`（该控制端设备已被锁定）、`INCOMPATIBLE_VERSION`（协议主版本不兼容）、
-   `TOO_MANY_SESSIONS`（被控端已达会话数上限 16，口令验证通过后、发出"通过"之前就明确拒绝，而不是先通过再断开连接）。
-   `TOO_MANY_SESSIONS` 是协议 3 内新增的枚举值（加性变更，主版本不变）；不认识它的旧控制端会把它当作一般的
-   "会话建立失败"，不会崩溃，只是看不到具体原因。
+   服务器证据 M2。控制端必须验证 M2，否则被控端未被认证。失败原因有：`AUTH_FAILURE_BAD_PASSWORD`（口令错误）、
+   `AUTH_FAILURE_TOO_MANY_ATTEMPTS`（该控制端设备已被锁定）、`AUTH_FAILURE_INCOMPATIBLE_VERSION`（协议主版本
+   不兼容）、`AUTH_FAILURE_TOO_MANY_SESSIONS`（被控端已达会话数上限 16，口令验证通过后、发出"通过"之前就明确
+   拒绝，而不是先通过再断开连接）；`AUTH_FAILURE_NONE` 表示没有失败。`TOO_MANY_SESSIONS` 是协议 3 内新增的枚举值
+   （加性变更，主版本不变）；不认识它的旧控制端会把它当作一般的"会话建立失败"，不会崩溃，只是看不到具体原因。
 5. 验证通过后，被控端依据策略（如是否为仅观看模式）开放其他信道的数据收发权限。
+6. **会话期消息**：控制信道在鉴权后继续承载四种消息（`src/Core/RemoteDesktop.Protocol/control.proto`）：
+   - `Ping` / `Pong`：两端每 2 秒一次（`RemoteSession`），只用于保活与 RTT 统计，不是业务心跳。
+   - `GrantChanged`（被控端 → 控制端）：会话中权限或模式变化时发送。控制端必须停止提供不再允许的功能；
+     被控端同时关闭对应通道，执行不依赖控制端配合。
+   - `InputAccessChanged`（被控端 → 控制端）：操作系统层面的输入授权状态（Wayland portal 的授予 / 拒绝 /
+     不可用）。带单调递增的 `sequence`，接收方丢弃比已应用值更旧的更新。
+   - `RequestInputAccess`（控制端 → 被控端）：请求桌面重新询问输入授权，忽略此前拒绝留下的退避。
 
 `AuthChallenge.nonce` 与 `AuthResponse.proof` 是为线格式兼容保留的字段，版本 3 不再使用。协议主版本不同的对端
 会被明确拒绝（`INCOMPATIBLE_VERSION`），而不是被告知"密码错误"。
@@ -320,12 +334,14 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   （返回 `TooManyAttempts`），直到有锁定项过期腾出空位（最迟约 5～6 分钟，过期清扫每分钟至多一次）。这是有意的
   fail-closed 取舍：不记录这个新设备的失败就等于给它无限次猜测机会（见 `AuthAttemptLimiter` 的注释与
   `SessionSecurityTests` 中对应的测试）。攻击成本很高——需要上万个已注册身份各失败 5 次，且每个身份都要过注册限速。
-* **半开连接洪泛**：被控端同时只允许 32 个连接处于握手阶段，超出的连接直接丢弃（洪泛者付出一次往返，
-  被控端几乎不付出代价）。已建好的会话不受影响，因为配额只覆盖握手。
+* **半开连接洪泛**：被控端同时只允许 32 个连接请求处于准备阶段（`QuicPeerListener.MaxConcurrentRequests`），
+  超出的请求直接丢弃（洪泛者付出一次往返，被控端几乎不付出代价）。已接受的连接另有 32 个队列上限，满了
+  **静默丢弃**。已建好的会话不受影响，因为配额只覆盖握手。
 
 ### 信令服务器自己的暴露面
 
-服务器是唯一一个"谁都连得上"的组件，所以它自己也要有账算。下面的限额都是默认开着的
+**一旦部署到公网**，服务器就是唯一一个"谁都连得上"的组件（出厂默认只监听回环，`Urls` 为
+`http://127.0.0.1:5080`，见 `SECURITY.md`），所以它自己也要有账算。下面的限额都是默认开着的
 （完整清单和调法见 [部署与运维](../ops/README.md) 的"公网上的限额"）：
 
 * **同时服务的设备数**有上限，超出的连接在 WebSocket 升级**之前**就被拒绝——洪泛者付出一次往返，
@@ -336,8 +352,8 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   已知设备掉线、休眠或服务器重启后重连通过验签，令牌退还——它不是这道闸要拦的对象；新分配的身份不退。
 * **连接请求要花配额**，而且一台设备能同时挂起的请求数有上限：否则任何人都能拿它去轰炸某台在线设备的弹窗，
   顺带无限签发中继票据。
-* **限流事件会写日志，带来源地址**。这是服务器唯一记录地址的地方，只在拒绝时写，专门留给运维排查滥用。
-  正常连接的日志里没有地址。
+* **限流事件会写日志**。注册与连接配额的拒绝日志带来源地址——这是服务器唯一记录地址的地方，只在拒绝时写；
+  连接请求、在线状态与遥测的限流只带设备代码。正常连接的日志里没有地址。
 * **TLS 由部署者打开**（`wss://`）。客户端对非回环明文信令默认拒绝；只有显式设置
   `Transport:AllowInsecureSignaling=true` 才允许，供隔离的明文实验网使用。客户端对信令服务器默认走系统信任链，所以证书域名要对得上；
   自签证书可以用 `Transport:RendezvousCertificatePath` 固定单个证书（不改系统信任库），见 [部署与运维](../ops/README.md)。SRP 保护的是口令，不能替代 TLS 对元数据和中继票据的保护。
@@ -352,7 +368,8 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **观看模式**强制只读，与请求和策略无关；没有屏幕权限时，输入和剪贴板一并去掉。
 * 被控端可以随时把某个会话降级为"仅观看"或收回摄像头：相关通道立刻被取消，控制端只是被通知（界面跟着变），
   执行不依赖它。
-* **同时最多 16 个会话**（`HostSessionService` 的内部常量 `MaxSessions`，不可配置）。每个会话都要占用这台机器的内存直到断开，而知道
+* **同时最多 16 个会话**（`HostSessionService` 的内部上限，默认 `DefaultMaxSessions = 16`，不参与配置绑定）。
+  每个会话都要占用这台机器的内存直到断开，而知道
   密码就能走到这一步，所以没有上限时，一个人就能一直开会话直到机器撑不住。平时从手机和笔记本各连一个，
   离这个数还很远。
 * 摄像头作为常规远程功能，默认随控制会话开放（`HostPolicy`）；观看模式下强制不开放。
@@ -595,7 +612,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 以那个文件为准。即使一列"感觉上属于 CREATE TABLE"，也写成迁移而不是改基线——改基线只帮得了新库，帮不了已有的库。
 时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL（个别迁移按方言分写）。
 
-核心表：`ops_node`（节点）、`ops_metric_sample` / `_catalog` / `_rollup`（指标；`_rollup` 已建表，预留，当前未使用）、
+核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；`ops_metric_rollup` 已建表，预留，当前未使用）、
 `ops_event` / `ops_session`（事实与投影）、`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_notification_channel`
 （预留，当前未使用：通道是代码里的常量 `webhook` / `smtp`，不是表）/ `ops_notification_attempt`（投递记录）、
 `ops_silence`（静默）、`ops_admin_user` / `_session`（账号）、
@@ -621,7 +638,8 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 去重键保证同一对象同时只有一条未恢复告警。
 
 通知有两条通道，开/恢复各发一次：Webhook（`Ops:Notifications:WebhookUrl`）与邮件（`Ops:Notifications:Smtp`）。
-两条通道**各自**在 `ops_notification_attempt` 里记一行，失败各自按 1/2/4/8 分钟退避重试、最多 5 次，彼此不影响；
+两条通道**各自**在 `ops_notification_attempt` 里记一行，失败各自按 1/2/4/8/16 分钟退避重试（单次间隔上限 30 分钟）、
+最多 5 次，彼此不影响；
 一条通道挂着不会让另一条重发。
 
 **静默**（告警页「静默 1 小时」或 `POST /api/silences`）只压通知：告警照常打开、恢复、认领，照常写审计。
@@ -679,9 +697,11 @@ Linux 是 `$XDG_DATA_HOME/RemoteDesktop/`（未设置时为 `~/.local/share/Remo
 
 * **写入是原子的**：先写 `recent_devices.json.tmp` 再替换。中途崩溃不会留下一个截断的文件，也就不会出现
   "下次启动读不出来 → 当成空列表 → 一保存就把全部设备抹掉"这条链。
-* **读不出来的文件会被让开**：解析失败、条目不合格（例如缺少必填的 `UpdatedAtUtc`）或版本比自己新时，文件被改名为
-  `recent_devices.json.corrupt-<时间戳>` 保留，而不是留在原位等着被下一次保存覆盖。列表因此永远可以人工找回。
+* **读不出来的文件会被让开**：JSON 解析失败、条目反序列化失败（缺少必填的 `UpdatedAtUtc`、字段类型不对）或版本
+  比自己新时，文件被改名为 `recent_devices.json.corrupt-<时间戳>` 保留，而不是留在原位等着被下一次保存覆盖。
   不合格的条目不会被"跳过再保存"——那样会无声丢条目，所以是整份文件让开。
+* **两处例外要知道**：`Devices` 属性缺失或不是数组时，读取返回空列表且**不保留副本**，下一次保存会覆盖原文件；
+  `DeviceId` 为空字符串的条目会被跳过（反序列化本身成功），下次保存时消失。这两处目前没有恢复路径。
 * **暂时打不开的文件不会被当成空列表**：文件存在但被别的进程占着（杀毒软件、第二个实例）时，读取会短暂重试几次，
   仍失败就把 `IOException` / `UnauthorizedAccessException` 抛给调用方，**不**返回空列表——否则紧接着的保存会用
   一个只有一条记录的列表替换整份旧列表。界面把这类失败记进日志并在状态栏提示，列表原样保留。
