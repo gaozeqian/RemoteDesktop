@@ -33,7 +33,7 @@ public sealed partial class HostSessionService(
     ISystemKeepAwake? keepAwake = null,
     IInputAccess? inputAccess = null) : BackgroundService
 {
-    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultHandshakeTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>How many controllers may be in a session at once. Well past what a person connecting from a
     /// phone and a laptop needs, and low enough that opening sessions in a loop cannot spend the machine.</summary>
@@ -41,6 +41,10 @@ public sealed partial class HostSessionService(
 
     /// <summary>The ceiling in force; only tests lower it, so that reaching it does not take sixteen real sessions.</summary>
     internal int MaxSessions { get; set; } = DefaultMaxSessions;
+
+    /// <summary>How long a controller may take to finish the handshake; only tests shorten it, so that a stalled
+    /// handshake can be seen to time out without waiting fifteen real seconds.</summary>
+    internal TimeSpan HandshakeTimeout { get; set; } = DefaultHandshakeTimeout;
 
     /// <summary>
     /// How many channels one session may have open at once. The products use fewer than ten (video, input, clipboard,

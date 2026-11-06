@@ -45,9 +45,56 @@ public sealed class HandshakeInterruptionTests(ServerFixture server) : IClassFix
         await WaitForAsync(() => host.Limiter.PendingReservations == 0, "the successful handshake to settle its reservation");
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
+    /// <summary>
+    /// A controller that opens the control channel and then goes silent holds one of the host's handshake slots and one
+    /// of the device's reserved attempts. The host gives up after its handshake timeout and must give both back,
+    /// uncounted: a controller that only stalls has shown no password evidence, so it has not failed.
+    /// </summary>
+    [Fact]
+    public async Task A_handshake_that_stalls_is_given_up_on_and_does_not_count_against_the_device()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var link = new StallableLink();
+        await using var host = await TestDevice.StartAsync(server);
+        host.HostSessions.HandshakeTimeout = TimeSpan.FromSeconds(1);
+        await using var controller = await TestDevice.StartAsync(server, services =>
+        {
+            services.AddSingleton<QuicPeerConnector>();
+            services.AddSingleton<IPeerConnector>(sp => new StallingConnector(sp.GetRequiredService<QuicPeerConnector>(), link));
+        });
+
+        // More stalled handshakes than failures the host tolerates: if a stall counted, the device would be locked out.
+        link.Stalled = true;
+        for (var i = 0; i < AuthAttemptLimiter.MaxFailuresPerDevice + 1; i++)
+        {
+            using var stalled = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            var attempt = controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, stalled.Token);
+
+            // The reservation is held while the controller is silent ...
+            await WaitForAsync(() => host.Limiter.PendingReservations == 1, "the host to reserve an attempt");
+
+            // ... and returned by the host's own timeout, not by anything the controller does.
+            // Eight seconds is far above the one-second timeout and far below the real 15 s one, so only the timeout
+            // this test set can satisfy it.
+            await WaitForAsync(() => host.Limiter.PendingReservations == 0, "the host to give up on the silent controller", seconds: 8);
+
+            // Whichever way the controller finds out (the host's abort of the stream, or its own cancellation), the
+            // attempt did not succeed; what matters is the host's state, checked above.
+            await stalled.CancelAsync();
+            await Assert.ThrowsAnyAsync<Exception>(() => attempt);
+        }
+
+        // The short timeout was only to make the stalls quick. A real handshake (QUIC and the password exchange) can take
+        // longer than that under load, so the last one runs under the host's normal timeout.
+        link.Stalled = false;
+        host.HostSessions.HandshakeTimeout = TimeSpan.FromSeconds(15);
+        await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
+
+        Assert.Equal(SessionMode.Control, session.Context.Grant.Mode);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, string what, int seconds = 20)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
@@ -161,5 +208,105 @@ public sealed class HandshakeInterruptionTests(ServerFixture server) : IClassFix
                 throw new IOException("The link broke before the password evidence was sent.");
             }
         }
+    }
+
+    private sealed class StallableLink
+    {
+        public volatile bool Stalled;
+    }
+
+    private sealed class StallingConnector(IPeerConnector inner, StallableLink link) : IPeerConnector
+    {
+        public async Task<IPeerConnection> ConnectAsync(DeviceId remote, CancellationToken cancellationToken) =>
+            new StallingConnection(await inner.ConnectAsync(remote, cancellationToken), link);
+    }
+
+    private sealed class StallingConnection(IPeerConnection inner, StallableLink link) : IPeerConnection
+    {
+        public DeviceId RemoteDevice => inner.RemoteDevice;
+
+        public ConnectionPath Path => inner.Path;
+
+        public string? RelaySessionId => inner.RelaySessionId;
+
+        public string LocalFingerprint => inner.LocalFingerprint;
+
+        public string RemoteFingerprint => inner.RemoteFingerprint;
+
+        public async ValueTask<IChannel> OpenChannelAsync(ChannelType type, bool bidirectional, CancellationToken cancellationToken)
+        {
+            var channel = await inner.OpenChannelAsync(type, bidirectional, cancellationToken);
+            return type == ChannelType.Control && link.Stalled ? new StallingChannel(channel) : channel;
+        }
+
+        public ValueTask<IChannel?> AcceptChannelAsync(CancellationToken cancellationToken) => inner.AcceptChannelAsync(cancellationToken);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
+    private sealed class StallingChannel(IChannel inner) : IChannel
+    {
+        public ChannelType Type => inner.Type;
+
+        public Stream Stream { get; } = new StallingStream(inner.Stream);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Passes everything through until the host's challenge has been read; after that every write - the one that would
+    /// carry the password evidence - waits until the caller gives up, the way a link that went silent does.
+    /// </summary>
+    private sealed class StallingStream(Stream inner) : Stream
+    {
+        private volatile bool _challengeRead;
+
+        public override bool CanRead => inner.CanRead;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => inner.CanWrite;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = inner.Read(buffer, offset, count);
+            _challengeRead |= read > 0;
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await inner.ReadAsync(buffer, cancellationToken);
+            _challengeRead |= read > 0;
+            return read;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_challengeRead)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            await inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }
