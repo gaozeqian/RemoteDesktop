@@ -1603,7 +1603,7 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 .\build\installer\windows\client\Build-ClientInstaller.ps1 -SignCertificate <证书指纹或 CN 名称>
 ```
 
-**客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物约 49 MB。
+**客户端那一个 MSI 同时装下客户端、后台服务和会话 Agent**（三者本来就在同一个目录里协作），产物约 59 MB。
 只做被控端的机器用**另一个**包：它只装服务与 Agent，没有客户端窗口，也没有开始菜单项。
 
 ```powershell
