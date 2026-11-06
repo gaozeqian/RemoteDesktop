@@ -5,7 +5,8 @@ on:
     tags:
       - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
 
-# 只有最后那个发布 job 需要写权限，它自己声明 contents: write；其余三个（check-version、build-linux、build-macos）只读仓库。
+# 只有最后的 release job 需要写权限，它自己声明 contents: write；其余四个（check-version、build-linux、
+# build-macos、build-windows）只读仓库。
 permissions:
   contents: read
 
@@ -258,18 +259,11 @@ jobs:
           # 同上：一个都没打出来就在这里红，而不是让发布 job 去下载一个不存在的 artifact。
           if-no-files-found: error
 
-  build-windows-and-release:
-    # 名字里两件事都要写：它是 Windows 那条腿（ci.yml 里叫 build-windows），也是发布本身。此前叫
-    # build-and-release，是三个 job 里唯一不带平台词的，读 job 列表时看不出 Windows 在哪。
-    #
-    # 等两个打包 job 先做完：发布是一个原子动作，缺一个产物就不该发
-    # （见上面 build-linux 与 build-macos 的注释）。
-    needs: [check-version, build-linux, build-macos]
+  # Windows 那条腿（ci.yml 里同名），只打包与自检，不发版。三个平台在这件事上形状一致：都叫 build-<平台>，
+  # 都只产出 artifact；发版是文件末尾的 release job 一个人的事（它等这三个都做完）。
+  build-windows:
+    needs: check-version
     runs-on: windows-latest
-
-    # 权限配置：允许向 Releases 写入文件
-    permissions:
-      contents: write
 
     # job 级 env 只放布尔值，不放证书与口令本身：job 级 env 对每一步都可见，包括 restore、build 与测试进程（测试
     # 代码读得到环境变量）。Secret 不能直接写进 if，所以 if 读这里的布尔值；而布尔值必须放在 job 级别才有保证——
@@ -277,12 +271,6 @@ jobs:
     env:
       HAS_PFX_CERT: ${{ secrets.CODE_SIGN_CERT_BASE64 != '' }}
       HAS_PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD != '' }}
-      # Only a boolean is needed here: the note below has to say whether the macOS packages were signed, and the
-      # packages themselves are built in the other job.
-      MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
-      # Likewise a boolean: the build-macos job only notarizes when all three notary secrets are present, and a signed
-      # but not notarized package still gets the Gatekeeper prompt on a first run.
-      MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
 
     steps:
       - name: Checkout Code
@@ -317,8 +305,11 @@ jobs:
       #
       # 没配置不是错误，而是选中了"不内置"：本软件公网和内网都要用，服务器地址往往是部署时才定的，一个装在
       # 用户机器上的包内置谁的地址都不对。这样的包默认连它自己那台机器，连不上时客户端界面会直说"未连接服务器
-      # （地址）"并告诉用户去哪儿改，所以不会变成"看着正常、就是连不上"。这里的说明会写进 Release。
-      - name: Decide the server address and the release note
+      # （地址）"并告诉用户去哪儿改，所以不会变成"看着正常、就是连不上"。
+      #
+      # 这里只决定 -RendezvousUri 传不传。发布说明里那句"内置了哪个地址"由 release job 读同一个变量自己生成，
+      # 不靠 job 之间的环境变量传递——环境变量传不过 job 边界，而这里能传到下个 job 的只有 artifact。
+      - name: Decide the server address
         shell: pwsh
         # The variable is read from the environment, not interpolated into the script text: a value containing a quote
         # or a $( ) would otherwise be parsed as PowerShell.
@@ -329,58 +320,9 @@ jobs:
           if ($address) {
               Write-Host "The client installer will point at $address."
               "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
-              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装时会询问（macOS 的 Installer 配置页 / Linux 的 debconf）；没有无人值守答案时按默认值安装。"
           } else {
               Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
-
-              # PowerShell 的 here-string 要求结束符顶格，而 YAML 的 run: | 块里每一行都必须缩进——两者不能共存，
-              # 所以这里用数组拼（而不是 @"..."@）。
-              $note = @(
-                  '> [!IMPORTANT]'
-                  '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
-                  '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
-                  '> 部署步骤见 [docs/ops/README.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/README.md)。'
-              ) -join "`n"
           }
-
-          # The boundaries a downloader has to know before installing, not after. Written here rather than left to
-          # the generated notes, which describe commits and not what the package will or will not protect.
-          $boundaries = [System.Collections.Generic.List[string]]::new()
-          $boundaries.Add('> [!WARNING]')
-          $boundaries.Add('> **Windows 本机用户边界**：控制管道对本机任何已登录用户开放，可读取设备码与临时密码、')
-          $boundaries.Add('> 设置固定密码。单用户机器上这没有问题；多人共用且彼此不信任的机器上，应把本机用户都视为可信。')
-          $boundaries.Add('> 见 [安全边界](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/design/README.md#3-安全边界)。')
-
-          if ($env:MACOS_SIGNED -ne 'true') {
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
-              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
-          } elseif ($env:MACOS_NOTARIZED -ne 'true') {
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **macOS 包已签名但未公证**：Gatekeeper 在首次打开时仍会提示。右键点击 `.pkg` 选择')
-              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
-          }
-
-          # The build steps below sign only when both the certificate and its password exist and otherwise fall back to
-          # -SkipSigning, so this has to use the same condition: checking the certificate alone said "signed" for a
-          # release whose packages were not.
-          if (-not ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true')) {
-              $missing = @()
-              if ($env:HAS_PFX_CERT -ne 'true') { $missing += 'CODE_SIGN_CERT_BASE64' }
-              if ($env:HAS_PFX_PASSWORD -ne 'true') { $missing += 'CODE_SIGN_CERT_PASSWORD' }
-              Write-Host "::warning title=Unsigned Windows packages::Missing secret(s): $($missing -join ', '). The MSI files will be unsigned: SmartScreen will warn, and the UIAccess session agent cannot start."
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')
-          }
-
-          $note = $note + "`n`n" + ($boundaries -join "`n")
-
-          # 有地址就写清是哪一个，没有就提醒要自己填——两种都是一个句子，所以这个文件总是存在。
-          # GitHub 会把它放在自动生成的 release notes 前面。
-          Set-Content -Path release-body.md -Value $note -Encoding utf8
 
       # 可选：如果你需要使用真正的代码签名，而不是自签/跳过，
       # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
@@ -487,11 +429,112 @@ jobs:
           Rename-Item -Path $client.FullName -NewName $clientName
           Rename-Item -Path $hostPackage.FullName -NewName $hostName
           Rename-Item -Path $server.FullName -NewName $serverName
-          Write-Output "CLIENT_MSI=$installerFolder/$clientName" >> $env:GITHUB_ENV
-          Write-Output "HOST_MSI=$installerFolder/$hostName" >> $env:GITHUB_ENV
-          Write-Output "SERVER_MSI=$installerFolder/$serverName" >> $env:GITHUB_ENV
+          Write-Output "Renamed to $clientName, $hostName and $serverName."
 
-      # 三个 Linux 包在上一个 job 里打好，这里取回来。少了就什么都不发——和下面 MSI 一样的理由：只发出其中
+      # 名字里已经带 Tag，就是发布资产名；release job 下载下来直接上传，中间不再改。
+      - name: Upload the MSIs
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-packages
+          path: artifacts/installer/windows/*.msi
+          # 同上：一个都没打出来就在这里红，而不是让发布 job 去下载一个不存在的 artifact。
+          if-no-files-found: error
+
+  # 发布本身：不打包任何东西，只等三个平台的 artifact 到齐，把九个包与发布说明交给 GitHub。从 Windows 那个 job
+  # 里拆出来，是为了 job 列表里三个 build-<平台> 形状一致，而且"发版"这件事只有一个地方能发生。
+  release:
+    # 三个打包 job 都做完才发：发布是一个原子动作，缺一个产物就不该发（见上面 build-linux 与 build-macos 的注释）。
+    needs: [check-version, build-linux, build-macos, build-windows]
+    # 与 build-windows 同一个 runner：发布说明用 pwsh 拼，gh 在托管 runner 上预装。
+    runs-on: windows-latest
+
+    # 唯一需要写权限的 job：发版要往 Releases 写文件。
+    permissions:
+      contents: write
+
+    # job 级 env 只放布尔值，理由与 build-windows 相同——但这里没有 if 读它，只是为了把两处判断收敛到一处写法。
+    # 发布说明必须如实写出各包有没有签名/公证，而这个事实由 Secret 有没有决定：这里读同一批 Secret 得到的就是
+    # 构建 job 得到的答案，不必（也不该）为了传一句话而把 Secret 下发到更多地方。
+    env:
+      HAS_PFX_CERT: ${{ secrets.CODE_SIGN_CERT_BASE64 != '' }}
+      HAS_PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD != '' }}
+      # 与 build-macos 同一个条件：两张证书都配了才签名，三个公证 Secret 都配了才公证。
+      MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
+      MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
+
+    steps:
+      # 只为 .git：gh 靠仓库推断往哪个 repo 发版。这个 job 不构建任何东西。
+      - uses: actions/checkout@v7
+
+      # 发布说明描述的是下载者拿到的那些包，而三个平台的包是上面三个 job 出的。这里不做判断，只把"为什么这样"
+      # 摆在资产最上面：地址有没有内置、哪些包没签名、Windows 本机用户的边界在哪里。
+      - name: Decide the release note
+        shell: pwsh
+        # The variable is read from the environment, not interpolated into the script text: a value containing a quote
+        # or a $( ) would otherwise be parsed as PowerShell.
+        env:
+          DEFAULT_RENDEZVOUS_URI: ${{ vars.DEFAULT_RENDEZVOUS_URI }}
+        run: |
+          $address = $env:DEFAULT_RENDEZVOUS_URI
+          if ($address) {
+              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装时会询问（macOS 的 Installer 配置页 / Linux 的 debconf）；没有无人值守答案时按默认值安装。"
+          } else {
+              # PowerShell 的 here-string 要求结束符顶格，而 YAML 的 run: | 块里每一行都必须缩进——两者不能共存，
+              # 所以这里用数组拼（而不是 @"..."@）。
+              $note = @(
+                  '> [!IMPORTANT]'
+                  '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
+                  '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
+                  '> 部署步骤见 [docs/ops/README.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/README.md)。'
+              ) -join "`n"
+          }
+
+          # The boundaries a downloader has to know before installing, not after. Written here rather than left to
+          # the generated notes, which describe commits and not what the package will or will not protect.
+          $boundaries = [System.Collections.Generic.List[string]]::new()
+          $boundaries.Add('> [!WARNING]')
+          $boundaries.Add('> **Windows 本机用户边界**：控制管道对本机任何已登录用户开放，可读取设备码与临时密码、')
+          $boundaries.Add('> 设置固定密码。单用户机器上这没有问题；多人共用且彼此不信任的机器上，应把本机用户都视为可信。')
+          $boundaries.Add('> 见 [安全边界](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/design/README.md#3-安全边界)。')
+
+          if ($env:MACOS_SIGNED -ne 'true') {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
+              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          } elseif ($env:MACOS_NOTARIZED -ne 'true') {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **macOS 包已签名但未公证**：Gatekeeper 在首次打开时仍会提示。右键点击 `.pkg` 选择')
+              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          }
+
+          # build-windows 只在证书与口令都存在时才签名、否则退回 -SkipSigning，所以这里必须用同一个条件：
+          # 只看证书会在包其实未签名的发布上说成"已签名"。
+          if (-not ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true')) {
+              $missing = @()
+              if ($env:HAS_PFX_CERT -ne 'true') { $missing += 'CODE_SIGN_CERT_BASE64' }
+              if ($env:HAS_PFX_PASSWORD -ne 'true') { $missing += 'CODE_SIGN_CERT_PASSWORD' }
+              Write-Host "::warning title=Unsigned Windows packages::Missing secret(s): $($missing -join ', '). The MSI files will be unsigned: SmartScreen will warn, and the UIAccess session agent cannot start."
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')
+          }
+
+          $note = $note + "`n`n" + ($boundaries -join "`n")
+
+          # 有地址就写清是哪一个，没有就提醒要自己填——两种都是一个句子，所以这个文件总是存在。
+          # GitHub 会把它放在自动生成的 release notes 前面。
+          Set-Content -Path release-body.md -Value $note -Encoding utf8
+
+      # 三个 MSI 在 build-windows 里打好并按 Tag 改过名，这里原样取回。
+      - name: Download the Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-packages
+          path: windows-packages
+
+      # 三个 Linux 包在 build-linux 里打好，这里取回来。少了就什么都不发——和上面 MSI 一样的理由：只发出其中
       # 一部分，是发完才会被发现的那种错。
       - name: Download the Linux packages
         uses: actions/download-artifact@v8
@@ -530,14 +573,12 @@ jobs:
           $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
           if ($packages.Count -ne 3) { throw "Expected the macOS client, host and server installers from build-macos, got $($packages.Count)." }
 
-          # Windows 三个都在本 job 里，名字已经写在环境变量里；少一个就说明重命名那一步只做了一半。
-          foreach ($variable in 'CLIENT_MSI', 'HOST_MSI', 'SERVER_MSI') {
-              $path = [Environment]::GetEnvironmentVariable($variable)
-              if (-not $path -or -not (Test-Path $path)) { throw "$variable is not a file that exists: '$path'." }
-          }
+          # Windows 三个来自 build-windows。少一个就说明那个 job 只出了一部分。
+          $windows = @(Get-ChildItem -Path windows-packages/*.msi -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          if ($windows.Count -ne 3) { throw "Expected the Windows client, host and server installers from build-windows, got $($windows.Count)." }
 
           gh release create "$env:GITHUB_REF_NAME" `
-            "$env:CLIENT_MSI" "$env:HOST_MSI" "$env:SERVER_MSI" @($linux.FullName) $packages `
+            $windows @($linux.FullName) $packages `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes

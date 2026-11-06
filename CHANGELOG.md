@@ -190,6 +190,13 @@
 - **其余观察项关闭**：四段版本号（R5/W9）在版本收敛时已改为三段 `ProductVersion.Display`；隐藏文件整行
   半透明（R9）随 W8 改为只淡化图标与文件名。只剩图标栅格（R3）待设计决定。
 
+**发布流水线的 job 名对齐**
+
+- **`release.yml` 的 `build-windows-and-release` 拆成 `build-windows` + `release`**：前者只打包、自检并上传三个
+  MSI 的 artifact，后者（唯一的 `contents: write`）等三个平台的包都到了再用 `gh` 建 Release。三个平台的 job 现在
+  同名同形状（`ci.yml` 与 `release.yml` 都是 `build-windows` / `build-linux` / `build-macos`），"发版"只剩一处。
+  发布说明改在 `release` 里读同一批 Secret 与 `DEFAULT_RENDEZVOUS_URI` 生成，不靠 job 之间的环境变量传递。
+
 ### Fixed
 
 **Windows 安装包（在 Windows Sandbox 中实测）**
