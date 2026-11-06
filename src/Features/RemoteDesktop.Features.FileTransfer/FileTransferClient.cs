@@ -340,7 +340,7 @@ public static class FileTransferClient
         ?? throw new EndOfStreamException("The remote computer closed the channel.");
 
     // Sizes and offsets are the host's to announce; cast unchecked, anything above long.MaxValue turns negative.
-    private static long ToLength(ulong announced) =>
+    internal static long ToLength(ulong announced) =>
         announced <= long.MaxValue
             ? (long)announced
             : throw new FileOperationException(FileError.Unsupported, "The remote computer announced a size that is not valid.");

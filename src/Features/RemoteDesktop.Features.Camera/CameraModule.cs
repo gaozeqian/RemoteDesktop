@@ -331,20 +331,15 @@ public sealed partial class CameraModule(
 
     private sealed class StreamState
     {
-        private volatile bool _keyFrameRequested;
+        private int _keyFrameRequested;
 
         public bool KeyFrameRequested
         {
-            get => _keyFrameRequested;
-            set => _keyFrameRequested = value;
+            get => Volatile.Read(ref _keyFrameRequested) != 0;
+            set => Volatile.Write(ref _keyFrameRequested, value ? 1 : 0);
         }
 
-        public bool TakeKeyFrameRequest()
-        {
-            var requested = _keyFrameRequested;
-            _keyFrameRequested = false;
-            return requested;
-        }
+        public bool TakeKeyFrameRequest() => Interlocked.Exchange(ref _keyFrameRequested, 0) != 0;
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: camera '{Camera}' opened ({Width}x{Height}@{FrameRate}).")]

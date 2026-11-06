@@ -82,7 +82,7 @@ public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? reque
             [.. listing.Entries.Select(e => new FileEntryInfo(
                 e.Name,
                 e.IsDirectory,
-                (long)e.Size,
+                FileTransferClient.ToLength(e.Size),
                 e.ModifiedUnixMs == 0 ? DateTimeOffset.MinValue : FileTimestamps.FromUnixMilliseconds(e.ModifiedUnixMs),
                 (FileEntryAttributes)e.Attributes))],
             listing.Truncated);

@@ -350,8 +350,10 @@ public sealed partial class WaylandClipboard(
             _ = connection.SelectionWriteDoneAsync(session, serial, success: true).ConfigureAwait(false);
             LogAnswered(logger, mimeType, payload.Value.Length);
         }
-        catch (Exception error) when (error is IOException or PortalException or InvalidOperationException)
+        catch (Exception error) when (error is IOException or PortalException or InvalidOperationException or AggregateException)
         {
+            // Wait() on a faulted worker rethrows the worker's exception wrapped in AggregateException; the read path
+            // already allows for it, and without it this worker would stop answering for the rest of the session.
             LogTransferFailed(logger, error.Message);
         }
     }

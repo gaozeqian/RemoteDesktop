@@ -470,6 +470,15 @@ public sealed class TransferManager : IAsyncDisposable
         {
             job.SetState(TransferState.Failed, ex.Message);
         }
+#pragma warning disable CA1031 // A job must reach a terminal state even when the failure is one nobody predicted.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            // ObjectDisposedException after the session closed, ArgumentException from a bad path: leaving the job in
+            // Running would make the window show a transfer that can never finish, and the exception would resurface
+            // on the shutdown path instead.
+            job.SetState(TransferState.Failed, ex.Message);
+        }
         finally
         {
             if (acquired)

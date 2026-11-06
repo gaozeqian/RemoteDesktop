@@ -204,7 +204,13 @@ public sealed partial class ConnectionBroker
                 return false;
             }
 
-            _pendingPerDevice.AddOrUpdate(pending.Controller.DeviceId, 0, static (_, count) => count - 1);
+            var remaining = _pendingPerDevice.AddOrUpdate(pending.Controller.DeviceId, 0, static (_, count) => count - 1);
+            if (remaining <= 0)
+            {
+                // Device ids are cheap to mint; a zero left behind would let this map grow for the process lifetime.
+                _pendingPerDevice.TryRemove(new KeyValuePair<uint, int>(pending.Controller.DeviceId, remaining));
+            }
+
             return true;
         }
     }

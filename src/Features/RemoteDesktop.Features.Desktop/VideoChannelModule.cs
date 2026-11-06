@@ -463,21 +463,16 @@ public sealed partial class VideoChannelModule(
 
     private sealed class StreamState
     {
-        private volatile bool _keyFrameRequested;
+        private int _keyFrameRequested;
         private volatile string? _requestedDisplay;
 
         public bool KeyFrameRequested
         {
-            get => _keyFrameRequested;
-            set => _keyFrameRequested = value;
+            get => Volatile.Read(ref _keyFrameRequested) != 0;
+            set => Volatile.Write(ref _keyFrameRequested, value ? 1 : 0);
         }
 
-        public bool TakeKeyFrameRequest()
-        {
-            var requested = _keyFrameRequested;
-            _keyFrameRequested = false;
-            return requested;
-        }
+        public bool TakeKeyFrameRequest() => Interlocked.Exchange(ref _keyFrameRequested, 0) != 0;
 
         public void RequestDisplay(string id) => _requestedDisplay = id;
 

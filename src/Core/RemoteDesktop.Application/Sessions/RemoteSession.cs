@@ -8,7 +8,8 @@ namespace RemoteDesktop.Application.Sessions;
 
 /// <summary>
 /// An established session as seen by the controller. Keeps the control channel alive with pings, which also
-/// measure the round-trip time used for display and bitrate adaptation.
+/// measure the round-trip time shown in the UI and reported in telemetry. Bitrate adaptation uses the encoder's own
+/// send timing, not this number.
 /// </summary>
 public sealed class RemoteSession : IAsyncDisposable
 {
