@@ -43,6 +43,10 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
             CREATE INDEX IF NOT EXISTS idx_device_registrations_device_id ON device_registrations(device_id);
             """;
 
+        public string? SchemaLockSql => "SELECT pg_advisory_lock(hashtext('remotedesktop.devices.schema'));";
+
+        public string? SchemaUnlockSql => "SELECT pg_advisory_unlock(hashtext('remotedesktop.devices.schema'));";
+
         public string AddRevokedAtSql =>
             "ALTER TABLE device_registrations ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;";
 

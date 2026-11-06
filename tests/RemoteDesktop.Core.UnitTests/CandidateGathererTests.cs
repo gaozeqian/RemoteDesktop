@@ -66,4 +66,96 @@ public class CandidateGathererTests
 
         Assert.Single(candidates, candidate => candidate.Address.Equals(IPAddress.Loopback));
     }
+
+    [Theory]
+    [InlineData("not an address", 50000u)]
+    [InlineData("", 50000u)]
+    [InlineData("192.168.1.5", 0u)]
+    [InlineData("192.168.1.5", 65536u)]
+    [InlineData("192.168.1.5", uint.MaxValue)]
+    [InlineData("::1", 50000u)]
+    [InlineData("2001:db8::1", 50000u)]
+    public void A_candidate_that_is_malformed_or_not_ipv4_is_skipped_and_the_rest_are_kept(string address, uint port)
+    {
+        var list = new[]
+        {
+            new PeerEndpoint { Address = address, Port = port },
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50000 },
+        };
+
+        var candidates = CandidateGatherer.FromMessages(list);
+
+        Assert.Equal([new IPEndPoint(IPAddress.Parse("192.168.1.5"), 50000)], candidates);
+    }
+
+    [Fact]
+    public void The_same_endpoint_listed_twice_is_taken_once_at_its_first_position()
+    {
+        var list = new[]
+        {
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50000 },
+            new PeerEndpoint { Address = "203.0.113.9", Port = 50000 },
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50000 },
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50001 },
+        };
+
+        var candidates = CandidateGatherer.FromMessages(list);
+
+        Assert.Equal(
+            [
+                new IPEndPoint(IPAddress.Parse("192.168.1.5"), 50000),
+                new IPEndPoint(IPAddress.Parse("203.0.113.9"), 50000),
+                new IPEndPoint(IPAddress.Parse("192.168.1.5"), 50001),
+            ],
+            candidates);
+    }
+
+    [Fact]
+    public void Entries_that_are_skipped_or_repeated_do_not_use_up_the_candidate_limit()
+    {
+        // Junk and repeats first, then more usable endpoints than the limit: the limit counts what is kept.
+        var list = Enumerable.Range(0, 200).Select(_ => new PeerEndpoint { Address = "bogus", Port = 1 })
+            .Concat(Enumerable.Range(0, 200).Select(_ => new PeerEndpoint { Address = "10.1.1.1", Port = 1 }))
+            .Concat(Enumerable.Range(1, CandidateGatherer.MaxPeerCandidates + 10)
+                .Select(i => new PeerEndpoint { Address = "10.2.0.1", Port = (uint)(1000 + i) }))
+            .ToList();
+
+        var candidates = CandidateGatherer.FromMessages(list);
+
+        Assert.Equal(CandidateGatherer.MaxPeerCandidates, candidates.Count);
+        Assert.Equal(new IPEndPoint(IPAddress.Parse("10.1.1.1"), 1), candidates[0]);
+        Assert.Equal(new IPEndPoint(IPAddress.Parse("10.2.0.1"), 1001), candidates[1]);
+    }
+
+    [Fact]
+    public void No_candidates_from_the_peer_is_an_empty_list_not_an_error()
+    {
+        Assert.Empty(CandidateGatherer.FromMessages([]));
+    }
+
+    [Fact]
+    public void A_gathered_endpoint_round_trips_through_the_wire_message()
+    {
+        var endPoint = new IPEndPoint(IPAddress.Parse("203.0.113.9"), 51820);
+
+        var message = CandidateGatherer.ToMessage(endPoint);
+
+        Assert.Equal("203.0.113.9", message.Address);
+        Assert.Equal(51820u, message.Port);
+        Assert.Equal([endPoint], CandidateGatherer.FromMessages([message]));
+    }
+
+    [Fact]
+    public void The_candidates_we_offer_contain_no_duplicates_and_every_one_uses_the_given_port()
+    {
+        var reflexive = new IPEndPoint(IPAddress.Parse("203.0.113.9"), 61000);
+
+        var candidates = CandidateGatherer.Gather(51820, reflexive);
+
+        Assert.Equal(candidates.Count, candidates.Distinct().Count());
+        // The reflexive endpoint keeps the port the NAT mapped, which is not the local one.
+        Assert.Contains(reflexive, candidates);
+        Assert.All(candidates.Where(c => !c.Equals(reflexive)), c => Assert.Equal(51820, c.Port));
+        Assert.Equal(IPAddress.Loopback, candidates[^1].Address);
+    }
 }

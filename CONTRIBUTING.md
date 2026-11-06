@@ -41,6 +41,17 @@ dotnet test RemoteDesktop.slnx
 平台专有的用例（只在某个 OS 上有意义）仍然放在对应平台的 `UnitTests` 项目里，用 `Assert.SkipUnless(...)`
 在别的系统上跳过，而不是为每个平台单开一种后缀。
 
+需要真实 PostgreSQL 的用例（设备注册表与监控台存储各一组）同样随时可跑：不设环境变量时跳过。本机跑法：
+
+```bash
+docker run -d --name rd-pg-test -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:18
+RD_TEST_POSTGRES='Host=127.0.0.1;Port=55432;Username=postgres;Password=test;Database=postgres' \
+  dotnet test --project tests/RemoteDesktop.Server.Storage.UnitTests
+docker rm -f rd-pg-test
+```
+
+监控台存储的那组在 `tests/RemoteDesktop.Server.Ops.IntegrationTests`，同样用这个环境变量启用。
+
 **`<区域>` 指的是"被测代码在哪一块"，但它不总是等于 `src/` 下的某个目录名**，这一点容易看错：
 
 | 项目 | 实际覆盖 |

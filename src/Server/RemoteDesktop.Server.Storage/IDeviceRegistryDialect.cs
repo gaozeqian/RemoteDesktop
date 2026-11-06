@@ -20,6 +20,16 @@ internal interface IDeviceRegistryDialect
     /// <summary>Creates the table and its index when they are absent. May hold several statements.</summary>
     string CreateSchemaSql { get; }
 
+    /// <summary>
+    /// A statement that takes a database-wide lock for the duration of the session, or <c>null</c> when the database
+    /// already serialises schema changes itself. Held while <see cref="CreateSchemaSql"/> runs: on PostgreSQL,
+    /// <c>CREATE TABLE IF NOT EXISTS</c> fails with a unique violation when two processes create the table at once.
+    /// </summary>
+    string? SchemaLockSql => null;
+
+    /// <summary>Releases the lock taken by <see cref="SchemaLockSql"/>.</summary>
+    string? SchemaUnlockSql => null;
+
     /// <summary>Returns the id stored for <c>@fingerprint</c>, or no row.</summary>
     string SelectDeviceIdSql { get; }
 

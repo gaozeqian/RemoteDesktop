@@ -75,10 +75,49 @@ public sealed partial class OpsStore : IDisposable
     }
 
     /// <summary>Creates the baseline schema if it is not there. Run once at start-up; a failure stops the host.</summary>
+    /// <remarks>
+    /// On PostgreSQL the whole run holds an advisory lock. <c>CREATE TABLE IF NOT EXISTS</c> is not safe against a second
+    /// process creating the same table at the same moment (it fails with a unique violation on the catalog), and two
+    /// processes that both read an old schema version would both try to apply the same migration. SQLite serialises
+    /// both by itself, with its file lock.
+    /// </remarks>
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
 
+        if (!string.Equals(_provider, OpsDatabaseSettings.Postgres, StringComparison.Ordinal))
+        {
+            await ApplySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await RunSchemaLockCommandAsync(connection, "pg_advisory_lock", cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ApplySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                await RunSchemaLockCommandAsync(connection, "pg_advisory_unlock", CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (DbException)
+            {
+                // The connection is gone, and a session-level lock goes with it.
+            }
+        }
+    }
+
+    private static async Task RunSchemaLockCommandAsync(DbConnection connection, string function, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {function}(hashtext('remotedesktop.ops.schema'));";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplySchemaAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
         if (string.Equals(_provider, OpsDatabaseSettings.Sqlite, StringComparison.Ordinal))
         {
             // WAL keeps the scraper's writes from blocking a page read. NORMAL trades a crash-window of the last

@@ -192,6 +192,12 @@
 
 ### Fixed
 
+**PostgreSQL 后端（在 postgres:18 上实测）**
+
+- **管理动作列表在 PostgreSQL 上打不开**：按状态筛选时把可空的 `@state` 直接与 `IS NULL` 比较，Postgres 无法推断参数类型，请求以 `42P08: could not determine data type of parameter $1` 失败（状态为空时必现）。改为与同库其它查询一致的 `CAST(@state AS TEXT) IS NULL`。SQLite 不受影响。
+- **多个服务进程同时启动时建表可能与迁移冲突**：`CREATE TABLE IF NOT EXISTS` 并不防并发创建，两个进程同时启动会有一个因目录唯一冲突失败；两个都读到旧版本还会同时应用同一迁移。设备注册表与监控台 schema 在 PostgreSQL 上改为先取会话级咨询锁（`pg_advisory_lock`）再建表/迁移，结束时释放；SQLite 自身的文件锁保持不变。
+- **PostgreSQL 存储层首次有直连测试**：设备注册表与监控台存储各一组用例，覆盖建库与迁移、并发启动、旧库原地升级、租约竞争、审计链、会话与指标读写等；不设 `RD_TEST_POSTGRES`（Npgsql 连接串）时跳过，`CONTRIBUTING.md` 写明用 `postgres:18` 容器跑法。
+
 **评审后修复（第五批）**
 
 - **帧编解码拒绝负的长度上限**：`FrameCodec.ReadAsync` 用无符号比较长度前缀，负的 `maxPayloadSize` 会回绕成一个巨大的上限而关掉对恶意长度前缀的校验；现在入口处直接拒绝。所有现有调用方传的都是正的常量，所以此前不会触发，属潜伏缺陷。

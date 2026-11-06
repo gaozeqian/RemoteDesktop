@@ -73,7 +73,7 @@ public sealed partial class OpsStore
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {ActionColumns} FROM ops_admin_action
-            WHERE (@state IS NULL OR state = @state)
+            WHERE (CAST(@state AS TEXT) IS NULL OR state = @state)
             ORDER BY requested_at DESC
             LIMIT @limit;
             """;

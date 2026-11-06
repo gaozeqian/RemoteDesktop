@@ -97,23 +97,41 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         {
             await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-            await using (var create = connection.CreateCommand())
+            // Several servers may start against one database; the lock (where the database needs one) keeps them from
+            // creating the table at the same moment.
+            if (_dialect.SchemaLockSql is { } lockSql)
             {
-                create.CommandText = _dialect.CreateSchemaSql;
-                await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await ExecuteAsync(connection, lockSql, cancellationToken).ConfigureAwait(false);
             }
 
-            // The revoked_at column postdates the first release, so a live deployment has the table without it. The
-            // ALTER is dialect-specific in whether it is idempotent on its own; the guard is what makes both safe.
             try
             {
-                await using var migrate = connection.CreateCommand();
-                migrate.CommandText = _dialect.AddRevokedAtSql;
-                await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await ExecuteAsync(connection, _dialect.CreateSchemaSql, cancellationToken).ConfigureAwait(false);
+
+                // The revoked_at column postdates the first release, so a live deployment has the table without it. The
+                // ALTER is dialect-specific in whether it is idempotent on its own; the guard is what makes both safe.
+                try
+                {
+                    await ExecuteAsync(connection, _dialect.AddRevokedAtSql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (_dialect.IsDuplicateColumn(ex))
+                {
+                    // Already there from an earlier start.
+                }
             }
-            catch (Exception ex) when (_dialect.IsDuplicateColumn(ex))
+            finally
             {
-                // Already there from an earlier start.
+                if (_dialect.SchemaUnlockSql is { } unlockSql)
+                {
+                    try
+                    {
+                        await ExecuteAsync(connection, unlockSql, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (DbException)
+                    {
+                        // The connection is gone, and a session-level lock goes with it.
+                    }
+                }
             }
 
             LogSchemaVerified(_logger);
@@ -123,6 +141,13 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
             LogSchemaFailed(_logger, ex);
             throw;
         }
+    }
+
+    private static async Task ExecuteAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task ProbeAsync(CancellationToken cancellationToken = default)
