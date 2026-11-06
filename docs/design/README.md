@@ -273,12 +273,12 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
    （加性变更，主版本不变）；不认识它的旧控制端会把它当作一般的"会话建立失败"，不会崩溃，只是看不到具体原因。
 5. 验证通过后，被控端依据策略（如是否为仅观看模式）开放其他信道的数据收发权限。
 6. **会话期消息**：控制信道在鉴权后继续承载四种消息（`src/Core/RemoteDesktop.Protocol/control.proto`）：
-   - `Ping` / `Pong`：两端每 2 秒一次（`RemoteSession`），只用于保活与 RTT 统计，不是业务心跳。
-   - `GrantChanged`（被控端 → 控制端）：会话中权限或模式变化时发送。控制端必须停止提供不再允许的功能；
+   * `Ping` / `Pong`：两端每 2 秒一次（`RemoteSession`），只用于保活与 RTT 统计，不是业务心跳。
+   * `GrantChanged`（被控端 → 控制端）：会话中权限或模式变化时发送。控制端必须停止提供不再允许的功能；
      被控端同时关闭对应通道，执行不依赖控制端配合。
-   - `InputAccessChanged`（被控端 → 控制端）：操作系统层面的输入授权状态（Wayland portal 的授予 / 拒绝 /
+   * `InputAccessChanged`（被控端 → 控制端）：操作系统层面的输入授权状态（Wayland portal 的授予 / 拒绝 /
      不可用）。带单调递增的 `sequence`，接收方丢弃比已应用值更旧的更新。
-   - `RequestInputAccess`（控制端 → 被控端）：请求桌面重新询问输入授权，忽略此前拒绝留下的退避。
+   * `RequestInputAccess`（控制端 → 被控端）：请求桌面重新询问输入授权，忽略此前拒绝留下的退避。
 
 `AuthChallenge.nonce` 与 `AuthResponse.proof` 是为线格式兼容保留的字段，版本 3 不再使用。协议主版本不同的对端
 会被明确拒绝（`INCOMPATIBLE_VERSION`），而不是被告知"密码错误"。
