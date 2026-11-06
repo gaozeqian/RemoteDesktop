@@ -201,7 +201,7 @@ public sealed class AuthService(
     {
         var now = time.GetUtcNow();
         var token = SessionToken.Create();
-        var csrf = SessionToken.Create();
+        var csrf = SessionToken.CsrfFor(token);
 
         await store.CreateSessionAsync(
             new OpsSessionRecord(

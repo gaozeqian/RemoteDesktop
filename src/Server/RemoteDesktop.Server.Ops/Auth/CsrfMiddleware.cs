@@ -1,13 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using RemoteDesktop.Server.Ops.Core;
 
 namespace RemoteDesktop.Server.Ops.Auth;
 
 /// <summary>
-/// The second half of the double-submit check: a mutating <c>/api</c> request from a signed-in browser must echo the
-/// CSRF cookie in a header. The cookie alone is not enough to forge a request, and a cross-site form cannot set a
-/// custom header.
+/// A mutating <c>/api</c> request from a signed-in browser must echo the CSRF cookie in a header, and that value must be
+/// the token derived from the request's own session (<see cref="SessionToken.CsrfFor"/>). The echo keeps the browser
+/// side trivial and a cross-site form cannot set a custom header; the derivation means a party that can only write
+/// cookies cannot invent a pair that passes, because it cannot read the HttpOnly session cookie the token comes from.
 /// </summary>
 public sealed class CsrfMiddleware(RequestDelegate next)
 {
@@ -20,8 +22,11 @@ public sealed class CsrfMiddleware(RequestDelegate next)
         {
             var cookie = context.Request.Cookies[OpsAuth.CsrfCookieName];
             var header = context.Request.Headers[OpsAuth.CsrfHeaderName].ToString();
+            var session = context.Request.Cookies[OpsAuth.CookieName];
 
-            if (!Matches(cookie, header))
+            if (string.IsNullOrEmpty(session)
+                || !Matches(cookie, header)
+                || !Matches(SessionToken.CsrfFor(session), header))
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await context.Response
@@ -41,14 +46,14 @@ public sealed class CsrfMiddleware(RequestDelegate next)
         && !HttpMethods.IsHead(context.Request.Method)
         && !HttpMethods.IsOptions(context.Request.Method);
 
-    private static bool Matches(string? cookie, string? header)
+    private static bool Matches(string? expected, string? header)
     {
-        if (string.IsNullOrEmpty(cookie) || string.IsNullOrEmpty(header))
+        if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(header))
         {
             return false;
         }
 
-        var left = Encoding.UTF8.GetBytes(cookie);
+        var left = Encoding.UTF8.GetBytes(expected);
         var right = Encoding.UTF8.GetBytes(header);
         return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
     }

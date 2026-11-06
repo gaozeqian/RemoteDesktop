@@ -610,7 +610,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 | 二次验证 | 自实现 RFC 6238 TOTP（30s，±1 窗口），`Ops:RequireTotp` 默认开；验证通过的时间步写入 `last_totp_step`，同一个码不能再次登录 |
 | 会话 | 32 字节随机 token，库里只存 SHA-256；登录成功重新签发；默认 8 小时；改密、重置 TOTP、停用或删除账号都会撤销该账号的全部会话 |
 | 角色 | `viewer` 只读 / `operator` 确认告警、发起动作 / `admin` 改规则、管账号、批准动作、看审计 |
-| CSRF | 双提交 Cookie + `X-Ops-CSRF`，`SameSite=Strict` |
+| CSRF | `X-Ops-CSRF` 头 = `ops_csrf` Cookie，且必须等于**当前会话派生**的令牌（`HMAC-SHA256(会话 token, "ops-csrf-v1")`，服务端按请求里的会话 Cookie 重算并常量时间比较，不落库、无额外密钥）；能写 Cookie 但读不到 HttpOnly 会话 Cookie 的一方（同站子域）编不出有效令牌；登出、过期、重新登录后旧令牌随会话失效；`ops_csrf` 为 `SameSite=Strict`、非 HttpOnly（前端要读）。 |
 | 审计 | `SHA256(prev_hash ‖ 字段)` 哈希链，`/api/audit/verify` 报第一条不一致 |
 | 管理动作 | 两段式：发起（operator）+ 批准（admin），发起人不能批准自己的 |
 

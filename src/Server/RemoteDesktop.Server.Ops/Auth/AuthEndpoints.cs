@@ -117,8 +117,8 @@ public static class AuthEndpoints
                 IsEssential = true,
             });
 
-        // Readable by the page on purpose: the double-submit check compares this value with a header the page sets,
-        // and a token scripts cannot read is a token they cannot send.
+        // Readable by the page on purpose: the CSRF check compares this value with a header the page sets (and with the
+        // token derived from the session), and a token scripts cannot read is a token they cannot send.
         context.Response.Cookies.Append(
             OpsAuth.CsrfCookieName,
             session.Csrf,

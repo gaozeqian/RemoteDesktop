@@ -104,6 +104,105 @@ public class AuthFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixtur
     }
 
     [Fact]
+    public async Task The_csrf_token_of_the_current_session_is_accepted()
+    {
+        var (signedIn, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        signedIn.Dispose();
+        var jar = cookies.GetCookies(fixture.BaseAddress);
+
+        // A client with no cookie jar of its own: only what the request spells out reaches the server.
+        using var bare = new HttpClient { BaseAddress = fixture.BaseAddress };
+        using var request = RawLogout(jar["ops_session"]!.Value, jar["ops_csrf"]!.Value, jar["ops_csrf"]!.Value);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await bare.SendAsync(request, Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_csrf_token_that_belongs_to_another_session_is_refused()
+    {
+        var (clientA, cookiesA) = await SignInAsync("admin", fixture.AdminSecret);
+        var (clientB, cookiesB) = await SignInAsync("admin", fixture.AdminSecret);
+        clientB.Dispose();
+        using (clientA)
+        {
+            var a = cookiesA.GetCookies(fixture.BaseAddress);
+            var b = cookiesB.GetCookies(fixture.BaseAddress);
+            Assert.NotEqual(a["ops_csrf"]!.Value, b["ops_csrf"]!.Value);
+
+            // Cookie and header agree with each other (so the old double-submit check passes), but the value is the
+            // token another valid session was given, not this one's.
+            using var bare = new HttpClient { BaseAddress = fixture.BaseAddress };
+            using var request = RawLogout(a["ops_session"]!.Value, b["ops_csrf"]!.Value, b["ops_csrf"]!.Value);
+
+            Assert.Equal(HttpStatusCode.Forbidden, (await bare.SendAsync(request, Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await clientA.GetAsync("/api/me", Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task A_csrf_token_the_caller_made_up_is_refused_even_when_cookie_and_header_agree()
+    {
+        var (client, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (client)
+        {
+            var session = cookies.GetCookies(fixture.BaseAddress)["ops_session"]!.Value;
+            var forged = SessionToken.Create();
+
+            // What a sibling-subdomain attacker can do: write both the cookie and the header, but not read the
+            // HttpOnly session cookie and so not derive the token that goes with it.
+            using var bare = new HttpClient { BaseAddress = fixture.BaseAddress };
+            using var request = RawLogout(session, forged, forged);
+
+            Assert.Equal(HttpStatusCode.Forbidden, (await bare.SendAsync(request, Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task The_csrf_token_must_also_match_in_the_header_and_cookie()
+    {
+        var (client, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (client)
+        {
+            var jar = cookies.GetCookies(fixture.BaseAddress);
+
+            // The right token in the header only is still refused: the cookie has to agree.
+            using var bare = new HttpClient { BaseAddress = fixture.BaseAddress };
+            using var request = RawLogout(jar["ops_session"]!.Value, SessionToken.Create(), jar["ops_csrf"]!.Value);
+
+            Assert.Equal(HttpStatusCode.Forbidden, (await bare.SendAsync(request, Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task The_csrf_token_stops_working_once_the_session_is_signed_out()
+    {
+        var (client, cookies) = await SignInAsync("admin", fixture.AdminSecret);
+        using (client)
+        {
+            var jar = cookies.GetCookies(fixture.BaseAddress);
+            var session = jar["ops_session"]!.Value;
+            var csrf = jar["ops_csrf"]!.Value;
+
+            using var bare = new HttpClient { BaseAddress = fixture.BaseAddress };
+            using var first = RawLogout(session, csrf, csrf);
+            Assert.Equal(HttpStatusCode.NoContent, (await bare.SendAsync(first, Ct)).StatusCode);
+
+            using var replay = RawLogout(session, csrf, csrf);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await bare.SendAsync(replay, Ct)).StatusCode);
+        }
+    }
+
+    /// <summary>A sign-out request whose cookies and header are spelled out by hand.</summary>
+    private static HttpRequestMessage RawLogout(string session, string csrfCookie, string csrfHeader)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+        request.Headers.Add("Cookie", $"ops_session={session}; ops_csrf={csrfCookie}");
+        request.Headers.Add(CsrfHeader, csrfHeader);
+        return request;
+    }
+
+    [Fact]
     public async Task Repeated_failures_lock_the_account_out_with_a_retry_after()
     {
         var (http, _) = fixture.CreateClient();
