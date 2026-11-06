@@ -138,10 +138,42 @@ function Set-RendezvousUri([string]$Path, [string]$Value) {
 }
 
 function Stop-RdServices {
+    $processIds = @()
     foreach ($name in 'RemoteDesktopHost', 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps') {
         $service = Get-Service -Name $name -ErrorAction SilentlyContinue
-        if ($service -and $service.Status -ne 'Stopped') {
+        if (-not $service) { continue }
+
+        # The process id has to be read before the stop: once the service is stopped the SCM reports none.
+        $instance = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction SilentlyContinue
+        $processId = if ($instance) { $instance.ProcessId } else { 0 }
+        if ($service.Status -ne 'Stopped') {
             Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+        }
+        if ($processId) { $processIds += $processId }
+    }
+
+    # Stop-Service only waits for the SCM to report Stopped, which a .NET service does when its OnStop returns --
+    # before the process has exited. The Ops service holds ops.db through its connection pool, and that handle is
+    # only closed by the exit, so wait for the process rather than for the status: deleting the directory right
+    # after the stop otherwise races the teardown and fails with a sharing violation.
+    foreach ($processId in $processIds) {
+        Wait-Process -Id $processId -Timeout 30 -ErrorAction SilentlyContinue
+    }
+}
+
+# A service that has just been stopped can still hold a file for a moment after the process is gone, and a delete
+# that races it fails with a sharing violation. Retry for a few seconds rather than turning a runner's timing into
+# a red build; anything still locked after that is a real failure and is reported as one.
+function Remove-Path([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            if ($attempt -ge 50) { throw }
+            Start-Sleep -Milliseconds 200
         }
     }
 }
@@ -323,7 +355,7 @@ Set-RendezvousUri (Join-Path $clientInstall 'appsettings.json') $oldAddress
 # The host service watches its settings file; stop it before removing the ProgramData copy so it cannot recreate the
 # file (and so the upgrade has to use the migration action, which is what this step verifies).
 Stop-RdServices
-Remove-Item -LiteralPath $clientConfig -Force
+Remove-Path $clientConfig
 Install-Msi $ClientMsi @() 'client-real'
 Assert-RendezvousUri $clientConfig $oldAddress
 
@@ -414,7 +446,7 @@ foreach ($role in 'Rendezvous', 'Relay', 'Ops') {
 }
 $markerKey = $rendezvous.Rendezvous.RelaySharedKey
 Stop-RdServices
-Remove-Item -LiteralPath $serverConfig -Recurse -Force
+Remove-Path $serverConfig
 Install-Msi $ServerMsi @('NOFIREWALL=1') 'server-real'
 $migrated = Read-Settings $rendezvousSettings
 if ($migrated.Rendezvous.RelaySharedKey -ne $markerKey) {
