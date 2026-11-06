@@ -45,7 +45,7 @@
     <!-- File transfer integrity check -->
     <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
     <!-- Audio: WASAPI capture/playback and the Opus codec -->
-    <PackageVersion Include="NAudio.Wasapi" Version="3.2.0" />
+    <PackageVersion Include="NAudio.Wasapi" Version="3.3.0" />
     <PackageVersion Include="Concentus" Version="2.2.2" />
     <!-- Protocol -->
     <PackageVersion Include="Google.Protobuf" Version="3.36.2" />

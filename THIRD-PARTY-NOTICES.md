@@ -69,8 +69,8 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | Microsoft.Extensions.Options | 10.0.14 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Options.ConfigurationExtensions | 10.0.14 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Primitives | 10.0.14 | MIT | https://dot.net/ |
-| NAudio.Core | 3.2.0 | MIT | https://naudio.github.io/NAudio/ |
-| NAudio.Wasapi | 3.2.0 | MIT | https://naudio.github.io/NAudio/ |
+| NAudio.Core | 3.3.0 | MIT | https://naudio.github.io/NAudio/ |
+| NAudio.Wasapi | 3.3.0 | MIT | https://naudio.github.io/NAudio/ |
 | Npgsql | 10.0.3 | PostgreSQL | https://github.com/npgsql/npgsql |
 | Serilog | 4.3.0 | Apache-2.0 | https://serilog.net/ |
 | Serilog.Extensions.Hosting | 10.0.0 | Apache-2.0 | https://github.com/serilog/serilog-extensions-hosting |
