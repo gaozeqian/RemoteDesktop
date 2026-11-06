@@ -38,8 +38,8 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | HarfBuzzSharp.NativeAssets.WebAssembly | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | HarfBuzzSharp.NativeAssets.Win32 | 8.3.1.3 | MIT | https://go.microsoft.com/fwlink/?linkid=868515 |
 | MicroCom.Runtime | 0.11.6 | MIT | https://www.nuget.org/packages/MicroCom.Runtime |
-| Microsoft.Data.Sqlite | 10.0.13 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
-| Microsoft.Data.Sqlite.Core | 10.0.13 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
+| Microsoft.Data.Sqlite | 10.0.14 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
+| Microsoft.Data.Sqlite.Core | 10.0.14 | MIT | https://docs.microsoft.com/dotnet/standard/data/sqlite/ |
 | Microsoft.Extensions.Configuration | 10.0.14 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.14 | MIT | https://dot.net/ |
 | Microsoft.Extensions.Configuration.Binder | 10.0.14 | MIT | https://dot.net/ |
