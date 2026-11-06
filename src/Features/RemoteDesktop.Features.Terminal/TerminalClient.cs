@@ -43,14 +43,23 @@ public sealed partial class TerminalClient : IAsyncDisposable
 {
     private const int MaxEventBytes = 64 * 1024;
 
+    /// <summary>At most 4 MiB of input may wait for the channel (1024 frames of up to 4 KiB).</summary>
+    private const int MaxQueuedFrames = 1024;
+
     private readonly IChannel _channel;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
-    private readonly Channel<Frame> _outgoing = Channel.CreateUnbounded<Frame>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<Frame> _outgoing = Channel.CreateBounded<Frame>(new BoundedChannelOptions(MaxQueuedFrames)
+    {
+        SingleReader = true,
+        FullMode = BoundedChannelFullMode.DropWrite,
+    });
+
     private readonly Task _writer;
     private Task? _reader;
     private int _started;
     private int _closed;
+    private long _droppedFrames;
 
     private TerminalClient(IChannel channel, string shell, ILogger logger)
     {
@@ -175,18 +184,39 @@ public sealed partial class TerminalClient : IAsyncDisposable
         }
     }
 
-    /// <summary>Queues input for the shell (keystrokes, pasted text); large pastes are split into frames.</summary>
-    public void Send(ReadOnlySpan<byte> data)
+    /// <summary>Frames dropped because the writer was not keeping up. Exposed for tests and diagnostics.</summary>
+    public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
+
+    /// <summary>
+    /// Queues input for the shell (keystrokes, pasted text); large pastes are split into frames. Returns <c>false</c>
+    /// when the bounded queue was full and the rest of this call was dropped: the caller's only backpressure signal.
+    /// </summary>
+    public bool Send(ReadOnlySpan<byte> data)
     {
+        var queued = true;
         while (!data.IsEmpty)
         {
             var piece = data[..Math.Min(data.Length, TerminalDataFrame.MaxLength)];
-            _outgoing.Writer.TryWrite(new Frame(TerminalDataFrame.MessageType, piece.ToArray()));
+            if (!_outgoing.Writer.TryWrite(new Frame(TerminalDataFrame.MessageType, piece.ToArray())))
+            {
+                // Dropping the tail of one input is the bounded-memory trade. It is logged once per client so a
+                // session that keeps overflowing is visible without flooding the log frame by frame.
+                if (Interlocked.Increment(ref _droppedFrames) == 1)
+                {
+                    LogInputDropped(_logger);
+                }
+
+                queued = false;
+                break;
+            }
+
             data = data[piece.Length..];
         }
+
+        return queued;
     }
 
-    public void Resize(int columns, int rows) =>
+    public bool Resize(int columns, int rows) =>
         _outgoing.Writer.TryWrite(new Frame(
             ProtobufFrames.EnvelopeMessageType,
             new TerminalRequest { Resize = new ResizeTerminal { Columns = (uint)columns, Rows = (uint)rows } }.ToByteArray()));
@@ -294,4 +324,7 @@ public sealed partial class TerminalClient : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A handler of the terminal's {Event} event threw; the terminal is over.")]
     private static partial void LogHandlerFailed(ILogger logger, Exception exception, string @event);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The terminal's input queue is full; the tail of an input was dropped.")]
+    private static partial void LogInputDropped(ILogger logger);
 }
