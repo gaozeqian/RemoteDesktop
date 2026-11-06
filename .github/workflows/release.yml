@@ -96,7 +96,7 @@ jobs:
         run: |
           version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
           for package in artifacts/installer/linux/*.deb; do
-            mv "$package" "${package%-$version.deb}-${GITHUB_REF_NAME}.deb"
+            mv "$package" "${package%-"$version".deb}-${GITHUB_REF_NAME}.deb"
           done
           ls -la artifacts/installer/linux/*.deb
 
@@ -185,6 +185,8 @@ jobs:
 
           # 让上述 -T 在非交互环境下真正生效。
           security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "$KC_PW" "$KC" >/dev/null
+          # The inner list is deliberately unquoted: its words are keychains to add, not one argument.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/installer.p12"
 

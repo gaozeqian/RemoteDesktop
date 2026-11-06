@@ -261,7 +261,7 @@ jobs:
             -p 15080:5080 \
             remotedesktop/rendezvous:ci
 
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:15080/health >/dev/null; then
               break
             fi
@@ -284,7 +284,7 @@ jobs:
             -p 15083:5083 \
             remotedesktop/relay:ci
 
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:15083/health >/dev/null; then
               break
             fi
