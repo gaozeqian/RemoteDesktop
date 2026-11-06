@@ -39,7 +39,7 @@ public static class ServiceCollectionExtensions
             {
                 // The policy says what this host is willing to allow; the mask says what it is able to. The mask is
                 // what keeps Ctrl+Alt+Del off sessions against a host that cannot raise it.
-                AllowedPermissions = (store is not null ? HostPolicy.Load(store) : HostPolicy.Default) & SupportedPermissions(sp),
+                AllowedPermissions = HostPolicy.Default & SupportedPermissions(sp),
                 FixedPassword = store is not null ? FixedPasswordPolicy.Load(store) : null,
             };
         });

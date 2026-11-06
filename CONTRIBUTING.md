@@ -4,7 +4,8 @@
 
 ## 🛠 开发环境准备
 
-1. **SDK 要求**: .NET 10 SDK。
+1. **SDK 要求**: .NET 10 SDK，**不低于 10.0.112**。版本由根目录的 `global.json` 固定（`rollForward: latestFeature`，
+   同一 主.次 版本（10.0）内更新的功能带也可以），测试运行器也在那里指定为 Microsoft.Testing.Platform。
 2. **IDE 推荐**: Visual Studio 2022 (Preview) / JetBrains Rider / VS Code (配合 C# Dev Kit)。
 3. **构建系统**: 本项目使用较新的 `.slnx` 解决方案格式，请确保您的 IDE 支持。
 
@@ -17,11 +18,11 @@
 dotnet build RemoteDesktop.slnx
 
 # 2. 运行单元测试与架构校验（非常重要！）
-dotnet test RemoteDesktop.slnx
+dotnet test --solution RemoteDesktop.slnx
 ```
 
-> `dotnet test` 会在当前目录建一个**空的** `TestResults/`，这是 Microsoft.Testing.Platform 的默认值，不是本仓库
-> 的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
+> `dotnet test` 不带 `--results-directory` 时会在当前目录建一个**空的** `TestResults/`，这是
+> Microsoft.Testing.Platform（`global.json` 指定的测试运行器）的默认值，不是本仓库的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
 > 根上那个空目录已被 gitignore，看到它不必处理；想自己留一份报告就加
 > `--results-directory artifacts/test-results/<平台>`。
 
@@ -31,7 +32,7 @@ dotnet test RemoteDesktop.slnx
 
 | 种类 | 含义 | 例子 |
 |---|---|---|
-| `UnitTests` | 不需要外部服务或网络，随时可跑 | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
+| `UnitTests` | 不需要外部服务或网络，随时可跑（个别用例例外：依赖已构建好的服务端 MSI 的用例，在 `artifacts/installer/windows/` 里找不到、也没设 `RD_SERVER_INSTALLER_MSI` 指向它时跳过；要人工点"分享"的 Linux portal 用例，不设 `RD_PORTAL_TEST=1` 就跳过） | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
 | `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
 
 **后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
@@ -40,13 +41,27 @@ dotnet test RemoteDesktop.slnx
 平台专有的用例（只在某个 OS 上有意义）仍然放在对应平台的 `UnitTests` 项目里，用 `Assert.SkipUnless(...)`
 在别的系统上跳过，而不是为每个平台单开一种后缀。
 
+需要真实 PostgreSQL 的用例（设备注册表与监控台存储各一组）同样随时可跑：不设环境变量时跳过。本机跑法：
+
+```bash
+docker run -d --name rd-pg-test -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:18
+RD_TEST_POSTGRES='Host=127.0.0.1;Port=55432;Username=postgres;Password=test;Database=postgres' \
+  dotnet test --project tests/RemoteDesktop.Server.Storage.UnitTests
+docker rm -f rd-pg-test
+```
+
+监控台存储的那组在 `tests/RemoteDesktop.Server.Ops.IntegrationTests`，同样用这个环境变量启用。
+
 **`<区域>` 指的是"被测代码在哪一块"，但它不总是等于 `src/` 下的某个目录名**，这一点容易看错：
 
 | 项目 | 实际覆盖 |
 |---|---|
-| `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
-| `RemoteDesktop.Transport.IntegrationTests` | 只有 Transport（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别） |
-| `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、以及 `RepositoryStructureTests` 里的结构约定 |
+| `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Camera,Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
+| `RemoteDesktop.Transport.IntegrationTests` | 传输层的端到端用例（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别）。它的 `ProjectReference` 不止 Transport：`Application`、`Features.*`、`Platform.Windows` / `Platform.MacOS`、`Server.Rendezvous`、`Server.Relay` 都在里面，所以信令、中继与功能通道的联调用例放这里 |
+| `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表） |
+| `RemoteDesktop.Server.Ops.UnitTests` | 监控台核心 `Server.Ops.Core` 与 `Server.Shared` |
+| `RemoteDesktop.Server.Ops.IntegrationTests` | 监控台三层（`Server.Ops`、`Server.Ops.Core`、`Server.Ops.Storage`）合起来跑 |
+| `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、`RepositoryStructureTests` 里的结构约定、以及 `DocumentationTests` 里的文档规范 |
 | `RemoteDesktop.Platform.<OS>.UnitTests` | 那一个平台的实现 |
 
 所以"某个功能在哪测"不能只靠项目名推。默认是**功能层的单测放 `Core.UnitTests`**；只有平台专有的才进对应平台的
@@ -54,7 +69,11 @@ dotnet test RemoteDesktop.slnx
 
 ## 🖥 本地联调
 
-单机两个客户端互连的完整步骤在根 [`README.md`](README.md) 的"快速开始"里。各平台多出来的那几步在这里：
+单机两个客户端互连的完整步骤在根 [`README.md`](README.md) 的"快速开始"里（含 Windows PowerShell 写法）。
+各平台多出来的那几步在这里：
+
+**Windows：** 不需要额外步骤。`README.md` 里 `ASPNETCORE_ENVIRONMENT=…` 的前缀写法是 POSIX shell 的，PowerShell 里
+要先 `$env:ASPNETCORE_ENVIRONMENT = 'Development'`，数据目录用 `"$env:TEMP\rd1"` 这类 Windows 路径。
 
 **Linux：要么把 `libmsquic` 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它。** 开发时是框架依赖运行，库不在可执行文件旁，
 缺它的报错是 `QUIC is not supported on this system`——看着像平台不支持，其实是缺库。`.deb` 里是随包带的，
@@ -65,6 +84,9 @@ dotnet test RemoteDesktop.slnx
 所以直接跑 bundle 里的可执行文件：
 
 ```bash
+# 客户端 .app 不会自己出现：先构建一次（也可以用 make-pkg.sh，它内部会调用这个脚本）
+build/installer/macos/client/make-app.sh --configuration Release
+
 sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
 curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
@@ -72,10 +94,30 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 "artifacts/app/macos/Remote Desktop.app/Contents/MacOS/RemoteDesktop.Client" --DataDirectory ~/rd2
 ```
 
-**跨机器测试**：放通服务器的 TCP 5080、UDP 5081（地址反射）和 UDP 5082（中继），并把 Rendezvous 的
-`Rendezvous:RelayEndpoint` 配成客户端可达的中继公网地址。`--Transport:ForceRelay true` 强制走中继，
-`--Transport:RendezvousUri ws://<服务器>:5080/ws` 换服务器。生产环境必须换掉 `RelaySharedKey` 并让信令走 `wss://`
-（做法见 [`docs/ops/README.md`](docs/ops/README.md)）。
+### 跨机器测试
+
+先按 [`docs/ops/README.md`](docs/ops/README.md) 的“防火墙”一节放通服务器的信令、地址反射和中继三个端口。**信令默认只监听回环，客户端默认也拒绝连非回环的
+`ws://`**，所以只放通端口、改服务器地址是连不上的——两端都要显式放开（只限隔离的明文实验网；其余情况改走 `wss://`）：
+
+```bash
+# 服务器：监听所有网卡、允许明文信令，并把中继地址配成客户端可达的 IP:端口（不能是域名）。
+# Development 配置提供了与 Relay 相同的开发密钥；Windows 的写法同上，先设 $env:ASPNETCORE_ENVIRONMENT
+ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Server/RemoteDesktop.Server.Rendezvous -- \
+    --Urls http://0.0.0.0:5080 --Rendezvous:AllowInsecureSignaling true \
+    --Rendezvous:RelayEndpoint <服务器IP>:5082
+
+# 客户端：换服务器地址并允许明文；--Transport:ForceRelay true 可强制走中继
+dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd1 \
+    --Transport:RendezvousUri ws://<服务器>:5080/ws --Transport:AllowInsecureSignaling true
+```
+
+不放开时的报错分别是 `Urls exposes signaling as plain HTTP …`（服务器，启动即失败）和
+`Transport:RendezvousUri uses plain ws:// to non-loopback host …`（客户端）。Relay 照 `README.md` 的方式启动即可：
+两个服务在 Development 配置里用的是同一把开发密钥。
+
+**这只是联调。** 明文信令里的设备代码和**中继票据**都可被在途读取；生产环境必须换掉 `RelaySharedKey` 并让信令走
+`wss://`，做法见 [`docs/ops/README.md`](docs/ops/README.md) 的"生产环境：信令必须走 TLS"，边界见
+[`SECURITY.md`](SECURITY.md)。
 
 ## 📦 构建产物布局
 
@@ -83,9 +125,9 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 | 路径 | 是什么 |
 |---|---|
-| `artifacts/installer/<平台>/` | **交付物**：安装包。Windows 三个 `.msi`（`RemoteDesktop-Client-Windows-x64-<版本>.msi` 客户端、`RemoteDesktop-Host-Windows-x64-<版本>.msi` 被控端、`RemoteDesktop-Server-Windows-x64-<版本>.msi` 服务端），macOS 三个 `.pkg`，Linux 三个 `.deb`。三平台同一个形状 `<产品>-<角色>-<平台>-<架构>-<版本>`，角色写在**文件名**里，不另开子目录；`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
-| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `Remote Desktop.app`；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/` 与 `Ops/` |
-| `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`） |
+| `artifacts/installer/<平台>/` | **交付物**：安装包。三个平台各三个：Windows `.msi`、macOS `.pkg`、Linux `.deb`，对应客户端、被控端、服务端三个角色。角色写在**文件名**里，不另开子目录；名字的形状与下面发布资产的一致，只是 `<tag>` 换成 `<版本>`。`.wixpdb` 之类的构建中间物不在这里，它跟着工程留在 `obj/` |
+| `artifacts/app/<平台>/` | 打包前的应用本体。macOS 是 `Remote Desktop.app`，另有 `host/`（`Remote Desktop Host.app`）与 `server/`（服务端发布内容）两个子目录；Windows 的下一层是角色：`client/` 同时装客户端、被控端服务与会话 Agent，所以这个目录里有三个 `.exe`；`host/` 只有服务与 Agent；`server/` 下再按程序分成 `Rendezvous/`、`Relay/`、`Ops/` 与 `Gateway/`（Ops 的 HTTPS 网关） |
+| `artifacts/lib/<平台>/` | 原生辅助库与随包分发的本地库（macOS 的 `libRemoteDesktopMacNative.dylib`、`libmsquic.dylib`；Linux 的 `libmsquic.so.<版本>` 加软链 `libmsquic.so.2`，由 `native/linux/fetch-libmsquic.sh` 取来） |
 | `artifacts/test-results/<平台>/` | 测试报告（`dotnet test --report-trx` 产出的 `.trx`），按跑测试的机器分平台 |
 
 发布时 `release.yml` 会把上面这些包**改名**成用户看到的那份资产，形状是
@@ -97,18 +139,12 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 | macOS | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` |
 | Linux | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | `RemoteDesktop-Server-Linux-amd64-<tag>.deb` |
 
-**九个资产一个形状**：`<产品>-<角色>-<平台>-<架构>-<tag>.<扩展名>`。角色词一律写上——三个平台都出三个包，
-下载列表里每一行都要能直接看出它是哪一端。
+**九个资产一个形状**。角色词一律写上——三个平台都出三个包，下载列表里每一行都要能直接看出它是哪一端。
+三平台的打包脚本产出的名字也是同一个形状（Windows 的 `OutputName`、macOS 的 `PKG_NAME`、Linux 的 `$package`），
+发布时只把 `<版本>` 换成 `<tag>`，所以 `artifacts/installer/` 里的文件名可以直接照发布资产名去找。
 
-只剩一处不同，且有成因：
-
-* **架构词用各平台自己的说法**：Windows `x64`、macOS `arm64`、Linux `amd64`。Linux 那个是 dpkg 的词，与包内
-  `Architecture` 字段（`build/installer/linux/*/control`）保持一致——文件名与字段不同词只会更绕。
-
-三平台的打包脚本产出的名字现在都带齐了平台、角色与架构（Windows 的 `OutputName`、macOS 的 `PKG_NAME`、Linux 的
-`$package`），发布时只把 `<版本>` 换成 `<tag>`。`artifacts/installer/windows/` 里就是带 `Windows` 的构建产物名，
-照发布资产名去找不会再一无所获——此前 Windows 的产物没有平台词、客户端连角色词也没有（`RemoteDesktop-<版本>-x64.msi`
-与 `RemoteDesktop.Server-<版本>-x64.msi`），`verify-packages` 为此踩过一次。
+只有一处不同，且有成因：**架构词用各平台自己的说法**——Windows `x64`、macOS `arm64`、Linux `amd64`。Linux 那个是
+dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control`）保持一致；文件名与字段不同词只会更绕。
 
 `dotnet build` / `dotnet publish` 的产物也在这里，用 SDK 自己的布局——`Directory.Build.props` 设了
 `UseArtifactsOutput` + `ArtifactsPath`：
@@ -122,14 +158,14 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 **这两组不是同一条规则。** 上面那组是我们自己的脚本写的，`<类别>/<平台>/` 由我们定；下面那组由 SDK 写，
 第二层是 `<项目>` 与 `<pivot>`，**不按平台分**——加一个平台不会在这里多一层。所以"新增平台"是往
-`installer/`、`app/`、`lib/`、`test-results/` 各加一层，SDK 的那四个不动。`vstest` 默认的 `TestResults/`
-在仓库根，只有不带 `--results-directory` 手跑时才会出现；`dotnet test` 不带参数默认就写它，所以
+`installer/`、`app/`、`lib/`、`test-results/` 各加一层，SDK 的那四个不动。Microsoft.Testing.Platform 默认的
+`TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：27 个项目（21 个产品项目 + 6 个测试项目）不再各长出两个目录。要清空
-构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
+所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 35 个：`src/` 下 26 个，`tests/` 下 9 个）
+不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
-**唯一的例外**是 `build/installer/windows/` 下的三个安装器工程（两个 WiX 工程与 net48 的 `CustomActions`）：它们
+**唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们
 带着自己那份（故意留空的）`Directory.Build.props`，不导入根目录的这份，产物仍在工程目录内（`bin/`、`obj/`、
 `bin/x64/`）。所以"删 `artifacts/bin` 与 `artifacts/obj`"清不掉它们——要连它们一起清，用
 `git clean -xdf build/installer`（`-x` 会连被忽略的文件一起删，用之前先看一眼 `git clean -xdn`）。
@@ -146,28 +182,43 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 * `Domain` (领域层) 不能引用任何其他层。
 * `Abstractions` (抽象端口) 只能引用 `Domain`。
-* `Platform.*` (平台实现) 和 `Media` (具体技术) **只能**依赖 `Abstractions` 与 `Domain`，绝不能直接引用其他实现或业务逻辑层。
+* `Signaling`（信令契约）是独立的一层：不引用任何其他内部项目；`Transport` 引用它，反过来不行。
+* `Protocol`、`Transport`、`Application` 依次向外（`Protocol` 不得引用 `Signaling`、`Transport`、`Application`，
+  `Transport` 不得引用 `Application`），且都不得引用 `Features`、`Media`、`Platform`、`Server` 或三个宿主
+  （`Client`、`HostService`、`SessionAgent`）。
+* `Platform.*` (平台实现) 和 `Media` (具体技术) 不得引用 `Protocol`、`Signaling`、`Transport`、`Application`、
+  `Features`、`Server` 与宿主（二者彼此也不引用），也就是只面对 `Abstractions` 与 `Domain`。**例外**：
+  `Platform.Linux` 与 `Platform.MacOS` 引用 `Platform.Posix`（两者共用的 POSIX 代码）。测试只禁止上面列出的方向，
+  不禁止 `Platform.*` 之间互相引用，所以这类引用靠评审把关。
 * `Features.*` (独立功能模块) 彼此之间禁止互相引用，它们通过 `Application` 层的统一接口交互。
+* `Features.*` 也不得引用 `Platform` 或三个宿主：平台由宿主在启动时接进来，功能模块只面对 `Application`（`Desktop`、`Camera` 另外引用 `Media`）。
+* `Server.*` 不得引用 `Abstractions`、`Protocol`、`Transport`、`Application`、`Features`、`Media`、`Platform` 或宿主。
+* 运维监控台分三层，只能向内：`Server.Ops.Core` 不得引用 `Server.Ops.Storage`、`Server.Ops`、`Microsoft.AspNetCore`
+  和 `Server.Storage`；`Server.Ops.Storage` 不得引用 `Server.Ops` 和 `Server.Storage`；`Server.Ops` 不得引用
+  `Server.Storage`（监控台不读信令服务器的库）。
 
 如果你引入了非法的依赖关系，`dotnet test` 将会失败。
 
-（上面几条与 `DependencyRuleTests` 里的禁止列表逐条对应。改成文档容易、改漏测试也容易，所以**以测试为准**：
+（上面几条概括的是 `DependencyRuleTests` 里的禁止列表，不是逐字翻译。改成文档容易、改漏测试也容易，所以**以测试为准**：
 两者不一致时先怀疑文档。）
 
 ## 🗂 仓库结构规则
 
-`tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 把下面几条变成了断言。以前它们只写在这份
-文档和 `build/README.md` 里，靠读到的人自觉——三轮目录结构评审每轮都能挑出新的违反，于是改成构建会红：
+`tests/RemoteDesktop.Architecture.UnitTests/RepositoryStructureTests.cs` 把下面几条变成了断言，违反时构建会红：
 
 | 规则 | 出处 |
 |---|---|
-| `tests/` 下的项目名一律 `<区域>.<种类>Tests`，且目录名 == `.csproj` 名 | §测试项目命名 |
-| `build/` 下每个目录名 == 它的 `.csproj` 名 | 同上 |
+| `src/` 与 `tests/` 下的项目，目录名 == `.csproj` 名；`tests/` 下的项目名一律 `<区域>.<种类>Tests` | “测试项目命名”一节 |
 | `.cs` 文件名要么是它声明的类型，要么是它分组的概念（此时必须声明 **两个以上** 类型） | 见下 |
 | `.sh` 用 kebab-case；`.ps1` 用 Verb-Noun，动词取自 PowerShell 的批准动词表 | `build/README.md` |
 | `build/installer/<平台>/<角色>/`、`build/service/<平台>/`，平台取 `windows`/`macos`/`linux` | `build/README.md` |
+| Linux 服务端 `.deb` 的 `postinst` 要让监控台钉住本机节点自己的证书（含 `--ops-node-certificate-path` 与 `tls/signaling.crt`），对应 `The_linux_package_lets_the_console_pin_its_own_certificate` | `build/installer/linux/server/postinst` |
 
-第三条值得展开：一个文件承载"一个概念的接口族与它的 DTO"是允许的（`IAudio.cs` 里没有 `IAudio` 类型，
+表里只是最常碰到的五条；同一个文件里还有安装 / 发布脚本的安全断言（服务端包脚本的密文只走环境变量、
+macOS `apply-answers.sh` 拒符号链接并校验地址、`release.yml` 的 job 级 env 不得含 Secret、卸载脚本先校验目录、
+WiX 转义等），改这些脚本前先看一眼那个测试文件。
+
+第二条值得展开：一个文件承载"一个概念的接口族与它的 DTO"是允许的（`IAudio.cs` 里没有 `IAudio` 类型，
 但它是音频端口的整组契约），所以判据不是"文件名必须是类型名"，而是**"名字不是类型时，它必须是个分组"**。
 真正会被拦下的是只声明一个类型、名字却是另一个的单件文件。
 
@@ -178,18 +229,16 @@ curl http://127.0.0.1:5080/health        # Healthy 就可以开始了
 
 ## 📄 文档
 
-文档的规范在 [`docs/STYLE.md`](docs/STYLE.md)：放哪、叫什么、怎么写、什么时候更新。三条最常被违反的：
+文档的规范在 [`docs/STYLE.md`](docs/STYLE.md)：放哪、叫什么、怎么写、什么时候更新。两条最常被违反的：
 
 1. **新文档要进索引**（[`docs/README.md`](docs/README.md)）。索引只有一份，漏加会让 `dotnet test` 变红。
-2. **评审是快照，不是规范。** 一次评审的结论进 `docs/reviews/`；其中被采纳的部分才写进规范类文档。
-3. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
+2. **移动或改名文档时全仓搜旧路径**——引用散在 `.md`、`.cs` 注释、`.yml`、`.sh`、`.ps1` 里，不只 Markdown。
 
-能机器判断的部分已经是断言（`tests/RemoteDesktop.Architecture.UnitTests/DocumentationTests.cs`）：必备文件、
-一个文件一个 H1、`docs/` 下没有孤儿文档、相对链接可解析、文件命名规范。**格式**（空行、缩进、代码块标注）
-由 CI 的 `docs` 作业跑 markdownlint。所以只改了文档也要跑一次测试：
+哪些规则由测试强制、哪些交给 markdownlint，以及测试文件在哪，见 STYLE 的“靠测试，不靠自觉”一节（不要在这里再列一份）。
+**格式**（空行、缩进、代码块标注）由 CI 的 `docs` 作业跑。所以只改了文档也要跑一次测试：
 
 ```bash
-dotnet test tests/RemoteDesktop.Architecture.UnitTests
+dotnet test --project tests/RemoteDesktop.Architecture.UnitTests
 ```
 
 ## 📝 提交规范
@@ -197,3 +246,6 @@ dotnet test tests/RemoteDesktop.Architecture.UnitTests
 1. 提交前确保通过 `dotnet test` 所有的单元测试。
 2. 新增的核心网络或编解码功能，需补充对应的测试用例。
 3. 请在 PR 描述中详细说明改动背景、受影响的模块，以及如何测试该改动。
+4. 有值得记录的变更，写进 `CHANGELOG.md` 的 `## [未发布]` 一节。**发版时**，`release.yml` 的 `check-version` 会要求
+   tag（`v<版本>`）与 `Directory.Build.props` 的 `<Version>` 一致，且 `CHANGELOG.md` 里有 `## [<版本>]` 这一小节，
+   缺一个就不发布——发版前把 `[未发布]` 的内容改成该版本的小节。

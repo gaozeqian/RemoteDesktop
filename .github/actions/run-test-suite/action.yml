@@ -1,7 +1,7 @@
 name: Run the test suite
 description: >-
   Runs the whole solution's tests, retries once when the first attempt fails, and appends a summary table to the job's
-  step summary. Shared by the three per-platform jobs of ci.yml so that they cannot drift apart.
+  step summary. Shared by the per-platform jobs of ci.yml and release.yml so that they cannot drift apart.
 
 inputs:
   artifact-name:

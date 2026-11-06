@@ -102,6 +102,52 @@ public class VideoRecorderTests
     }
 
     [Fact]
+    public async Task MacVideoRecorder_records_frames_whose_rows_carry_padding()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "AVAssetWriter is macOS only.");
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+        var recorder = new MacVideoRecorder();
+        try
+        {
+            const int width = 64;
+            const int height = 48;
+            recorder.Start(tempPath, width, height, frameRate: 30, bitrateKbps: 500);
+
+            // Captured frames are often wider in memory than on screen. The recorder repacks the visible pixels into
+            // a tight buffer, so the native validation (length >= (height - 1) * stride + width * 4) has to be given
+            // the tight row width — the caller's stride would make the repacked buffer look too short and every
+            // frame would be rejected. The last row has no trailing padding, which is the shortest legal buffer.
+            const int stride = (width * 4) + 16;
+            var frame = new byte[((height - 1) * stride) + (width * 4)];
+            for (var i = 0; i < frame.Length; i++)
+            {
+                frame[i] = (byte)((i * 37) & 0xFF);
+            }
+
+            const int frames = 5;
+            for (var i = 0; i < frames; i++)
+            {
+                recorder.RecordFrame(frame, stride, width, height);
+            }
+
+            var savedPath = await recorder.StopAsync();
+
+            Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+            Assert.Equal(frames, recorder.WrittenFrames);
+            Assert.Equal("ftyp", ReadFourCc(savedPath));
+        }
+        finally
+        {
+            await recorder.DisposeAsync();
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+    }
+
+    [Fact]
     public async Task MacVideoRecorder_says_so_when_no_frame_ever_arrived()
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "AVAssetWriter is macOS only.");

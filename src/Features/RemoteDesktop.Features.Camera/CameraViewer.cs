@@ -46,47 +46,42 @@ public sealed record CameraStatistics(double FramesPerSecond, double Kbps, doubl
 /// </summary>
 public sealed partial class CameraViewer : IAsyncDisposable
 {
-    private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(30);
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
-    private readonly VideoCodecSelector _codecs;
+    private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Lock _frameLock = new();
+    private readonly VideoFrameBuffer _frames = new();
+    private readonly VideoStatisticsMeter _meter = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-    private IVideoDecoder? _decoder;
-    private byte[] _bgra = [];
-    private long _frameNumber;
     private volatile bool _waitingForKeyFrame = true;
+    private volatile bool _stalled;
     private volatile string? _failure;
 
     private CameraViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
         _channel = channel;
-        _codecs = codecs;
         _time = time;
         _logger = logger;
+
+        // The stall time is real monotonic time; the viewer's own clock only drives the watchdog tick and the latency.
+        _supervisor = new VideoDecoderSupervisor(codecs, TimeProvider.System, ex => LogDecoderRebuildFailed(_logger, ex));
     }
 
     public CameraDetails? Details { get; private set; }
 
     /// <summary>Total number of frames decoded so far. Zero means the stream is up but no picture has arrived.</summary>
-    public long FrameNumber
-    {
-        get
-        {
-            lock (_frameLock)
-            {
-                return _frameNumber;
-            }
-        }
-    }
+    public long FrameNumber => _frames.FrameNumber;
+
+    /// <summary>
+    /// Whether the host stopped answering key-frame requests, so the picture is older than the window says. A camera
+    /// never idles the way a desktop does, so this is a genuine stall rather than an unchanged screen.
+    /// </summary>
+    public bool IsStalled => _stalled;
 
     public CameraStatistics Statistics { get; private set; } = new(0, 0, 0, null);
 
@@ -112,8 +107,13 @@ public sealed partial class CameraViewer : IAsyncDisposable
         {
             try
             {
-                await ProtobufFrames.WriteAsync(channel.Stream, new CameraRequest { List = new ListCamerasRequest() }, cancellationToken).ConfigureAwait(false);
-                var answer = await ReadEventAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(
+                    async token =>
+                    {
+                        await ProtobufFrames.WriteAsync(channel.Stream, new CameraRequest { List = new ListCamerasRequest() }, token).ConfigureAwait(false);
+                        return await ReadEventAsync(channel.Stream, token).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
                 return answer.BodyCase switch
                 {
                     CameraEvent.BodyOneofCase.Cameras =>
@@ -127,6 +127,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     _ => throw new CameraException(CameraError.Unsupported, "The host answered unexpectedly."),
                 };
             }
+            catch (TimeoutException ex)
+            {
+                throw new CameraException(ex.Message, ex);
+            }
             catch (Exception ex) when (ex is IOException or InvalidDataException)
             {
                 throw new CameraException("The connection to the host failed.", ex);
@@ -136,6 +140,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
     /// <summary>Starts streaming a camera and returns once the host has confirmed it and announced the picture size.</summary>
     /// <exception cref="CameraException">The host refused or could not open the camera.</exception>
+    /// <exception cref="TimeoutException">
+    /// The host did not answer within <see cref="RequestTimeout.Default"/> — an unanswered permission prompt on the host
+    /// is the ordinary way to get here, so the window turns this into advice rather than an error.
+    /// </exception>
     public static async Task<CameraViewer> StartAsync(
         IPeerConnection connection,
         VideoCodecSelector codecs,
@@ -157,10 +165,10 @@ public sealed partial class CameraViewer : IAsyncDisposable
                 new CameraRequest { Open = new OpenCamera { CameraId = cameraId, Width = (uint)mode.Width, Height = (uint)mode.Height, FrameRate = (uint)mode.FrameRate } },
                 cancellationToken).ConfigureAwait(false);
 
-            // The first answer is the stream description, or the reason there is none. Opening a camera can take a moment.
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(OpenTimeout);
-            var first = await ReadEventAsync(channel.Stream, timeout.Token).ConfigureAwait(false);
+            // The first answer is the stream description, or the reason there is none. Opening a camera can take a moment
+            // on the host — a permission prompt may be waiting for somebody to walk up to it — so the deadline is the
+            // shared one-shot one rather than anything tighter.
+            var first = await RequestTimeout.RunAsync(token => ReadEventAsync(channel.Stream, token), cancellationToken).ConfigureAwait(false);
             switch (first.BodyCase)
             {
                 case CameraEvent.BodyOneofCase.StreamInfo:
@@ -192,25 +200,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
     /// Copies the newest picture into <paramref name="destination"/> (BGRA, <paramref name="stride"/> bytes per row).
     /// Returns its sequence number, or <c>-1</c> when there is no picture of the current size yet.
     /// </summary>
-    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height)
-    {
-        lock (_frameLock)
-        {
-            var info = Details;
-            if (info is null || _frameNumber == 0 || info.Width != width || info.Height != height)
-            {
-                return -1;
-            }
-
-            var rowBytes = width * 4;
-            for (var y = 0; y < height; y++)
-            {
-                _bgra.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
-            }
-
-            return _frameNumber;
-        }
-    }
+    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height) =>
+        _frames.CopyLatest(destination, stride, width, height);
 
     public Task RequestKeyFrameAsync(CancellationToken cancellationToken) =>
         WriteAsync(new CameraRequest { KeyFrameRequest = new KeyFrameRequest() }, cancellationToken).AsTask();
@@ -221,7 +212,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
         await _channel.DisposeAsync().ConfigureAwait(false);
         await _loop.ConfigureAwait(false);
         await _watchdog.ConfigureAwait(false);
-        _decoder?.Dispose();
+        _supervisor.Dispose();
         _stop.Dispose();
         _writeLock.Dispose();
     }
@@ -229,11 +220,6 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         var clock = Stopwatch.StartNew();
-        var windowStart = TimeSpan.Zero;
-        var windowFrames = 0;
-        long windowBytes = 0;
-        double windowDecodeMs = 0;
-        double? latencyMs = null;
         try
         {
             while (await FrameCodec.ReadAsync(_channel.Stream, cancellationToken: _stop.Token).ConfigureAwait(false) is { } frame)
@@ -254,23 +240,27 @@ public sealed partial class CameraViewer : IAsyncDisposable
                     continue;
                 }
 
-                if (frame.MessageType != VideoDataFrame.MessageType || _decoder is null)
+                var decoder = _supervisor.Decoder;
+                if (frame.MessageType != VideoDataFrame.MessageType || decoder is null)
                 {
                     continue;
                 }
 
-                var (encoded, capturedAt) = VideoDataFrame.Parse(frame);
-                windowBytes += frame.Payload.Length;
-                if (_waitingForKeyFrame && !encoded.IsKeyFrame)
-                {
-                    continue;
-                }
-
-                var decodeStarted = clock.Elapsed;
+                // A frame the peer sent malformed costs that frame, not the viewer: it is handled like a decode error.
+                EncodedVideoFrame encoded;
+                DateTimeOffset capturedAt;
+                TimeSpan decodeStarted;
                 VideoFrame? picture;
                 try
                 {
-                    picture = _decoder.Decode(encoded);
+                    (encoded, capturedAt) = VideoDataFrame.Parse(frame);
+                    if (_waitingForKeyFrame && !encoded.IsKeyFrame)
+                    {
+                        continue;
+                    }
+
+                    decodeStarted = clock.Elapsed;
+                    picture = decoder.Decode(encoded);
                 }
                 catch (InvalidDataException ex)
                 {
@@ -283,41 +273,55 @@ public sealed partial class CameraViewer : IAsyncDisposable
                 _waitingForKeyFrame = false;
                 if (picture is null)
                 {
+                    // The host is feeding non-key frames but the decoder stopped producing pictures: it has lost
+                    // sync and is silently dropping everything. A camera never idles the way a desktop does, so this
+                    // is a genuine stall rather than an unchanged screen; rebuild the decoder (this loop is its only
+                    // owner) instead of leaving the watchdog to wait forever for a key frame it will never request.
+                    //
+                    // Whether it is a run of silence rather than one quiet answer is the supervisor's call.
+                    if (_supervisor.RecordSilentFrame(encoded.IsKeyFrame))
+                    {
+                        LogDecoderStalled(_logger);
+                        _supervisor.Rebuild();
+                        _waitingForKeyFrame = true;
+                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
                 using (picture)
                 {
-                    lock (_frameLock)
-                    {
-                        ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _bgra, picture.Width * 4);
-                        _frameNumber++;
-                    }
+                    _frames.Publish(picture);
                 }
 
-                windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
-                windowFrames++;
-                latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _supervisor.PictureShown();
+                _stalled = false;
+
+                var latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _meter.Add(frame.Payload.Length, clock.Elapsed - decodeStarted, latencyMs);
                 FrameReady?.Invoke(this, EventArgs.Empty);
 
-                var elapsed = clock.Elapsed - windowStart;
-                if (elapsed >= StatisticsWindow)
+                if (_meter.TryTake(out var snapshot))
                 {
                     Statistics = new CameraStatistics(
-                        windowFrames / elapsed.TotalSeconds,
-                        windowBytes * 8 / elapsed.TotalSeconds / 1000,
-                        windowFrames == 0 ? 0 : windowDecodeMs / windowFrames,
-                        latencyMs);
-                    windowStart = clock.Elapsed;
-                    windowFrames = 0;
-                    windowBytes = 0;
-                    windowDecodeMs = 0;
+                        snapshot.FramesPerSecond,
+                        snapshot.Kbps,
+                        snapshot.DecodeMilliseconds,
+                        snapshot.LatencyMilliseconds);
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException or ObjectDisposedException
-                                       or Google.Protobuf.InvalidProtocolBufferException)
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
+            // The channel closed or the viewer was disposed: the ordinary way for the stream to end.
+            LogStreamEnded(_logger, ex);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or Google.Protobuf.InvalidProtocolBufferException)
+        {
+            // Nothing that can be skipped: an unusable stream description (or a control message that does not parse)
+            // leaves no way to carry on, so the viewer ends, but not without saying why.
+            LogStreamMalformed(_logger, ex);
         }
 #pragma warning disable CA1031 // Decoder setup can fail in many backend-specific ways; the viewer just closes.
         catch (Exception ex)
@@ -327,63 +331,40 @@ public sealed partial class CameraViewer : IAsyncDisposable
         }
         finally
         {
-            Closed?.Invoke(this, EventArgs.Empty);
-        }
-    }
-
-    // While no picture can be shown (just joined, or a decode error), keep asking for a key frame: the first request
-    // or key frame may have been lost.
-    private async Task KeyFrameWatchdogAsync()
-    {
-        try
-        {
-            while (true)
+#pragma warning disable CA1031 // A subscriber's failure must not fault the receive loop (and resurface from Dispose).
+            try
             {
-                await Task.Delay(KeyFrameRetry, _time, _stop.Token).ConfigureAwait(false);
-                if (Details is not null && _waitingForKeyFrame)
-                {
-                    await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
-                }
+                Closed?.Invoke(this, EventArgs.Empty);
             }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
-        {
+            catch (Exception ex)
+            {
+                LogCloseHandlerFailed(_logger, ex);
+            }
+#pragma warning restore CA1031
         }
     }
 
-    /// <summary>
-    /// The largest camera stream this will set up buffers for. The same argument as
-    /// <c>DesktopViewer.MaxDimension</c>: every stream info allocates four bytes per pixel, and the size is whatever
-    /// the other computer says it is. A camera that really produces 8K UHD is already at the edge of what exists;
-    /// 16384x16384 would be a gigabyte allocated on request, and alternating sizes would do it again on every
-    /// StreamInfo. 8K is far past any camera anybody points this at.
-    /// </summary>
-    private const int MaxDimension = 8192;
-
-    private const long MaxPixels = 7680L * 4320;
+    private Task KeyFrameWatchdogAsync() =>
+        Media.KeyFrameWatchdog.RunAsync(
+            _time,
+            () => Details is not null,
+            () => _waitingForKeyFrame,
+            () => FrameNumber,
+            _supervisor.QuietFor,
+            RequestKeyFrameAsync,
+            value => _stalled = value,
+            _stop.Token);
 
     private void OnStreamInfo(CameraStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
-        {
-            throw new InvalidDataException($"Invalid stream size {width}x{height}.");
-        }
 
-        // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream.
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
-        lock (_frameLock)
-        {
-            if (_bgra.Length != width * height * 4)
-            {
-                _bgra = new byte[width * height * 4];
-            }
-
-            _frameNumber = 0;
-            Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _decoder.Name);
-        }
+        // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream. The
+        // supervisor refuses an unusable size (the size is whatever the other computer says it is) and replaces it.
+        _supervisor.Start(width, height);
+        _frames.Reset(width, height);
+        Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
 
         _waitingForKeyFrame = true;
     }
@@ -408,6 +389,21 @@ public sealed partial class CameraViewer : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Decoding failed ({Reason}); requested a key frame.")]
     private static partial void LogDecodeFailed(ILogger logger, string reason);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The camera decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
+    private static partial void LogDecoderStalled(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A new camera decoder could not be created; keeping the old one and requesting a key frame.")]
+    private static partial void LogDecoderRebuildFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The camera stream ended.")]
+    private static partial void LogStreamEnded(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The camera stream ended because the host sent data that cannot be used.")]
+    private static partial void LogStreamMalformed(ILogger logger, Exception exception);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Camera stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A handler for the camera viewer's Closed event threw.")]
+    private static partial void LogCloseHandlerFailed(ILogger logger, Exception exception);
 }

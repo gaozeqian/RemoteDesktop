@@ -29,19 +29,18 @@ public sealed record AccessGrant
             effective &= Permissions.ViewOnly;
         }
 
-        // Without screen access, a host-side input-capable session would be meaningless and risky.
-        if (!effective.HasFlag(Permissions.ViewScreen))
-        {
-            effective &= ~(Permissions.ControlInput | Permissions.Clipboard);
-        }
-
-        return new AccessGrant(mode, effective);
+        return new AccessGrant(mode, Normalize(effective));
     }
 
     public bool Allows(Permissions permission) => permission != Permissions.None && (Permissions & permission) == permission;
 
     /// <summary>Host-initiated downgrade during a session (e.g. the local user switches to watch-only).</summary>
-    public AccessGrant Revoke(Permissions permissions) => new(Mode, Permissions & ~permissions);
+    public AccessGrant Revoke(Permissions permissions) => new(Mode, Normalize(Permissions & ~permissions));
 
     public AccessGrant DowngradeToView() => Create(SessionMode.View, Permissions, Permissions);
+
+    // Without screen access, a host-side input-capable session would be meaningless and risky. Applied wherever
+    // permissions are derived, so a revoke cannot leave behind what only made sense together with the screen.
+    private static Permissions Normalize(Permissions permissions) =>
+        permissions.HasFlag(Permissions.ViewScreen) ? permissions : permissions & ~(Permissions.ControlInput | Permissions.Clipboard);
 }

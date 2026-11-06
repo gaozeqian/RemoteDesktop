@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One installer for the three server programs: the rendezvous server (signaling), the relay and the monitoring
-  console. They go side by side into one folder, each in a subfolder of its own, because each is a self-contained
+  One installer for the server programs: the rendezvous server (signaling), the relay, the monitoring console and its
+  HTTPS gateway. They go side by side into one folder, each in a subfolder of its own, because each is a self-contained
   application with its own runtime. This is the server side of the product; the client and host installers under
   build/installer/windows/ are separate packages with separate UpgradeCodes, so a machine can be a server, a client or
   a controlled end without the other two.
@@ -21,9 +21,10 @@
          makes this the code page that fits; an MSI built this way renders its own strings correctly on any
          locale. -->
 
-    <!-- The UI is Chinese only; claiming otherwise in the package properties is the kind of thing that ends up in
-         somebody's procurement checklist and is wrong. Add the languages here when there are languages. -->
-    <SummaryInformation Description="Remote desktop servers: signaling (rendezvous) and relay. Chinese UI." />
+    <!-- The custom settings page and the licence are Chinese; the standard WixUI buttons (Back/Next/Cancel) come
+         from the extension's default English localization. Say that rather than "Chinese UI". Add a WixUI .wxl and
+         the languages here when the standard pages are localized. -->
+    <SummaryInformation Description="Remote desktop servers: signaling, relay, the Ops console and its HTTPS gateway. Chinese pages." />
 
     <!-- The product icon in Settings > Apps. Same source icon as the client and host packages. -->
     <Icon Id="AppIcon" SourceFile="..\..\..\..\src\Hosts\RemoteDesktop.Client\Assets\icon.ico" />
@@ -71,7 +72,7 @@
          anybody carrying a secret between them; a key already in appsettings.json is never replaced, because a relay
          on another machine was configured with the one printed when it was set up. Given a key (at least 32 bytes,
          base64), both servers are set to it. -->
-    <Property Id="RELAYSHAREDKEY" Value="auto" Secure="yes" />
+    <Property Id="RELAYSHAREDKEY" Value="auto" Secure="yes" Hidden="yes" />
 
     <!-- Where device codes are kept. "auto" (the default) means "decide for this machine": PostgreSQL when this
          machine already has a connection string, and otherwise a SQLite database of its own. Without either, codes
@@ -83,11 +84,11 @@
     <!-- The SQLite file. Empty means the platform default, %ProgramData%\Remote Desktop Server\rendezvous.db, which
          is what almost every installation wants; set it to put the file somewhere with more room, or on a disk that
          is backed up. It has to be a local disk: SQLite corrupts on a network share. -->
-    <Property Id="DATABASEPATH" Value="" Secure="yes" />
+    <Property Id="DATABASEPATH" Value=" " Secure="yes" />
 
     <!-- PostgreSQL connection string, for a deployment that has a database server. "auto" and empty both mean "not
          this one", and then DATABASEPROVIDER decides; a value here means PostgreSQL whatever that property says. -->
-    <Property Id="POSTGRESCONNECTIONSTRING" Value="auto" Secure="yes" />
+    <Property Id="POSTGRESCONNECTIONSTRING" Value="auto" Secure="yes" Hidden="yes" />
 
     <!-- A .pfx the signaling server should serve TLS with. "auto" (the default) means no certificate and plain http,
          which is what a deployment behind a reverse proxy, or one on a network nobody else shares, wants; any other
@@ -115,8 +116,9 @@
     <Property Id="TLSCERTIFICATEFILE" Value=" " Secure="yes" />
 
     <!-- The password of that .pfx. Nothing is the normal case: a .pfx made for a service is usually protected by where
-         the file lives rather than by a password the installer would have to pass around. Whatever is passed here ends
-         up in the installer's own log like any command-line value, which is the reason to prefer a passwordless file.
+         the file lives rather than by a password the installer would have to pass around. The value is read by the
+         ConfigureServer custom action and passed to the server in the child's environment, not on a command line, so
+         it is neither in the MSI log nor in a process list. Hidden keeps the property out of the log's property dump.
          A value of nothing but spaces reaches the server as "no password", which it already understood before this
          property existed.
 
@@ -128,24 +130,44 @@
          property that has to hold a value can never make the field look empty. The password is therefore visible while
          it is typed, which is a real cost, taken because the installer runs on the machine being set up and behind an
          elevation prompt. It is trimmed to nothing on the way out if it is left alone - see NormalizeSettings. -->
-    <Property Id="TLSCERTIFICATEPASSWORD" Value=" " Secure="yes" />
+    <Property Id="TLSCERTIFICATEPASSWORD" Value=" " Secure="yes" Hidden="yes" />
 
-    <!--
-      The four arguments both configuration command lines carry - the address, the relay endpoint, the key and the
-      database - assembled once by the setter action in Components.wxs and read by the certificate's command line,
-      which cannot spell them out a second time (the note there has the numbers).
+    <!-- The names the generated certificate has to answer. A deployment reached by a DNS name or a NAT address must
+         name that address here, or clients reject a certificate that is otherwise trusted. Empty/space means the
+         machine name, which is what SetDefaultTlsHostName fills in before the configuration runs. Secure so the
+         deferred ConfigureServer action receives it; a space default keeps the edit box usable (see the note above). -->
+    <Property Id="TLSCERTIFICATEHOSTNAME" Value=" " Secure="yes" />
 
-      It is declared here, and Secure, for one reason: a deferred custom action runs out of the installation script,
-      past the elevation boundary, and only the properties in the secure list have their values carried into that
-      script. Without this declaration the certificate's line would read an empty property and quietly configure
-      those four values to their defaults instead of the ones the installation was given.
-    -->
-    <Property Id="CONFIGUREARGUMENTS" Secure="yes" />
+    <!-- The Ops gateway's public HTTPS listener. The certificate is generated by the configuration step and contains
+         this machine's IPv4 addresses as IP SAN entries, so no domain is required. The firewall rule is written for
+         the default port; a deployment that changes this property opens its own rule for the new port. -->
+    <Property Id="GATEWAYLISTEN" Value="https://0.0.0.0:5443" Secure="yes" />
+
+    <!-- Extra DNS names or addresses to put in the generated certificate. A space means "leave it to the machine's own
+         addresses", which keeps the edit box usable if one is added to the settings page later. -->
+    <Property Id="GATEWAYHOSTNAME" Value=" " Secure="yes" />
 
     <!-- Adds no firewall rules when it is 1: msiexec /i <msi> NOFIREWALL=1. For a machine whose rules are managed
          centrally, or one whose server only listens on a network the rules are not wanted on. "0" is the default and
-         means the three inbound rules in Components.wxs are installed. -->
+         means the four inbound rules in Components.wxs are installed. -->
     <Property Id="NOFIREWALL" Value="0" Secure="yes" />
+
+    <!-- Uninstalling keeps the databases, settings and the generated certificate unless the operator asks for them to
+         go: msiexec /x ... REMOVEDATA=1. Keeping them is the default because a reinstall then keeps every device code
+         and the console's history; removing them is what a decommissioned machine needs. -->
+    <Property Id="REMOVEDATA" Value="0" Secure="yes" />
+
+    <!-- The immediate pass copies the install/config directories into these properties. The immediate actions
+         (SecureConfigDirectory, MigrateLiveSettings) read them directly; the deferred ones get them through
+         SERVERCONFIGDATA, because Windows Installer only gives a deferred managed action its CustomActionData. -->
+    <Property Id="SERVERINSTALLDIR" Value=" " Secure="yes" />
+    <Property Id="SERVERCONFIGDIR" Value=" " Secure="yes" />
+
+    <!-- PrepareServerData fills this with base64-encoded name=value pairs. It contains the relay key, the PostgreSQL
+         connection string and the TLS password, so it is Hidden (no property dump in the log) and every action that
+         receives it is HideTarget. A space default keeps the property in the table so the immediate action can set
+         it. -->
+    <Property Id="SERVERCONFIGDATA" Value=" " Secure="yes" Hidden="yes" />
 
     <!-- Which of the three TLS answers the settings page has chosen. This one is the page's own business: it never
          reaches the deferred action, it only decides what TLSCERTIFICATEPATH is set to when Next is pressed. A
@@ -156,6 +178,15 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />
     </StandardDirectory>
+
+    <!-- The live settings, databases, TLS public certificate and server-setup.log. ProgramData rather than Program
+         Files because a major upgrade removes every file the old product's MSI owns from Program Files, and because
+         this directory can be restricted to SYSTEM and Administrators (SecureConfigDirectory) while Program Files
+         carries inherited Users read access on every machine. -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="CONFIGFOLDER" Name="Remote Desktop Server" />
+    </StandardDirectory>
+
     <!-- Somewhere to point "where do I change this" at. The shortcut goes to the page in the installation folder rather
          than to a URL: this repository is private, and whoever runs the server may never have seen it. -->
     <StandardDirectory Id="ProgramMenuFolder">
@@ -167,13 +198,16 @@
       <ComponentRef Id="RendezvousService" />
       <ComponentRef Id="RelayService" />
       <ComponentRef Id="OpsService" />
-      <!-- Inbound rules for the two public servers, in a component of their own (see Components.wxs). The console
-           binds to loopback and has none. -->
+      <ComponentRef Id="GatewayService" />
+      <!-- Inbound rules for the two public servers, plus the HTTPS console gateway, in components of their own. The
+           console itself still binds to loopback and has no rule. -->
       <ComponentRef Id="FirewallRules" />
+      <ComponentRef Id="GatewayFirewallRule" />
       <!-- The settings each program reads at start-up, which an upgrade must not put back to their built-in defaults. -->
       <ComponentRef Id="RendezvousSettings" />
       <ComponentRef Id="RelaySettings" />
       <ComponentRef Id="OpsSettings" />
+      <ComponentRef Id="GatewaySettings" />
       <ComponentRef Id="ServerShortcut" />
       <!-- Everything else: the runtime, libraries and the settings templates' neighbours. -->
       <ComponentGroupRef Id="Payload" />
@@ -192,6 +226,8 @@
     <util:CloseApplication Id="CloseRelay" Target="RemoteDesktop.Server.Relay.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
     <util:CloseApplication Id="CloseOps" Target="RemoteDesktop.Server.Ops.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
+    <util:CloseApplication Id="CloseGateway" Target="RemoteDesktop.Server.Gateway.exe"
                            CloseMessage="no" RebootPrompt="no" TerminateProcess="1" Timeout="20" />
 
     <!-- Welcome, license, folder, progress, finish. The license is the product's, shared by every package: the

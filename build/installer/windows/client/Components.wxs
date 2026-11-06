@@ -30,6 +30,19 @@
         <!-- Windows Installer only removes folders it is told about. -->
         <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
       </Component>
+
+      <!-- The remotedesktop:// scheme. Windows hands the URL to the program named here, which fills the device code
+           into the window rather than dialling out by itself. Machine-wide because the registration belongs to the
+           installed program, and MSI takes it away again on uninstall. -->
+      <Component Id="UrlSchemeRegistration" Guid="b6877280-0bed-4911-bd9e-d401cb06f562">
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop" Type="string"
+                       Value="URL:Remote Desktop connection" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop" Name="URL Protocol" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop\DefaultIcon" Type="string"
+                       Value="[INSTALLFOLDER]RemoteDesktop.Client.exe,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\remotedesktop\shell\open\command" Type="string"
+                       Value="&quot;[INSTALLFOLDER]RemoteDesktop.Client.exe&quot; &quot;%1&quot;" />
+      </Component>
       <?endif?>
 
       <!-- The service that accepts connections and starts the agent inside the interactive session. -->
@@ -61,7 +74,7 @@
                                     Name="Remote Desktop peer connections (UDP)"
                                     Description="Incoming connections from other Remote Desktop devices."
                                     Program="[#HostServiceExeFile]"
-                                    Protocol="udp" Profile="all" Scope="any" IgnoreFailure="yes" />
+                                    Protocol="udp" Profile="all" InterfaceType="all" Scope="any" IgnoreFailure="yes" />
       </Component>
 
       <!-- The agent runs inside the session; the service starts it from this folder. -->
@@ -69,9 +82,11 @@
         <File Id="SessionAgentExeFile" Source="$(var.SourceRoot)\RemoteDesktop.SessionAgent.exe" KeyPath="yes" />
       </Component>
 
-      <!-- Both the service and the client read this. Never overwritten: the server address in it belongs to the person
-           who installed the software, and an upgrade must not put the built-in default back. -->
-      <Component Id="Settings" Guid="c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f" NeverOverwrite="yes">
+      <!-- The shipped defaults. The live address is %ProgramData%\RemoteDesktop\appsettings.json, which the MSI does
+           not own: a major upgrade removes the old product's files from Program Files before installing the new ones,
+           so a NeverOverwrite file here would still be deleted on every upgrade. This one is replaced with the new
+           defaults, and the machine layer wins over it at run time. -->
+      <Component Id="Settings" Guid="c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f">
         <File Id="AppSettingsFile" Source="$(var.SourceRoot)\appsettings.json" KeyPath="yes" />
       </Component>
 
@@ -125,6 +140,9 @@
     <Binary Id="ServerCertBinary" SourceFile="$(var.SourceRoot)\$(var.TrustedServerCertificate)" />
     <?endif?>
 
+    <!-- The client/host package's installer plumbing: the first-upgrade migration and the fixed-password file. -->
+    <Binary Id="ClientActions" SourceFile="$(var.CustomActionsPath)" />
+
     <!--
       The steps that need elevated rights go through the service executable, which the installer has just put in place.
       All are deferred, run as the system, and are safe to repeat.
@@ -133,56 +151,78 @@
       component when linking (silently), which would quietly leave the installer without its custom actions.
     -->
     <!--
-      These run through System32\cmd.exe instead of using the service executable as the action's own target, and they
-      ignore the exit code. Both details come from a real failed upgrade:
+      This runs through System32\cmd.exe instead of using the service executable as the action's own target: a type 18
+      action (the packaged file as the target) fails the whole installation with error 1721 when Windows cannot start
+      that file, which is what happens when an earlier version's file is waiting for a reboot because a process still
+      held it. Going through cmd.exe turns a launch failure into an exit code like any other.
 
-        * A type 18 action (the packaged file as the target) fails the whole installation with error 1721 when Windows
-          cannot start that file, which is what happens when an earlier version's file is waiting for a reboot because
-          a process still held it. "ignore" covers a non-zero exit code, not a failure to launch. Going through
-          cmd.exe turns every failure, including "the file is not there", into an exit code that is ignored.
-        * The work is best-effort by design: the server address is already baked into appsettings.json when the
-          installer is built, and the same steps can be repeated by hand at any time.
-
-      A configuration step must never leave a half-installed product behind.
+      Return="check" is deliberate. The service writes the address and certificate pin and returns non-zero if either
+      cannot be applied; the SAS policy and restart steps are best-effort inside the service and still return success.
+      A host/client that installed fine but cannot reach its server is the failure this makes visible at install time
+      instead of at first start.
     -->
     <CustomAction Id="ConfigureSystem"
                   Directory="SystemFolder"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot;&quot;"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
+                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot; --rendezvous-certificate &quot;[RENDEZVOUSCERTIFICATEPATH]&quot;&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
 
     <!--
-      A major upgrade from 0.3.0 could remove the old product's appsettings.json and then skip the new product's
-      component with the same GUID, leaving the service with no settings at all. It then fell back to the built-in
-      localhost address and retried forever. The package now ships a copy of the settings it was built with, and this
-      action restores appsettings.json from that copy when it is missing.
+      The live address is %ProgramData%\RemoteDesktop\appsettings.json, outside the MSI's file table. An upgrade keeps
+      it; the install-directory appsettings.json is only the shipped defaults and is replaced with the new package's.
+      On the first upgrade from a package that kept the address under Program Files, this action copies the old file
+      across before RemoveExistingProducts deletes it. Later upgrades find the destination and do nothing.
 
-      "if not exist" is what keeps an operator's settings: on a normal install and on every upgrade where the file
-      survived, the action does nothing. The default file is a normal component of the package (generated into the
-      file list from appsettings.default.json), so it is present even when the old product's component machinery
-      skipped the real settings file.
-
-      Through cmd.exe and Return="ignore" for the same reason as ConfigureSystem: a configuration step must never
-      leave a half-installed product behind.
+      Immediate, and sequenced before InstallInitialize: RemoveExistingProducts has to be the very first action after
+      InstallInitialize, or Windows Installer fails the upgrade with error 2613. A deferred action cannot run before
+      InstallInitialize at all, so the copy would be too late. The install is per-machine and elevated, so the
+      immediate pass can write ProgramData.
     -->
-    <CustomAction Id="RestoreDefaultSettings"
-                  Directory="SystemFolder"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c if not exist &quot;[INSTALLFOLDER]appsettings.json&quot; copy /Y &quot;[INSTALLFOLDER]appsettings.default.json&quot; &quot;[INSTALLFOLDER]appsettings.json&quot;"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="SetClientInstallDir"
+                  Property="CLIENTINSTALLFOLDER" Value="[INSTALLFOLDER]" Execute="immediate" />
+    <CustomAction Id="MigrateClientSettings"
+                  BinaryRef="ClientActions" DllEntry="MigrateClientSettings"
+                  Execute="immediate" Return="check" />
+
+    <!-- The connection page and its certificate. The three page actions are immediate and invoked by the dialog itself
+         (DoAction), so they run in msiexec's own process and can read/write the properties the page shows. The fourth
+         runs in the execute sequence, so it also covers a silent installation. -->
+    <CustomAction Id="PrefillConnectionSettings"
+                  BinaryRef="ClientActions" DllEntry="PrefillConnectionSettings"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="ValidateConnectionSettings"
+                  BinaryRef="ClientActions" DllEntry="ValidateConnectionSettings"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="BrowseForServerCertificate"
+                  BinaryRef="ClientActions" DllEntry="BrowseForServerCertificate"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="PrepareRendezvousCertificate"
+                  BinaryRef="ClientActions" DllEntry="PrepareRendezvousCertificate"
+                  Execute="immediate" Return="check" />
 
     <?ifdef var.HostOnly ?>
     <!--
       The fixed password, straight into the service's own secret store (DPAPI machine scope) before the service starts.
-      No cmd.exe here on purpose: that wrapper would make &, |, % and the other shell metacharacters special in a
-      password, and this is the one value in the package that must be taken literally. Double quotes are still not
-      possible because Windows Installer builds a command line; the wizard says so.
+      The password is written by WriteFixedPasswordFile to a SYSTEM/Administrators-only file in ProgramData and passed
+      by path with the set-fixed-password-file option; putting it on the host process's command line, as the old
+      set-fixed-password option did, exposed it to every local user for the duration of the install. The service has
+      read the file form since the Linux package needed the same protection.
 
       Return="check" rather than "ignore": if somebody typed a password shorter than the policy allows, the installer
       must stop and say so. Silently installing a host that nobody can connect to is the failure this prevents.
     -->
+    <CustomAction Id="WriteFixedPasswordFile"
+                  BinaryRef="ClientActions" DllEntry="WriteFixedPasswordFile"
+                  Execute="immediate" Return="check" />
     <CustomAction Id="SetFixedPassword"
                   FileRef="HostServiceExeFile"
-                  ExeCommand="--set-fixed-password &quot;[FIXEDPASSWORD]&quot;"
+                  ExeCommand="--set-fixed-password-file &quot;[FIXEDPASSWORDFILE]&quot;"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="DeleteFixedPasswordFile"
+                  BinaryRef="ClientActions" DllEntry="DeleteFixedPasswordFile"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="DeleteFixedPasswordFileRollback"
+                  BinaryRef="ClientActions" DllEntry="DeleteFixedPasswordFile"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
     <CustomAction Id="ClearFixedPassword"
                   FileRef="HostServiceExeFile"
                   ExeCommand="--clear-fixed-password"
@@ -215,34 +255,52 @@
       <!-- Before validation, because that is when Windows decides whether a restart will be needed. -->
       <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
       <!--
-        Installing only, and only on a fresh install: "NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed".
-
-        The appsettings.json this action rewrites is NeverOverwrite, so an upgrade keeps the address the machine was
-        configured with. Running the action on top of that would put the new package's built-in default (often
-        ws://127.0.0.1:5080/ws) back, silently disconnecting every upgraded machine whose address was set at install
-        time or edited later. The first half of the condition decides "not a removal"; the second decides "not an
-        upgrade". They are different questions, and an earlier version of this line confused them: it read
-        "NOT REMOVE OR UPGRADINGPRODUCTCODE", and UPGRADINGPRODUCTCODE is set while the *old* product is being removed,
-        so the old product ran this action after its own files had been deleted and every upgrade rolled back with
-        1603. WIX_UPGRADE_DETECTED is set on the new product's install instead, which is the side this action runs on.
+        The live address is %ProgramData%\RemoteDesktop\appsettings.json; this action writes it there on a fresh
+        install through the service's own configure-system step. On an upgrade the file is left alone (the migration
+        below has already preserved the first one from the old layout), so an operator's address is not replaced by
+        the package default. "Not a removal" and "not an upgrade" are different questions: UPGRADINGPRODUCTCODE is
+        set while the *old* product is being removed, which is why an earlier condition using it ran the action after
+        the old files were gone and every upgrade rolled back with 1603. WIX_UPGRADE_DETECTED is set on the new
+        product's install, which is the side this action runs on.
       -->
+      <!-- The page is shown on upgrades too, prefilled with the live values. A silent upgrade has CONNECTIONEDITED=0
+           and leaves those values alone; an interactive upgrade sets it when the page is left with Next. -->
+      <Custom Action="PrepareRendezvousCertificate"
+              Before="ConfigureSystem"
+              Condition="NOT REMOVE AND ((NOT Installed AND NOT WIX_UPGRADE_DETECTED) OR CONNECTIONEDITED = &quot;1&quot;)" />
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
-              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED AND NOT Installed" />
+              Condition="NOT REMOVE AND ((NOT Installed AND NOT WIX_UPGRADE_DETECTED) OR CONNECTIONEDITED = &quot;1&quot;)" />
 
-      <!-- After InstallFiles, on install and upgrade alike: if a major upgrade left appsettings.json missing, put the
-           built-in one back; if it is there, this does nothing. This is also what a repair runs, which is how a
-           machine upgraded before this fix can be repaired without reinstalling. -->
-      <Custom Action="RestoreDefaultSettings"
-              After="InstallFiles"
-              Condition="NOT REMOVE" />
+      <!-- Before InstallInitialize (and therefore before RemoveExistingProducts) deletes the old product's
+           appsettings.json, copy it to ProgramData. The destination check makes this a one-time migration: later
+           upgrades keep the file it produced. The immediate sequence is the only place early enough: a deferred action
+           cannot run before InstallInitialize, and anything between InstallInitialize and RemoveExistingProducts
+           makes the package fail with MSI error 2613. -->
+      <Custom Action="SetClientInstallDir"
+              Before="MigrateClientSettings"
+              Condition="WIX_UPGRADE_DETECTED" />
+      <Custom Action="MigrateClientSettings"
+              Before="InstallInitialize"
+              Condition="WIX_UPGRADE_DETECTED" />
 
       <?ifdef var.HostOnly ?>
       <!-- Before ConfigureSystem, and before the service is started: the service reads the fixed password once, at
-           startup. "NOT REMOVE" keeps both off the uninstall and off the old product during a major upgrade. -->
+           startup. WriteFixedPasswordFile runs in the immediate pass and leaves the path in a secure property; the
+           deferred Set reads the file, and Delete removes it. "NOT REMOVE" keeps these off the uninstall and off the
+           old product during a major upgrade. -->
+      <Custom Action="WriteFixedPasswordFile"
+              Before="SetFixedPassword"
+              Condition="NOT REMOVE AND CLEARFIXEDPASSWORD &lt;&gt; &quot;1&quot;" />
       <Custom Action="SetFixedPassword"
               Before="ConfigureSystem"
-              Condition="NOT REMOVE AND CLEARFIXEDPASSWORD &lt;&gt; &quot;1&quot;" />
+              Condition="NOT REMOVE AND CLEARFIXEDPASSWORD &lt;&gt; &quot;1&quot; AND FIXEDPASSWORDFILE &lt;&gt; &quot;&quot;" />
+      <Custom Action="DeleteFixedPasswordFile"
+              After="SetFixedPassword"
+              Condition="NOT REMOVE" />
+      <Custom Action="DeleteFixedPasswordFileRollback"
+              After="SetFixedPassword"
+              Condition="NOT REMOVE" />
       <Custom Action="ClearFixedPassword"
               Before="ConfigureSystem"
               Condition="NOT REMOVE AND CLEARFIXEDPASSWORD = &quot;1&quot;" />
@@ -258,34 +316,80 @@
               Before="RemoveFiles"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEDATA=&quot;1&quot;" />
     </InstallExecuteSequence>
-  <?ifdef var.HostOnly ?>
   <!--
-    The host-only package has no window after installation, so this page is the only place the fixed password can be
-    typed. It is deliberately a page of its own rather than part of the folder page: the folder page is shared with
-    the client package, and the client can set the password later in its own 高级设置 → 安全.
+    The connection page is shared by the client and the host: both need a signaling address, and both need the
+    self-signed server certificate when the address is wss://. The client can change the address later in its own
+    window; the host has no window, so this page (and the existing fixed-password page after it) is the host's only
+    installer UI.
 
-    The transitions carry a higher Order than the ones WixUI_InstallDir publishes, which is what replaces the direct
-    InstallDirDlg → VerifyReadyDlg step. Same arrangement as the server package's settings page.
+    The page is shown on upgrades too, after PrefillConnectionSettings has put the live values into its properties. A
+    silent upgrade does not run the UI and leaves the live settings untouched (see the InstallExecuteSequence
+    conditions); an interactive upgrade applies what the page holds.
 
-    Kept inside the same Fragment as the components on purpose: WiX 5.0.2 drops a Fragment that holds no component
-    when linking, and a silently missing dialog is exactly the failure the package tests are here to catch.
+    The dialogs live in the same Fragment as the components on purpose: WiX 5.0.2 drops a Fragment that holds no
+    component when linking, and a silently missing dialog is exactly the failure the package tests catch.
   -->
     <UI>
+      <Dialog Id="ConnectionDlg" Width="370" Height="270" Title="[ProductName] 安装向导">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器连接" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="30" Transparent="yes" NoPrefix="yes" Text="填写信令服务器地址，以及服务器使用自签名证书时的公钥。升级时这里会带出当前值；不修改也可以。" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="AddressLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="服务器地址（ws:// 或 wss://）" />
+        <Control Id="AddressEdit" Type="Edit" X="20" Y="80" Width="330" Height="18" Property="RENDEZVOUSURI" Text="[RENDEZVOUSURI]" />
+
+        <Control Id="CertificateLabel" Type="Text" X="20" Y="108" Width="330" Height="12" NoPrefix="yes" Text="服务器证书（仅 wss:// 自签名时需要；公开可信证书留空）" />
+        <Control Id="CertificateEdit" Type="Edit" X="20" Y="122" Width="248" Height="18" Property="SERVERCERTIFICATEPATH" Text="[SERVERCERTIFICATEPATH]" />
+        <Control Id="CertificateBrowse" Type="PushButton" X="276" Y="122" Width="74" Height="18" Text="浏览…">
+          <Publish Event="DoAction" Value="BrowseForServerCertificate" Order="1" />
+          <Publish Event="NewDialog" Value="ServerCertificateChosenDlg" Order="2" Condition="SERVERCERTIFICATECHOSEN = &quot;1&quot;" />
+        </Control>
+
+        <Control Id="Note" Type="Text" X="20" Y="150" Width="330" Height="70" NoPrefix="yes" Text="地址以 ws:// 或 wss:// 开头。ws:// 不需要证书；wss:// 使用公开可信证书时也不需要。只有服务器使用自签名证书时，才在这里选择它的公钥（PEM/DER）；安装后只固定这一个服务器证书，不修改系统信任设置。" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="ServerCertificateChosenDlg" Width="370" Height="120" Title="[ProductName] 安装向导">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}已选择证书文件" />
+        <Control Id="Description" Type="Text" X="25" Y="26" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="安装程序会把这个文件里的公钥固定为服务器证书；不会复制私钥。" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="84" Width="370" Height="0" />
+        <Control Id="ChosenPath" Type="Text" X="25" Y="52" Width="330" Height="26" Transparent="yes" NoPrefix="yes" Text="[SERVERCERTIFICATEPATH]" />
+        <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+          <Publish Event="NewDialog" Value="ConnectionDlg" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="ConnectionErrorDlg" Width="370" Height="160" Title="[ProductName] 安装向导">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}无法使用这组设置" />
+        <Control Id="ErrorText" Type="Text" X="25" Y="30" Width="320" Height="80" Transparent="yes" NoPrefix="yes" Text="[CONNECTIONERROR]" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="118" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="124" Width="370" Height="0" />
+        <Control Id="OK" Type="PushButton" X="294" Y="132" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+          <Publish Event="NewDialog" Value="ConnectionDlg" />
+        </Control>
+      </Dialog>
+
+      <?ifdef var.HostOnly ?>
       <Dialog Id="HostSettingsDlg" Width="370" Height="270" Title="[ProductName] 安装向导">
         <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}无人值守设置" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="30" Transparent="yes" NoPrefix="yes" Text="固定密码让这台机器在没有人登录时也能被连接。留空表示不修改已有密码；之后也可以用命令行设置。" />
         <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
-        <Control Id="PasswordLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="固定密码（至少 8 位，不能包含双引号；输入内容会显示在框中）" />
+        <Control Id="PasswordLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="固定密码（至少 8 位；输入内容会显示在框中）" />
         <Control Id="PasswordEdit" Type="Edit" X="20" Y="80" Width="330" Height="18" Property="FIXEDPASSWORD" Text="[FIXEDPASSWORD]" />
         <Control Id="ClearCheck" Type="CheckBox" X="20" Y="108" Width="330" Height="18" Property="CLEARFIXEDPASSWORD" CheckBoxValue="1" Text="清除已设置的固定密码（勾选后忽略上面的输入）" />
-        <Control Id="Note" Type="Text" X="20" Y="136" Width="330" Height="48" NoPrefix="yes" Text="没有固定密码时，host 包没有任何界面可以显示设备代码或临时密码，只能等有人在本机用客户端设置。密码保存后需要重启 RemoteDesktopHost 服务才生效。" />
-        <Control Id="AddressNote" Type="Text" X="20" Y="190" Width="330" Height="26" NoPrefix="yes" Text="服务器地址在上一页/安装命令行设置（RENDEZVOUSURI）；它和密码一起决定这台机器能否被连接。" />
+        <Control Id="Note" Type="Text" X="20" Y="136" Width="330" Height="48" NoPrefix="yes" Text="没有固定密码时，host 包没有任何界面可以显示设备代码或临时密码，只能等有人在本机用客户端设置。安装程序会在服务启动前写入这个密码；之后在客户端里修改才需要重启服务。" />
+        <Control Id="AddressNote" Type="Text" X="20" Y="190" Width="330" Height="26" NoPrefix="yes" Text="服务器地址和证书在上一页设置；升级时那里会带出当前值。没有地址，host 无法注册到服务器。" />
 
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
-          <Publish Event="NewDialog" Value="InstallDirDlg" />
-        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
           <Publish Event="NewDialog" Value="VerifyReadyDlg" />
         </Control>
@@ -294,10 +398,27 @@
         </Control>
       </Dialog>
 
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="HostSettingsDlg" Order="6" Condition="1" />
+      <!-- The connection page only exists on a fresh install or a major upgrade (!Installed). A repair keeps the
+           live values and the built-in maintenance Back transition. -->
+      <Publish Dialog="HostSettingsDlg" Control="Back" Event="NewDialog" Value="ConnectionDlg" Order="7" Condition="NOT Installed" />
+      <Publish Dialog="HostSettingsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="6" Condition="Installed" />
+      <?endif?>
+
+      <!-- Before the connection page is built, put the live values into its properties on an upgrade. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="PrefillConnectionSettings" Order="5" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ConnectionDlg" Order="6" Condition="NOT Installed" />
+
+      <Publish Dialog="ConnectionDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="1" Condition="1" />
+      <Publish Dialog="ConnectionDlg" Control="Next" Event="DoAction" Value="ValidateConnectionSettings" Order="1" Condition="1" />
+      <Publish Dialog="ConnectionDlg" Control="Next" Event="NewDialog" Value="ConnectionErrorDlg" Order="2" Condition="CONNECTIONERROR &lt;&gt; &quot; &quot;" />
+      <?ifdef var.HostOnly ?>
+      <Publish Dialog="ConnectionDlg" Control="Next" Event="NewDialog" Value="HostSettingsDlg" Order="3" Condition="CONNECTIONERROR = &quot; &quot;" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="HostSettingsDlg" Order="6" Condition="1" />
+      <?else?>
+      <Publish Dialog="ConnectionDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="3" Condition="CONNECTIONERROR = &quot; &quot;" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ConnectionDlg" Order="6" Condition="NOT Installed" />
+      <?endif?>
     </UI>
-  <?endif?>
   </Fragment>
 
 </Wix>

@@ -14,10 +14,9 @@ namespace RemoteDesktop.Platform.Linux.Camera;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Not yet run against a camera.</b> This machine reports <c>IsCameraPresent</c> false and has no
-/// <c>/dev/video*</c>, so nothing here has ever executed against real hardware. It is written from the portal's
-/// own interface definition and patterned on the screen-capture path, which is verified; treat it as a starting
-/// point for a machine that has a camera rather than as something known to work.
+/// <b>Verified on real hardware.</b> It has been run end to end against a USB camera on Ubuntu 26.04 (see
+/// docs/ports/README.md). It is written from the portal's own interface definition and patterned on the
+/// screen-capture path.
 /// </para>
 /// <para>
 /// Listing cameras is a question for a person — the portal will not say which cameras exist without first being
@@ -28,8 +27,7 @@ namespace RemoteDesktop.Platform.Linux.Camera;
 /// <para>
 /// <b>The fd is not a camera.</b> <c>OpenPipeWireRemote</c> hands back a connection to the desktop's PipeWire
 /// instance with every node hidden except the cameras; the cameras themselves are found by reading that graph's
-/// registry. There is no V4L2 ioctl anywhere in this, which is what the interface definition says and what an
-/// earlier version of the port plan got wrong.
+/// registry. There is no V4L2 ioctl anywhere in this, which is what the interface definition says.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]

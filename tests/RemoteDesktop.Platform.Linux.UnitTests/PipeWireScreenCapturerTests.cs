@@ -37,7 +37,7 @@ public sealed class PipeWireScreenCapturerTests
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "RemoteDesktop");
 
-    private static (PortalGrant Grant, PipeWireScreenCapturerFactory Factory) CreateFactory()
+    private static (PortalGrant Grant, PipeWireScreenCapturerFactory Factory) CreateFactory(IDisplayEnumerator displays)
     {
         var grant = new PortalGrant(
             new FileSecretStore(Path.Combine(DataDirectory, "secrets")),
@@ -46,6 +46,7 @@ public sealed class PipeWireScreenCapturerTests
 
         return (grant, new PipeWireScreenCapturerFactory(
             grant,
+            displays,
             NullLoggerFactory.Instance,
             NullLogger<PipeWireScreenCapturerFactory>.Instance));
     }
@@ -64,7 +65,7 @@ public sealed class PipeWireScreenCapturerTests
         var target = displays.GetDisplays().FirstOrDefault(d => d.IsPrimary)
             ?? throw new InvalidOperationException("No primary screen to capture.");
 
-        var (grant, factory) = CreateFactory();
+        var (grant, factory) = CreateFactory(displays);
         try
         {
             return (grant, factory, factory.Create(target));

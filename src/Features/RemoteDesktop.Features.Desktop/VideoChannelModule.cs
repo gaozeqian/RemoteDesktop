@@ -28,9 +28,15 @@ public sealed partial class VideoChannelModule(
     ILogger<VideoChannelModule> logger) : IFeatureModule
 {
     private const int MaxFrameRate = 60;
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan SetupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CaptureTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan DisplayPoll = TimeSpan.FromSeconds(2);
+
+    /// <summary>Capture is rebuilt after this long without a frame, when the capturer also says it is broken.</summary>
+    private static readonly TimeSpan NoFrameTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>Rebuilds of a capturer that keeps failing are spaced out; each one costs a device and a duplication.</summary>
+    private static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(5);
 
     public ChannelType ChannelType => ChannelType.Video;
 
@@ -43,7 +49,7 @@ public sealed partial class VideoChannelModule(
         VideoRequest request;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
-            timeout.CancelAfter(RequestTimeout);
+            timeout.CancelAfter(SetupTimeout);
             var first = await ProtobufFrames.ReadAsync(channel.Stream, VideoControl.Parser, 64 * 1024, timeout.Token).ConfigureAwait(false);
             if (first?.BodyCase != VideoControl.BodyOneofCase.Request)
             {
@@ -57,7 +63,7 @@ public sealed partial class VideoChannelModule(
         var display = available.FirstOrDefault(d => d.Id == request.DisplayId) ?? Primary(available);
         if (display is null)
         {
-            LogNoDisplay(logger);
+            LogNoDisplay(logger, session.Id);
             return;
         }
 
@@ -69,7 +75,7 @@ public sealed partial class VideoChannelModule(
         var controlReader = ReadControlAsync(channel, stream, stop);
         try
         {
-            await Task.Run(() => StreamAsync(channel, display, available, frameRate, preference, stream, stop.Token), stop.Token).ConfigureAwait(false);
+            await Task.Run(() => StreamAsync(channel, display, available, frameRate, preference, stream, session.Id, stop.Token), stop.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
@@ -95,6 +101,7 @@ public sealed partial class VideoChannelModule(
         int frameRate,
         EncoderPreference preference,
         StreamState stream,
+        SessionId sessionId,
         CancellationToken cancellationToken)
     {
         var clock = Stopwatch.StartNew();
@@ -112,6 +119,12 @@ public sealed partial class VideoChannelModule(
         // Set when the newest image has not been encoded yet because it arrived before the frame-rate cap allowed.
         var pending = false;
 
+        // Nothing to send is normal on a screen nobody is touching; a capturer that says it is broken while no
+        // frames arrive is not, and that is the pair that used to leave the controller on a picture that never moved.
+        var lastFrameAt = clock.Elapsed;
+        var lastRecovery = TimeSpan.MinValue;
+        var stalled = false;
+
         // The capturer raises its cursor events from inside CaptureAsync, i.e. on this loop; they are flushed to the
         // channel right after. Only the newest position matters; the shape is remembered to re-announce it on a new stream.
         var cursor = new CursorRelay();
@@ -125,7 +138,7 @@ public sealed partial class VideoChannelModule(
                 var switchTo = NextDisplay(stream, ref available, display, clock.Elapsed, ref nextDisplayPoll, out var listChanged);
                 if (switchTo is not null && switchTo.Id != display.Id)
                 {
-                    var next = TryCreateCapturer(switchTo);
+                    var next = TryCreateCapturer(switchTo, sessionId);
                     if (next is not null)
                     {
                         capturer.CursorChanged -= cursor.OnShape;
@@ -135,7 +148,7 @@ public sealed partial class VideoChannelModule(
                         capturer.CursorChanged += cursor.OnShape;
                         capturer.CursorMoved += cursor.OnMoved;
                         display = switchTo;
-                        LogDisplaySwitched(logger, display.Id);
+                        LogDisplaySwitched(logger, sessionId, display.Id);
 
                         // A new stream (fresh encoder, fresh StreamInfo) tells the controller which display it is looking at.
                         latest?.Dispose();
@@ -144,12 +157,19 @@ public sealed partial class VideoChannelModule(
                         encoder = null;
                         pending = false;
                         listChanged = false;
+
+                        // The new capturer gets the same grace as a session that has just started.
+                        lastFrameAt = clock.Elapsed;
+                        lastRecovery = TimeSpan.MinValue;
                     }
                 }
 
                 if (listChanged && encoder is not null)
                 {
-                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
+                    // The capturer's display, not the requested one: a host that had to substitute another screen (a
+                    // Wayland desktop shares only what the operator picked) announces the screen it is really sending,
+                    // so the toolbar and the picture cannot disagree.
+                    await SendStreamInfoAsync(channel, capturer.Display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
                 }
 
                 // Pacing comes from the capture itself (it blocks until the screen changes, at most at the refresh
@@ -161,6 +181,13 @@ public sealed partial class VideoChannelModule(
                 {
                     if (captured is not null)
                     {
+                        lastFrameAt = clock.Elapsed;
+                        if (stalled)
+                        {
+                            stalled = false;
+                            LogCaptureRecovered(logger, sessionId, display.Id);
+                        }
+
                         // H.264 in 4:2:0 needs even dimensions; an odd last row/column is dropped.
                         var width = captured.Width & ~1;
                         var height = captured.Height & ~1;
@@ -170,6 +197,26 @@ public sealed partial class VideoChannelModule(
                         latest = nv12;
                         pending = true;
                     }
+                }
+
+                // The capturer is the only thing that can tell "a static screen" from "this display cannot be
+                // captured any more", so only its own verdict is acted on; rebuilding a healthy one would cost a
+                // device and a duplication every couple of seconds for nothing.
+                if (capturer.IsFaulted && clock.Elapsed - lastFrameAt >= NoFrameTimeout
+                    && (lastRecovery == TimeSpan.MinValue || clock.Elapsed - lastRecovery >= RecoveryInterval))
+                {
+                    lastRecovery = clock.Elapsed;
+                    stalled = true;
+                    LogCaptureStalled(logger, sessionId, display.Id);
+                    capturer.Reset();
+
+                    // Whatever `latest` holds predates the fault; the controller must not keep showing it as new.
+                    latest?.Dispose();
+                    latest = null;
+                    pending = false;
+                    stream.KeyFrameRequested = true;
+                    await cursor.FlushAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
+                    continue;
                 }
 
                 await cursor.FlushAsync(channel.Stream, cancellationToken).ConfigureAwait(false);
@@ -194,8 +241,11 @@ public sealed partial class VideoChannelModule(
                 if (encoder is null || encoder.Options.Width != latest.Width || encoder.Options.Height != latest.Height)
                 {
                     encoder?.Dispose();
-                    (encoder, bitrate) = CreateEncoder(latest.Width, latest.Height, frameRate, preference, allowHardware);
-                    await SendStreamInfoAsync(channel, display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
+                    (encoder, bitrate) = CreateEncoder(latest.Width, latest.Height, frameRate, preference, allowHardware, sessionId);
+                    // The capturer's display, not the requested one: a host that had to substitute another screen (a
+                    // Wayland desktop shares only what the operator picked) announces the screen it is really sending,
+                    // so the toolbar and the picture cannot disagree.
+                    await SendStreamInfoAsync(channel, capturer.Display, available, encoder, cursor, cancellationToken).ConfigureAwait(false);
                     stream.KeyFrameRequested = true;
                 }
 
@@ -207,7 +257,7 @@ public sealed partial class VideoChannelModule(
                 catch (Exception ex) when (encoder.IsHardware && ex is not OperationCanceledException)
                 {
                     // Drivers can fail mid-stream (device lost, session limits); continue in software.
-                    LogEncoderFailed(logger, encoder.Name, ex);
+                    LogEncoderFailed(logger, sessionId, encoder.Name, ex);
                     allowHardware = false;
                     encoder.Dispose();
                     encoder = null;
@@ -271,7 +321,7 @@ public sealed partial class VideoChannelModule(
         return available.Any(d => d.Id == current.Id) ? null : Primary(available);
     }
 
-    private IScreenCapturer? TryCreateCapturer(DisplayInfo display)
+    private IScreenCapturer? TryCreateCapturer(DisplayInfo display, SessionId sessionId)
     {
         try
         {
@@ -281,12 +331,13 @@ public sealed partial class VideoChannelModule(
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogSwitchFailed(logger, display.Id, ex);
+            LogSwitchFailed(logger, sessionId, display.Id, ex);
             return null;
         }
     }
 
-    private (IVideoEncoder Encoder, BitrateController Bitrate) CreateEncoder(int width, int height, int frameRate, EncoderPreference preference, bool allowHardware)
+    private (IVideoEncoder Encoder, BitrateController Bitrate) CreateEncoder(
+        int width, int height, int frameRate, EncoderPreference preference, bool allowHardware, SessionId sessionId)
     {
         // ~0.06 bits per pixel per frame for smoothness, more for text-heavy "quality" sessions.
         var bitsPerPixel = preference == EncoderPreference.Quality ? 0.1 : 0.06;
@@ -294,7 +345,7 @@ public sealed partial class VideoChannelModule(
         var options = new VideoEncoderOptions(VideoCodec.H264, width, height, frameRate, initialKbps, preference);
 
         var encoder = codecs.CreateEncoder(options, allowHardware);
-        LogEncoderCreated(logger, encoder.Name, encoder.IsHardware, width, height, frameRate, initialKbps);
+        LogEncoderCreated(logger, sessionId, encoder.Name, encoder.IsHardware, width, height, frameRate, initialKbps);
         return (encoder, new BitrateController(initialKbps, Math.Max(300, initialKbps / 8), initialKbps * 2, frameRate));
     }
 
@@ -412,39 +463,40 @@ public sealed partial class VideoChannelModule(
 
     private sealed class StreamState
     {
-        private volatile bool _keyFrameRequested;
+        private int _keyFrameRequested;
         private volatile string? _requestedDisplay;
 
         public bool KeyFrameRequested
         {
-            get => _keyFrameRequested;
-            set => _keyFrameRequested = value;
+            get => Volatile.Read(ref _keyFrameRequested) != 0;
+            set => Volatile.Write(ref _keyFrameRequested, value ? 1 : 0);
         }
 
-        public bool TakeKeyFrameRequest()
-        {
-            var requested = _keyFrameRequested;
-            _keyFrameRequested = false;
-            return requested;
-        }
+        public bool TakeKeyFrameRequest() => Interlocked.Exchange(ref _keyFrameRequested, 0) != 0;
 
         public void RequestDisplay(string id) => _requestedDisplay = id;
 
         public string? TakeDisplayRequest() => Interlocked.Exchange(ref _requestedDisplay, null);
     }
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "No display available to stream.")]
-    private static partial void LogNoDisplay(ILogger logger);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: no display available to stream.")]
+    private static partial void LogNoDisplay(ILogger logger, SessionId sessionId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Now streaming display {Display}.")]
-    private static partial void LogDisplaySwitched(ILogger logger, string display);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: now streaming display {Display}.")]
+    private static partial void LogDisplaySwitched(ILogger logger, SessionId sessionId, string display);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not switch to display {Display}; staying on the current one.")]
-    private static partial void LogSwitchFailed(ILogger logger, string display, Exception exception);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: could not switch to display {Display}; staying on the current one.")]
+    private static partial void LogSwitchFailed(ILogger logger, SessionId sessionId, string display, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Video encoder {Encoder} (hardware: {Hardware}) {Width}x{Height}@{FrameRate}, {Kbps} kbps.")]
-    private static partial void LogEncoderCreated(ILogger logger, string encoder, bool hardware, int width, int height, int frameRate, int kbps);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: video encoder {Encoder} (hardware: {Hardware}) {Width}x{Height}@{FrameRate}, {Kbps} kbps.")]
+    private static partial void LogEncoderCreated(ILogger logger, SessionId sessionId, string encoder, bool hardware, int width, int height, int frameRate, int kbps);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Hardware encoder {Encoder} failed; falling back to software.")]
-    private static partial void LogEncoderFailed(ILogger logger, string encoder, Exception exception);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: hardware encoder {Encoder} failed; falling back to software.")]
+    private static partial void LogEncoderFailed(ILogger logger, SessionId sessionId, string encoder, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: no frames from display {Display} and the capturer reports a fault; rebuilding capture.")]
+    private static partial void LogCaptureStalled(ILogger logger, SessionId sessionId, string display);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId}: display {Display} is delivering frames again.")]
+    private static partial void LogCaptureRecovered(ILogger logger, SessionId sessionId, string display);
 }

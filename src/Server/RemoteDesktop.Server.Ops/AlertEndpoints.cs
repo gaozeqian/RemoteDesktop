@@ -75,6 +75,11 @@ public static class AlertEndpoints
                 return Results.BadRequest(new { error = "rule", message });
             }
 
+            if (await UnknownMetricAsync(rule, store, cancellationToken).ConfigureAwait(false) is { } unknown)
+            {
+                return Results.BadRequest(new { error = "rule", message = unknown });
+            }
+
             await store.UpsertAlertRuleAsync(rule, cancellationToken).ConfigureAwait(false);
             await AuditAsync(store, context, context.User.Identity?.Name ?? "unknown", "alert.rule.save", rule.Name, time.GetUtcNow(), cancellationToken)
                 .ConfigureAwait(false);
@@ -170,6 +175,33 @@ public static class AlertEndpoints
             request.Enabled ?? true);
 
         return true;
+    }
+
+    private static async Task<string?> UnknownMetricAsync(AlertRule rule, OpsStore store, CancellationToken cancellationToken)
+    {
+        if (string.Equals(rule.Kind, AlertRuleKinds.SingleMetric, StringComparison.Ordinal)
+            && rule.Metric is { } metric
+            && await store.ReadMetricKindAsync(metric, cancellationToken).ConfigureAwait(false) is null)
+        {
+            return $"metric '{metric}' has never been scraped; wait for the first scrape or correct the name";
+        }
+
+        if (string.Equals(rule.Kind, AlertRuleKinds.Ratio, StringComparison.Ordinal))
+        {
+            if (rule.Numerator is { } numerator
+                && await store.ReadMetricKindAsync(numerator, cancellationToken).ConfigureAwait(false) is null)
+            {
+                return $"numerator '{numerator}' has never been scraped";
+            }
+
+            if (rule.Denominator is { } denominator
+                && await store.ReadMetricKindAsync(denominator, cancellationToken).ConfigureAwait(false) is null)
+            {
+                return $"denominator '{denominator}' has never been scraped";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The stored spelling of an aggregation, defaulting to the one that needs no explanation.</summary>

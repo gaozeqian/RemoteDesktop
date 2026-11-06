@@ -39,7 +39,8 @@ public static class FileTransferClient
         string fileName,
         ConflictPolicy policy,
         ITransferObserver observer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(observer);
@@ -61,12 +62,26 @@ public static class FileTransferClient
         // A damaged partial on the host is deleted by the host; the second attempt then starts from nothing.
         for (var attempt = 0; ; attempt++)
         {
-            var (outcome, retry) = await UploadOnceAsync(connection, info, remoteDirectory, fileName, policy, observer, cancellationToken).ConfigureAwait(false);
+            var (outcome, retry) = await UploadOnceAsync(connection, info, remoteDirectory, fileName, policy, observer, requestTimeout, cancellationToken).ConfigureAwait(false);
             if (!retry || attempt > 0)
             {
                 return outcome;
             }
         }
+    }
+
+    /// <summary>
+    /// How long an upload waits for the host's verdict after the last byte. Unlike every other answer in a transfer,
+    /// this one is not immediate: the host copies the whole verified partial file to its final name first, which takes
+    /// time in proportion to the file. The plain deadline would report a failure for a transfer the host then goes on
+    /// to complete. The allowance assumes the host's disk copies at no less than 1 MiB/s, and stops at an hour so a
+    /// host that has really gone quiet is still given up on.
+    /// </summary>
+    internal static TimeSpan FinishTimeout(TimeSpan requestTimeout, long size)
+    {
+        var extra = TimeSpan.FromSeconds(Math.Max(0, size) / (double)(1024 * 1024));
+        var ceiling = TimeSpan.FromHours(1);
+        return requestTimeout >= ceiling ? requestTimeout : TimeSpan.FromTicks(Math.Min((requestTimeout + extra).Ticks, ceiling.Ticks));
     }
 
     public static async Task<TransferOutcome> DownloadAsync(
@@ -99,6 +114,7 @@ public static class FileTransferClient
         string fileName,
         ConflictPolicy policy,
         ITransferObserver observer,
+        TimeSpan? requestTimeout,
         CancellationToken cancellationToken)
     {
         var size = info.Length;
@@ -121,7 +137,7 @@ public static class FileTransferClient
                     },
                 }, cancellationToken).ConfigureAwait(false);
 
-                var answer = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken, requestTimeout).ConfigureAwait(false);
                 if (answer.BodyCase == FileResponse.BodyOneofCase.Result)
                 {
                     Check(answer.Result.Status);
@@ -139,13 +155,21 @@ public static class FileTransferClient
                 }
 
                 Check(accepted.Status);
-                var offset = (long)accepted.ResumeOffset;
+                var offset = ToLength(accepted.ResumeOffset);
+                if (offset > size)
+                {
+                    throw new FileOperationException(FileError.Unsupported, "The remote computer asked to continue beyond the end of the file.");
+                }
+
                 observer.Started(size, offset, accepted.FinalPath, PartialFile.PathFor(accepted.FinalPath, size, modified));
 
                 var hash = await FileSender.SendAsync(stream, info.FullName, size, offset, observer.Progress, cancellationToken).ConfigureAwait(false);
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Finish = new TransferComplete { Status = new FileStatus(), Hash = hash, Size = (ulong)size } }, cancellationToken).ConfigureAwait(false);
 
-                var verdict = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var verdict = await RequestTimeout.RunAsync(
+                    token => ReadResponseAsync(stream, token),
+                    cancellationToken,
+                    FinishTimeout(requestTimeout ?? RequestTimeout.Default, size)).ConfigureAwait(false);
                 if (verdict.BodyCase != FileResponse.BodyOneofCase.Complete)
                 {
                     throw new FileOperationException(FileError.Unsupported, "The remote computer answered unexpectedly.");
@@ -158,6 +182,11 @@ public static class FileTransferClient
 
                 Check(verdict.Complete.Status);
                 return (TransferOutcome.Completed, false);
+            }
+            catch (TimeoutException ex)
+            {
+                // The host took the channel and then stopped answering: the transfer never started, or never ended.
+                throw new FileOperationException(FileError.Io, ex.Message, ex);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or EndOfStreamException && !cancellationToken.IsCancellationRequested)
             {
@@ -181,7 +210,7 @@ public static class FileTransferClient
             try
             {
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Download = new DownloadRequest { Path = remotePath } }, cancellationToken).ConfigureAwait(false);
-                var answer = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var answer = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (answer.BodyCase == FileResponse.BodyOneofCase.Result)
                 {
                     Check(answer.Result.Status);
@@ -194,7 +223,7 @@ public static class FileTransferClient
 
                 var accepted = answer.DownloadAccepted;
                 Check(accepted.Status);
-                var size = (long)accepted.Size;
+                var size = ToLength(accepted.Size);
                 var modified = FileTimestamps.FromUnixMilliseconds(accepted.ModifiedUnixMs);
 
                 var final = destination;
@@ -233,7 +262,7 @@ public static class FileTransferClient
                 await ProtobufFrames.WriteAsync(stream, new FileRequest { Start = new TransferStart { Offset = (ulong)offset } }, cancellationToken).ConfigureAwait(false);
 
                 var hash = await FileReceiver.ReceiveAsync(stream, partial, size, offset, observer.Progress, cancellationToken, InterpretControl).ConfigureAwait(false);
-                var verdict = await ReadResponseAsync(stream, cancellationToken).ConfigureAwait(false);
+                var verdict = await RequestTimeout.RunAsync(token => ReadResponseAsync(stream, token), cancellationToken).ConfigureAwait(false);
                 if (verdict.BodyCase != FileResponse.BodyOneofCase.Complete)
                 {
                     throw new FileOperationException(FileError.Unsupported, "The remote computer answered unexpectedly.");
@@ -251,6 +280,11 @@ public static class FileTransferClient
 
                 Place(partial, final, policy == ConflictPolicy.Overwrite, modified);
                 return (TransferOutcome.Completed, false);
+            }
+            catch (TimeoutException ex)
+            {
+                // The host took the channel and then stopped answering: the transfer never started, or never ended.
+                throw new FileOperationException(FileError.Io, ex.Message, ex);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException && !cancellationToken.IsCancellationRequested)
             {
@@ -304,6 +338,12 @@ public static class FileTransferClient
     private static async Task<FileResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken) =>
         await ProtobufFrames.ReadAsync(stream, FileResponse.Parser, MaxResponseBytes, cancellationToken).ConfigureAwait(false)
         ?? throw new EndOfStreamException("The remote computer closed the channel.");
+
+    // Sizes and offsets are the host's to announce; cast unchecked, anything above long.MaxValue turns negative.
+    internal static long ToLength(ulong announced) =>
+        announced <= long.MaxValue
+            ? (long)announced
+            : throw new FileOperationException(FileError.Unsupported, "The remote computer announced a size that is not valid.");
 
     private static void Check(FileStatus? status)
     {

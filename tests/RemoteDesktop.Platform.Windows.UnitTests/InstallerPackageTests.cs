@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text;
 using RemoteDesktop.Application;
+using WixToolset.Dtf.WindowsInstaller;
 
 namespace RemoteDesktop.Platform.Windows.UnitTests;
 
@@ -69,6 +71,28 @@ public sealed class InstallerPackageTests
     }
 
     /// <summary>
+    /// The <c>remotedesktop://</c> scheme is a registry row, so a source review cannot show whether it made it into the
+    /// package. Windows starts the client with the URL as its argument; without these rows a link does nothing at all.
+    /// </summary>
+    [Fact]
+    public void The_package_registers_the_connection_scheme()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        using var package = new MsiPackage(Msi!);
+
+        // The Registry table's Root column is 0 = HKCR, 1 = HKCU, 2 = HKLM: the scheme belongs to the installed
+        // program, so it has to be machine-wide rather than only for whoever happened to install it.
+        var scheme = package.Rows("SELECT `Name`, `Value`, `Root` FROM `Registry` WHERE `Key` = 'Software\\Classes\\remotedesktop'", 3);
+        Assert.Contains(scheme, row => row[0] == "URL Protocol" && row[2] == "2");
+
+        var command = Assert.Single(
+            package.Rows("SELECT `Value` FROM `Registry` WHERE `Key` = 'Software\\Classes\\remotedesktop\\shell\\open\\command'", 1))[0];
+        Assert.Contains("RemoteDesktop.Client.exe", command, StringComparison.Ordinal);
+        Assert.Contains("%1", command, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The number Settings > Apps shows is the number the build was made from, plus the fourth part MSI requires.
     /// Nothing else checks that: the build script computes it, and a package left over from an earlier build would
     /// happily sit in artifacts/ and be reviewed as if it were this one.
@@ -90,7 +114,7 @@ public sealed class InstallerPackageTests
     public void The_package_contains_the_payload_the_service_and_the_machine_setup_actions()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\client\\windows\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
         using var package = new MsiPackage(Msi!);
 
         // --- payload ---------------------------------------------------------------------------------------------
@@ -200,16 +224,40 @@ public sealed class InstallerPackageTests
         // choice: a type 18 action (the installed file as the target) fails the whole installation with error 1721 when
         // Windows cannot start that file - a leftover process holding it, or a pending rename waiting for a reboot -
         // and "ignore" does not cover a launch failure. It only covers a non-zero exit code, which is what cmd.exe
-        // gives us instead. An upgrade failed exactly that way, so this is checked here.
+        // gives us instead.
         foreach (var name in new[] { "ConfigureSystem", "CleanupKeepData", "CleanupRemoveData" })
         {
             var only = Assert.Single(actions, row => row[0] == name);
             var type = int.Parse(only[1], CultureInfo.InvariantCulture);
             Assert.Equal(34, type & 0x3F);          // exe from a directory
-            Assert.Equal(64, type & 64);            // ignore the exit code
             Assert.Equal("SystemFolder", only[2]);
             Assert.Contains("cmd.exe", only[3], StringComparison.OrdinalIgnoreCase);
             Assert.Contains("RemoteDesktop.HostService.exe", only[3], StringComparison.Ordinal);
+        }
+
+        // ConfigureSystem must report a failed address/certificate write; the cleanup steps are best-effort. The
+        // service itself catches the SAS-policy and restart failures, so a non-zero exit really does mean "the
+        // settings were not applied".
+        var configureAction = Assert.Single(actions, row => row[0] == "ConfigureSystem");
+        Assert.Equal(0, int.Parse(configureAction[1], CultureInfo.InvariantCulture) & 64);
+        Assert.Contains("--rendezvous-certificate", configureAction[3], StringComparison.Ordinal);
+        Assert.Contains("RENDEZVOUSCERTIFICATEPATH", configureAction[3], StringComparison.Ordinal);
+        foreach (var name in new[] { "CleanupKeepData", "CleanupRemoveData" })
+        {
+            Assert.Equal(64, int.Parse(Assert.Single(actions, row => row[0] == name)[1], CultureInfo.InvariantCulture) & 64);
+        }
+
+        // The connection page's actions: three immediate page actions and the execute-sequence certificate export.
+        foreach (var name in new[]
+                 {
+                     "PrefillConnectionSettings", "ValidateConnectionSettings", "BrowseForServerCertificate",
+                     "PrepareRendezvousCertificate",
+                 })
+        {
+            var action = Assert.Single(actions, row => row[0] == name);
+            Assert.Equal("ClientActions", action[2]);
+            Assert.Equal(1, int.Parse(action[1], CultureInfo.InvariantCulture) & 0x3F); // managed DLL
+            Assert.Equal(0, int.Parse(action[1], CultureInfo.InvariantCulture) & 0x400); // immediate
         }
 
         // Leftover processes are closed before validation, which is when Windows decides whether a restart is needed.
@@ -218,14 +266,46 @@ public sealed class InstallerPackageTests
         Assert.Contains("RemoteDesktop.SessionAgent.exe", stopLeftovers[3], StringComparison.Ordinal);
         Assert.Single(package.Rows("SELECT `Action` FROM `InstallExecuteSequence`", 1), row => row[0] == "StopLeftoverProcesses");
 
-        var sequence = package.Rows("SELECT `Action`, `Condition` FROM `InstallExecuteSequence`", 2);
+        var sequence = package.Rows("SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`", 3);
         var configure = Assert.Single(sequence, row => row[0] == "ConfigureSystem");
         var keep = Assert.Single(sequence, row => row[0] == "CleanupKeepData");
         var remove = Assert.Single(sequence, row => row[0] == "CleanupRemoveData");
 
-        // "NOT REMOVE" and nothing more: adding UPGRADINGPRODUCTCODE here made the *old* product run this action while
-        // it was being removed during an upgrade, with its files already gone - error 1721 and a rolled-back install.
-        Assert.Equal("NOT REMOVE", configure[1]);
+        // A fresh install always applies the connection values; an upgrade or repair applies them only when the
+        // connection page was actually used (CONNECTIONEDITED), so a silent upgrade keeps the live settings. Adding
+        // UPGRADINGPRODUCTCODE here would make the *old* product run this action while it was being removed, with its
+        // files already gone - error 1721 and a rolled-back install.
+        Assert.Contains("NOT REMOVE", configure[1], StringComparison.Ordinal);
+        Assert.Contains("NOT WIX_UPGRADE_DETECTED", configure[1], StringComparison.Ordinal);
+        Assert.Contains("NOT Installed", configure[1], StringComparison.Ordinal);
+        Assert.Contains("CONNECTIONEDITED", configure[1], StringComparison.Ordinal);
+
+        var prepareCertificate = Assert.Single(actions, row => row[0] == "PrepareRendezvousCertificate");
+        Assert.Equal("ClientActions", prepareCertificate[2]);
+        var prepareSequence = Assert.Single(sequence, row => row[0] == "PrepareRendezvousCertificate");
+        Assert.Contains("CONNECTIONEDITED", prepareSequence[1], StringComparison.Ordinal);
+        Assert.True(int.Parse(prepareSequence[2], CultureInfo.InvariantCulture) < int.Parse(configure[2], CultureInfo.InvariantCulture),
+            "PrepareRendezvousCertificate must run before ConfigureSystem.");
+
+        // The first upgrade from the layout that kept appsettings.json under Program Files copies it to ProgramData
+        // before RemoveExistingProducts deletes the old product's files. That forces the action into the immediate
+        // sequence before InstallInitialize: Windows Installer rejects an upgrade when RemoveExistingProducts is not
+        // the first action after InstallInitialize (error 2613), and a deferred action cannot run early enough.
+        var migrate = Assert.Single(actions, row => row[0] == "MigrateClientSettings");
+        Assert.Equal("ClientActions", migrate[2]);
+        var migrateType = int.Parse(migrate[1], CultureInfo.InvariantCulture);
+        Assert.Equal(1, migrateType & 0x3F);   // DLL from the Binary table
+        Assert.Equal(0, migrateType & 0x400);  // immediate, not deferred
+        var migrated = Assert.Single(sequence, row => row[0] == "MigrateClientSettings");
+        Assert.Contains("WIX_UPGRADE_DETECTED", migrated[1], StringComparison.Ordinal);
+        var installInitialize = int.Parse(
+            Assert.Single(sequence, row => row[0] == "InstallInitialize")[2], CultureInfo.InvariantCulture);
+        Assert.True(int.Parse(migrated[2], CultureInfo.InvariantCulture) < installInitialize,
+            "MigrateClientSettings must run before InstallInitialize.");
+        var setClientInstallDir = Assert.Single(sequence, row => row[0] == "SetClientInstallDir");
+        Assert.True(int.Parse(setClientInstallDir[2], CultureInfo.InvariantCulture) < int.Parse(migrated[2], CultureInfo.InvariantCulture),
+            "SetClientInstallDir must run before the migration that reads CLIENTINSTALLFOLDER.");
+        Assert.Equal("1501", Assert.Single(sequence, row => row[0] == "RemoveExistingProducts")[2]);
 
         // The two uninstall paths only differ in what they do with the machine's data, and neither runs while a major
         // upgrade removes the old product: that would wipe the device identity on every upgrade.
@@ -242,8 +322,12 @@ public sealed class InstallerPackageTests
         // --- install-time properties -----------------------------------------------------------------------------
         var properties = package.Rows("SELECT `Property`, `Value` FROM `Property`", 2).ToDictionary(row => row[0], row => row[1]);
         Assert.True(properties.ContainsKey("RENDEZVOUSURI"), "The server address cannot be given at install time.");
+        Assert.True(properties.ContainsKey("SERVERCERTIFICATEPATH"), "The server certificate cannot be given at install time.");
+        Assert.True(properties.ContainsKey("RENDEZVOUSCERTIFICATEPATH"), "The pinned certificate path is missing.");
+        Assert.True(properties.ContainsKey("DEFAULT_RENDEZVOUSURI"), "The package default address is not recorded.");
         Assert.Equal("0", properties["REMOVEDATA"]); // keeping the device identity is the default
-        foreach (var name in new[] { "RENDEZVOUSURI", "REMOVEDATA" })
+        Assert.Equal("0", properties["CONNECTIONEDITED"]);
+        foreach (var name in new[] { "RENDEZVOUSURI", "REMOVEDATA", "SERVERCERTIFICATEPATH", "RENDEZVOUSCERTIFICATEPATH" })
         {
             Assert.Contains(name, properties["SecureCustomProperties"], StringComparison.Ordinal);
         }
@@ -259,6 +343,27 @@ public sealed class InstallerPackageTests
         // page would mean the wizard silently skips it.
         Assert.Contains("LicenseAgreementDlg", dialogs);
         Assert.Contains("InstallDirDlg", dialogs);
+        Assert.Contains("ConnectionDlg", dialogs);
+        Assert.Contains("ServerCertificateChosenDlg", dialogs);
+        Assert.Contains("ConnectionErrorDlg", dialogs);
+
+        var connectionControls = package.Rows(
+            "SELECT `Control` FROM `Control` WHERE `Dialog_` = 'ConnectionDlg'", 1).Select(row => row[0]).ToList();
+        foreach (var control in new[] { "AddressEdit", "CertificateEdit", "CertificateBrowse" })
+        {
+            Assert.Contains(control, connectionControls);
+        }
+
+        // The connection page is for a fresh install or a major upgrade, never a repair: a repair keeps the live
+        // values and uses the maintenance flow's own Back transition.
+        var controlEvents = package.Rows(
+            "SELECT `Dialog_`, `Control_`, `Event`, `Argument`, `Condition` FROM `ControlEvent`", 5);
+        Assert.Contains(controlEvents, row =>
+            row[0] == "InstallDirDlg" && row[1] == "Next" && row[3] == "ConnectionDlg"
+            && row[4].Contains("NOT Installed", StringComparison.Ordinal));
+        Assert.Contains(controlEvents, row =>
+            row[0] == "VerifyReadyDlg" && row[1] == "Back" && row[3] == "ConnectionDlg"
+            && row[4].Contains("NOT Installed", StringComparison.Ordinal));
 
         // And the text itself travels in the package: without it the dialog would come up empty. WiX 5 puts it straight
         // into the control that shows it (a WixUI extension that inlines the RTF) rather than into the Binary table.
@@ -274,4 +379,39 @@ public sealed class InstallerPackageTests
         Assert.True(int.Parse(escape.Groups[1].Value, CultureInfo.InvariantCulture) < 0, "The license text does not start with Chinese text.");
     }
 
+    /// <summary>
+    /// The client/host package's migration and fixed-password actions have to be something this package's msiexec can
+    /// load. Getting the bitness or the runtime wrong is silent: the action fails in two milliseconds with no managed
+    /// line in the log, which is why the server package checks the same two things.
+    /// </summary>
+    [Fact]
+    public void The_client_custom_action_is_packed_for_the_installer_that_runs_it()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
+        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+
+        using var database = new Database(Msi!, DatabaseOpenMode.ReadOnly);
+
+        Assert.StartsWith("x64", database.SummaryInfo.Template, StringComparison.Ordinal);
+
+        using var view = database.OpenView("SELECT `Source` FROM `CustomAction` WHERE `Action` = 'MigrateClientSettings'");
+        view.Execute();
+        using var action = view.Fetch();
+        Assert.NotNull(action);
+        var binaryName = action!.GetString(1);
+        Assert.Equal("ClientActions", binaryName);
+
+        using var binaryView = database.OpenView($"SELECT `Data` FROM `Binary` WHERE `Name` = '{binaryName}'");
+        binaryView.Execute();
+        using var record = binaryView.Fetch();
+        Assert.NotNull(record);
+        using var stream = record!.GetStream(1);
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        var image = memory.ToArray();
+
+        var peOffset = BitConverter.ToInt32(image, 0x3C);
+        Assert.Equal(0x8664, BitConverter.ToUInt16(image, peOffset + 4)); // AMD64
+        Assert.Contains("CustomAction.config", Encoding.ASCII.GetString(image), StringComparison.Ordinal);
+    }
 }

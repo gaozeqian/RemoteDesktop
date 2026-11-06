@@ -44,7 +44,7 @@ public static class OpsSchema
             node_id TEXT NOT NULL,
             metric TEXT NOT NULL,
             ts BIGINT NOT NULL,
-            value REAL NOT NULL,
+            value DOUBLE PRECISION NOT NULL,
             PRIMARY KEY (node_id, metric, ts)
         );
 
@@ -53,11 +53,11 @@ public static class OpsSchema
             metric TEXT NOT NULL,
             step_seconds INTEGER NOT NULL,
             bucket BIGINT NOT NULL,
-            first_value REAL,
-            last_value REAL,
-            min_value REAL,
-            max_value REAL,
-            avg_value REAL,
+            first_value DOUBLE PRECISION,
+            last_value DOUBLE PRECISION,
+            min_value DOUBLE PRECISION,
+            max_value DOUBLE PRECISION,
+            avg_value DOUBLE PRECISION,
             sample_count INTEGER NOT NULL,
             PRIMARY KEY (node_id, metric, step_seconds, bucket)
         );
@@ -88,8 +88,8 @@ public static class OpsSchema
             end_reason TEXT,
             bytes_in BIGINT,
             bytes_out BIGINT,
-            rtt_ms REAL,
-            loss_pct REAL,
+            rtt_ms DOUBLE PRECISION,
+            loss_pct DOUBLE PRECISION,
             updated_at BIGINT NOT NULL
         );
 
@@ -102,7 +102,7 @@ public static class OpsSchema
             denominator TEXT,
             aggregation TEXT NOT NULL,
             comparator TEXT NOT NULL,
-            threshold REAL NOT NULL,
+            threshold DOUBLE PRECISION NOT NULL,
             window_seconds INTEGER NOT NULL,
             for_seconds INTEGER NOT NULL,
             severity TEXT NOT NULL,
@@ -115,7 +115,7 @@ public static class OpsSchema
             severity TEXT NOT NULL,
             dedupe_key TEXT NOT NULL,
             state TEXT NOT NULL,
-            value REAL,
+            value DOUBLE PRECISION,
             labels_json TEXT NOT NULL,
             opened_at BIGINT NOT NULL,
             acked_at BIGINT,
@@ -198,5 +198,5 @@ public static class OpsSchema
         """;
 
     /// <summary>The schema version this build writes. Only ever increases.</summary>
-    public const int Version = 3;
+    public const int Version = 7;
 }

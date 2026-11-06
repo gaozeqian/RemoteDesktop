@@ -1,0 +1,163 @@
+#!/bin/sh
+#
+# Asks where this client should connect, and whether it has to trust a certificate the server made itself.
+#
+# The same script runs from apt's preconfiguration and from the post-install step, because plain dpkg -i does not
+# preconfigure. It writes nothing: the postinst applies the answers to the settings the program ships with.
+set -e
+
+. /usr/share/debconf/confmodule
+
+SETTINGS=/usr/lib/remotedesktop-client/appsettings.json
+DEFAULTS=/etc/default/remotedesktop-client
+DEFAULT_URI=@DEFAULT_RENDEZVOUS_URI@
+PACKAGE=remotedesktop-client
+MARKER=/run/remotedesktop-client.questions-asked
+
+# The post-install step passes this when it runs the questions itself (plain dpkg -i). apt's preconfiguration does
+# not: it asks before unpacking and leaves the marker the post-install step reads.
+post_install=false
+for argument in "$@"; do
+    [ "$argument" = "--post-install" ] && post_install=true
+done
+
+# A fresh installation and a reinstallation ask again; a version upgrade keeps the answers already given. The second
+# argument is the version being installed during preconfiguration, and the previously configured version when the
+# post-install step calls this script; `dpkg-query` says what is installed right now.
+force_ask=false
+if [ "${1:-}" = "reconfigure" ]; then
+    force_ask=true
+else
+    installed_version=$(dpkg-query -W -f='${Version}' "$PACKAGE" 2>/dev/null || true)
+    if [ -z "$installed_version" ]; then
+        force_ask=true
+    elif [ "$post_install" = true ] && [ -z "${2:-}" ]; then
+        # A fresh install called from the post-install step has no previous version. Debconf may still hold seen
+        # answers from an installation that was removed rather than purged; show them again.
+        force_ask=true
+    elif [ -n "${2:-}" ] && [ "$installed_version" = "$2" ]; then
+        force_ask=true
+    fi
+fi
+
+uri=$DEFAULT_URI
+certificate=
+
+# What the installed copy already says is the default for an upgrade. On a first install, before the package is
+# unpacked, this file does not exist and the build-time default above is used.
+if [ -r "$SETTINGS" ]; then
+    value=$(sed -n 's/.*"RendezvousUri"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS" | head -n 1)
+    [ -n "$value" ] && uri=$value
+fi
+
+if [ -r "$DEFAULTS" ]; then
+    # shellcheck disable=SC1090
+    . "$DEFAULTS"
+    [ -n "${RD_RENDEZVOUS_URI:-}" ] && uri=$RD_RENDEZVOUS_URI
+    [ -n "${RD_SERVER_CERTIFICATE:-}" ] && certificate=$RD_SERVER_CERTIFICATE
+fi
+
+ask_question() {
+    question=$1
+    value=$2
+    seen=false
+    if db_fget "$question" seen; then
+        [ "$RET" = "true" ] && seen=true
+    fi
+    if [ "$seen" = false ]; then
+        db_set "$question" "$value" || true
+    fi
+    if [ "$force_ask" = true ]; then
+        # Keep the value already there (the previous installation's answer) and show the question again.
+        db_fset "$question" seen false || true
+    fi
+}
+
+valid_uri() {
+    case "$1" in
+        ws://?*|wss://?*) ;;
+        *) return 1 ;;
+    esac
+
+    case "$1" in
+        *'&'*|*'#'*|*'\\'*|*'"'*|*'|'*|*[[:space:]]*) return 1 ;;
+    esac
+
+    return 0
+}
+
+# A purge deletes the certificate and the next install recreates it; that sequence can leave a stale negative
+# directory entry, so test(1) reports the absolute path missing while a lookup relative to the directory reaches it.
+# Ask the way the post-install step will read it, or a perfectly valid answer looks unreadable.
+certificate_readable() {
+    [ -z "$1" ] && return 0
+    if [ -f "$1" ] && [ -r "$1" ]; then
+        return 0
+    fi
+
+    directory=$(dirname -- "$1")
+    name=$(basename -- "$1")
+    ( cd "$directory" 2>/dev/null && head -c 1 < "$name" >/dev/null 2>&1 )
+}
+
+ask_question remotedesktop-client/server-address "$uri"
+ask_question remotedesktop-client/server-certificate "$certificate"
+
+attempt=0
+while :; do
+    if [ "$attempt" -eq 0 ]; then
+        db_input high remotedesktop-client/server-address || true
+    else
+        db_input critical remotedesktop-client/server-address || true
+    fi
+    db_go || true
+    db_get remotedesktop-client/server-address || true
+    uri=$RET
+
+    if valid_uri "$uri"; then
+        break
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 3 ]; then
+        echo "The signaling address must start with ws:// or wss:// and contain no shell metacharacters (got '$uri')." >&2
+        exit 1
+    fi
+done
+
+case "$uri" in
+    wss://*)
+        # A public certificate needs no import; a self-signed one does. Empty is therefore a valid answer.
+        attempt=0
+        while :; do
+            if [ "$attempt" -eq 0 ]; then
+                db_input high remotedesktop-client/server-certificate || true
+            else
+                db_input critical remotedesktop-client/server-certificate || true
+            fi
+            db_go || true
+            db_get remotedesktop-client/server-certificate || true
+            certificate=$RET
+
+            if certificate_readable "$certificate"; then
+                break
+            fi
+
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+                echo "The certificate '$certificate' cannot be read." >&2
+                exit 1
+            fi
+        done
+        ;;
+    *)
+        # No TLS, no certificate. A previous answer is harmless but not used.
+        ;;
+esac
+
+# Leave a marker when this was apt's preconfiguration. The post-install step runs in the same transaction and must
+# not ask the same questions a second time.
+if [ "${1:-}" = "configure" ] && [ "$post_install" = false ] &&
+    [ -d "$(dirname "$MARKER")" ] && [ -w "$(dirname "$MARKER")" ]; then
+    : >"$MARKER" 2>/dev/null || true
+fi

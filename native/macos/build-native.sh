@@ -41,7 +41,7 @@ output="$out_dir/libRemoteDesktopMacNative.dylib"
 # both directions share, and rd_video_encoder/rd_video_decoder each hold one VideoToolbox session. Splitting them
 # is what lets each be compiled and tested on its own.
 sources="$source_dir/rd_screen_capture.m $source_dir/rd_video_common.m $source_dir/rd_video_encoder.m $source_dir/rd_video_decoder.m $source_dir/rd_camera.m $source_dir/rd_audio.m $source_dir/rd_cursor.m $source_dir/rd_clipboard.m $source_dir/rd_system.m $source_dir/rd_recorder.m"
-header="$source_dir/rd_native.h"
+headers="$source_dir/rd_native.h $source_dir/rd_video_common.h"
 
 for tool in xcrun clang install_name_tool codesign otool; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -57,7 +57,7 @@ needs_build=$force
 if [ ! -f "$output" ]; then
     needs_build=1
 else
-    for input in $sources $header; do
+    for input in $sources $headers; do
         if [ "$input" -nt "$output" ]; then
             needs_build=1
             break

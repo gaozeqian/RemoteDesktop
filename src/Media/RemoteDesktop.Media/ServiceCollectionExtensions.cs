@@ -4,7 +4,7 @@ namespace RemoteDesktop.Media;
 
 public static class ServiceCollectionExtensions
 {
-    /// <summary>Registers codec selection. Software (FFmpeg/openh264) and Opus backends are added in milestone M2.</summary>
+    /// <summary>Registers codec selection. The H.264 encoders and decoders come from the platform layers; Opus audio lives in this project (OpusAudio).</summary>
     public static IServiceCollection AddRemoteDesktopMedia(this IServiceCollection services)
     {
         services.AddSingleton<VideoCodecSelector>();

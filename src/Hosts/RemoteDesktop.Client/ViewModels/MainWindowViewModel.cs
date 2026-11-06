@@ -12,6 +12,7 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
+using RemoteDesktop.Application.Links;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Setup;
 using RemoteDesktop.Client.Storage;
@@ -47,6 +48,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Ids per query, so a long list stays one or two messages rather than one big one.</summary>
     private const int PresenceChunkSize = 32;
 
+    /// <summary>How often a standalone client checks whether a host service has appeared since it started.</summary>
+    private const long HostServiceProbeInterval = 5000;
+
+    private const string HostServiceAppearedHint = "后台服务已启动；重启客户端后由它托管被控端（当前仍在本进程内）";
+
     private readonly IHostControl _hostControl;
     private readonly ControllerSessionService _controller;
     private readonly VideoCodecSelector _codecs;
@@ -62,7 +68,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly ILoginItem? _loginItem;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _presenceTimer;
+    private readonly string _hostControlPipeName;
+    private readonly bool _probeForHostService;
     private int _presenceInFlight;
+    private long _nextHostServiceProbeAt;
+    private bool _hostServiceAppeared;
     private RemoteSession? _session;
 
     public MainWindowViewModel(
@@ -79,10 +89,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ClientEnvironment environment,
         TransportOptions transport,
         IVideoRecorderFactory? recorderFactory = null,
-        ILoginItem? loginItem = null)
+        ILoginItem? loginItem = null,
+        StartupLink? startupLink = null)
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
+        _hostControlPipeName = environment.HostControlPipeName;
+        _probeForHostService = environment.ControlledEndInThisProcess
+            && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS());
         _controller = controller;
         _codecs = codecs;
         _time = time;
@@ -137,6 +151,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         _ = RefreshHostStatusAsync();
         _ = LoadRecentDevicesAsync();
+
+        if (startupLink?.Value is { } link)
+        {
+            ApplyConnectionLink(link);
+        }
+    }
+
+    /// <summary>
+    /// Fills in the device code a <c>remotedesktop://</c> link carried. It deliberately does not connect: the link
+    /// came from a browser, a chat message or an e-mail, so the person confirms the code and supplies the password.
+    /// </summary>
+    public void ApplyConnectionLink(ConnectionLink link)
+    {
+        RemoteDeviceId = link.Device.ToDisplayString();
+        StatusMessage = $"已从链接填入设备代码 {link.Device.ToDisplayString()}，输入密码后点“连接”。";
+        SelectedPageIndex = 0;
     }
 
     [ObservableProperty]
@@ -214,6 +244,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     public partial string? HostDetail { get; set; }
 
+    /// <summary>
+    /// A page-independent banner for the one case that needs the person to act: a background service appeared while
+    /// this window was already hosting. <see cref="HostDetail"/> carries the same sentence on the home and settings
+    /// pages, but the window may be on any tab when the service starts.
+    /// </summary>
+    [ObservableProperty]
+    public partial string? HostServiceHint { get; set; }
+
     /// <summary>Whether the controlled end runs in the installed background service (as opposed to this process).</summary>
     [ObservableProperty]
     public partial bool IsHostService { get; set; }
@@ -288,7 +326,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// used to mean macOS, which made Linux read a wrong statement wherever the two differ — where a secret is
     /// kept, what changing the server address costs, and which process a device code belongs to. Linux is not
     /// macOS: secrets live in an owner-only file and the controlled end is a systemd --user service, see
-    /// docs/usage/README.md §1.
+    /// the Linux section of docs/usage/README.md, "1. 支持矩阵".
     /// </summary>
     private static string ByPlatform(string windows, string macOS, string linux) =>
         OperatingSystem.IsWindows() ? windows
@@ -409,7 +447,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     public async Task LoadRecentDevicesAsync()
     {
-        var entries = await _recentDevicesStore.GetAllAsync();
+        IReadOnlyList<RecentDeviceEntry> entries;
+        try
+        {
+            entries = await _recentDevicesStore.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            // Called fire-and-forget at start-up and from the refresh button, so nothing above could report this. The
+            // list stays as it is on screen, and the file on disk was left untouched by the failed read.
+            LogDeviceListReadFailed(_logger, ex);
+            StatusMessage = "无法读取设备列表：读取设备列表文件失败。";
+            return;
+        }
 
         var edited = RecentDevices.ToDictionary(item => item.DeviceId, StringComparer.Ordinal);
         var selectedId = SelectedRecentDevice?.DeviceId;
@@ -631,8 +681,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // UserSettings for the whole story.
             if (OperatingSystem.IsWindows())
             {
-                // Windows keeps the two halves under different accounts, so the installed service owns the address
-                // in its own appsettings.json and only an elevated run can write it.
+                // Windows keeps the two halves under different accounts, so the installed service owns the machine
+                // file under %ProgramData%\RemoteDesktop and only an elevated run can write it.
                 if (!await ApplyOnWindowsAsync(rendezvous))
                 {
                     return;
@@ -989,6 +1039,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 SessionFailure.BadPassword => "密码错误。",
                 SessionFailure.TooManyAttempts => "失败次数过多，请稍后再试。",
                 SessionFailure.IncompatibleVersion => "对方版本不兼容。",
+                SessionFailure.TooManySessions => "对方当前连接的会话数已满，请稍后再试。",
                 _ => "会话建立失败。",
             };
             return;
@@ -1038,7 +1089,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                         return;
                     }
 
-                    var terminal = new TerminalWindowViewModel(session.Context.Connection);
+                    var terminal = new TerminalWindowViewModel(session.Context.Connection, _loggers.CreateLogger<TerminalSession>());
                     await terminal.InitializeAsync();
                     StatusMessage = $"已连接 {target.ToDisplayString()} · 终端";
                     session.Closed += (_, _) => Dispatcher.UIThread.Post(() => StatusMessage = "终端会话已结束。");
@@ -1094,13 +1145,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try
         {
-            var savedPwd = (targetDevice?.RememberPassword ?? RememberPassword) ? password : null;
-            await _recentDevicesStore.SaveOrUpdateAsync(target.ToDisplayString(), alias: targetDevice?.Alias, password: savedPwd, cancellationToken: cancellationToken);
+            var remember = targetDevice?.RememberPassword ?? RememberPassword;
+            await RecordConnectedDeviceAsync(_recentDevicesStore, target.ToDisplayString(), targetDevice?.Alias, password, remember, cancellationToken);
             await LoadRecentDevicesAsync();
         }
         catch (Exception ex)
         {
             LogDeviceListWriteFailed(_logger, ex);
+        }
+    }
+
+    /// <summary>
+    /// Saves the device and applies the "remember password" choice to what is stored. <c>SaveOrUpdateAsync</c> reads a
+    /// null password as "leave it alone", so unticking the box has to clear the stored password explicitly or it would
+    /// be read back and prefilled on the next load.
+    /// </summary>
+    internal static async Task RecordConnectedDeviceAsync(
+        IRecentDevicesStore store,
+        string deviceId,
+        string? alias,
+        string password,
+        bool rememberPassword,
+        CancellationToken cancellationToken)
+    {
+        await store.SaveOrUpdateAsync(deviceId, alias: alias, password: rememberPassword ? password : null, cancellationToken: cancellationToken);
+        if (!rememberPassword)
+        {
+            await store.UpdatePasswordAsync(deviceId, null, cancellationToken);
         }
     }
 
@@ -1198,7 +1269,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             TemporaryPassword = string.Empty;
             ServerStatus = $"○ {HostUnreachable}";
             SetIncoming([]);
-            HostDetail = null;
+            HostDetail = _hostServiceAppeared ? HostServiceAppearedHint : null;
+            HostServiceHint = _hostServiceAppeared ? HostServiceAppearedHint : null;
             ServerHint = null;
             HostRendezvousUri = null;
             CanEditHostServerAddress = false;
@@ -1238,9 +1310,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? null
             : OperatingSystem.IsWindows()
                 ? "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：安装时加 RENDEZVOUSURI=ws://服务器地址:5080/ws，"
-                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务（见 docs/ops/README.md）。"
+                  + "或改 appsettings.json 里的 Transport:RendezvousUri 再重启服务。"
                 : "连不上信令服务器，所以还没有设备代码。两台机器必须连同一台服务器：在「高级设置 → 服务器地址」里填 "
-                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效（见 docs/ops/README.md）。";
+                  + "ws://服务器地址:5080/ws 或 wss://域名/ws，应用会重启生效。";
         HostRendezvousUri = string.IsNullOrEmpty(status.RendezvousUri) ? null : status.RendezvousUri;
         // Windows with the service installed points at it. Without one — and on Linux or macOS — the controlled end
         // runs inside this process, so the row says that instead of going blank: a blank row reads like a missing
@@ -1265,6 +1337,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RefreshLoginItemState();
         }
         SetIncoming(status.Sessions);
+
+        // The host package can be installed or its service started while this window is open. The composition was
+        // chosen at start-up and cannot switch without restarting, so probe occasionally and say so rather than
+        // leave two controlled ends registering under the same device id.
+        if (_probeForHostService && !_hostServiceAppeared && Environment.TickCount64 >= _nextHostServiceProbeAt)
+        {
+            _nextHostServiceProbeAt = Environment.TickCount64 + HostServiceProbeInterval;
+
+            // A socket from a package that has since been removed is not a service to hand over to. The unit file
+            // (Linux) or app/launchd plist (macOS) is what tells an installed controlled end from a process the
+            // package manager no longer shows.
+            var hostPackageInstalled = OperatingSystem.IsMacOS()
+                ? HostControlProtocol.MacOSHostInstalled
+                : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
+            if (hostPackageInstalled)
+            {
+                using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                try
+                {
+                    _hostServiceAppeared = await PipeHostControl.IsAvailableAsync(_hostControlPipeName, probeTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Still starting; the next probe tries again.
+                }
+            }
+        }
+
+        HostServiceHint = _hostServiceAppeared ? HostServiceAppearedHint : null;
+        if (_hostServiceAppeared)
+        {
+            HostDetail = HostServiceAppearedHint;
+        }
     }
 
     private void UpdateClientDeviceId() =>
@@ -1287,6 +1392,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not open {Feature} for {Device} after connecting; the session was closed again.")]
     private static partial void LogFeatureOpenFailed(ILogger logger, Exception ex, string feature, string device);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read the recent devices list.")]
+    private static partial void LogDeviceListReadFailed(ILogger logger, Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not write the recent devices list.")]
     private static partial void LogDeviceListWriteFailed(ILogger logger, Exception ex);

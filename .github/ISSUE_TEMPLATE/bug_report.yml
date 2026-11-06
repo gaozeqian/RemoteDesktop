@@ -68,8 +68,8 @@ body:
     id: version
     attributes:
       label: 版本或提交
-      description: 安装包版本号，或 `git rev-parse --short HEAD` 的结果
-      placeholder: 1.0.0.0 / 4f14524
+      description: 客户端里的「高级设置 → 数据与诊断 → 客户端版本」（三段，如 1.0.0），或 `git rev-parse --short HEAD` 的结果
+      placeholder: 1.0.0 / 4f14524
     validations:
       required: true
 
@@ -91,7 +91,8 @@ body:
       label: 日志
       description: |
         日志位置：Windows `%ProgramData%\RemoteDesktop\logs`（`service-*.log`、`agent-*.log`），
-        Linux `journalctl --user -u remotedesktop-host`。**贴之前删掉设备代码、密码和 IP。**
+        Linux `~/.local/share/RemoteDesktop/logs/service-*.log`，
+        macOS `~/Library/Application Support/RemoteDesktop/logs/`（`service-*.log`）。**贴之前删掉设备代码、密码和 IP。**
       render: text
     validations:
       required: false

@@ -63,7 +63,8 @@ public static class RendezvousServer
         services.AddSingleton<ConnectionQuota>();
 
         // What one address may cost the server, and what one device may ask of it. Both are keyed and both shrink
-        // again on their own; see KeyedTokenBucket.
+        // again on their own; see KeyedTokenBucket. The registration budget is keyed by ConnectionQuota.Normalize, the
+        // same source key the connection quota uses.
         services.AddSingleton(sp => new KeyedTokenBucket<IPAddress>(
             sp.GetRequiredService<IOptions<RendezvousOptions>>().Value.RegistrationBurst,
             sp.GetRequiredService<IOptions<RendezvousOptions>>().Value.RegistrationRefill,
@@ -98,7 +99,12 @@ public static class RendezvousServer
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.UseForwardedHeaders(ForwardedHeaderOptions(app));
+        // With no trusted proxy the middleware is not added at all: with both of its lists empty it believes every
+        // caller, which is the opposite of what clearing the framework's default proxies is meant to achieve.
+        if (ForwardedHeaderOptions(app) is { } forwarded)
+        {
+            app.UseForwardedHeaders(forwarded);
+        }
 
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
         app.MapHealthChecks("/health");
@@ -205,8 +211,14 @@ public static class RendezvousServer
     /// loopback fallback accept a request that came from outside. A proxy that really is on this machine has to be
     /// named in <c>Rendezvous:TrustedProxies</c> like any other.
     /// </remarks>
-    private static ForwardedHeadersOptions ForwardedHeaderOptions(WebApplication app)
+    private static ForwardedHeadersOptions? ForwardedHeaderOptions(WebApplication app)
     {
+        // See the call site: empty lists mean "believe everyone", so no trusted proxy has to mean no middleware.
+        if (TrustedProxyList.Parse(app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.TrustedProxies) is not { } trusted)
+        {
+            return null;
+        }
+
         var options = new ForwardedHeadersOptions
         {
             ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
@@ -215,17 +227,14 @@ public static class RendezvousServer
         options.KnownProxies.Clear();
         options.KnownIPNetworks.Clear();
 
-        foreach (var entry in app.Services.GetRequiredService<IOptions<RendezvousOptions>>().Value.TrustedProxies)
+        foreach (var address in trusted.Addresses)
         {
-            // Validated at start-up, so both parses are known to succeed here.
-            if (IPAddress.TryParse(entry, out var address))
-            {
-                options.KnownProxies.Add(address);
-            }
-            else if (System.Net.IPNetwork.TryParse(entry, out var network))
-            {
-                options.KnownIPNetworks.Add(network);
-            }
+            options.KnownProxies.Add(address);
+        }
+
+        foreach (var network in trusted.Networks)
+        {
+            options.KnownIPNetworks.Add(network);
         }
 
         return options;

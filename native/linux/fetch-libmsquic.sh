@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Stages the native MsQuic library so an application can bring its own copy.
+# Stages the native MsQuic library for a machine that cannot, or would rather not, use the distribution package.
 #
 # Why this exists: System.Net.Quic needs libmsquic at run time. Windows gets msquic.dll from the .NET runtime pack;
 # Linux gets nothing, because Microsoft ships it as a separate package in their own apt repository rather than in the
@@ -18,15 +18,15 @@
 #
 #     native/linux/fetch-libmsquic.sh
 #
-# Then set RD_MSQUIC_LIBRARY to the staged file, or copy it next to the executable and turn on the
-# System.Net.Quic.AppLocalMsQuic switch (see docs/ports/README.md).
+# Then install libmsquic on the system, or point LD_LIBRARY_PATH at the staged file's directory (see
+# CONTRIBUTING.md).
 set -eu
 
 # Pinned on purpose: the .NET runtime loads libmsquic without pinning a version, so an unnoticed upgrade changes
 # behaviour under every existing installation. Bump this together with the digest below.
 version=2.6.2
 digest=42a7f6a4e846c6c7f7b1b727fbc5bf87e8b5c49adf752df6151d9ea47839007f
-suite=resolute
+# Ubuntu 26.04 ("resolute") series of Microsoft's apt repository.
 base="https://packages.microsoft.com/ubuntu/26.04/prod"
 file="pool/main/libm/libmsquic/libmsquic_${version}_amd64.deb"
 

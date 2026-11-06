@@ -50,6 +50,16 @@ internal static unsafe partial class LibC
     /// <summary>Do not make this the controlling terminal even if it is a tty; the child picks its own.</summary>
     internal static int ONoCtty => IsDarwin ? 0x20000 : 0x0100;
 
+    /// <summary>
+    /// Close the descriptor when the process executes another program, so a child never inherits it. glibc's
+    /// fcntl-linux.h: <c>O_CLOEXEC</c> is 02000000 (octal); Darwin's fcntl.h: 0x01000000.
+    /// </summary>
+    internal static int OCloExec => IsDarwin ? 0x0100_0000 : 0x80000;
+
+    // <sys/filio.h> on Darwin (_IO('f', 1)), asm-generic/ioctls.h on Linux. Sets close-on-exec without fcntl, which
+    // is variadic; see the class remarks for why that matters on Apple arm64.
+    private static ulong FileIoCloseOnExec => IsDarwin ? 0x2000_6601UL : 0x5451UL;
+
     // glibc's spawn.h: POSIX_SPAWN_SETSID is 0x0080. Darwin's spawn.h: 0x0400.
     internal static short SpawnSetSid => IsDarwin ? (short)0x0400 : (short)0x0080;
 
@@ -252,6 +262,44 @@ internal static unsafe partial class LibC
         columns = size.Columns;
         rows = size.Rows;
         return result == 0;
+    }
+
+    /// <summary>Marks a descriptor close-on-exec (<c>FIOCLEX</c>), so no program started later inherits it.</summary>
+    /// <remarks>
+    /// <c>fcntl(F_SETFD)</c> would do the same, but <c>fcntl</c> is variadic and cannot be called safely through a
+    /// P/Invoke on Apple arm64; the request takes no argument, so a null pointer is passed through the same ioctl
+    /// path the window size uses.
+    /// </remarks>
+    internal static bool TrySetCloseOnExec(int descriptor) =>
+        Ioctl(descriptor, FileIoCloseOnExec, null) == 0;
+
+    /// <summary>
+    /// Opens the master side of a pseudo-terminal that is close-on-exec from the moment it exists, so a shell (or any
+    /// other child) started while it is open does not inherit it.
+    /// </summary>
+    /// <remarks>
+    /// On Linux the flag is part of the open, which closes the window in which another thread's fork could inherit a
+    /// descriptor that had not been marked yet. Darwin's <c>posix_openpt</c> is only specified to accept
+    /// <c>O_RDWR</c> and <c>O_NOCTTY</c>, so there the flag is applied right after, with <c>FIOCLEX</c>.
+    /// </remarks>
+    /// <returns>The descriptor, or <c>-1</c> with <c>errno</c> set.</returns>
+    internal static int OpenPseudoTerminalCloseOnExec()
+    {
+        if (!IsDarwin)
+        {
+            return OpenPseudoTerminal(ORdWr | ONoCtty | OCloExec);
+        }
+
+        var master = OpenPseudoTerminal(ORdWr | ONoCtty);
+        if (master >= 0 && !TrySetCloseOnExec(master))
+        {
+            var error = Marshal.GetLastPInvokeError();
+            _ = Close(master);
+            Marshal.SetLastPInvokeError(error);
+            return -1;
+        }
+
+        return master;
     }
 
     [LibraryImport("libc", EntryPoint = "posix_spawn", SetLastError = true)]

@@ -30,6 +30,16 @@ public sealed class OpsHostFixture : IAsyncLifetime
     /// <summary>The host's services, for driving the scraper by hand.</summary>
     public IServiceProvider Services => _app!.Services;
 
+    /// <summary>The clock every service in the host reads.</summary>
+    public TestTimeProvider Time { get; } = new();
+
+    /// <summary>The host's current time, for events and signatures that must agree with it.</summary>
+    public DateTimeOffset Now => Time.GetUtcNow();
+
+    /// <summary>A TOTP code for the next time step, so a single-use code is never presented twice.</summary>
+    public string NextTotp(string secret) =>
+        Totp.Compute(secret, Time.Advance(TimeSpan.FromSeconds(Totp.StepSeconds)));
+
     /// <summary>TOTP secret of the <c>admin</c> account.</summary>
     public string AdminSecret { get; } = Totp.GenerateSecret();
 
@@ -88,6 +98,10 @@ public sealed class OpsHostFixture : IAsyncLifetime
         builder.Logging.ClearProviders();
         builder.AddOps();
 
+        // Replace the system clock AddOps registered. Every server-side time read — session expiry, throttle windows,
+        // event signatures, rule windows — must agree with the codes the tests compute.
+        builder.Services.AddSingleton<TimeProvider>(Time);
+
         _app = builder.Build();
         _app.UseOps();
         await _app.StartAsync(TestContext.Current.CancellationToken);
@@ -97,7 +111,7 @@ public sealed class OpsHostFixture : IAsyncLifetime
         BaseAddress = new Uri(address);
 
         var store = _app.Services.GetRequiredService<OpsStore>();
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var now = Time.GetUtcNow().ToUnixTimeMilliseconds();
         await store.CreateUserAsync(
             new OpsAdminUser(Guid.NewGuid().ToString("N"), "admin", PasswordHasher.Hash(Password), AdminSecret, OpsRoles.Admin, false, now));
         await store.CreateUserAsync(
@@ -130,7 +144,7 @@ public sealed class OpsHostFixture : IAsyncLifetime
         }
     }
 
-    private static string RepositoryRoot()
+    internal static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))

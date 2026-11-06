@@ -3,23 +3,23 @@
   Builds the Windows installer (MSI) for the RemoteDesktop servers.
 
 .DESCRIPTION
-  1. Publishes the three server programs (the rendezvous server, the relay and the monitoring console) self-contained
-     for win-x64, each into a folder of its own (Rendezvous, Relay, Ops) under one publish directory.
+  1. Publishes the server programs (rendezvous, relay, monitoring console and its HTTPS gateway) self-contained for
+     win-x64, each into a folder of its own (Rendezvous, Relay, Ops, Gateway) under one publish directory.
   2. Generates the WiX file list from that directory (WiX v5 has no heat, and the list changes with every build
      anyway).
   3. Builds the MSI with the WiX v5 SDK and, when a signing certificate is given, signs it.
 
-  The MSI installs all three into Program Files\Remote Desktop Server, registers each as a Windows service
-  (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps), adds the three inbound firewall rules the two
-  public servers need, and configures them - the address signaling listens on, the relay endpoint clients are told,
-  the key they share, and optionally a certificate to serve TLS with. The console binds to loopback and gets no rule:
-  exposing it is a reverse-proxy decision, not an installer default.
+  The MSI installs all four into Program Files\Remote Desktop Server, registers each as a Windows service
+  (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps, RemoteDesktopGateway), adds the inbound firewall
+  rules the public listeners need, and configures them - the addresses signaling and the console gateway listen on,
+  the relay endpoint clients are told, the shared key, and optionally a certificate for signaling TLS. The console
+  itself stays on loopback; the gateway is the only network-facing listener for it.
 
   This is a package of its own, next to the client installer in ..\client: a machine can run the servers, the client,
   or both, and upgrading one never touches the other.
 
 .EXAMPLE
-  # Development build, servers reachable on this machine's name and on all interfaces
+  # Development build; signaling listens on loopback until an address is chosen at install time
   .\build\installer\windows\server\Build-ServerInstaller.ps1
 
 .EXAMPLE
@@ -48,8 +48,9 @@ param(
 
     # The address the rendezvous server binds to (http:// or https://), baked into the settings template the installer
     # ships and used as the default of the RENDEZVOUSURL property. This is what the server listens on, not what clients
-    # are told to use. Empty leaves whatever the publish output already has in place.
-    [string]$RendezvousUrl = 'http://0.0.0.0:5080',
+    # are told to use. Empty leaves whatever the publish output already has in place. The default is loopback; a public
+    # deployment passes https:// explicitly (or opts into insecure plaintext at install time).
+    [string]$RendezvousUrl = 'http://127.0.0.1:5080',
 
     [string]$Configuration = 'Release',
 
@@ -96,6 +97,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# The signing functions (Find-SigningCertificate, Resolve-SigningTool, Get-SigningCertificate, Invoke-Signing,
+# Read-PfxCertificate) and Remove-GeneratedDirectory are the same in the client and the server packaging script, so
+# they live in one file. It is dot-sourced, not run: the functions have to be defined in this script's own scope to
+# read its parameters. $PSScriptRoot is only empty in parameter defaults on Windows PowerShell 5.1; in the script body
+# it works there as well, and this runs before the first of the functions is called.
+. (Join-Path $PSScriptRoot '..\Import-SigningHelpers.ps1')
 
 # $PSScriptRoot is empty inside parameter defaults on Windows PowerShell 5.1 (it works in PowerShell 6 and later), so
 # every path that means "next to this script" is resolved here instead. Running a release build with the PowerShell
@@ -168,18 +176,18 @@ function Get-ProductVersion {
 # One component per file, the subfolders of the publish output mirrored as directories. Ids are positional: component
 # GUIDs are derived from each file's key path, so they stay stable as long as a file keeps its name and place.
 #
-# Two things differ from the client installer's copy of this function, both of them because the servers have what it
-# does not (one folder per server, each with the runtime's own localization folders under it):
+# Two things are worth knowing next to the client installer's copy of this function:
 #
-#   * the folders directly under the publish directory are named after those servers and get their id from
+#   * the servers have what it does not (one folder per server, each with the runtime's own localization folders under
+#     it), so the folders directly under the publish directory are named after those servers and get their id from
 #     $TopLevelDirectoryIds rather than from the counter. The hand-written components in Components.wxs install into
 #     them (the two executables, the two settings files), and a counter would tie those to the order the publish
 #     output happens to be read in. A folder the caller does not name falls back to the counter, and the components
 #     that expect the named id then fail to link - loudly, which is the point;
 #   * the directory tree is written under a DirectoryRef and the components stay in the ComponentGroup, each one
-#     carrying the id of the folder it belongs to. WiX 5 has no Directory element inside a ComponentGroup (the client's
-#     publish output is flat, so its generator never met that), and a component that nothing references is not
-#     installed at all, so the two cannot simply be written together.
+#     carrying the id of the folder it belongs to, as in the client's copy. WiX 5 has no Directory element inside a
+#     ComponentGroup, and a component that nothing references is not installed at all, so the two cannot simply be
+#     written together.
 function New-FileList {
     param([string]$Source, [string]$Destination, [string[]]$Exclude, [hashtable]$TopLevelDirectoryIds = @{})
 
@@ -212,7 +220,10 @@ function New-FileList {
                 $id = "dir$($count.Directories)"
             }
 
-            [void]$directories.AppendLine("$Indent<Directory Id=""$id"" Name=""$($directory.Name)"">")
+            # The lookup above uses the real name; only the attribute written into the WiX source is escaped, as in the
+            # client script: a folder name with an ampersand would otherwise produce a source that does not parse.
+            $name = [System.Security.SecurityElement]::Escape($directory.Name)
+            [void]$directories.AppendLine("$Indent<Directory Id=""$id"" Name=""$name"">")
             Add-Directory -Path $directory.FullName -Indent "$Indent  " -Depth ($Depth + 1)
             [void]$directories.AppendLine("$Indent</Directory>")
 
@@ -258,130 +269,6 @@ function New-FileList {
     Write-Host "  $($count.Files) files$extra"
 }
 
-
-# Finds a certificate to sign with: the one asked for, or the best code-signing certificate in the stores. A
-# certificate needs a private key, the code-signing usage and a validity that has not run out; among several, the one
-# expiring last wins, which is usually the current release certificate.
-function Find-SigningCertificate {
-    param([string]$Wanted, [string]$Product)
-
-    $candidates = @()
-    foreach ($store in 'Cert:\CurrentUser\My', 'Cert:\LocalMachine\My') {
-        if (-not (Test-Path $store)) { continue }
-        foreach ($certificate in Get-ChildItem $store) {
-            if (-not $certificate.HasPrivateKey) { continue }
-            if ($certificate.NotAfter -lt (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) { continue }
-            if (-not $certificate.EnhancedKeyUsageList) { continue }
-            if ($certificate.EnhancedKeyUsageList.ObjectId -notcontains '1.3.6.1.5.5.7.3.3') { continue }
-            $candidates += $certificate
-        }
-    }
-
-    if ($Wanted) {
-        $chosen = $candidates | Where-Object { $_.Thumbprint -eq $Wanted.Replace(' ', '') -or $_.Subject -like "*$Wanted*" } | Select-Object -First 1
-        if (-not $chosen) { throw "No usable code-signing certificate matches '$Wanted' (it must have a private key and be valid)." }
-        return @{ Chosen = $chosen; Candidates = $candidates }
-    }
-
-    if (@($candidates).Count -eq 0) {
-        return @{ Chosen = $null; Candidates = @() }
-    }
-
-    # Certificates for other products must not be used here: whoever installs this should see who signed it. Only a
-    # certificate naming this product is chosen automatically; anything else has to be asked for by name.
-    $matching = $candidates | Where-Object { $_.Subject -like "*$Product*" }
-    if (@($matching).Count -ge 1) {
-        return @{ Chosen = ($matching | Sort-Object NotAfter -Descending | Select-Object -First 1); Candidates = $candidates }
-    }
-
-    return @{ Chosen = $null; Candidates = $candidates }
-}
-
-# The certificate (with its private key) inside a PKCS#12 file. Through the constructor, and with a null password rather
-# than an empty one: an X509Certificate2 is immutable on .NET (PowerShell 6 and later), so loading a file with a separate
-# Import call - which is how this reads on Windows PowerShell 5.1 - is refused there with "X509Certificate is immutable
-# on this platform".
-function Read-PfxCertificate {
-    param([string]$Path, [string]$Password)
-
-    $secret = if ($Password) { $Password } else { $env:RD_SIGNING_PASSWORD }
-    if (-not $secret) { $secret = $null }
-
-    return [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-        $Path, $secret, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
-}
-
-# Signing needs a tool. signtool comes with the Windows SDK, which not every build machine has; Windows itself can
-# sign Authenticode just as well through PowerShell, so that is used when signtool is missing. Anything that cannot
-# sign reports what to install instead of failing halfway through a release build.
-function Resolve-SigningTool {
-    # Credentials decide which tools can do the job: all three work with a PKCS#12 file, signtool and PowerShell also
-    # with a certificate in a store, and a PEM certificate with its separate key file is something only osslsigncode
-    # takes. Without either credential there is nothing to sign with, whatever the tools are.
-    #
-    # -CertificateFile is the more specific instruction, so it wins over a certificate found in a store: whoever passes
-    # files means those files to sign, not whichever certificate this machine happens to have.
-    $haveFiles = -not [string]::IsNullOrEmpty($CertificateFile)
-    $havePfx = $haveFiles -and $CertificateFile -match '\.p(12|fx)$'
-    $haveStore = -not $haveFiles -and $null -ne $signing.Chosen
-    $haveCredentials = $haveStore -or $havePfx
-
-    $tools = [ordered]@{}
-    foreach ($name in 'signtool', 'osslsigncode') {
-        # By base name: signtool is signtool.exe on Windows, osslsigncode has no extension on Linux and macOS.
-        $command = Get-Command $name -ErrorAction SilentlyContinue | Where-Object { $_.CommandType -in 'Application', 'ExternalScript' } | Select-Object -First 1
-        if ($command) { $tools[$name] = $command.Source }
-    }
-
-    $powershell = $null
-    # Windows PowerShell (5.1) and PowerShell 7 on Windows can both sign Authenticode; the same commands on Linux or
-    # macOS cannot. $IsWindows only exists in PowerShell 6 and later, so this asks the platform instead of the variable
-    # - running the script with Windows PowerShell is common enough that it has to work there too.
-    $onWindows = $PSVersionTable.PSEdition -eq 'Desktop' -or [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-    $powershell = if ($onWindows) { 'powershell' } else { $null }
-
-    if ($SigningTool -eq 'signtool') {
-        if (-not $tools['signtool']) { throw 'signtool.exe was not found. Install the Windows SDK (Signing Tools), or use -SigningTool osslsigncode.' }
-        if (-not $haveCredentials) { throw 'signtool signs with a certificate in a store (-SignCertificate <thumbprint>) or with a PKCS#12 file (-CertificateFile <pfx> [-CertificatePassword <pw>]). A PEM certificate with a separate key file needs -SigningTool osslsigncode.' }
-        return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool']; Certificate = (Get-SigningCertificate) }
-    }
-
-    if ($SigningTool -eq 'osslsigncode') {
-        if (-not $tools['osslsigncode']) { throw 'osslsigncode was not found. Install it (winget install MichalTrojnara.osslsigncode, apt install osslsigncode, brew install osslsigncode), or leave -SigningTool on auto.' }
-        if (-not $haveFiles) { throw 'osslsigncode signs with files: pass -CertificateFile <pfx|pem> [-CertificatePassword <pw>], or -CertificateFile <pem> -PrivateKeyFile <key>.' }
-        # No Certificate: osslsigncode is handed files and reads them itself. The property is set (to nothing) on every
-        # tool all the same - reading a property that is not there at all is an error under Set-StrictMode.
-        return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode']; Certificate = $null }
-    }
-
-    if ($SigningTool -eq 'powershell') {
-        if (-not $powershell) { throw 'PowerShell signs Authenticode on Windows only; use -SigningTool osslsigncode here.' }
-        if (-not $haveCredentials) { throw 'PowerShell signing needs a code-signing certificate in a store (-SignCertificate) or a PKCS#12 file (-CertificateFile <pfx> [-CertificatePassword <pw>]). A PEM certificate with a separate key file needs -SigningTool osslsigncode.' }
-        return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) }
-    }
-
-    # Automatic: apart from osslsigncode, the tools only need what the build already has. A certificate in a store goes
-    # to signtool when it is installed, as before. A PKCS#12 file goes to PowerShell even then, because PowerShell is
-    # part of Windows: the build does not depend on the Windows SDK being installed (or on signtool's folder being on
-    # the PATH, which is what a CI runner decides), and the password stays in this process instead of on a command line
-    # that every other process on the machine can read. osslsigncode is what is left for a PEM certificate with its own
-    # key file, and the only one that runs off Windows.
-    if ($havePfx -and $powershell) { return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) } }
-    if ($tools['signtool'] -and $haveCredentials) { return [pscustomobject]@{ Kind = 'signtool'; Path = $tools['signtool']; Certificate = (Get-SigningCertificate) } }
-    if ($powershell -and $haveCredentials) { return [pscustomobject]@{ Kind = 'powershell'; Path = $powershell; Certificate = (Get-SigningCertificate) } }
-    if ($tools['osslsigncode'] -and $haveFiles) { return [pscustomobject]@{ Kind = 'osslsigncode'; Path = $tools['osslsigncode']; Certificate = $null } }
-
-    return $null
-}
-
-# The certificate the build signs with: the one inside the PKCS#12 file when files were given, otherwise the one found
-# in a store. Read once, when the tool is chosen, and not once per file: signing several hundred files must not
-# re-open the file for each of them.
-function Get-SigningCertificate {
-    if ($CertificateFile) { return Read-PfxCertificate -Path $CertificateFile -Password $CertificatePassword }
-    return $signing.Chosen
-}
-
 # The message for "the signature is fine, this machine just does not trust the certificate yet" - which is what a
 # self-signed certificate looks like everywhere until its .cer is installed.
 function Get-UntrustedCertificateAdvice {
@@ -411,90 +298,9 @@ To skip this check on the build machine, pass -SkipSignatureVerification.
     return $advice
 }
 
-function Invoke-Signing {
-    param([object]$Tool, [object]$Certificate, [string]$File)
-
-    if ($Tool.Kind -eq 'osslsigncode') {
-        # osslsigncode writes a new file rather than changing one in place, and it takes its credentials as files:
-        # either a PKCS#12 (with its password) or a PEM certificate plus its private key.
-        $temporary = "$File.signed"
-        try {
-            $arguments = @('sign', '-h', 'sha256', '-n', 'RemoteDesktop')
-            if ($TimestampServer) { $arguments += @('-ts', $TimestampServer) }
-
-            if ($CertificateFile -match '\.p(12|fx)$') {
-                $arguments += @('-pkcs12', $CertificateFile)
-
-                # An environment variable keeps the password out of the shell history and out of the process list of
-                # the build script itself (the child process still sees it, so a passwordless build certificate or a
-                # signing service is better where that matters).
-                $password = if ($CertificatePassword) { $CertificatePassword } else { $env:RD_SIGNING_PASSWORD }
-                if ($password) { $arguments += @('-pass', $password) }
-            }
-            elseif ($PrivateKeyFile) {
-                $arguments += @('-certs', $CertificateFile, '-key', $PrivateKeyFile)
-            }
-            else {
-                throw "Signing $File failed: give a PKCS#12 file, or a PEM certificate together with -PrivateKeyFile."
-            }
-
-            $arguments += @('-in', $File, '-out', $temporary)
-
-            & $Tool.Path @arguments
-            if ($LASTEXITCODE -ne 0) { throw "Signing $File failed (osslsigncode exit code $LASTEXITCODE)." }
-
-            Move-Item -LiteralPath $temporary -Destination $File -Force
-        }
-        finally {
-            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-        }
-
-        return
-    }
-
-    if ($Tool.Kind -eq 'signtool') {
-        $arguments = @('sign', '/fd', 'sha256')
-        if ($CertificateFile) {
-            # A PKCS#12 file. signtool takes the password as an argument, where every other process on this machine can
-            # read it: a passwordless build certificate, RD_SIGNING_PASSWORD in the environment, or a certificate in a
-            # store (signtool then takes only the thumbprint) keeps it out of sight.
-            $arguments += @('/f', $CertificateFile)
-            $secret = if ($CertificatePassword) { $CertificatePassword } else { $env:RD_SIGNING_PASSWORD }
-            if ($secret) { $arguments += @('/p', $secret) }
-        }
-        else {
-            $arguments += @('/sha1', $Certificate.Thumbprint)
-        }
-
-        if ($TimestampServer) { $arguments += @('/tr', $TimestampServer, '/td', 'sha256') }
-        $arguments += @('/d', 'RemoteDesktop', $File)
-
-        & $Tool.Path @arguments
-        if ($LASTEXITCODE -ne 0) { throw "Signing $File failed." }
-        return
-    }
-
-    # PowerShell's own Authenticode signing: no SDK needed, and with a PKCS#12 file no certificate store either. The
-    # password stays inside this process, unlike with the tools that take it as an argument.
-    $credentials = if ($Tool.Certificate) { $Tool.Certificate } else { $Certificate }
-    $parameters = @{ FilePath = $File; Certificate = $credentials; HashAlgorithm = 'SHA256' }
-    if ($TimestampServer) { $parameters.TimestampServer = $TimestampServer }
-
-    $result = Set-AuthenticodeSignature @parameters
-
-    # The status describes whether the *certificate* is trusted, not whether the file was signed: a self-signed test
-    # certificate gives UnknownError ("the chain ends in an untrusted root") while the signature and its timestamp are
-    # written correctly. Only a missing signer means the signing itself failed.
-    if (-not $result.SignerCertificate) {
-        throw "Signing $File failed: $($result.Status) $($result.StatusMessage)"
-    }
-
-    return $result
-}
-
 Write-Host 'Publishing the servers...'
 if (Test-Path $PublishDirectory) {
-    if (-not $KeepPublishOutput) { Remove-Item -Recurse -Force $PublishDirectory }
+    if (-not $KeepPublishOutput) { Remove-GeneratedDirectory $PublishDirectory }
 }
 New-Item -ItemType Directory -Force -Path $PublishDirectory | Out-Null
 
@@ -506,6 +312,7 @@ $servers = @(
     @{ Project = 'RemoteDesktop.Server.Rendezvous'; Folder = 'Rendezvous' }
     @{ Project = 'RemoteDesktop.Server.Relay'; Folder = 'Relay' }
     @{ Project = 'RemoteDesktop.Server.Ops'; Folder = 'Ops' }
+    @{ Project = 'RemoteDesktop.Server.Gateway'; Folder = 'Gateway' }
 )
 
 Push-Location $repoRoot
@@ -531,7 +338,8 @@ finally {
 
 foreach ($expected in @('Rendezvous\RemoteDesktop.Server.Rendezvous.exe', 'Rendezvous\appsettings.json',
                         'Relay\RemoteDesktop.Server.Relay.exe', 'Relay\appsettings.json',
-                        'Ops\RemoteDesktop.Server.Ops.exe', 'Ops\appsettings.json')) {
+                        'Ops\RemoteDesktop.Server.Ops.exe', 'Ops\appsettings.json',
+                        'Gateway\RemoteDesktop.Server.Gateway.exe', 'Gateway\appsettings.json')) {
     if (-not (Test-Path (Join-Path $PublishDirectory $expected))) {
         throw "$expected is missing from $PublishDirectory; the publish output is not complete."
     }
@@ -545,7 +353,11 @@ $settingsPath = Join-Path $PublishDirectory 'Rendezvous\appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 
 if ($RendezvousUrl) {
-    if ($RendezvousUrl -notmatch '^https?://') { throw "RendezvousUrl must look like http://0.0.0.0:5080 (got '$RendezvousUrl')." }
+    $parsed = $null
+    $valid = [Uri]::TryCreate($RendezvousUrl, [UriKind]::Absolute, [ref]$parsed)
+    if (-not $valid -or $parsed.Scheme -notin @('http', 'https') -or $parsed.Host.Length -eq 0) {
+        throw "RendezvousUrl must look like http://0.0.0.0:5080 (got '$RendezvousUrl')."
+    }
 
     # A published settings file that has no Urls at all is a server that listens where its own default says; adding the
     # property here is what keeps this step from depending on that file's shape.
@@ -566,6 +378,13 @@ if ($defaultRendezvousUrl -match '^https://') {
 This installer serves TLS ($defaultRendezvousUrl) but carries no certificate of its own. Install it with one, or
 signaling will not start:
   msiexec /i <msi> TLSCERTIFICATEPATH=C:\certs\rd.pfx [TLSCERTIFICATEPASSWORD=<password>]
+"@
+}
+elseif ($defaultRendezvousUrl -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:|/)') {
+    Write-Warning @"
+This installer binds signaling to $defaultRendezvousUrl, so only this machine can reach it. For a public or LAN
+deployment install with TLS and an externally reachable address:
+  msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080 TLSCERTIFICATEPATH=C:\certs\rd.pfx
 "@
 }
 
@@ -594,20 +413,24 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD-PARTY-NOTICES.md') -Destinati
 Write-Host "Generating the file list (version $version)..."
 $fileList = Join-Path $installerDirectory 'Files.generated.wxs'
 
-# The two files that make an installation maintainable rather than only installable: a script that writes the settings
-# the same way the installer does, and a short page for whoever has to do it. They go into the package root, where the
-# servers' folders and server-setup.log already are — an operator looking for "how do I change this" starts there.
-foreach ($extra in 'Set-ServerConfiguration.ps1', 'how-to-configure.txt') {
+# The files that make an installation maintainable rather than only installable: a script that writes the settings the
+# same way the installer does, a .cmd wrapper that survives the Windows 11 client execution policy, and a short page
+# for whoever has to do it. They go into the package root, where the servers' folders and server-setup.log already
+# are — an operator looking for "how do I change this" starts there.
+foreach ($extra in 'Set-ServerConfiguration.ps1', 'Set-ServerConfiguration.cmd', 'how-to-configure.txt') {
     Copy-Item -LiteralPath (Join-Path $installerDirectory $extra) -Destination $PublishDirectory -Force
 }
 
 # Declared by hand in Components.wxs (they carry the service or the settings). The settings file is excluded by name,
 # which is what leaves out all three copies of it: the publish output has one in each program folder.
-$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'RemoteDesktop.Server.Ops.exe', 'appsettings.json')
+$handWritten = @('RemoteDesktop.Server.Rendezvous.exe', 'RemoteDesktop.Server.Relay.exe', 'RemoteDesktop.Server.Ops.exe', 'RemoteDesktop.Server.Gateway.exe', 'appsettings.json')
 
 # Symbol files are left out of the installer unless asked for.
 if (-not $KeepSymbols) {
-    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | Remove-Item -Force
+    # Remove-Item through the pipeline with -Recurse throws InputObjectNotBound on Windows PowerShell 5.1; passing the
+    # path explicitly works on both 5.1 and 7. The scripts support both because a release build often runs in the
+    # PowerShell that ships with Windows.
+    Get-ChildItem $PublishDirectory -Filter *.pdb -Recurse | ForEach-Object { [System.IO.File]::Delete($_.FullName) }
 }
 
 # The product's own binaries are signed before the package is built, so what ends up installed is signed as well and
@@ -631,12 +454,12 @@ if ($signer) {
 }
 
 New-FileList -Source $PublishDirectory -Destination $fileList -Exclude $handWritten `
-    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder' }
+    -TopLevelDirectoryIds @{ 'Rendezvous' = 'RendezvousFolder'; 'Relay' = 'RelayFolder'; 'Ops' = 'OpsFolder'; 'Gateway' = 'GatewayFolder' }
 
-# The hand-written components own those files; a second component for one of them would install it twice, and for the
-# settings files it would fight the NeverOverwrite an upgrade depends on. The exclusion is by file name, so it is
-# checked here rather than assumed: a renamed binary would quietly come back into the generated list, and WiX would
-# accept it.
+# The hand-written components own those files; a second component for one of them would install it twice. The
+# settings files here are the shipped defaults; the live files are in %ProgramData% and are not in the MSI's file
+# table. The exclusion is by file name, so it is checked here rather than assumed: a renamed binary would quietly
+# come back into the generated list, and WiX would accept it.
 foreach ($name in $handWritten) {
     if (Select-String -LiteralPath $fileList -SimpleMatch $name -Quiet) {
         throw "$name is in the generated file list as well as in the hand-written components in Components.wxs."

@@ -11,7 +11,7 @@ namespace RemoteDesktop.Platform.Windows.Input;
 /// </summary>
 /// <remarks>
 /// Input cannot reach elevated windows or the secure desktop from a normal user process (UIPI); that needs the
-/// session agent started by the host service (milestone M3).
+/// session agent started by the host service.
 /// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IInputInjector

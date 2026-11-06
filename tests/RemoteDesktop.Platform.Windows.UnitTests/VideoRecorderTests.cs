@@ -179,6 +179,41 @@ public class VideoRecorderTests
     }
 
     [Fact]
+    public async Task MfVideoRecorder_stop_without_a_running_recording_returns_the_latest_path_instead_of_throwing()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        var recorder = new MfVideoRecorder();
+        try
+        {
+            // Never started: no path yet.
+            Assert.Equal(string.Empty, await recorder.StopAsync());
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+            try
+            {
+                recorder.Start(tempPath, 64, 64, frameRate: 30, bitrateKbps: 500);
+                recorder.RecordFrame(new byte[64 * 64 * 4], 64 * 4, 64, 64);
+                Assert.Equal(tempPath, await recorder.StopAsync());
+
+                // Already stopped: the same path again, no exception.
+                Assert.Equal(tempPath, await recorder.StopAsync());
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { }
+                }
+            }
+        }
+        finally
+        {
+            await recorder.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task MfVideoRecorder_says_so_when_no_frame_ever_arrived()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");

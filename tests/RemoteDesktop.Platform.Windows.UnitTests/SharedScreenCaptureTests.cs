@@ -15,26 +15,19 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 /// </remarks>
 public class SharedScreenCaptureTests
 {
+    private static readonly DisplayInfo TestDisplay = new("display-1", "Test", new PixelRect(0, 0, 4, 4), 1, IsPrimary: true);
+
     [Fact]
     public async Task Two_subscribers_share_one_capturer_and_both_receive_the_same_frame()
     {
-        var fake = new FakeCapturer();
-        var creates = 0;
-        await using var capture = new SharedDisplayCapture(
-            fake.Display,
-            _ =>
-            {
-                creates++;
-                return fake;
-            },
-            NullLogger.Instance,
-            TimeSpan.FromMilliseconds(50));
+        var fakes = new List<FakeCapturer>();
+        await using var capture = new SharedDisplayCapture(TestDisplay, Collect(fakes), NullLogger.Instance, TimeSpan.FromMilliseconds(50));
         await using var first = capture.Subscribe();
         await using var second = capture.Subscribe();
 
-        Assert.Equal(1, creates);
+        Assert.Single(fakes);
 
-        fake.Push();
+        fakes[0].Push();
         using var a = await first.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
         using var b = await second.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
 
@@ -51,12 +44,8 @@ public class SharedScreenCaptureTests
     [Fact]
     public async Task Cursor_updates_reach_every_subscriber()
     {
-        var fake = new FakeCapturer();
-        await using var capture = new SharedDisplayCapture(
-            fake.Display,
-            _ => fake,
-            NullLogger.Instance,
-            TimeSpan.FromMilliseconds(50));
+        var fakes = new List<FakeCapturer>();
+        await using var capture = new SharedDisplayCapture(TestDisplay, Collect(fakes), NullLogger.Instance, TimeSpan.FromMilliseconds(50));
         await using var first = capture.Subscribe();
         await using var second = capture.Subscribe();
 
@@ -69,9 +58,9 @@ public class SharedScreenCaptureTests
         first.CursorChanged += (_, s) => firstShapes.Add(s);
         second.CursorChanged += (_, s) => secondShapes.Add(s);
 
-        fake.ChangeCursorShape();
-        fake.MoveCursor(3, 7);
-        fake.Push();
+        fakes[0].ChangeCursorShape();
+        fakes[0].MoveCursor(3, 7);
+        fakes[0].Push();
         using (await first.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken))
         {
         }
@@ -88,46 +77,94 @@ public class SharedScreenCaptureTests
         Assert.Equal(1, secondShapes[0].Width);
     }
 
+    /// <summary>
+    /// Disconnecting and reconnecting used to show exactly the picture from before the gap: the newest frame was kept
+    /// across the idle stop and handed to the next subscriber, and the duplication under it was never rebuilt. A
+    /// reconnecting controller now gets a rebuilt capturer instead, so it sees the desktop as it is now.
+    /// </summary>
     [Fact]
-    public async Task A_new_subscriber_after_an_idle_gap_reads_the_last_frame_without_a_new_capture()
+    public async Task A_new_subscriber_after_an_idle_gap_is_not_shown_the_previous_picture()
     {
-        var fake = new FakeCapturer();
-        var creates = 0;
-        await using var capture = new SharedDisplayCapture(
-            fake.Display,
-            _ =>
-            {
-                creates++;
-                return fake;
-            },
-            NullLogger.Instance,
-            TimeSpan.FromMilliseconds(50));
+        var fakes = new List<FakeCapturer>();
+        await using var capture = new SharedDisplayCapture(TestDisplay, Collect(fakes), NullLogger.Instance, TimeSpan.FromMilliseconds(50));
 
         var first = capture.Subscribe();
-        fake.Push();
+        fakes[0].Push();
         using (await first.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken))
         {
         }
 
         await first.DisposeAsync();
 
-        // Past the idle grace, so the loop has stopped. The duplication is still the same one.
+        // Past the idle grace, so the loop has stopped and the duplication it opened may be out of date.
         await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
         await using var next = capture.Subscribe();
-        using var frame = await next.CaptureAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+        using var replay = await next.CaptureAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+        Assert.Null(replay);
 
-        Assert.NotNull(frame);
-        Assert.Equal(1, creates);
-        Assert.Equal((byte)1, frame.GetPixels(out _)[0]);
+        await WaitForAsync(() => fakes.Count >= 2);
+        fakes[^1].Push();
+        using var fresh = await next.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        Assert.NotNull(fresh);
+        Assert.True(fakes.Count >= 2);
     }
 
-    /// <summary>Stands in for the DXGI capturer: hand-shaped frames, a cursor, and a count of instances.</summary>
+    /// <summary>
+    /// A capture object that throws once is what a lost graphics device looks like. Ending the loop on it left every
+    /// controller of that display frozen until the host process restarted, because nothing else would start it again.
+    /// </summary>
+    [Fact]
+    public async Task A_capturer_that_fails_is_replaced_and_the_loop_recovers()
+    {
+        var fakes = new List<FakeCapturer>();
+        IScreenCapturer Create(DisplayInfo display)
+        {
+            var fake = new FakeCapturer { Fail = fakes.Count == 0 };
+            fakes.Add(fake);
+            return fake;
+        }
+
+        await using var capture = new SharedDisplayCapture(TestDisplay, Create, NullLogger.Instance, TimeSpan.FromMilliseconds(50));
+        await using var subscription = capture.Subscribe();
+
+        await WaitForAsync(() => fakes.Count >= 2);
+        Assert.True(fakes[0].Disposed);
+
+        fakes[^1].Push();
+        using var frame = await subscription.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        Assert.NotNull(frame);
+        Assert.False(capture.IsFaulted);
+    }
+
+    private static Func<DisplayInfo, IScreenCapturer> Collect(List<FakeCapturer> fakes) => _ =>
+    {
+        var fake = new FakeCapturer();
+        fakes.Add(fake);
+        return fake;
+    };
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for the capture loop.");
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Stands in for the DXGI capturer: hand-shaped frames, a cursor, a failure mode and a count of instances.</summary>
     private sealed class FakeCapturer : IScreenCapturer
     {
         private readonly SemaphoreSlim _frames = new(0);
         private int _frameNumber;
 
-        public DisplayInfo Display { get; } = new("display-1", "Test", new PixelRect(0, 0, 4, 4), 1, IsPrimary: true);
+        public DisplayInfo Display => TestDisplay;
+
+        /// <summary>Throws on every capture, the way a removed device does.</summary>
+        public bool Fail { get; init; }
+
+        public bool Disposed { get; private set; }
 
         public event EventHandler<CursorShape>? CursorChanged;
 
@@ -142,6 +179,11 @@ public class SharedScreenCaptureTests
 
         public ValueTask<VideoFrame?> CaptureAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
+            if (Fail)
+            {
+                throw new InvalidOperationException("The graphics device was removed.");
+            }
+
             if (!_frames.Wait(timeout, cancellationToken))
             {
                 return ValueTask.FromResult<VideoFrame?>(null);
@@ -155,6 +197,7 @@ public class SharedScreenCaptureTests
 
         public ValueTask DisposeAsync()
         {
+            Disposed = true;
             _frames.Dispose();
             return ValueTask.CompletedTask;
         }

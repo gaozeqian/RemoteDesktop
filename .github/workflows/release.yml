@@ -5,7 +5,7 @@ on:
     tags:
       - 'v*.*.*' # 触发条件：当你推送 v1.0.0 这样的 Tag 时触发
 
-# 只有最后那个发布 job 需要写权限，它自己声明 contents: write；其余两个只读仓库。
+# 只有最后那个发布 job 需要写权限，它自己声明 contents: write；其余三个（check-version、build-linux、build-macos）只读仓库。
 permissions:
   contents: read
 
@@ -96,7 +96,7 @@ jobs:
         run: |
           version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
           for package in artifacts/installer/linux/*.deb; do
-            mv "$package" "${package%-$version.deb}-${GITHUB_REF_NAME}.deb"
+            mv "$package" "${package%-"$version".deb}-${GITHUB_REF_NAME}.deb"
           done
           ls -la artifacts/installer/linux/*.deb
 
@@ -117,14 +117,15 @@ jobs:
     runs-on: macos-26
     # 证书与公证凭据都是可选的：没配就出一个**未签名**的 .pkg（Gatekeeper 会提示"身份不明的开发者"，
     # 右键 → 打开即可），配了就签名 + 公证（下载即开）。四个证书 Secret 与三个公证 Secret 见下面的注释。
+    #
+    # job 级 env 只放布尔值，不放 Secret 本身：job 级 env 对每一步都可见，包括 restore、build 与测试进程（测试代码
+    # 读得到环境变量）。Secret 只出现在确实要用它的那几步自己的 env 里（导入证书、打包 + 公证）。布尔值放在
+    # job 级而不是 step 级，是因为 step 自己的 env 能否被它自己的 if 读到并没有保证。
     env:
-      APP_CERT_BASE64: ${{ secrets.MACOS_APP_CERT_BASE64 }}
-      APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
-      INSTALLER_CERT_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_BASE64 }}
-      INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
-      NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
-      NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-      NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      # 两张证书都配了才签名；与下面导入步骤、打包步骤用的是同一个条件。
+      MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
+      # 三个公证 Secret 都配了才公证；只在已签名时才有意义。
+      MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -155,7 +156,12 @@ jobs:
       #   security export -k login.keychain-db -t identities -f pkcs12 -o app.p12 -P <口令>
       #   base64 -i app.p12 | tr -d '\n'
       - name: Import the Developer ID certificates (optional)
-        if: env.APP_CERT_BASE64 != '' && env.INSTALLER_CERT_BASE64 != ''
+        if: env.MACOS_SIGNED == 'true'
+        env:
+          APP_CERT_BASE64: ${{ secrets.MACOS_APP_CERT_BASE64 }}
+          APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          INSTALLER_CERT_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_BASE64 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
         run: |
           set -euo pipefail
           KC="$RUNNER_TEMP/rd-signing.keychain-db"
@@ -179,25 +185,36 @@ jobs:
 
           # 让上述 -T 在非交互环境下真正生效。
           security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "$KC_PW" "$KC" >/dev/null
+          # The inner list is deliberately unquoted: its words are keychains to add, not one argument.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/installer.p12"
 
           echo "==> Signing identities available:"
           security find-identity -v -p codesigning "$KC"
+          # The Installer certificate has no Code Signing EKU and is absent from the filtered list above; the
+          # packagers search for it without the filter. Print both so a missing identity is visible here.
+          security find-identity -v "$KC"
 
       # 三个 .pkg：客户端（Remote Desktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
-      # （信令、中继与监控台 + 三个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
+      # （信令、中继、监控台与 HTTPS 网关 + 四个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
       # TCC 授权也分开，不能互相复用。
       # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize
       # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
       - name: Build the macOS installers (.pkg)
+        # 公证凭据只在这一步的环境里：make-pkg.sh 自己读 NOTARY_KEY_ID / NOTARY_ISSUER_ID / NOTARY_KEY_PATH。
+        # 证书不在这里——签名用的是上一步导入钥匙串的身份。
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
           args=(--configuration Release)
 
-          if [[ -n "${APP_CERT_BASE64:-}" && -n "${INSTALLER_CERT_BASE64:-}" ]]; then
+          if [[ "$MACOS_SIGNED" == "true" ]]; then
             args+=(--distribution)
-            if [[ -n "${NOTARY_KEY_BASE64:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER_ID:-}" ]]; then
+            if [[ "$MACOS_NOTARIZED" == "true" ]]; then
               printf '%s' "$NOTARY_KEY_BASE64" | openssl base64 -d -A -out "$RUNNER_TEMP/notary_key.p8"
               export NOTARY_KEY_PATH="$RUNNER_TEMP/notary_key.p8"
               args+=(--notarize)
@@ -213,7 +230,7 @@ jobs:
           ./build/installer/macos/server/make-pkg.sh "${args[@]}"
 
       # 打开三个包的 payload 看里面有什么（客户端那个必须带着 Info.plist，被控端那个必须带着登录项 plist，
-      # 服务端那三个必须带着各自的 launchd plist），与 ci.yml 及另外两个平台调用同一份共享动作。
+      # 服务端那四个必须带着各自的 launchd plist），与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
 
       # 三个包都落在 artifacts/installer/macos/，文件名里已经带角色词，这一步只是把版本换成 Tag。
@@ -254,15 +271,18 @@ jobs:
     permissions:
       contents: write
 
-    # 证书 Secrets 放在 job 级别：GitHub 文档给的做法是"把 Secret 放进 env，再在 step 的 if 里用 env.X 判断"
-    # （Secret 不能直接写进 if），而这里必须是 job 级别的 env 才有保证——step 自己那份 env 能否被它自己的 if
-    # 读到并没有说明。下面解码证书的那一步就靠它判断有没有配置证书。
+    # job 级 env 只放布尔值，不放证书与口令本身：job 级 env 对每一步都可见，包括 restore、build 与测试进程（测试
+    # 代码读得到环境变量）。Secret 不能直接写进 if，所以 if 读这里的布尔值；而布尔值必须放在 job 级别才有保证——
+    # step 自己那份 env 能否被它自己的 if 读到并没有说明。证书与口令只出现在解码证书、构建并签名 MSI 的那几步自己的 env 里。
     env:
-      PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
-      PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
+      HAS_PFX_CERT: ${{ secrets.CODE_SIGN_CERT_BASE64 != '' }}
+      HAS_PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD != '' }}
       # Only a boolean is needed here: the note below has to say whether the macOS packages were signed, and the
       # packages themselves are built in the other job.
       MACOS_SIGNED: ${{ secrets.MACOS_APP_CERT_BASE64 != '' && secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
+      # Likewise a boolean: the build-macos job only notarizes when all three notary secrets are present, and a signed
+      # but not notarized package still gets the Gatekeeper prompt on a first run.
+      MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
 
     steps:
       - name: Checkout Code
@@ -300,12 +320,16 @@ jobs:
       # （地址）"并告诉用户去哪儿改，所以不会变成"看着正常、就是连不上"。这里的说明会写进 Release。
       - name: Decide the server address and the release note
         shell: pwsh
+        # The variable is read from the environment, not interpolated into the script text: a value containing a quote
+        # or a $( ) would otherwise be parsed as PowerShell.
+        env:
+          DEFAULT_RENDEZVOUS_URI: ${{ vars.DEFAULT_RENDEZVOUS_URI }}
         run: |
-          $address = "${{ vars.DEFAULT_RENDEZVOUS_URI }}"
+          $address = $env:DEFAULT_RENDEZVOUS_URI
           if ($address) {
               Write-Host "The client installer will point at $address."
               "DEFAULT_SERVER=$address" >> $env:GITHUB_ENV
-              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装后需在客户端里填写（它们不参与这里的变量）。"
+              $note = "Windows 客户端与被控端安装包已内置信令服务器地址 ``$address``：装完直接可用。macOS 与 Linux 的包不内置地址，安装时会询问（macOS 的 Installer 配置页 / Linux 的 debconf）；没有无人值守答案时按默认值安装。"
           } else {
               Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
 
@@ -332,9 +356,21 @@ jobs:
               $boundaries.Add('> [!WARNING]')
               $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
               $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          } elseif ($env:MACOS_NOTARIZED -ne 'true') {
+              $boundaries.Add('')
+              $boundaries.Add('> [!WARNING]')
+              $boundaries.Add('> **macOS 包已签名但未公证**：Gatekeeper 在首次打开时仍会提示。右键点击 `.pkg` 选择')
+              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
           }
 
-          if (-not $env:PFX_BASE64) {
+          # The build steps below sign only when both the certificate and its password exist and otherwise fall back to
+          # -SkipSigning, so this has to use the same condition: checking the certificate alone said "signed" for a
+          # release whose packages were not.
+          if (-not ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true')) {
+              $missing = @()
+              if ($env:HAS_PFX_CERT -ne 'true') { $missing += 'CODE_SIGN_CERT_BASE64' }
+              if ($env:HAS_PFX_PASSWORD -ne 'true') { $missing += 'CODE_SIGN_CERT_PASSWORD' }
+              Write-Host "::warning title=Unsigned Windows packages::Missing secret(s): $($missing -join ', '). The MSI files will be unsigned: SmartScreen will warn, and the UIAccess session agent cannot start."
               $boundaries.Add('')
               $boundaries.Add('> [!WARNING]')
               $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')
@@ -350,7 +386,9 @@ jobs:
       # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
       # 下面演示了如何从 Secrets 获取 PFX 证书并解码：
       - name: Decode Code Signing Certificate (Optional)
-        if: env.PFX_BASE64 != ''
+        if: env.HAS_PFX_CERT == 'true'
+        env:
+          PFX_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
         run: |
           $pfxBytes = [System.Convert]::FromBase64String($env:PFX_BASE64)
           [System.IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\sign.pfx", $pfxBytes)
@@ -363,10 +401,13 @@ jobs:
       # ——第一次跑 v0.2.0 就是这么失败的（目录被建成名为 `-Configuration` 的文件夹，WiX 找不到 SourceRoot）。
       - name: Build MSI Installer
         shell: pwsh
+        # 口令只在三个构建步骤里（证书已由上面解码成 sign.pfx）；是否签名读 job 级的布尔值。
+        env:
+          PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
         run: |
           $arguments = @{ Configuration = 'Release' }
           if ($env:DEFAULT_SERVER) { $arguments.RendezvousUri = $env:DEFAULT_SERVER }
-          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+          if ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true') {
               $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
               $arguments.CertificatePassword = $env:PFX_PASSWORD
           } else {
@@ -379,10 +420,12 @@ jobs:
       # 因为它走的是同一个脚本的 -HostOnly 分支——两份服务定义迟早会分叉，这里不留第二份。
       - name: Build Host MSI Installer
         shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
         run: |
           $arguments = @{ Configuration = 'Release' }
           if ($env:DEFAULT_SERVER) { $arguments.RendezvousUri = $env:DEFAULT_SERVER }
-          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+          if ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true') {
               $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
               $arguments.CertificatePassword = $env:PFX_PASSWORD
           } else {
@@ -391,12 +434,14 @@ jobs:
 
           .\build\installer\windows\host\Build-HostInstaller.ps1 @arguments
 
-      # 服务端（信令 + 中继 + 监控台）的安装包。和上面那些用同一套签名参数、同一个版本号，但是三个各自独立安装的包：
+      # 服务端（信令 + 中继 + 监控台 + HTTPS 网关）的安装包。和上面那些用同一套签名参数、同一个版本号，但是三个各自独立安装的包：
       # 一台机器可以只做被控端、只做服务器，或者都做。
       - name: Build Server MSI Installer
         shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
         run: |
-          if ($env:PFX_BASE64 -and $env:PFX_PASSWORD) {
+          if ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true') {
               .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword $env:PFX_PASSWORD
           } else {
               .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
@@ -405,6 +450,12 @@ jobs:
       # 打开三个 MSI 的数据库看里面有什么（payload、服务与崩溃重启、防火墙规则、快捷方式、向导页与许可文本），
       # 与 ci.yml 及另外两个平台调用同一份共享动作。
       - uses: ./.github/actions/verify-packages
+
+      # 数据库检查看不到大版本升级对磁盘上文件做了什么。这里真正安装三个 MSI、把 live 设置放回旧的
+      # Program Files 布局、重装，检查迁移与普通升级都保留运维的值。runner 是一次性的，脚本只适合在这种机器上跑。
+      - name: Install, upgrade and uninstall the MSIs
+        shell: pwsh
+        run: ./build/installer/windows/Test-InstallerUpgrade.ps1
 
       # 将打好的三个 MSI 提取出来
       - name: Rename Artifacts for Release

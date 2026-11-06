@@ -3,26 +3,28 @@ Version: @VERSION@
 Section: net
 Priority: optional
 Architecture: @ARCHITECTURE@
-Maintainer: Remote Desktop <noreply@example.invalid>
+Maintainer: Zeqian GAO <zeqian_gao@outlook.com>
 Homepage: https://github.com/gaozeqian/RemoteDesktop
-Recommends: libmsquic
-Description: Remote Desktop server (signaling, relay and ops console)
+Depends: adduser, ca-certificates, debconf (>= 0.5) | debconf-2.0, libc6, libgcc-s1, libicu78 | libicu77 | libicu76 | libicu74 | libicu72, libssl3t64 | libssl3, libstdc++6, zlib1g
+Description: Remote Desktop server (signaling, relay, ops console and HTTPS gateway)
  Lets devices find each other and, when they cannot connect directly, forwards
  their traffic between them.
  .
- Three services are installed: the rendezvous server, which registers devices
+ Four services are installed: the rendezvous server, which registers devices
  and hands out their codes; the relay, which carries the traffic of peers whose
- networks will not let them reach each other directly; and the ops console,
- which shows nodes, sessions, alerts and audit on 127.0.0.1:5090.
+ networks will not let them reach each other directly; the ops console, which
+ shows nodes, sessions, alerts and audit; and an HTTPS gateway that exposes the
+ console on TCP 5443 while the console itself stays on 127.0.0.1:5090.
  .
- The two network servers are configured from /etc/remotedesktop-server, and the
- settings are kept there so that upgrading the package does not overwrite them.
- The console keeps its own database under /var/lib/remotedesktop-server and is
- loopback-only until a reverse proxy is put in front of it.
+ The installation asks which database to keep device codes in (SQLite, or an
+ existing PostgreSQL server and its connection string) and whether signaling
+ should use TLS: a self-signed certificate generated on this machine, an
+ existing certificate, or plain HTTP. The same database provider is used by the
+ console; with the memory-only choice the console still keeps its own SQLite
+ file, because it cannot run without one.
  .
- libmsquic is only recommended rather than required. It is what System.Net.Quic
- loads to speak QUIC at all, and without it every client fails with "QUIC is not
- supported on this system" — which reads like a platform problem rather than a
- missing package. It comes from Microsoft's own repository, so depending on it
- would make this package uninstallable on a machine that has not added that
- repository; the post-install step says so if it is missing.
+ The settings live in /etc/remotedesktop-server and are written by the server
+ itself, so upgrading the package does not overwrite what the operator
+ configured. The console keeps its data beside the signaling database. The
+ gateway uses a generated self-signed certificate containing this machine's IP
+ addresses; administrators must trust its exported public certificate.

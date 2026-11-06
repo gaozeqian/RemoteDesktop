@@ -37,7 +37,20 @@ public sealed class FileSecretStore(string directory) : ISecretStore
         // longer be read — and for the device identity that means a machine that silently comes back as a different
         // device, with a different code, that nobody can connect to any more.
         var temporary = path + ".tmp";
-        File.WriteAllBytes(temporary, secret);
+
+        // Any leftover from an interrupted save is removed so the file is always created fresh, with the owner-only
+        // mode applied at open(2) time rather than after the secret is already on disk.
+        File.Delete(temporary);
+        using (var stream = new FileStream(temporary, new FileStreamOptions
+        {
+            Mode = System.IO.FileMode.CreateNew,
+            Access = FileAccess.Write,
+            UnixCreateMode = FileMode,
+        }))
+        {
+            stream.Write(secret);
+        }
+
         File.SetUnixFileMode(temporary, FileMode);
         File.Move(temporary, path, overwrite: true);
     }

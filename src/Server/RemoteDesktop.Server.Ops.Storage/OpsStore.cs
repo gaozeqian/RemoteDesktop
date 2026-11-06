@@ -23,6 +23,13 @@ public sealed partial class OpsStore : IDisposable
     /// <summary>Serialises audit appends so the chain cannot fork. See the remarks on <see cref="AppendAuditAsync"/>.</summary>
     private readonly SemaphoreSlim _auditGate = new(1, 1);
 
+    /// <summary>
+    /// Serialises ingest batches. Two batches for one correlation id each read the session, merge their events and
+    /// write the whole row; interleaved, the second overwrites the first's fields and the projection silently loses an
+    /// update. The console is a single process, so one gate is enough, and ingest batches are small and infrequent.
+    /// </summary>
+    private readonly SemaphoreSlim _ingestGate = new(1, 1);
+
     private OpsStore(string provider, string connectionString)
     {
         _provider = provider;
@@ -32,8 +39,12 @@ public sealed partial class OpsStore : IDisposable
     /// <summary>The provider in canonical spelling, for logging.</summary>
     public string Provider => _provider;
 
-    /// <summary>Releases the audit gate. Connections are pooled by the driver and are not this type's to own.</summary>
-    public void Dispose() => _auditGate.Dispose();
+    /// <summary>Releases the in-process gates. Connections are pooled by the driver and are not this type's to own.</summary>
+    public void Dispose()
+    {
+        _auditGate.Dispose();
+        _ingestGate.Dispose();
+    }
 
     /// <summary>
     /// A store for <paramref name="settings"/>, with the SQLite folder created if it is missing.
@@ -64,10 +75,49 @@ public sealed partial class OpsStore : IDisposable
     }
 
     /// <summary>Creates the baseline schema if it is not there. Run once at start-up; a failure stops the host.</summary>
+    /// <remarks>
+    /// On PostgreSQL the whole run holds an advisory lock. <c>CREATE TABLE IF NOT EXISTS</c> is not safe against a second
+    /// process creating the same table at the same moment (it fails with a unique violation on the catalog), and two
+    /// processes that both read an old schema version would both try to apply the same migration. SQLite serialises
+    /// both by itself, with its file lock.
+    /// </remarks>
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
 
+        if (!string.Equals(_provider, OpsDatabaseSettings.Postgres, StringComparison.Ordinal))
+        {
+            await ApplySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await RunSchemaLockCommandAsync(connection, "pg_advisory_lock", cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ApplySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                await RunSchemaLockCommandAsync(connection, "pg_advisory_unlock", CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (DbException)
+            {
+                // The connection is gone, and a session-level lock goes with it.
+            }
+        }
+    }
+
+    private static async Task RunSchemaLockCommandAsync(DbConnection connection, string function, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {function}(hashtext('remotedesktop.ops.schema'));";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplySchemaAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
         if (string.Equals(_provider, OpsDatabaseSettings.Sqlite, StringComparison.Ordinal))
         {
             // WAL keeps the scraper's writes from blocking a page read. NORMAL trades a crash-window of the last
@@ -94,7 +144,10 @@ public sealed partial class OpsStore : IDisposable
             await using (var step = connection.CreateCommand())
             {
                 step.Transaction = transaction;
-                step.CommandText = migration.Sql;
+                step.CommandText = string.Equals(_provider, OpsDatabaseSettings.Postgres, StringComparison.Ordinal)
+                    && migration.PostgresSql is { } postgres
+                        ? postgres
+                        : migration.Sql;
                 await step.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -124,6 +177,19 @@ public sealed partial class OpsStore : IDisposable
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null or DBNull ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is the database refusing a row because a unique key already holds it, on
+    /// either provider. Lets a caller turn "someone else inserted that name first" into a conflict instead of an error.
+    /// </summary>
+    public static bool IsUniqueViolation(Exception exception) =>
+        exception switch
+        {
+            // 2067 is SQLITE_CONSTRAINT_UNIQUE and 1555 is SQLITE_CONSTRAINT_PRIMARYKEY.
+            SqliteException { SqliteExtendedErrorCode: 2067 or 1555 } => true,
+            PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } => true,
+            _ => false,
+        };
 
     /// <summary>Throws when the database cannot answer. The health endpoint turns that into an unhealthy report.</summary>
     public async Task ProbeAsync(CancellationToken cancellationToken = default)

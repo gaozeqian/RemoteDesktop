@@ -28,15 +28,16 @@ public interface IRecentDevicesStore
 /// The local device list, kept as versioned JSON in the data directory.
 /// </summary>
 /// <remarks>
-/// Passwords are not part of it: they live in the OS-protected <see cref="ISecretStore"/>, so they cannot be
-/// decrypted on another machine and can never be carried along if the list is synced to an account later. Entries
-/// carry <see cref="RecentDeviceEntry.UpdatedAtUtc"/> and a tombstone on removal for the same reason — see
-/// <c>docs/ops/README.md</c> for what a future account sync is expected to do with them.
+/// Passwords are not part of it: they live in the <see cref="ISecretStore"/>, which is per machine and per user and
+/// is kept apart from the list file on purpose — see <c>docs/design/README.md</c> ("密码为什么不进列表"). Removal
+/// leaves a tombstone rather than deleting the entry, so a removed device can come back when it is connected to again.
 /// </remarks>
 public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 {
     private const int CurrentVersion = 1;
     private const string FileName = "recent_devices.json";
+    private const int ReadAttempts = 3;
+    private static readonly TimeSpan ReadRetryDelay = TimeSpan.FromMilliseconds(50);
 
     private readonly string _filePath;
     private readonly string _secretPrefix;
@@ -257,32 +258,73 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
         JsonDocument document;
         try
         {
-            // Closed again before anything else runs: migrating a legacy file rewrites it, and that cannot happen
-            // while this read handle is still on it.
-            await using (var stream = File.OpenRead(_filePath))
-            {
-                document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
+            document = await ReadDocumentAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (JsonException)
         {
             PreserveUnreadableFile();
             return [];
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+            // Gone since the existence check: there is nothing on disk that a save could destroy.
             return [];
         }
 
+        // Any other IOException or UnauthorizedAccessException escapes from ReadDocumentAsync on purpose. A file that
+        // exists but cannot be read right now (locked by a scanner or a second instance) must not be treated as an
+        // empty list: the next save would replace the whole thing with one entry.
         using (document)
         {
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Array)
+            try
             {
-                return await MigrateLegacyAsync(root, cancellationToken).ConfigureAwait(false);
-            }
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return await MigrateLegacyAsync(root, cancellationToken).ConfigureAwait(false);
+                }
 
-            return root.ValueKind == JsonValueKind.Object ? ReadCurrentFile(root) : [];
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    // Not a shape this store ever wrote. Treat it like any other unreadable file rather than letting
+                    // the next save overwrite it.
+                    PreserveUnreadableFile();
+                    return [];
+                }
+
+                return ReadCurrentFile(root);
+            }
+            catch (JsonException)
+            {
+                // Valid JSON that is not a valid list (an entry missing a required field, a wrongly typed value).
+                // Skipping the bad entries would silently drop them on the next save, so set the whole file aside.
+                PreserveUnreadableFile();
+                return [];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parses the file. A transient lock is retried a couple of times, briefly; if it persists the IOException or
+    /// UnauthorizedAccessException is allowed to escape.
+    /// </summary>
+    private async Task<JsonDocument> ReadDocumentAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                // Closed again before anything else runs: migrating a legacy file rewrites it, and that cannot happen
+                // while this read handle is still on it.
+                await using var stream = File.OpenRead(_filePath);
+                return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                && ex is not (FileNotFoundException or DirectoryNotFoundException)
+                && attempt < ReadAttempts)
+            {
+                await Task.Delay(ReadRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -297,16 +339,24 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 
         if (!root.TryGetProperty(nameof(RecentDevicesFile.Devices), out var devices) || devices.ValueKind != JsonValueKind.Array)
         {
+            // The file says it is ours but has no list in it. Keeping it lets a person recover whatever is left;
+            // returning an empty list would let the next save replace it without a word.
+            PreserveUnreadableFile();
             return [];
         }
 
         var list = new List<RecentDeviceEntry>();
         foreach (var element in devices.EnumerateArray())
         {
-            if (element.Deserialize<RecentDeviceEntry>(JsonOptions) is { DeviceId.Length: > 0 } entry)
+            if (element.Deserialize<RecentDeviceEntry>(JsonOptions) is not { DeviceId.Length: > 0 } entry)
             {
-                list.Add(entry);
+                // One unreadable entry makes the whole file unreadable: skipping it would drop it on the next save,
+                // which is the silent loss this store promises not to do.
+                PreserveUnreadableFile();
+                return [];
             }
+
+            list.Add(entry);
         }
 
         return list;

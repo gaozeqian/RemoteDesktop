@@ -9,10 +9,9 @@ public static class TemporaryPasswordGenerator
     private const string Alphabet = "abcdefghijkmnpqrstuvwxyz23456789";
 
     /// <summary>
-    /// Twelve characters of that alphabet, about 2^60. The length is what stands between somebody who captured a
-    /// proof and the password behind it (see the remarks on <see cref="Sessions.PasswordProof"/>): eight characters
-    /// is 2^40, which is days of work for a rented GPU farm, and twelve is not. It is read aloud as three groups of
-    /// four, and the window has a copy button.
+    /// Twelve characters of that alphabet, about 2^60. SRP removes the captured-proof/offline-cracking path, but an
+    /// active fake host can still try one password per handshake: eight characters is 2^40 and too small for a
+    /// long-lived credential, while twelve is read aloud as three groups of four and the window has a copy button.
     /// </summary>
     public const int DefaultLength = 12;
 

@@ -12,6 +12,15 @@ public sealed class DeviceIdentity : IDisposable
 {
     public const string SecretName = "device-identity";
 
+    /// <summary>
+    /// The key a client uses when a background service owns the device's own identity. Windows keeps the two apart
+    /// by data directory (the service keeps its state in ProgramData, the client in AppData). Linux runs the service
+    /// as the signed-in user, so both read the same store; without a separate name the two processes register with
+    /// the same device id, and the signaling server — which keeps one session per device — aborts one connection
+    /// every time the other registers.
+    /// </summary>
+    public const string ControllerSecretName = "controller-identity";
+
     private DeviceIdentity(X509Certificate2 certificate)
     {
         Certificate = certificate;
@@ -23,11 +32,12 @@ public sealed class DeviceIdentity : IDisposable
 
     public string Fingerprint { get; }
 
-    public static DeviceIdentity LoadOrCreate(ISecretStore store)
+    public static DeviceIdentity LoadOrCreate(ISecretStore store, string secretName = SecretName)
     {
         ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(secretName);
 
-        var stored = store.Load(SecretName);
+        var stored = store.Load(secretName);
         if (stored is not null)
         {
             try
@@ -41,7 +51,7 @@ public sealed class DeviceIdentity : IDisposable
         }
 
         var pfx = CreatePfx();
-        store.Save(SecretName, pfx);
+        store.Save(secretName, pfx);
         return new DeviceIdentity(Import(pfx));
     }
 

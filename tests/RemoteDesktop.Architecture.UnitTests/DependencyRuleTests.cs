@@ -33,6 +33,10 @@ public class DependencyRuleTests
         { Signaling, [Domain, Abstractions, Protocol, Transport, Application, .. Outer] },
         { Transport, [Application, .. Outer] },
         { Application, Outer },
+        // Features sit between Application and the hosts: only a host wires a platform in at start-up, and a feature
+        // that reached for one (or for a host) would be tied to the machine it was written on. Features.Desktop and
+        // Features.Camera do reference Media, as the design says, so Media is not forbidden here.
+        { Features, [Platform, Client, HostService, SessionAgent] },
         { Media, [Protocol, Signaling, Transport, Application, Features, Platform, Server, Client, HostService, SessionAgent] },
         { Platform, [Protocol, Signaling, Transport, Application, Features, Media, Server, Client, HostService, SessionAgent] },
         { Server, [Abstractions, Protocol, Transport, Application, Features, Media, Platform, Client, HostService, SessionAgent] },

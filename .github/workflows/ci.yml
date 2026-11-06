@@ -5,7 +5,7 @@ on:
     branches: [master]
   pull_request:
 
-# Nothing in this workflow writes to the repository: the three jobs read the checkout, upload test reports, and stop.
+# Nothing in this workflow writes to the repository: the jobs read the checkout, upload test reports, and stop.
 # The job that publishes a release is in release.yml, and it asks for contents: write itself.
 permissions:
   contents: read
@@ -69,6 +69,13 @@ jobs:
       # All three packages are opened and their contents checked, by the same shared action the other two platforms
       # call: one place answers "does this package hold what it is supposed to" for all three.
       - uses: ./.github/actions/verify-packages
+
+      # Opening the database cannot see what a major upgrade does to files on disk. This installs the three MSIs,
+      # moves the live settings into the old Program Files layout, reinstalls, and checks that the migration and the
+      # normal upgrade both keep the operator's values. The runner is disposable; the script is only safe there.
+      - name: Install, upgrade and uninstall the MSIs
+        shell: pwsh
+        run: ./build/installer/windows/Test-InstallerUpgrade.ps1
 
   build-linux:
     # The distro this port targets, and the one its tests were written against: FFmpeg 8 (libavcodec.so.62) and the
@@ -165,6 +172,10 @@ jobs:
       NODE_TOKEN: ci-node-token
       OPS_INGEST_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
       RENDEZVOUS_DOMAIN: rd.example.com
+      OPS_GATEWAY_IP: 127.0.0.1
+      # Placeholders for the self-signed overlay; `compose config` only interpolates them, the file need not exist.
+      TLS_CERT_PATH: ./rd.example.pfx
+      TLS_CERT_PASSWORD: ci-not-a-secret
     steps:
       - uses: actions/checkout@v7
       - name: Check the compose files parse
@@ -172,6 +183,60 @@ jobs:
           docker compose -f build/docker/docker-compose.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.tls.yml config >/dev/null
           docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.selfsigned.yml config >/dev/null
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.selfsigned.yml -f build/docker/docker-compose.ops.yml config >/dev/null
+      - name: Check .env.example does not satisfy the required values
+        # The template leaves the secrets empty on purpose. If a placeholder ever returns, `cp .env.example .env` would
+        # start the servers with a value everybody knows. The environment is cleared so the job's test values above
+        # cannot mask it: with only the template as input, compose has to refuse.
+        run: |
+          if env -i PATH="$PATH" HOME="$HOME" docker compose --env-file build/docker/.env.example -f build/docker/docker-compose.yml config >/dev/null 2>&1; then
+            echo "build/docker/.env.example satisfies the required values; they must stay empty." >&2
+            exit 1
+          fi
+      - name: Smoke-test the security audit script
+        # Nothing else runs build/tools/Invoke-SecurityAudit.ps1. The shipped default settings must be reported as
+        # unsafe (exit 2: no database), and a configuration that sets what the audit looks at must pass (exit 0), so
+        # the script can neither stop reporting nor start reporting everything.
+        run: |
+          set -u
+          code=0
+          pwsh -NoProfile -File build/tools/Invoke-SecurityAudit.ps1 \
+            -SettingsPath src/Server/RemoteDesktop.Server.Rendezvous/appsettings.json >/dev/null || code=$?
+          if [ "$code" -ne 2 ]; then
+            echo "Expected exit code 2 for the default settings, got $code." >&2
+            exit 1
+          fi
+
+          good=$(mktemp)
+          cat > "$good" <<'JSON'
+          {
+            "Urls": "https://0.0.0.0:5080",
+            "Rendezvous": {
+              "RelayEndpoint": "",
+              "NodeToken": "audit-smoke-token",
+              "Database": { "Provider": "postgres", "ConnectionString": "Host=db" }
+            }
+          }
+          JSON
+          code=0
+          pwsh -NoProfile -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath "$good" >/dev/null || code=$?
+          rm -f "$good"
+          if [ "$code" -ne 0 ]; then
+            echo "Expected exit code 0 for a hardened configuration, got $code." >&2
+            exit 1
+          fi
+      - name: Check the ops overlay seeds the local nodes
+        # The ops image's ENTRYPOINT is the console, so a `command: [bash, -ec, ...]` on ops is only appended to it as
+        # arguments and never runs; seeding is the job of the one-shot ops-seed service that ops waits for.
+        run: |
+          set -euo pipefail
+          docker compose -f build/docker/docker-compose.yml -f build/docker/docker-compose.ops.yml config --format json > ops-config.json
+          jq -e '.services.ops.command == null' ops-config.json
+          jq -e '.services["ops-seed"].command[0] == "--seed-local-nodes"' ops-config.json
+          jq -e '.services["ops-seed"].restart == "no"' ops-config.json
+          jq -e '.services.ops.depends_on["ops-seed"].condition == "service_completed_successfully"' ops-config.json
+          rm ops-config.json
       - name: Validate the Caddyfile
         run: |
           docker run --rm \
@@ -183,17 +248,20 @@ jobs:
           docker build -f build/docker/Dockerfile.rendezvous -t remotedesktop/rendezvous:ci .
           docker build -f build/docker/Dockerfile.relay -t remotedesktop/relay:ci .
           docker build -f build/docker/Dockerfile.ops -t remotedesktop/ops:ci .
+          docker build -f build/docker/Dockerfile.gateway -t remotedesktop/gateway:ci .
       - name: Smoke test rendezvous
         run: |
           set -euo pipefail
           docker run -d --name rd-rendezvous \
+            -e Urls=http://0.0.0.0:5080 \
+            -e Rendezvous__AllowInsecureSignaling=true \
             -e Rendezvous__RelayEndpoint="$RELAY_PUBLIC_ENDPOINT" \
             -e Rendezvous__RelaySharedKey="$RELAY_SHARED_KEY" \
             -e Rendezvous__NodeToken="$NODE_TOKEN" \
             -p 15080:5080 \
             remotedesktop/rendezvous:ci
 
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:15080/health >/dev/null; then
               break
             fi
@@ -216,31 +284,47 @@ jobs:
             -p 15083:5083 \
             remotedesktop/relay:ci
 
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:15083/health >/dev/null; then
               break
             fi
             sleep 1
           done
           curl -fsS http://127.0.0.1:15083/health
-      - name: Smoke test the ops console
+      - name: Smoke test the ops console through its gateway
         run: |
           set -euo pipefail
-          docker run -d --name rd-ops \
+          # The console is not published; the gateway is the only listener. The dedicated subnet is what the console
+          # trusts for X-Forwarded-For/X-Forwarded-Proto, mirroring docker-compose.ops.yml.
+          docker network create --subnet 172.31.0.0/24 rd-ops-ci
+          docker run -d --name rd-ops --network rd-ops-ci \
             -e Ops__Listen=http://0.0.0.0:5090 \
             -e Ops__Database__Path=/data/ops.db \
-            -p 15090:5090 \
+            -e Ops__TrustedProxies__0=172.31.0.0/24 \
             remotedesktop/ops:ci
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:15090/ >/dev/null; then
+          docker run -d --name rd-gateway --network rd-ops-ci \
+            -e OPS_GATEWAY_IP="$OPS_GATEWAY_IP" \
+            -e ReverseProxy__Clusters__ops__Destinations__loopback__Address=http://rd-ops:5090 \
+            -p 15443:5443 \
+            -v rd-gateway-ci:/data \
+            remotedesktop/gateway:ci
+
+          for _ in $(seq 1 60); do
+            if curl -ksSf https://127.0.0.1:15443/ >/dev/null; then
               break
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:15090/ >/dev/null
+          curl -ksSf https://127.0.0.1:15443/ >/dev/null
+          test "$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1:15443/health)" = "404"
+          docker exec rd-gateway openssl x509 -in /data/gateway/tls/ops-gateway.crt \
+            -noout -ext subjectAltName | grep -q "IP Address:$OPS_GATEWAY_IP"
       - name: Stop the containers
         if: always()
-        run: docker rm -f rd-rendezvous rd-relay rd-ops || true
+        run: |
+          docker rm -f rd-rendezvous rd-relay rd-ops rd-gateway || true
+          docker network rm rd-ops-ci || true
+          docker volume rm rd-gateway-ci || true
 
   docs:
     # Documentation *formatting*: blank lines around headings and lists, indentation, ``` fences tagged with a
@@ -248,7 +332,7 @@ jobs:
     #
     # Whether a document should exist, where it may live, what it may be called and whether its links resolve is
     # checked somewhere else -- DocumentationTests, in dotnet test, on all three runners. That split is deliberate
-    # (docs/STYLE.md §7): markdownlint sees one file at a time and cannot know that a link points at a path no
+    # (docs/STYLE.md §6): markdownlint sees one file at a time and cannot know that a link points at a path no
     # longer there, and the test has no opinion about whitespace. Each checks what it is good at.
     runs-on: ubuntu-26.04
     steps:

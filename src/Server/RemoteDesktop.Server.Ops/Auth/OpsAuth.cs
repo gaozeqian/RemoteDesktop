@@ -25,7 +25,7 @@ public static class OpsAuth
     /// <summary>Needs any of the three roles; every signed-in account has one.</summary>
     public const string ViewerPolicy = "ops-viewer";
 
-    /// <summary>Acknowledging alerts and, later, disconnecting sessions.</summary>
+    /// <summary>Acknowledging alerts and requesting actions on sessions and devices (disconnect, revoke).</summary>
     public const string OperatorPolicy = "ops-operator";
 
     /// <summary>Rules, accounts, audit.</summary>

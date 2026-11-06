@@ -43,7 +43,7 @@ public sealed partial class WaylandClipboard(
     /// <summary>How long to wait before looking again at a control session that has not been granted yet.</summary>
     private static readonly TimeSpan WatchRetryDelay = TimeSpan.FromSeconds(5);
 
-    /// <summary>The largest selection read or written in one go; the same ceiling the synchroniser enforces.</summary>
+    /// <summary>The largest selection read or written in one go. This is the synchroniser's image ceiling (8 MB); it caps text lower, at 4 MB, on its own.</summary>
     private const int MaxBytes = 8 * 1024 * 1024;
 
     private readonly Lock _gate = new();
@@ -288,7 +288,16 @@ public sealed partial class WaylandClipboard(
                         changed = _changed;
                     }
 
-                    changed?.Invoke(this, EventArgs.Empty);
+                    try
+                    {
+                        changed?.Invoke(this, EventArgs.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        // This runs on the portal connection's dispatch thread: an exception escaping here would take
+                        // down the process (or stop the dispatch loop), and the next change would never be seen.
+                        LogHandlerFailed(logger, ex);
+                    }
                 }
             },
             // Queued, not answered here — see the note on the queue. This runs on the connection's dispatch thread.
@@ -350,8 +359,10 @@ public sealed partial class WaylandClipboard(
             _ = connection.SelectionWriteDoneAsync(session, serial, success: true).ConfigureAwait(false);
             LogAnswered(logger, mimeType, payload.Value.Length);
         }
-        catch (Exception error) when (error is IOException or PortalException or InvalidOperationException)
+        catch (Exception error) when (error is IOException or PortalException or InvalidOperationException or AggregateException)
         {
+            // Wait() on a faulted worker rethrows the worker's exception wrapped in AggregateException; the read path
+            // already allows for it, and without it this worker would stop answering for the rest of the session.
             LogTransferFailed(logger, error.Message);
         }
     }
@@ -482,6 +493,9 @@ public sealed partial class WaylandClipboard(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "The clipboard has changed; {Count} format(s) on offer.")]
     private static partial void LogOwnerChanged(ILogger logger, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A clipboard change handler threw; that change was not reported.")]
+    private static partial void LogHandlerFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Published the clipboard as {Format} ({What}).")]
     private static partial void LogPublished(ILogger logger, string format, string what);

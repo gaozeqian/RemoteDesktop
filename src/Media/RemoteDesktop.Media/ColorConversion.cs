@@ -9,6 +9,9 @@ public static unsafe class ColorConversion
 {
     private const int BandRows = 32;
 
+    // Below this a frame is converted on one thread: the thread-pool round trip costs more than the conversion saves.
+    private const int ParallelMinPixels = 640 * 360;
+
     /// <param name="bgra">Source pixels; rows are <paramref name="bgraStride"/> bytes apart.</param>
     /// <param name="nv12">Destination: Y plane (<paramref name="nv12Stride"/> × height) then UV plane.</param>
     public static void BgraToNv12(ReadOnlySpan<byte> bgra, int bgraStride, int width, int height, Span<byte> nv12, int nv12Stride)
@@ -24,7 +27,7 @@ public static unsafe class ColorConversion
         {
             var source = (nint)src;
             var destination = (nint)dst;
-            ForEachBand(height, (top, bottom) =>
+            ForEachBand(width, height, (top, bottom) =>
                 BgraToNv12Rows((byte*)source, bgraStride, width, (byte*)destination, nv12Stride, height, top, bottom));
         }
     }
@@ -42,7 +45,7 @@ public static unsafe class ColorConversion
         {
             var source = (nint)src;
             var destination = (nint)dst;
-            ForEachBand(height, (top, bottom) =>
+            ForEachBand(width, height, (top, bottom) =>
                 Nv12ToBgraRows((byte*)source, nv12Stride, width, height, (byte*)destination, bgraStride, top, bottom));
         }
     }
@@ -56,10 +59,10 @@ public static unsafe class ColorConversion
     }
 
     // Bands always start on an even row so each band owns whole chroma rows.
-    private static void ForEachBand(int height, Action<int, int> body)
+    private static void ForEachBand(int width, int height, Action<int, int> body)
     {
         var bands = (height + BandRows - 1) / BandRows;
-        if (bands <= 2)
+        if (bands <= 2 || width * height < ParallelMinPixels)
         {
             body(0, height);
             return;

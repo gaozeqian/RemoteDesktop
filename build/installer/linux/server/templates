@@ -1,0 +1,82 @@
+Template: remotedesktop-server/database-provider
+Type: select
+Choices: sqlite, postgres, none
+Default: sqlite
+Description: Database for the Remote Desktop server:
+ Device codes are kept in this database. SQLite is a file on this
+ machine and needs no other service. PostgreSQL is an existing server
+ whose connection string you will be asked for next.
+ .
+ "none" keeps the codes in memory only: every restart gives every
+ device a new code, so unattended machines stop being reachable. Choose
+ it only for a test server.
+ .
+ The monitoring console uses the same provider. With "none" it keeps
+ its own SQLite file, because it cannot run without a database.
+
+Template: remotedesktop-server/database-path
+Type: string
+Default: /var/lib/remotedesktop-server/rendezvous.db
+Description: SQLite database file:
+ The file the device codes are kept in. Its directory is created and
+ made writable by the service account. The monitoring console keeps
+ ops.db in the same directory.
+ .
+ Keep this on a local disk: SQLite corrupts on a network share. Back
+ the file up; losing it gives every device a new code.
+
+Template: remotedesktop-server/postgres-connection
+Type: password
+Default:
+Description: PostgreSQL connection string:
+ For example:
+  Host=127.0.0.1;Port=5432;Database=remotedesktop;Username=remotedesktop;Password=...
+ .
+ The database itself must already exist; the server creates its
+ tables. The monitoring console uses the same connection.
+ .
+ Leave this empty on an upgrade to keep the connection string the
+ machine already has.
+
+Template: remotedesktop-server/tls-mode
+Type: select
+Choices: generate, existing, none
+Default: generate
+Description: Signaling TLS:
+ "generate" creates a self-signed certificate on this machine and
+ serves HTTPS with it. Clients have to trust that certificate; the
+ client and host packages can import it at install time.
+ .
+ "existing" uses a certificate you already have: a PKCS#12 (.pfx or
+ .p12) file, or a PEM certificate with its key next to it.
+ .
+ "none" serves plain HTTP. Device codes and relay tickets then travel
+ in the clear; only choose it behind a TLS reverse proxy or on a
+ trusted network.
+
+Template: remotedesktop-server/tls-certificate
+Type: string
+Default:
+Description: Certificate file:
+ A PKCS#12 file, or a PEM certificate whose private key is in a file
+ with the same name and a .key extension next to it. The file is copied
+ into /etc/remotedesktop-server/tls/custom and made readable by the
+ service account.
+
+Template: remotedesktop-server/tls-password
+Type: password
+Default:
+Description: Certificate password:
+ The password of the PKCS#12 file. Leave empty if it has none or the
+ certificate is PEM.
+
+Template: remotedesktop-server/tls-hostname
+Type: string
+Default:
+Description: Public host name:
+ A DNS name (or address) clients use to reach this server. It is added
+ to the generated certificate, together with this machine's own name
+ and addresses. Comma-separated names are accepted.
+ .
+ Without this, a client connecting through a public DNS name or a NAT
+ address rejects the certificate: the name it asked for is not in it.

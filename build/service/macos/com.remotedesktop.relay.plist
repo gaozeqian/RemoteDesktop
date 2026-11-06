@@ -17,6 +17,12 @@
     <key>WorkingDirectory</key>
     <string>/usr/local/remotedesktop-server/Relay</string>
 
+    <!-- Same account as the signaling server; see com.remotedesktop.rendezvous.plist. -->
+    <key>UserName</key>
+    <string>_remotedesktop</string>
+    <key>GroupName</key>
+    <string>_remotedesktop</string>
+
     <key>RunAtLoad</key>
     <true/>
 

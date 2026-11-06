@@ -1,3 +1,4 @@
+using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 
 namespace RemoteDesktop.Core.UnitTests;
@@ -32,6 +33,52 @@ public class AccessGrantTests
 
         Assert.False(grant.Allows(Permissions.ControlInput));
         Assert.True(grant.Allows(Permissions.FileTransfer));
+    }
+
+    /// <summary>Taking the screen away leaves nothing to type into or copy from, however the grant got there.</summary>
+    [Fact]
+    public void Revoking_the_screen_also_removes_input_and_clipboard()
+    {
+        var grant = AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All).Revoke(Permissions.ViewScreen);
+
+        Assert.False(grant.Allows(Permissions.ViewScreen));
+        Assert.False(grant.Allows(Permissions.ControlInput));
+        Assert.False(grant.Allows(Permissions.Clipboard));
+        Assert.True(grant.Allows(Permissions.FileTransfer));
+    }
+
+    /// <summary>
+    /// The host downgrades a session and the local user revokes the camera from two threads at once. Each reads the
+    /// grant, derives a new one and writes it back, so without an atomic update the second write silently undoes the
+    /// first.
+    /// </summary>
+    [Fact]
+    public async Task Concurrent_downgrade_and_revoke_both_take_effect()
+    {
+        for (var attempt = 0; attempt < 20_000; attempt++)
+        {
+            var context = new SessionContext(
+                SessionId.New(),
+                SessionRole.Host,
+                null!,
+                AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
+            using var gate = new Barrier(2);
+
+            var downgrade = Task.Run(() =>
+            {
+                gate.SignalAndWait();
+                context.UpdateGrant(grant => grant.DowngradeToView());
+            }, TestContext.Current.CancellationToken);
+            var revoke = Task.Run(() =>
+            {
+                gate.SignalAndWait();
+                context.UpdateGrant(grant => grant.Revoke(Permissions.Camera));
+            }, TestContext.Current.CancellationToken);
+            await Task.WhenAll(downgrade, revoke);
+
+            Assert.Equal(SessionMode.View, context.Grant.Mode);
+            Assert.False(context.Grant.Allows(Permissions.Camera));
+        }
     }
 
     [Fact]

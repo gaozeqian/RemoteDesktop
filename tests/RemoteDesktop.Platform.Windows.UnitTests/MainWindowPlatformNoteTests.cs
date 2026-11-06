@@ -73,7 +73,7 @@ public class MainWindowPlatformNoteTests
     [Fact]
     public void The_portal_caveat_exists_only_where_it_applies()
     {
-        // U4 of docs/reviews/ui-consistency-review-2026-10-17.md: the portal refuses to persist the control grant,
+        // The portal refuses to persist the control grant,
         // so a fixed password cannot make a Linux machine unattended. The sentence belongs to Linux alone.
         var onLinux = OperatingSystem.IsLinux();
 

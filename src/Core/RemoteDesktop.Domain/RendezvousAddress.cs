@@ -48,6 +48,14 @@ public readonly record struct RendezvousAddress
             return false;
         }
 
+        // The server maps /ws, and "ws://host:5080" without a path is the common way people type it; without this it
+        // would connect to "/" and report "connection lost" forever. A non-empty path is left alone: a reverse proxy
+        // is allowed to keep a prefix (the installer tests and the docs use /rd/ws for exactly that).
+        if (string.IsNullOrEmpty(candidate.AbsolutePath) || candidate.AbsolutePath == "/")
+        {
+            candidate = new UriBuilder(candidate) { Path = "/ws" }.Uri;
+        }
+
         parsed = new RendezvousAddress(candidate);
         return true;
     }

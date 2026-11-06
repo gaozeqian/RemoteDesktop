@@ -4,6 +4,7 @@
 #   TLS_CERT_PATH=../signing/certificates/rd.lan.pfx
 #   TLS_CERT_PASSWORD=...
 #   RENDEZVOUS_BIND_IP=0.0.0.0
+#   OPS_GATEWAY_IP=192.168.1.10
 #   docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-compose.ops.yml up -d
 #
 # 5080/tcp is the TLS listener the clients use (wss://<address>:5080/ws). 5082/tcp is an internal plain-HTTP listener

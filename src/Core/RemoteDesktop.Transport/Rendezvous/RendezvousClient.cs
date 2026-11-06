@@ -74,16 +74,39 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
             {
                 using var socket = new ClientWebSocket();
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-                await socket.ConnectAsync(options.RendezvousUri, cancellationToken).ConfigureAwait(false);
-                await RegisterAsync(socket, cancellationToken).ConfigureAwait(false);
+
+                // A self-signed server certificate is pinned rather than installed into the System keychain: the
+                // installer cannot set macOS trust settings without a user session. Empty means "use the platform
+                // trust store", which is the right answer for a certificate from a public authority.
+                if (options.RendezvousUri.Scheme == "wss"
+                    && PinnedCertificate.TryCreate(options.RendezvousCertificatePath) is { } pinned)
+                {
+                    socket.Options.RemoteCertificateValidationCallback = pinned;
+                }
+
+                // The handshake and the registration exchange are the two places where a server that accepts the
+                // socket but never answers would otherwise park this loop for ever: the outer token lives as long as
+                // the process. Both are bounded, and a timeout is turned into an ordinary connection failure so the
+                // loop backs off and retries instead of ending the host.
+                try
+                {
+                    using var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    handshake.CancelAfter(options.SignalingTimeout);
+                    await socket.ConnectAsync(options.RendezvousUri, handshake.Token).ConfigureAwait(false);
+                    await RegisterAsync(socket, handshake.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"The rendezvous handshake did not complete within {options.SignalingTimeout}.");
+                }
 
                 _socket = socket;
                 backoff = TimeSpan.FromSeconds(1);
                 SetState(RendezvousState.Online);
 
-                // Two loops share the socket: the receive loop owns reads, the heartbeat loop owns the telemetry
-                // channel. Sends are still serialised by _sendLock, so a heartbeat cannot interleave with a connect
-                // request mid-frame.
+                // The receive loop owns reads; the heartbeat and session-end loops each own one outbound queue. Sends
+                // are still serialised by _sendLock, so a heartbeat cannot interleave with a connect request mid-frame.
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var receive = ReceiveLoopAsync(socket, connection.Token);
                 var heartbeat = TelemetryLoopAsync(socket, connection.Token);
@@ -102,7 +125,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
             {
                 break;
             }
-            catch (Exception ex) when (ex is WebSocketException or InvalidDataException or SocketException or HttpRequestException)
+            catch (Exception ex) when (ex is WebSocketException or InvalidDataException or SocketException or HttpRequestException or TimeoutException)
             {
                 LogConnectionLost(logger, ex.Message);
             }
@@ -197,7 +220,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         {
             await foreach (var report in _telemetry.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await WebSocketMessaging.SendAsync(socket, new ClientMessage { Telemetry = report }, cancellationToken).ConfigureAwait(false);
+                await SendLockedAsync(socket, new ClientMessage { Telemetry = report }, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
@@ -213,26 +236,34 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         }
     }
 
-    /// <summary>Drains end reports onto the socket while this connection is up.</summary>
+    /// <summary>
+    /// Drains end reports onto the socket while this connection is up. Unlike heartbeats, nothing here is discarded when
+    /// the connection ends: a report describes a peer-to-peer session, which does not depend on the signaling socket,
+    /// so one that is still queued — or that this connection failed to send — goes out on the next connection.
+    /// </summary>
     private async Task SessionEndLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
         try
         {
             await foreach (var report in _sessionEnds.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await WebSocketMessaging.SendAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await SendLockedAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
+                {
+                    // Put back for the next connection, then stop: this one is broken, and trying the same report on
+                    // it again would only fail the same way. The server merges repeated reports for a session, so a
+                    // report that did reach it before the break and is sent again is harmless.
+                    _sessionEnds.Writer.TryWrite(report);
+                    throw;
+                }
             }
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
         {
             // The receive loop reports the disconnect; a report that cannot be sent is not a second error.
-        }
-        finally
-        {
-            // Whatever was queued describes a session on a connection that no longer exists.
-            while (_sessionEnds.Reader.TryRead(out _))
-            {
-            }
         }
     }
 
@@ -394,14 +425,29 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     private async Task SendAsync(IMessage message, CancellationToken cancellationToken)
     {
         var socket = _socket ?? throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.");
+        try
+        {
+            await SendLockedAsync(socket, message, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is WebSocketException or ObjectDisposedException)
+        {
+            // ObjectDisposedException: the reconnect loop cleared and released the socket between this method reading
+            // _socket and the send reaching it. Same answer as a lost connection.
+            throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.", ex);
+        }
+    }
+
+    /// <summary>
+    /// All sends — connect requests, heartbeats and session-end reports — go through this one lock. A
+    /// <see cref="ClientWebSocket"/> does not allow concurrent <see cref="WebSocket.SendAsync"/>, and the three loops
+    /// that write to the socket would otherwise interleave mid-frame.
+    /// </summary>
+    private async Task SendLockedAsync(WebSocket socket, IMessage message, CancellationToken cancellationToken)
+    {
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await WebSocketMessaging.SendAsync(socket, message, cancellationToken).ConfigureAwait(false);
-        }
-        catch (WebSocketException ex)
-        {
-            throw new PeerConnectException(PeerConnectFailure.SignalingUnavailable, "Not connected to the server.", ex);
         }
         finally
         {

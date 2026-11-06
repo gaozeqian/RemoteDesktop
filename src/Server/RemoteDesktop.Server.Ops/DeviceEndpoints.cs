@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Net.Http.Json;
+using System.Text.Json;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Storage;
 using RemoteDesktop.Server.Shared;
@@ -42,6 +42,14 @@ public static class DeviceEndpoints
                 return Results.NotFound(new { error = "node", message = "no enabled rendezvous node matches" });
             }
 
+            var token = NodeHttp.TokenFor(target, options);
+            if (NodeHttp.RefusalReason(target.BaseUrl, token, options) is { } refusal)
+            {
+                return Results.Json(
+                    new { error = "node", message = refusal },
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+
             var query = $"?limit={Math.Clamp(limit ?? 50, 1, 200).ToString(CultureInfo.InvariantCulture)}";
             if (!string.IsNullOrEmpty(cursor))
             {
@@ -51,16 +59,21 @@ public static class DeviceEndpoints
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
                 target.BaseUrl.TrimEnd('/') + "/internal/v1/devices" + query);
-            if (!string.IsNullOrEmpty(options.NodeToken))
-            {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
-            }
+            NodeHttp.ApplyAuthorization(request, token);
 
             using var client = httpClientFactory.CreateClient(ClientName);
             HttpResponseMessage response;
             try
             {
                 response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (TaskCanceledException)
+            {
+                return Results.Json(new { error = "node", message = "timed out" }, statusCode: StatusCodes.Status502BadGateway);
             }
             catch (HttpRequestException ex)
             {
@@ -76,9 +89,38 @@ public static class DeviceEndpoints
                         statusCode: StatusCodes.Status502BadGateway);
                 }
 
-                var page = await response.Content
-                    .ReadFromJsonAsync<NodeDevicePage>(OpsEventJson.Options, cancellationToken)
-                    .ConfigureAwait(false);
+                NodeDevicePage? page;
+                try
+                {
+                    var body = await NodeHttp
+                        .ReadBoundedAsync(response.Content, NodeHttp.MaxResponseBytes, cancellationToken)
+                        .ConfigureAwait(false);
+                    page = JsonSerializer.Deserialize<NodeDevicePage>(body, OpsEventJson.Options);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (TaskCanceledException)
+                {
+                    return Results.Json(new { error = "node", message = "timed out" }, statusCode: StatusCodes.Status502BadGateway);
+                }
+                catch (JsonException ex)
+                {
+                    return Results.Json(new { error = "node", message = $"invalid JSON: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
+                }
+                catch (NodeResponseTooLargeException ex)
+                {
+                    return Results.Json(new { error = "node", message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+                }
+                catch (HttpRequestException ex)
+                {
+                    return Results.Json(new { error = "node", message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+                }
+                catch (IOException ex)
+                {
+                    return Results.Json(new { error = "node", message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+                }
 
                 if (page is null)
                 {

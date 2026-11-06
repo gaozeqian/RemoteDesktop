@@ -163,6 +163,180 @@ public class RecentDevicesTests
     }
 
     [Fact]
+    public async Task RecentDevicesStore_does_not_replace_the_list_when_the_file_cannot_be_opened()
+    {
+        // The lock below relies on Windows sharing semantics: opening with FileShare.Delete and no read share makes
+        // the store's read fail. On Unix share modes are advisory and the same open succeeds.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows file-sharing semantics.");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+            await store.SaveOrUpdateAsync("111 222 333", alias: "Dev1", cancellationToken: ct);
+            var before = await File.ReadAllBytesAsync(file, ct);
+
+            // Another process holding the file open without sharing read access: reading it fails with a sharing
+            // violation, while replacing it (FileShare.Delete) would still go through if the store pressed on.
+            await using (var holder = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Delete))
+            {
+                await Assert.ThrowsAnyAsync<IOException>(() => store.GetAllAsync(ct));
+                await Assert.ThrowsAnyAsync<IOException>(() => store.SaveOrUpdateAsync("444 555 666", alias: "Dev2", cancellationToken: ct));
+            }
+
+            // Nothing was written over the list, and nothing was set aside as corrupt either.
+            Assert.Equal(before, await File.ReadAllBytesAsync(file, ct));
+            Assert.Empty(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+            Assert.Equal("111 222 333", Assert.Single(await store.GetAllAsync(ct)).DeviceId);
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_file_whose_entries_do_not_deserialize()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            // Valid JSON, current version, but the entry lacks the required UpdatedAtUtc.
+            await File.WriteAllTextAsync(file, """
+                { "Version": 1, "Devices": [ { "DeviceId": "111 222 333", "Alias": "Dev1", "LastConnectedUtc": "2026-01-01T00:00:00Z" } ] }
+                """, TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+
+            // The store works again instead of failing on every read and every save.
+            await store.SaveOrUpdateAsync("444 555 666", cancellationToken: ct);
+            Assert.Equal("444 555 666", Assert.Single(await store.GetAllAsync(ct)).DeviceId);
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_file_without_a_devices_array()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            // Ours by version, but the list itself is missing: a save would otherwise replace it with an empty list.
+            await File.WriteAllTextAsync(file, """{ "Version": 1 }""", TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+
+            await store.SaveOrUpdateAsync("444 555 666", cancellationToken: ct);
+            Assert.Equal("444 555 666", Assert.Single(await store.GetAllAsync(ct)).DeviceId);
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_file_with_an_entry_that_has_no_device_id()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            // Deserializes, but the id is empty: skipping the entry would silently drop it on the next save.
+            await File.WriteAllTextAsync(file, """
+                { "Version": 1, "Devices": [ { "DeviceId": "", "Alias": "Dev1", "LastConnectedUtc": "2026-01-01T00:00:00Z", "UpdatedAtUtc": "2026-01-01T00:00:00Z" } ] }
+                """, TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task RecentDevicesStore_forgets_the_password_but_keeps_the_device_when_it_is_cleared()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+            await store.SaveOrUpdateAsync("111 222 333", alias: "Dev1", password: "pwd1", cancellationToken: ct);
+
+            await store.UpdatePasswordAsync("111 222 333", null, ct);
+            Assert.Null(await store.GetPasswordAsync("111 222 333", ct));
+            Assert.Equal("Dev1", Assert.Single(await store.GetAllAsync(ct)).Alias);
+
+            await store.UpdatePasswordAsync("111 222 333", "pwd2", ct);
+            Assert.Equal("pwd2", await store.GetPasswordAsync("111 222 333", ct));
+
+            await store.UpdatePasswordAsync("111 222 333", string.Empty, ct);
+            Assert.Null(await store.GetPasswordAsync("111 222 333", ct));
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// Unticking "remember password" must forget what was stored, not merely stop writing: SaveOrUpdateAsync treats a
+    /// null password as "leave it", so without an explicit clear the old password was read back and prefilled.
+    /// </summary>
+    [Fact]
+    public async Task Connecting_with_remember_password_off_clears_the_stored_password_but_keeps_the_device()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            await MainWindowViewModel.RecordConnectedDeviceAsync(store, "111 222 333", "Dev1", "pwd1", rememberPassword: true, ct);
+            Assert.Equal("pwd1", await store.GetPasswordAsync("111 222 333", ct));
+
+            await MainWindowViewModel.RecordConnectedDeviceAsync(store, "111 222 333", "Dev1", "pwd2", rememberPassword: false, ct);
+            Assert.Null(await store.GetPasswordAsync("111 222 333", ct));
+            Assert.Equal("Dev1", Assert.Single(await store.GetAllAsync(ct)).Alias);
+
+            // And ticking it again stores the password again.
+            await MainWindowViewModel.RecordConnectedDeviceAsync(store, "111 222 333", "Dev1", "pwd3", rememberPassword: true, ct);
+            Assert.Equal("pwd3", await store.GetPasswordAsync("111 222 333", ct));
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public async Task RecentDevicesStore_scopes_the_list_and_its_passwords_to_an_account()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");

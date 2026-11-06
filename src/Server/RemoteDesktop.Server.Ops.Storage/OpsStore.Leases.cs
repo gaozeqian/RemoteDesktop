@@ -25,7 +25,7 @@ public sealed partial class OpsStore
         command.CommandText = """
             INSERT INTO ops_lease (name, holder, expires_at) VALUES (@name, @holder, @expiresAt)
             ON CONFLICT (name) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at
-            WHERE ops_lease.expires_at < @now;
+            WHERE ops_lease.expires_at < @now OR ops_lease.holder = @holder;
             """;
         Bind(
             command,
@@ -33,6 +33,27 @@ public sealed partial class OpsStore
             ("@holder", holder),
             ("@now", nowUnixMilliseconds),
             ("@expiresAt", expiresAtUnixMilliseconds));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>
+    /// Gives a lease up so the next holder does not have to wait for it to expire, true when this holder owned it.
+    /// </summary>
+    /// <remarks>
+    /// Called when a background service stops. Without it a restarted single instance is a stranger to the lease its
+    /// previous process left behind and would sit idle until that lease ran out. A lease held by someone else is left
+    /// alone: the holder column is part of the match.
+    /// </remarks>
+    public async Task<bool> ReleaseLeaseAsync(string name, string holder, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(holder);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM ops_lease WHERE name = @name AND holder = @holder;";
+        Bind(command, ("@name", name), ("@holder", holder));
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
     }

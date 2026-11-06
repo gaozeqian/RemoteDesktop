@@ -109,20 +109,74 @@ public sealed class SystemSetup(SystemSetupLocations locations)
         return false;
     }
 
-    /// <summary>Sets <c>Transport:RendezvousUri</c> in the appsettings.json of an install directory.</summary>
+    /// <summary>Sets <c>Transport:RendezvousUri</c> in the machine-wide appsettings.json under a data directory.</summary>
+    /// <remarks>
+    /// The directory is <c>%ProgramData%\RemoteDesktop</c> on an installed machine (see
+    /// <c>RemoteDesktop.Application.Hosting.DataDirectory.ForMachine</c>), not the program folder: the MSI's major
+    /// upgrade removes the old product's files from Program Files, so a live settings file there would be deleted on
+    /// every upgrade.
+    /// </remarks>
     /// <exception cref="ArgumentException">The address is not a ws:// or wss:// URI.</exception>
-    public static void SetRendezvousUri(string installDirectory, string uri)
+    public static void SetRendezvousUri(string settingsDirectory, string uri)
     {
-        ArgumentException.ThrowIfNullOrEmpty(installDirectory);
+        ArgumentException.ThrowIfNullOrEmpty(settingsDirectory);
         if (!TryParseRendezvousUri(uri, out var parsed))
         {
             throw new ArgumentException("The rendezvous server must be given as ws://host:port/ws or wss://host/ws.", nameof(uri));
         }
 
-        var path = Path.Combine(installDirectory, "appsettings.json");
+        UpdateSettings(settingsDirectory, transport => transport["RendezvousUri"] = parsed.AbsoluteUri);
+    }
+
+    /// <summary>
+    /// Sets or removes <c>Transport:RendezvousCertificatePath</c>: the public certificate the connection pins for a
+    /// <c>wss://</c> server. An empty path removes the pin again, which is what "the certificate is from a public
+    /// authority" and "the address is ws://" both want.
+    /// </summary>
+    /// <remarks>
+    /// The installer copies the public half into <c>%ProgramData%\RemoteDesktop\certificates</c> first and passes that
+    /// file here; this method only writes the setting, so it does not need to be told where the operator's original
+    /// file was. The path has to be absolute and exist: a pin the application cannot load is a start-up failure for
+    /// the service, which is worse than refusing the installation now.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The certificate path is not absolute or does not exist.</exception>
+    public static void SetRendezvousCertificate(string settingsDirectory, string? certificatePath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(settingsDirectory);
+        certificatePath = certificatePath?.Trim();
+        if (!string.IsNullOrEmpty(certificatePath))
+        {
+            if (!Path.IsPathRooted(certificatePath))
+            {
+                throw new ArgumentException("The server certificate must be given as an absolute path.", nameof(certificatePath));
+            }
+
+            if (!File.Exists(certificatePath))
+            {
+                throw new ArgumentException($"The server certificate '{certificatePath}' does not exist.", nameof(certificatePath));
+            }
+        }
+
+        UpdateSettings(settingsDirectory, transport =>
+        {
+            if (string.IsNullOrEmpty(certificatePath))
+            {
+                transport.Remove("RendezvousCertificatePath");
+            }
+            else
+            {
+                transport["RendezvousCertificatePath"] = certificatePath;
+            }
+        });
+    }
+
+    private static void UpdateSettings(string settingsDirectory, Action<JsonObject> update)
+    {
+        Directory.CreateDirectory(settingsDirectory);
+        var path = Path.Combine(settingsDirectory, "appsettings.json");
         var root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip }) as JsonObject ?? [] : [];
         var transport = root["Transport"] as JsonObject ?? [];
-        transport["RendezvousUri"] = parsed.AbsoluteUri;
+        update(transport);
         root["Transport"] = transport;
 
         // Written next to the file first, so an interrupted install never leaves half a settings file behind.

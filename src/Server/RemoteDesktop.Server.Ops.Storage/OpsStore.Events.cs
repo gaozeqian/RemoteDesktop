@@ -71,75 +71,94 @@ public sealed partial class OpsStore
             return 0;
         }
 
-        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-
-        var inserted = 0;
-        var sessions = new Dictionary<string, SessionState?>(StringComparer.Ordinal);
-
-        foreach (var envelope in events)
+        // The read-merge-write below is only correct when one batch at a time touches a session. PostgreSQL's
+        // read-committed isolation would let two batches both read the old row and the later commit overwrite the
+        // earlier one; SQLite would turn the same overlap into SQLITE_BUSY and a 500. The gate makes the race
+        // impossible for the single console this version deploys. A second process would need a row lock instead.
+        await _ingestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await using (var insert = connection.CreateCommand())
-            {
-                insert.Transaction = transaction;
-                insert.CommandText = """
-                    INSERT INTO ops_event (id, event_id, node, kind, occurred_at, received_at, correlation_id, payload, schema_version)
-                    VALUES (@id, @eventId, @node, @kind, @occurredAt, @receivedAt, @correlationId, @payload, @version)
-                    ON CONFLICT (event_id) DO NOTHING;
-                    """;
-                Bind(
-                    insert,
-                    ("@id", envelope.EventId),
-                    ("@eventId", envelope.EventId),
-                    ("@node", envelope.Node),
-                    ("@kind", envelope.Kind),
-                    ("@occurredAt", envelope.OccurredAt.ToUnixTimeMilliseconds()),
-                    ("@receivedAt", receivedAt),
-                    ("@correlationId", envelope.CorrelationId),
-                    ("@payload", envelope.Payload),
-                    ("@version", envelope.V));
+            await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-                if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+            var inserted = 0;
+            var sessions = new Dictionary<string, SessionState?>(StringComparer.Ordinal);
+
+            foreach (var envelope in events)
+            {
+                await using (var insert = connection.CreateCommand())
                 {
-                    continue;
+                    insert.Transaction = transaction;
+                    insert.CommandText = """
+                        INSERT INTO ops_event (id, event_id, node, kind, occurred_at, received_at, correlation_id, payload, schema_version)
+                        VALUES (@id, @eventId, @node, @kind, @occurredAt, @receivedAt, @correlationId, @payload, @version)
+                        ON CONFLICT (event_id) DO NOTHING;
+                        """;
+                    Bind(
+                        insert,
+                        ("@id", envelope.EventId),
+                        ("@eventId", envelope.EventId),
+                        ("@node", envelope.Node),
+                        ("@kind", envelope.Kind),
+                        ("@occurredAt", envelope.OccurredAt.ToUnixTimeMilliseconds()),
+                        ("@receivedAt", receivedAt),
+                        ("@correlationId", envelope.CorrelationId),
+                        ("@payload", envelope.Payload),
+                        ("@version", envelope.V));
+
+                    if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+                    {
+                        continue;
+                    }
+                }
+
+                inserted++;
+
+                if (!sessions.TryGetValue(envelope.CorrelationId, out var session))
+                {
+                    session = await ReadSessionAsync(connection, transaction, envelope.CorrelationId, cancellationToken).ConfigureAwait(false);
+                }
+
+                var projected = SessionProjection.Apply(session, envelope);
+                sessions[envelope.CorrelationId] = projected;
+
+                if (projected is not null && !ReferenceEquals(projected, session))
+                {
+                    await UpsertSessionAsync(connection, transaction, projected, cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            inserted++;
-
-            if (!sessions.TryGetValue(envelope.CorrelationId, out var session))
-            {
-                session = await ReadSessionAsync(connection, transaction, envelope.CorrelationId, cancellationToken).ConfigureAwait(false);
-            }
-
-            var projected = SessionProjection.Apply(session, envelope);
-            sessions[envelope.CorrelationId] = projected;
-
-            if (projected is not null && !ReferenceEquals(projected, session))
-            {
-                await UpsertSessionAsync(connection, transaction, projected, cancellationToken).ConfigureAwait(false);
-            }
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return inserted;
         }
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return inserted;
+        finally
+        {
+            _ingestGate.Release();
+        }
     }
 
-    /// <summary>Recent sessions, newest first. <paramref name="before"/> pages by start time.</summary>
+    /// <summary>
+    /// Recent sessions, newest first. <paramref name="before"/> and <paramref name="beforeId"/> are one cursor:
+    /// the timestamp alone is not unique, and a page boundary in the middle of a millisecond would either repeat or
+    /// skip rows. The id is the tiebreaker in both the filter and the order.
+    /// </summary>
     public async Task<IReadOnlyList<OpsSessionRow>> ListSessionsAsync(
         int limit,
         long? before,
+        string? beforeId,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT {SessionColumns} FROM ops_session
-            WHERE CAST(@before AS BIGINT) IS NULL OR COALESCE(started_at, updated_at) < @before
-            ORDER BY COALESCE(started_at, updated_at) DESC
+            WHERE CAST(@before AS BIGINT) IS NULL
+               OR COALESCE(started_at, updated_at) < @before
+               OR (CAST(@beforeId AS TEXT) IS NOT NULL AND COALESCE(started_at, updated_at) = @before AND id < @beforeId)
+            ORDER BY COALESCE(started_at, updated_at) DESC, id DESC
             LIMIT @limit;
             """;
-        Bind(command, ("@before", before), ("@limit", Math.Clamp(limit, 1, 200)));
+        Bind(command, ("@before", before), ("@beforeId", beforeId), ("@limit", Math.Clamp(limit, 1, 200)));
 
         var rows = new List<OpsSessionRow>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -195,9 +214,14 @@ public sealed partial class OpsStore
         var relayed = 0;
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = """
+            command.CommandText = $"""
                 SELECT transport, COUNT(*) FROM ops_session
                 WHERE transport IN ('direct', 'relay') AND COALESCE(started_at, updated_at) >= @since
+                  AND EXISTS (
+                      SELECT 1 FROM ops_event e
+                      WHERE e.correlation_id = ops_session.correlation_id
+                        AND e.kind = '{OpsEventKinds.SessionTelemetry}'
+                  )
                 GROUP BY transport;
                 """;
             Bind(command, ("@since", sinceUnix));
@@ -265,6 +289,24 @@ public sealed partial class OpsStore
         }
 
         return rows;
+    }
+
+    /// <summary>Deletes events received before the cutoff in bounded batches. Returns how many rows went.</summary>
+    public async Task<int> DeleteEventsBeforeAsync(
+        long beforeUnixMilliseconds,
+        int limit = 5000,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM ops_event WHERE id IN (
+                SELECT id FROM ops_event WHERE received_at < @before LIMIT @limit
+            );
+            """;
+        Bind(command, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<SessionState?> ReadSessionAsync(

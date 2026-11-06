@@ -1,7 +1,7 @@
 ﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Installs the RemoteDesktop host service (development / manual deployment; the MSI installer arrives in milestone M8).
+  Installs the RemoteDesktop host service (development / manual deployment; the MSI installer under build/installer/windows is the normal route).
 
 .DESCRIPTION
   Copies the build output of RemoteDesktop.HostService (which already contains RemoteDesktop.SessionAgent.exe) to the

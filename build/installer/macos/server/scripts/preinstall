@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# Runs before the server payload is unpacked, as root.
+#
+# Stops the three launchd jobs before their binaries are replaced (so an upgrade does not leave the old process
+# running, and so the postinstall's bootstrap cannot race a job that is still loaded), and moves the Installer pane's
+# answers out of the user-writable /var/tmp.
+#
+set -e
+
+ROLE="server"
+PLUGIN_ANSWERS="/var/tmp/com.remotedesktop.install.$ROLE.plist"
+ROOT_ANSWERS="/var/tmp/com.remotedesktop.install.$ROLE.root.plist"
+
+if [ -f "$PLUGIN_ANSWERS" ]; then
+    install -m 600 -o root -g wheel "$PLUGIN_ANSWERS" "$ROOT_ANSWERS"
+    rm -f "$PLUGIN_ANSWERS"
+else
+    # No pane answers this time (installer -pkg, MDM). A root copy left by an earlier cancelled install must not be
+    # applied to this one.
+    rm -f "$ROOT_ANSWERS"
+fi
+
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
+    launchctl bootout system "/Library/LaunchDaemons/$label.plist" 2>/dev/null || true
+done
+
+exit 0

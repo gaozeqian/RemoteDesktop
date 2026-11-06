@@ -21,9 +21,16 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 （有私钥、未过期、用途是代码签名），找到就签名。它只自动使用**名字里含 `RemoteDesktop`** 的证书——别人的证书
 （比如另一个产品的）绝不会被默默拿来签本产品；那种情况下脚本会列出候选并让你用 `-SignCertificate` 明确指定。
 
+下面的例子都以 `Build-ClientInstaller.ps1` 为准，但 `host/Build-HostInstaller.ps1` 与 `server/Build-ServerInstaller.ps1`
+有同一套签名参数（`-SignCertificate`、`-SigningTool`、`-CertificateFile`、`-CertificatePassword`、`-PrivateKeyFile`、
+`-SkipSigning`、`-TimestampServer`、`-SkipSignatureVerification`），行为也一样。不同的只有两处：`-ServerCertificate`
+（把信令服务器的证书公钥打进包里，让 `wss://` 免证书报错）只有 client 与 host 脚本有，server 脚本没有；
+服务端脚本里与服务器地址相关的参数叫 `-RendezvousUrl`（信令服务器**监听**的地址，如 `http://0.0.0.0:5080`），而
+client / host 脚本的 `-RendezvousUri` 是客户端要**连**的 `ws://` / `wss://` 地址。
+
 签名分两步，顺序在脚本里是固定的，因为顺序错了就白签：
 
-1. **先签发布目录里本产品自己的 exe/dll**（`RemoteDesktop*.exe`、`RemoteDesktop*.dll`，当前是 18 个）。这样**装到机器上的程序**
+1. **先签发布目录里本产品自己的 exe/dll**（`RemoteDesktop*.exe`、`RemoteDesktop*.dll`；个数随角色而不同）。这样**装到机器上的程序**
    也是签过名的——SmartScreen 和杀毒软件看的是用户真正运行的那个 exe。旁边的 .NET 运行时和微软的库本来就有微软的签名，不动它们。
 2. **再给 MSI 签名**。签名之后脚本会用 `signtool verify /pa`（或 PowerShell 的签名检查）验证一次。
 
@@ -61,9 +68,12 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 CI 上最常见的用法（证书以 Base64 放在 Secrets 里，解码成 .pfx 再传给脚本）：
 
 ```powershell
-.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws `
+.\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws `
     -CertificateFile .\sign.pfx -CertificatePassword $env:PFX_PASSWORD
 ```
+
+> 非回环地址不要烤 `ws://` 进去：客户端/被控端启动时会拒绝非回环明文。只有本机回环调试才用
+> `ws://127.0.0.1:5080/ws`；生产用 `wss://`，自签证书再加 `-ServerCertificate`。
 
 ### 用 osslsigncode 签名
 
@@ -75,14 +85,14 @@ brew install osslsigncode
 ```
 
 ```powershell
-# PKCS#12（.pfx/.p12）：-SingingTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
+# PKCS#12（.pfx/.p12）：-SigningTool 不必指定，Windows 上 auto 会用 PowerShell 签（不需要装 osslsigncode）
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
-    -RendezvousUri ws://<服务器>:5080/ws `
+    -RendezvousUri wss://<服务器>:5080/ws `
     -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # 指定 osslsigncode 也可以（Linux/macOS 上只有它），密码也可以放在环境变量 RD_SIGNING_PASSWORD 里
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 `
-    -RendezvousUri ws://<服务器>:5080/ws `
+    -RendezvousUri wss://<服务器>:5080/ws `
     -SigningTool osslsigncode -CertificateFile C:\keys\codesign.pfx -CertificatePassword <密码>
 
 # PEM 证书 + 私钥（从 CA 拿到的 .crt/.cer + .key，或从 pfx 导出）——这一种只有 osslsigncode 支持
@@ -127,7 +137,7 @@ pwsh -File build/signing/windows/New-SigningCertificate.ps1 -Years 5
 #    → build/signing/windows/certificates/RemoteDesktop.pfx  .cer
 
 # 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
 #    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要
@@ -194,7 +204,7 @@ CA 签发的证书**不会**被这样做：它的链本来就受信任，把一�
 
 ```powershell
 # 自动找证书并签名（默认行为）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri ws://<服务器>:5080/ws
+pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
 
 # 指定证书（指纹或 CN 名称的一部分）
 pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -SignCertificate 1A2B3C... 
@@ -234,13 +244,41 @@ macOS 的签名不走本目录的脚本，而在打包流程里：`make-app.sh` 
 
 | 证书 | 签什么 | 没有它会怎样 |
 |---|---|---|
-| **Developer ID Application** | `.app` 及其内的二进制（硬化运行时 + 安全时间戳） | 无法公证；Gatekeeper 提示"身份不明的开发者" |
+| **Developer ID Application** | client/host 的 `.app` 及其内的二进制；三个包共用的 Installer 面板；server `.pkg` 载荷里的每个 Mach-O（apphost 与 dylib） | 无法公证；Gatekeeper 提示"身份不明的开发者" |
 | **Developer ID Installer** | `.pkg` 本身 | 同上 |
 
 两者都要**付费 Apple Developer Program 账号**（$99/年）才能签发。开发用的 "Apple Development" 证书**不能**用于
 分发——`make-app.sh --distribution` 会直接拒绝它（只对本地开发有意义）。
 
-### GitHub Secrets
+没有这两张证书时 `.pkg` 默认**未签名**：在别人的 Mac 上 Gatekeeper 会提示"无法打开，因为来自身份不明的开发者"
+（"unidentified developer"），**右键 → 打开**即可，或在「系统设置 → 隐私与安全性」里放行。有证书时加 `--distribution`
+（Developer ID Installer 签 `.pkg`，Developer ID Application 签 app 与 Installer 面板）和 `--notarize`（提交 Apple
+公证并 staple）即可做到下载即开。
+
+**Installer 证书不是 code-signing 身份。** 它没有 Code Signing EKU，`security find-identity -p codesigning`
+不会列出它——用这个过滤器找 Installer 证书，在真正配了证书的机器上必然失败。
+所以 `make-pkg.sh` 用 `security find-identity -v`（不过滤）找 Installer，用 `-p codesigning` 找 Application；
+Apple DTS 的原话见
+[论坛 822661](https://developer.apple.com/forums/thread/822661)。
+
+**server 包的载荷必须逐个签名。** 公证要求提交物里的每个可执行文件都用 Developer ID Application 签名、
+带安全时间戳并启用硬化运行时（`codesign --options runtime --timestamp`）；只签外层 `.pkg` 不够。
+`server/make-pkg.sh --distribution` 会遍历 payload 里所有 Mach-O（四个 apphost 与原生库），apphost 带
+`server/entitlements.plist`（`build/installer/macos/server/entitlements.plist`）的 JIT 权限，dylib 不带；签名后逐个
+`codesign --verify --strict`。`--notarize` 在没有 Application 证书时直接拒绝。
+
+### GitHub Secrets 与变量
+
+Windows 包由 `release.yml` 用同一把 `.pfx` 签名（解码后以 `-CertificateFile` / `-CertificatePassword` 传给三个打包脚本）。
+两个 Secret 缺任何一个，都会退回 `-SkipSigning`；此时构建日志里有 `::warning`（写明缺的是哪一个），Release 说明里也会写明
+"Windows 包未签名"（判断条件与构建步骤一致：`CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD` 同时存在才算已签名）：
+
+| Secret / 变量 | 内容 |
+|---|---|
+| `CODE_SIGN_CERT_BASE64` / `CODE_SIGN_CERT_PASSWORD`（Secret） | Windows 代码签名证书 `.pfx`（base64 单行）与口令 |
+| `DEFAULT_RENDEZVOUS_URI`（仓库**变量**，不是 Secret） | 内置进 Windows 客户端与被控端安装包的信令服务器地址；不配置就不内置地址，不影响签名 |
+
+macOS：
 
 | Secret | 内容 |
 |---|---|
@@ -256,8 +294,13 @@ base64 -i app.p12 | tr -d '\n'                    # 粘进 Secret
 base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 ```
 
-**四个证书 Secret 都在** → 签名；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
-警告**（`::warning`），绝不静默出一个半成品。
+**两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`，即 Application 与 Installer 的 `.p12`）
+都在** → 签名（`release.yml` 只判断这两个，口令不参与判断）；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
+警告**（`::warning`），绝不静默出一个半成品。Release 说明也会如实写出：证书缺失时写"macOS 包未签名、未公证"；
+证书齐全但公证 Secret 缺任何一个时写"macOS 包已签名但未公证"（Gatekeeper 首次打开同样会提示）。`release.yml` 里 macOS job 与发布 job 的
+`MACOS_SIGNED` / `MACOS_NOTARIZED`（以及 Windows 的 `HAS_PFX_CERT` / `HAS_PFX_PASSWORD`）只是由 Secret 是否为空算出的布尔值，
+放在 job 级 env 里供各步骤的 `if:` 读取；证书、口令与公证 Key 这些 Secret 本身**不在 job 级 env 里**（否则 restore、build 与测试进程
+都读得到），只出现在确实要用它的几步自己的 `env:` 里：macOS 的"导入证书"与"打包 + 公证"，Windows 的"解码证书"与三个 MSI 构建步骤。
 
 > 公证也支持 Apple ID + 专用密码（`NOTARY_APPLE_ID` / `NOTARY_PASSWORD` / `NOTARY_TEAM_ID`），但 CI 里 API Key
 > 更省事：没有 2FA，也不用为每台机器轮换专用密码。
@@ -267,6 +310,9 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 ```bash
 # 签名（证书在钥匙串里，自动找；多于一张时用 --app-identity / --identity 指定）
 build/installer/macos/client/make-pkg.sh --distribution
+build/installer/macos/host/make-pkg.sh   --distribution
+# server 同时需要 Application（签载荷）与 Installer（签 .pkg）；--notarize 前两者缺一不可
+build/installer/macos/server/make-pkg.sh --distribution
 
 # 签名 + 公证（公证会把 .pkg 上传到 Apple，通常几分钟）
 NOTARY_KEY_PATH=AuthKey.p8 NOTARY_KEY_ID=XXXXXXXXXX NOTARY_ISSUER_ID=<uuid> \

@@ -8,7 +8,7 @@ namespace RemoteDesktop.Features.FileTransfer;
 /// once <c>..</c> and friends are resolved. Access beyond that is up to the operating system, since the files are
 /// reached with the rights of the logged-in user.
 /// </summary>
-public sealed class FileAccessPolicy
+public sealed partial class FileAccessPolicy
 {
     private const int MaxPathLength = 32_000;
     private const int MaxNameLength = 255;
@@ -75,7 +75,7 @@ public sealed class FileAccessPolicy
 
         if (IsWindows)
         {
-            if (path.StartsWith(@"\\.\", StringComparison.Ordinal) || path.StartsWith(@"\\?\", StringComparison.Ordinal))
+            if (IsDevicePath(path))
             {
                 throw Invalid("Device paths are not allowed.");
             }
@@ -100,15 +100,12 @@ public sealed class FileAccessPolicy
             throw new FileOperationException(FileError.InvalidPath, "The path is not valid.", ex);
         }
 
-        // A UNC path is not a local file: opening one makes Windows authenticate to the named server as this user.
-        // With no roots configured the file browser otherwise accepts \\attacker\share\x and hands the remote side a
-        // way to collect the logged-in user's NetNTLM hash (or reach shares on the internal network). A deployment
-        // that really means to share a network folder configures that UNC path as a root; everything outside it is
-        // refused like any other path outside a root.
-        if (IsWindows && full.StartsWith(@"\\", StringComparison.Ordinal) &&
-            !_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal)))
+        // The check on the raw spelling above only knows the backslash form; GetFullPath turns "//./PhysicalDrive0" into
+        // "\\.\PhysicalDrive0", so the canonical spelling is judged too. Otherwise the only thing between a device path
+        // and the filesystem would be the network-share refusal, which a configured UNC root switches off.
+        if (IsWindows && IsDevicePath(full))
         {
-            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+            throw Invalid("Device paths are not allowed.");
         }
 
         if (IsWindows && full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsReserved))
@@ -116,16 +113,64 @@ public sealed class FileAccessPolicy
             throw Invalid("The path contains a reserved device name.");
         }
 
+        // Before anything touches the filesystem: resolving a path asks the operating system about each segment, and
+        // for a UNC path that is a connection (with the user's credentials) to whatever server the path names.
+        RefuseUnconfiguredNetworkShare(full);
+
         var resolved = ResolveFinalTarget(full);
 
         // Judged on the resolved path, not the spelling: a symbolic link pointing into /proc would otherwise be a way
-        // straight past this check.
-        if (!IsWindows && UnixKernelPaths.Any(kernel => IsSameOrInside(resolved, kernel)))
+        // straight past this check. The same boundary is checked again on the opened handle by OpenRead/OpenWrite,
+        // because a link can be swapped between this check and the actual open.
+        EnsureLocationAllowed(resolved);
+        return full;
+    }
+
+    /// <summary>
+    /// Refuses a UNC path unless a configured root lives on the same <c>\\server\share</c>, using nothing but the
+    /// spelling. This has to run before <see cref="ResolveFinalTarget"/>: the check in
+    /// <see cref="EnsureLocationAllowed"/> judges the resolved path, and by then the resolution walk has already asked
+    /// the named server about the path (an SMB connection authenticated as the logged-in user), which is the very
+    /// NetNTLM exposure the refusal exists to prevent.
+    /// </summary>
+    private void RefuseUnconfiguredNetworkShare(string full)
+    {
+        if (!IsWindows || !full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var share = Path.GetPathRoot(full);
+        if (!_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal) &&
+                string.Equals(Path.GetPathRoot(root), share, PathComparison)))
+        {
+            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+        }
+    }
+
+    /// <summary>
+    /// Applies the parts of the policy that depend on where a path really leads: kernel interfaces, network shares
+    /// and the configured roots. Both the pre-open spelling and the post-open handle target go through here.
+    /// </summary>
+    private void EnsureLocationAllowed(string path)
+    {
+        // A UNC path is not a local file: opening one makes Windows authenticate to the named server as this user.
+        // With no roots configured the file browser otherwise accepts \\attacker\share\x and hands the remote side a
+        // way to collect the logged-in user's NetNTLM hash (or reach shares on the internal network). A deployment
+        // that really means to share a network folder configures that UNC path as a root; everything outside it is
+        // refused like any other path outside a root.
+        if (IsWindows && path.StartsWith(@"\\", StringComparison.Ordinal) &&
+            !_allowedRoots.Any(root => root.StartsWith(@"\\", StringComparison.Ordinal)))
+        {
+            throw new FileOperationException(FileError.NotAllowed, "Network shares are not allowed.");
+        }
+
+        if (!IsWindows && UnixKernelPaths.Any(kernel => IsSameOrInside(path, kernel)))
         {
             throw Invalid("That location is a kernel interface, not a file.");
         }
 
-        if (_allowedRoots.Length > 0)
+        if (_allowedRoots.Length > 0 && !_allowedRoots.Any(root => IsSameOrInside(path, root)))
         {
             // A path may sit inside a root as a string yet resolve, through a symbolic link or junction, to somewhere
             // outside it. The string check alone would let a planted link turn a "shared" path into an escape: follow
@@ -134,13 +179,8 @@ public sealed class FileAccessPolicy
             // root that itself lives behind a link still matches the paths beneath it. Without that, a genuinely
             // shared folder is refused as "not shared" (macOS keeps /var as a link to /private/var, and every
             // temporary path begins there).
-            if (!_allowedRoots.Any(root => IsSameOrInside(resolved, root)))
-            {
-                throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
-            }
+            throw new FileOperationException(FileError.NotAllowed, "That location is not shared.");
         }
-
-        return full;
     }
 
     /// <summary>
@@ -171,6 +211,15 @@ public sealed class FileAccessPolicy
             // land through one. Judging the spelling in hand is as close to an answer as exists, and it keeps the
             // walk finite; an escape through a cycle is still caught, because the cycle has to point at the outside
             // spelling to matter and that spelling resolves normally.
+            return full;
+        }
+
+        // A link whose target is a network share is not followed any further: walking the target would ask that server
+        // about every segment, and the server was named by whoever planted the link. The spelling is returned as it
+        // is, which EnsureLocationAllowed then refuses (or accepts only inside a configured UNC root), and the handle
+        // check after the open still sees where the file really is.
+        if (depth > 0 && IsWindows && full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
             return full;
         }
 
@@ -295,9 +344,14 @@ public sealed class FileAccessPolicy
         }
     }
 
+    // A filesystem root ("/" or "D:\") already ends in the separator; appending another would make the prefix "//" or
+    // "D:\\", which no path has, and everything beneath such a root would be judged outside it.
     private static bool IsSameOrInside(string path, string root) =>
         path.Equals(root, PathComparison) ||
-        path.StartsWith(root + Path.DirectorySeparatorChar, PathComparison);
+        path.StartsWith(root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar, PathComparison);
+
+    private static bool IsDevicePath(string path) =>
+        path.StartsWith(@"\\.\", StringComparison.Ordinal) || path.StartsWith(@"\\?\", StringComparison.Ordinal);
 
     private static string TrimTrailingSeparator(string path)
     {

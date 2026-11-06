@@ -16,16 +16,20 @@ public static class SessionEndpoints
 
         var group = endpoints.MapGroup("/api/sessions").RequireAuthorization(OpsAuth.ViewerPolicy);
 
-        group.MapGet("/", async (int? limit, long? before, OpsStore store, CancellationToken cancellationToken) =>
+        group.MapGet("/", async (int? limit, long? before, string? beforeId, OpsStore store, CancellationToken cancellationToken) =>
         {
             var rows = await store
-                .ListSessionsAsync(limit ?? 50, before, cancellationToken)
+                .ListSessionsAsync(limit ?? 50, before, beforeId, cancellationToken)
                 .ConfigureAwait(false);
 
             return Results.Ok(new
             {
                 items = rows.Select(Describe),
+
+                // Both halves of the cursor leave together. A client that sends only the timestamp still gets the
+                // old behaviour, but it can repeat or skip rows that share a millisecond.
                 nextBefore = rows.Count == 0 ? (long?)null : rows[^1].StartedAt ?? rows[^1].UpdatedAt,
+                nextBeforeId = rows.Count == 0 ? null : rows[^1].Id,
             });
         });
 

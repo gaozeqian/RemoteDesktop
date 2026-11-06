@@ -12,11 +12,12 @@ namespace RemoteDesktop.Application.Hosting;
 /// <remarks>
 /// <para>
 /// On Windows this file is not used: there the two halves of the product run as different accounts, so the installed
-/// service owns the address in its own <c>appsettings.json</c> and an elevated step (<c>SystemSetup</c>) writes it.
-/// Everywhere else both halves run as the same person in the same session, so one file in the data directory drives
-/// them both — and on macOS it is the only place the address may live at all, because the file next to the program
-/// sits inside the signed <c>.app</c> bundle and editing a signed bundle invalidates its signature (and with it the
-/// screen-recording and accessibility grants).
+/// service owns the machine-wide file (<see cref="MachineSettings.WindowsPath"/>) and an elevated step
+/// (<c>SystemSetup</c>) writes it. Everywhere else both halves run as the same person in the same session, so one
+/// file in the data directory drives them both. On macOS the installer cannot write the file next to the program —
+/// it sits inside the signed <c>.app</c> bundle, and editing a signed bundle invalidates its signature (and with it
+/// the screen-recording and accessibility grants) — so that layer is <see cref="MachineSettings"/> instead, and this
+/// file stays the person's override.
 /// </para>
 /// <para>
 /// The data-directory file is what the person can change. The shipped one stays the defaults — under <c>/usr/lib</c>
@@ -43,31 +44,7 @@ public static class UserSettings
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentException.ThrowIfNullOrEmpty(dataDirectory);
 
-        var path = PathFor(dataDirectory);
-        if (!File.Exists(path))
-        {
-            return;
-        }
-
-        // AddJsonFile is what wires up the file provider for an absolute path; the source then has to move. It is
-        // appended last, which would put it above the environment and the command line as well — so it is taken back
-        // out and re-inserted directly after the shipped appsettings.json.
-        configuration.AddJsonFile(path, optional: true, reloadOnChange: false);
-        var sources = configuration.Sources;
-        var saved = sources[^1];
-        sources.RemoveAt(sources.Count - 1);
-
-        var afterAppSettings = 0;
-        for (var i = 0; i < sources.Count; i++)
-        {
-            if (sources[i] is FileConfigurationSource file
-                && string.Equals(System.IO.Path.GetFileName(file.Path), FileName, StringComparison.OrdinalIgnoreCase))
-            {
-                afterAppSettings = i + 1;
-            }
-        }
-
-        sources.Insert(afterAppSettings, saved);
+        SettingsFile.AddConfigurationSource(configuration, PathFor(dataDirectory));
     }
 
     /// <summary>

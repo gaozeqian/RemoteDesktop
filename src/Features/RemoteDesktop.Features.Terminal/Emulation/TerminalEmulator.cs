@@ -221,6 +221,7 @@ public sealed partial class TerminalEmulator
         }
 
         var builder = new StringBuilder();
+        var text = new StringBuilder();
         lock (SyncRoot)
         {
             var last = TotalLines - 1;
@@ -229,7 +230,7 @@ public sealed partial class TerminalEmulator
                 var line = GetLine(row);
                 var start = row == from.Row ? from.Column : 0;
                 var end = row == to.Row ? to.Column : line.Length - 1;
-                var text = new StringBuilder();
+                text.Clear();
                 for (var column = Math.Max(0, start); column <= Math.Min(end, line.Length - 1); column++)
                 {
                     var cell = line.Cells[column];
@@ -241,7 +242,8 @@ public sealed partial class TerminalEmulator
 
                 var isSelectedToEnd = row != to.Row || end >= line.Length - 1;
                 var continues = row < last && row < to.Row && GetLine(row + 1).Wrapped;
-                builder.Append(continues || !isSelectedToEnd ? text.ToString() : text.ToString().TrimEnd());
+                var lineText = text.ToString();
+                builder.Append(continues || !isSelectedToEnd ? lineText : lineText.TrimEnd());
                 if (row < to.Row && !continues)
                 {
                     builder.Append('\n');
@@ -298,12 +300,14 @@ public sealed partial class TerminalEmulator
             var overflow = lines.Count - rows;
             var followsCursor = isPrimary && !_alternateActive;
             var fromTop = followsCursor ? Math.Clamp(_cursorY - (rows - 1), 0, overflow) : 0;
+
+            // Move the top rows into the scrollback, then drop them in one pass rather than RemoveAt(0) in a loop.
             for (var i = 0; i < fromTop; i++)
             {
-                _scrollback.Add(lines[0]);
-                lines.RemoveAt(0);
+                _scrollback.Add(lines[i]);
             }
 
+            lines.RemoveRange(0, fromTop);
             _cursorY -= fromTop;
 
             lines.RemoveRange(rows, lines.Count - rows);
@@ -311,17 +315,23 @@ public sealed partial class TerminalEmulator
         else
         {
             // Growing brings back lines from the scrollback first, so a shrink followed by a grow restores the view.
-            while (lines.Count < rows)
+            var restored = new List<TerminalLine>();
+            if (isPrimary && !_alternateActive)
             {
-                if (isPrimary && !_alternateActive && _scrollback.RemoveLast() is { } restored)
+                while (lines.Count + restored.Count < rows && _scrollback.RemoveLast() is { } line)
                 {
-                    lines.Insert(0, restored);
+                    restored.Add(line);
                     _cursorY++;
                 }
-                else
-                {
-                    lines.Add(new TerminalLine(columns));
-                }
+            }
+
+            // RemoveLast hands back newest-first; the original Insert(0) loop left the oldest on top, so reverse.
+            restored.Reverse();
+            lines.InsertRange(0, restored);
+
+            while (lines.Count < rows)
+            {
+                lines.Add(new TerminalLine(columns));
             }
         }
 
@@ -343,17 +353,30 @@ public sealed partial class TerminalEmulator
 
     private void ScrollUp(int count)
     {
-        count = Math.Min(count, _scrollBottom - _scrollTop + 1);
+        var height = _scrollBottom - _scrollTop + 1;
+        count = Math.Min(count, height);
+
+        // The rows that scroll off the top, in the order they leave.
+        var removed = new TerminalLine[count];
         for (var i = 0; i < count; i++)
         {
-            var removed = _screen[_scrollTop];
-            Array.Copy(_screen, _scrollTop + 1, _screen, _scrollTop, _scrollBottom - _scrollTop);
+            removed[i] = _screen[_scrollTop + i];
+        }
+
+        // Shift the rest up in one move, then blank the bottom — O(height) rather than O(count × height).
+        Array.Copy(_screen, _scrollTop + count, _screen, _scrollTop, height - count);
+        for (var i = height - count; i < height; i++)
+        {
             var fresh = new TerminalLine(Columns);
             EraseCells(fresh, 0, Columns);
-            _screen[_scrollBottom] = fresh;
-            if (!_alternateActive && _scrollTop == 0)
+            _screen[_scrollTop + i] = fresh;
+        }
+
+        if (!_alternateActive && _scrollTop == 0)
+        {
+            foreach (var line in removed)
             {
-                _scrollback.Add(removed);
+                _scrollback.Add(line);
             }
         }
 
@@ -362,13 +385,16 @@ public sealed partial class TerminalEmulator
 
     private void ScrollDown(int count)
     {
-        count = Math.Min(count, _scrollBottom - _scrollTop + 1);
+        var height = _scrollBottom - _scrollTop + 1;
+        count = Math.Min(count, height);
+
+        // Shift down in one move, then blank the top.
+        Array.Copy(_screen, _scrollTop, _screen, _scrollTop + count, height - count);
         for (var i = 0; i < count; i++)
         {
-            Array.Copy(_screen, _scrollTop, _screen, _scrollTop + 1, _scrollBottom - _scrollTop);
             var fresh = new TerminalLine(Columns);
             EraseCells(fresh, 0, Columns);
-            _screen[_scrollTop] = fresh;
+            _screen[_scrollTop + i] = fresh;
         }
 
         _dirty = true;

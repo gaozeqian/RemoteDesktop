@@ -33,8 +33,8 @@ runs:
 
         # The dependencies have to be written by hand — our libraries are reached through DllImport, which
         # dpkg-shlibdeps cannot see — so a control file that has lost them installs cleanly and then fails on first
-        # use. Every package declares something, whether in Depends or in Recommends (the server's msquic is
-        # optional, so it is a Recommends).
+        # use. Every package declares something, whether in Depends or in Recommends (the client and host packages
+        # recommend a desktop portal, which is optional; the server declares only Depends and bundles no msquic).
         check() {
           package=$1
           binary=$2
@@ -81,16 +81,21 @@ runs:
         check artifacts/installer/linux/RemoteDesktop-Client-Linux-amd64-*.deb RemoteDesktop.Client
         check artifacts/installer/linux/RemoteDesktop-Host-Linux-amd64-*.deb RemoteDesktop.HostService
         check artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb RemoteDesktop.Server.Rendezvous
-        # The console is the third program in the server package. Checked separately so a server package that lost it
-        # fails here rather than at the first operator who opens 5090.
+        # The other three programs and the four units that start them. Checked separately so a server package that
+        # lost the relay, the console or its HTTPS gateway fails here rather than at the first operator who looks for it.
         server=$(ls -1 artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb)
-        case "$(dpkg-deb --contents "$server")" in
-          *RemoteDesktop.Server.Ops*) ;;
-          *)
-            echo "$server does not contain the Ops console." >&2
-            exit 1
-            ;;
-        esac
+        server_contents=$(dpkg-deb --contents "$server")
+        for wanted in \
+          RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway \
+          remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service; do
+          case "$server_contents" in
+            *"$wanted"*) ;;
+            *)
+              echo "$server does not contain $wanted." >&2
+              exit 1
+              ;;
+          esac
+        done
 
     - name: Verify the .pkg installers
       if: runner.os == 'macOS'
@@ -113,13 +118,19 @@ runs:
         # A package left over from an earlier build, or one built before <Version> was readable, fails here.
         check_component_versions() {
           package=$1
+          # pkgutil refuses a target that already exists ("Error 17: File exists" on macOS 26), and mktemp creates
+          # one. Remove it first; the path is still unique and still cleaned up by the rm at the end.
           expanded=$(mktemp -d)
+          rmdir "$expanded"
           pkgutil --expand "$package" "$expanded"
           components=0
           for component in "$expanded"/*.pkg; do
             [ -d "$component" ] || continue
             components=$((components + 1))
-            actual=$(/usr/bin/plutil -extract version raw "$component/PackageInfo" 2>/dev/null || true)
+            # PackageInfo is a <pkg-info> document, not a <plist>; plutil refuses it with "unknown tag pkg-info"
+            # (and did so on macOS 26 even though the check read as if it worked). The version is an attribute of
+            # the root element.
+            actual=$(sed -n 's/.*<pkg-info[^>]* version="\([^"]*\)".*/\1/p' "$component/PackageInfo" | head -1)
             if [ "$actual" != "$expected" ]; then
               echo "$package component $(basename "$component") declares version '$actual', expected $expected." >&2
               exit 1
@@ -137,6 +148,7 @@ runs:
         check_bundle_version() {
           package=$1
           expanded=$(mktemp -d)
+          rmdir "$expanded"
           if ! pkgutil --expand-full "$package" "$expanded" >/dev/null 2>&1; then
             echo "$package could not be expanded to read the app bundle version." >&2
             exit 1
@@ -156,6 +168,66 @@ runs:
             echo "$package bundle declares CFBundleVersion '$actual', expected $expected." >&2
             exit 1
           fi
+
+          # A LAN deployment is the normal self-hosted shape. macOS 15+ refuses the connection with no prompt when
+          # this key is missing, so its absence is a delivery defect the package tests have to see.
+          usage=$(/usr/bin/plutil -extract NSLocalNetworkUsageDescription raw "$info" 2>/dev/null || true)
+          if [ -z "$usage" ]; then
+            echo "$package bundle has no NSLocalNetworkUsageDescription." >&2
+            exit 1
+          fi
+          rm -rf "$expanded"
+        }
+
+        # The Installer pane travels as a gzip-compressed cpio in the product archive's PlugIns file; pkgutil --expand
+        # leaves PlugIns as an empty directory. Read it with xar so a package that lost the pane (or was built with
+        # the wrong role) fails here rather than in front of the first person who double-clicks it.
+        check_plugin() {
+          package=$1
+          role=$2
+          package_abs="$(cd "$(dirname "$package")" && pwd)/$(basename "$package")"
+          expanded=$(mktemp -d)
+          if ! ( cd "$expanded" && xar -xf "$package_abs" PlugIns ); then
+            echo "$package has no PlugIns payload." >&2
+            exit 1
+          fi
+          if ! ( cd "$expanded" && gunzip -c PlugIns | cpio -idm 2>/dev/null ); then
+            echo "$package PlugIns payload could not be unpacked." >&2
+            exit 1
+          fi
+          if [ ! -f "$expanded/RemoteDesktopSetup.bundle/Contents/Info.plist" ]; then
+            echo "$package does not contain the installer pane." >&2
+            exit 1
+          fi
+          if [ ! -f "$expanded/InstallerSections.plist" ]; then
+            echo "$package does not contain InstallerSections.plist." >&2
+            exit 1
+          fi
+          actual=$(/usr/bin/plutil -extract RDRole raw "$expanded/RemoteDesktopSetup.bundle/Contents/Info.plist" 2>/dev/null || true)
+          if [ "$actual" != "$role" ]; then
+            echo "$package installer pane has role '$actual', expected $role." >&2
+            exit 1
+          fi
+          if ! codesign --verify --strict "$expanded/RemoteDesktopSetup.bundle" >/dev/null 2>&1; then
+            echo "$package installer pane does not have a valid signature." >&2
+            exit 1
+          fi
+          rm -rf "$expanded"
+        }
+
+        check_scripts() {
+          package=$1
+          component=$2
+          shift 2
+          expanded=$(mktemp -d)
+          rmdir "$expanded"
+          pkgutil --expand "$package" "$expanded"
+          for script in "$@"; do
+            if [ ! -f "$expanded/$component/Scripts/$script" ]; then
+              echo "$package has no $component/Scripts/$script." >&2
+              exit 1
+            fi
+          done
           rm -rf "$expanded"
         }
 
@@ -187,6 +259,25 @@ runs:
         check "$client" \
           RemoteDesktop.Client 'Remote Desktop.app/Contents/Info.plist'
         check_bundle_version "$client"
+        client_expanded=$(mktemp -d)
+        rmdir "$client_expanded"
+        pkgutil --expand "$client" "$client_expanded"
+        client_bom="$(lsbom "$client_expanded/component.pkg/Bom")"
+        for wanted in \
+          'Remote Desktop.app/Contents/MacOS/RemoteDesktop.Client' \
+          'Remote Desktop.app/Contents/MacOS/libmsquic.dylib' \
+          'Remote Desktop.app/Contents/MacOS/libRemoteDesktopMacNative.dylib'; do
+          case "$client_bom" in
+            *"$wanted"*) ;;
+            *)
+              echo "$client does not contain $wanted." >&2
+              exit 1
+              ;;
+          esac
+        done
+        rm -rf "$client_expanded"
+        check_plugin "$client" client
+        check_scripts "$client" component.pkg preinstall postinstall apply-answers.sh
 
         # The host package is a product archive with two components (the app and the login item). pkgutil
         # --payload-files shows only the first one, and it does not read an expanded component directory either, so
@@ -195,6 +286,7 @@ runs:
         host=$(ls -1 artifacts/installer/macos/RemoteDesktop-Host-macOS-*.pkg)
         check_component_versions "$host"
         host_expanded=$(mktemp -d)
+        rmdir "$host_expanded"
         pkgutil --expand "$host" "$host_expanded"
         for component in app agent; do
           if [ ! -d "$host_expanded/$component.pkg" ]; then
@@ -202,21 +294,50 @@ runs:
             exit 1
           fi
         done
-        if ! lsbom "$host_expanded/app.pkg/Bom" | grep -q 'Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService'; then
-          echo "$host does not contain the host application." >&2
-          exit 1
-        fi
-        if ! lsbom "$host_expanded/agent.pkg/Bom" | grep -q 'LaunchAgents/com.remotedesktop.host.plist'; then
-          echo "$host does not contain the login item." >&2
-          exit 1
-        fi
+        host_bom="$(lsbom "$host_expanded/app.pkg/Bom")"
+        for wanted in \
+          'Remote Desktop Host.app/Contents/MacOS/RemoteDesktop.HostService' \
+          'Remote Desktop Host.app/Contents/MacOS/libmsquic.dylib' \
+          'Remote Desktop Host.app/Contents/MacOS/libRemoteDesktopMacNative.dylib'; do
+          case "$host_bom" in
+            *"$wanted"*) ;;
+            *)
+              echo "$host does not contain $wanted." >&2
+              exit 1
+              ;;
+          esac
+        done
+        agent_bom="$(lsbom "$host_expanded/agent.pkg/Bom")"
+        for wanted in 'LaunchAgents/com.remotedesktop.host.plist' 'uninstall-host.sh'; do
+          case "$agent_bom" in
+            *"$wanted"*) ;;
+            *)
+              echo "$host does not contain $wanted." >&2
+              exit 1
+              ;;
+          esac
+        done
         rm -rf "$host_expanded"
         check_bundle_version "$host"
+        check_plugin "$host" host
+        check_scripts "$host" agent.pkg preinstall postinstall apply-answers.sh
         echo "--- $(basename "$host") $($(command -v stat) -f%z "$host") bytes, app + login item"
 
-        check artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg \
-          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops \
-          com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist com.remotedesktop.ops.plist
+        server=$(ls -1 artifacts/installer/macos/RemoteDesktop-Server-macOS-*.pkg)
+        check "$server" \
+          RemoteDesktop.Server.Rendezvous RemoteDesktop.Server.Relay RemoteDesktop.Server.Ops RemoteDesktop.Server.Gateway \
+          com.remotedesktop.rendezvous.plist com.remotedesktop.relay.plist com.remotedesktop.ops.plist \
+          com.remotedesktop.gateway.plist \
+          configure-server.sh uninstall-server.sh how-to-configure.txt
+        server_payload=$(pkgutil --payload-files "$server")
+        case "$server_payload" in
+          *appsettings.Development.json*)
+            echo "$server carries a development settings file." >&2
+            exit 1
+            ;;
+        esac
+        check_plugin "$server" server
+        check_scripts "$server" component.pkg preinstall postinstall
 
     - name: Verify the MSI installers
       if: runner.os == 'Windows'

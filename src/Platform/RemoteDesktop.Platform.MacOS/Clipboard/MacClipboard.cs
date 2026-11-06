@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Clipboard;
 using RemoteDesktop.Platform.MacOS.Interop;
 
@@ -25,7 +27,7 @@ namespace RemoteDesktop.Platform.MacOS.Clipboard;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacClipboard : IClipboard, IDisposable
+public sealed partial class MacClipboard : IClipboard, IDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
@@ -51,6 +53,7 @@ public sealed class MacClipboard : IClipboard, IDisposable
     private static readonly Lock ReadGate = new();
 
     private readonly string? _pasteboard;
+    private readonly ILogger<MacClipboard> _logger;
     private readonly Lock _lock = new();
     private Timer? _poll;
     private long _lastChangeCount;
@@ -62,7 +65,11 @@ public sealed class MacClipboard : IClipboard, IDisposable
     /// The pasteboard to use, or <see langword="null"/> for the general one. Naming it exists for the tests, which
     /// work on a private pasteboard rather than overwriting whatever the user had copied.
     /// </param>
-    public MacClipboard(string? pasteboard = null) => _pasteboard = pasteboard;
+    public MacClipboard(string? pasteboard = null, ILogger<MacClipboard>? logger = null)
+    {
+        _pasteboard = pasteboard;
+        _logger = logger ?? NullLogger<MacClipboard>.Instance;
+    }
 
     public event EventHandler? Changed
     {
@@ -215,6 +222,18 @@ public sealed class MacClipboard : IClipboard, IDisposable
             handler = _changed;
         }
 
-        handler?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            handler?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            // A timer callback is a thread-pool entry point: an exception escaping here ends the process. The next
+            // pasteboard change is still picked up, so dropping this one is the safer failure.
+            LogHandlerFailed(_logger, ex);
+        }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A clipboard change handler threw; that change was not reported.")]
+    private static partial void LogHandlerFailed(ILogger logger, Exception exception);
 }

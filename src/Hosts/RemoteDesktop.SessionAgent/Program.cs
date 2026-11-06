@@ -44,17 +44,30 @@ var desktop = builder.Configuration["desktop"] ?? "user";
 var logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.File(
-        Path.Combine(dataDirectory, "logs", "agent-.log"),
+        // One file per desktop kind: a user agent runs for the life of the session, and two agents writing one
+        // file would need the shared sink — which ignores flushToDiskInterval, leaving a stuck stream with no log
+        // on disk. Separate files keep the regular sink, whose periodic flush makes the encoder/capture lines
+        // readable while the agent is still running.
+        Path.Combine(dataDirectory, "logs", $"agent-{desktop}-.log"),
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 7,
-        shared: true,
+        // A long-lived agent writes little; without an interval the sink holds lines in its buffer and a stuck
+        // stream leaves no log behind to diagnose. Flush every second so the encoder/capture lines are on disk.
+        flushToDiskInterval: TimeSpan.FromSeconds(1),
         formatProvider: CultureInfo.InvariantCulture,
         outputTemplate: $"{{Timestamp:HH:mm:ss.fff}} [{{Level:u3}}] [agent {Environment.ProcessId}/{desktop}] {{Message:lj}}{{NewLine}}{{Exception}}")
     .CreateLogger();
 builder.Logging.ClearProviders().AddSerilog(logger, dispose: true);
 
 using var stop = new CancellationTokenSource();
-AppDomain.CurrentDomain.UnhandledException += (_, e) => logger.Fatal(e.ExceptionObject as Exception, "Unhandled exception in the agent.");
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+{
+    logger.Fatal(e.ExceptionObject as Exception, "Unhandled exception in the agent.");
+
+    // The runtime tears the process down as soon as this handler returns, and the file sink flushes only once a
+    // second: the line that explains the crash would be the one still in the buffer. Disposing the logger writes it.
+    logger.Dispose();
+};
 
 AgentLink link;
 try
@@ -82,11 +95,13 @@ await using (link.ConfigureAwait(false))
         .AddSingleton<IInputInjector>(sp => new AgentInputInjector(
             new SendInputInjector(sp.GetRequiredService<IDisplayEnumerator>()),
             sp.GetRequiredService<AgentLink>()))
-        .AddSingleton<AgentRunner>();
+        .AddSingleton<AgentRunner>()
+        // The host is only started for its hosted services; see AgentHostLifetime.
+        .AddSingleton<IHostLifetime, AgentHostLifetime>();
 
     using var host = builder.Build();
     logger.Information("Agent for the {Desktop} desktop connected to the host service.", desktop);
-    await host.Services.GetRequiredService<AgentRunner>().RunAsync(stop.Token).ConfigureAwait(false);
+    await AgentRunner.RunHostedAsync(host, stop.Token).ConfigureAwait(false);
     logger.Information("Agent exiting.");
 }
 

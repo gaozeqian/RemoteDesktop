@@ -47,6 +47,30 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     public void A_camera_without_modes_has_nothing_to_choose() => Assert.Null(CameraModule.ChooseMode([], 640, 480, 30));
 
     [Fact]
+    public void A_camera_that_only_has_fast_modes_falls_back_to_its_slowest_ones()
+    {
+        // 60/120 fps cameras and capture cards offer nothing at or below 30 fps. They used to be refused with "no
+        // usable video format"; now the slowest rate is chosen (the stream is thinned to 30 fps while sending).
+        CameraMode[] modes = [new(1920, 1080, 120), new(1280, 720, 60), new(640, 480, 60), new(1920, 1080, 60)];
+
+        var chosen = CameraModule.ChooseMode(modes, 1920, 1080, 30);
+
+        Assert.Equal(new CameraMode(1920, 1080, 60), chosen); // the lowest rate, and at that rate the nearest size
+        Assert.True(chosen!.FrameRate > 30); // which is what makes the host drop frames
+        Assert.Equal(new CameraMode(640, 480, 60), CameraModule.ChooseMode(modes, 640, 480, 30));
+        Assert.Equal(new CameraMode(1920, 1080, 120), CameraModule.ChooseMode([new(1920, 1080, 120)], 640, 480, 30));
+    }
+
+    [Fact]
+    public void A_camera_with_a_slow_mode_never_gets_a_fast_one_chosen_for_its_size()
+    {
+        CameraMode[] modes = [new(1920, 1080, 60), new(1280, 720, 30), new(640, 480, 60)];
+
+        Assert.Equal(new CameraMode(1280, 720, 30), CameraModule.ChooseMode(modes, 1920, 1080, 60));
+        Assert.Equal(new CameraMode(1280, 720, 30), CameraModule.ChooseMode(modes, 640, 480, 30));
+    }
+
+    [Fact]
     public async Task The_camera_is_available_by_default_and_can_be_disabled_by_policy()
     {
         // Available by default
@@ -126,6 +150,25 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         Assert.InRange(bgra[left + 2], 170, 255);
         Assert.InRange(bgra[right + 0], 170, 255);
         Assert.InRange(bgra[right + 2], 0, 90);
+    }
+
+    [Fact]
+    public async Task A_camera_that_only_does_60_fps_is_streamed_at_30_instead_of_being_refused()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
+        var fast = new CameraMode(640, 480, 60);
+        await using var pair = await Pair.StartAsync(server, allowCamera: true, frontModes: [fast]);
+
+        var frames = 0;
+        await using var viewer = await CameraViewer.StartAsync(pair.Session.Context.Connection, CreateCodecs(), "front", fast, TimeProvider.System, NullLogger.Instance, Ct);
+        viewer.FrameReady += (_, _) => Interlocked.Increment(ref frames);
+        await WaitUntilAsync(() => Volatile.Read(ref frames) >= 15);
+
+        // The stream is reported at the rate that is actually sent, and the camera produced about twice as many
+        // pictures as arrived (the rest were dropped before encoding).
+        Assert.Equal((640, 480, 30), (viewer.Details!.Width, viewer.Details.Height, viewer.Details.FrameRate));
+        var received = Volatile.Read(ref frames);
+        Assert.True(pair.Source.Produced >= received * 1.5, $"{pair.Source.Produced} pictures produced, {received} received.");
     }
 
     [Fact]
@@ -334,11 +377,11 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     }
 
     /// <summary>Two cameras; the first delivers a synthetic picture, left half red and right half blue, with a moving bar.</summary>
-    private sealed class FakeCameras(FakeSource source) : ICameraEnumerator, ICameraSourceFactory
+    private sealed class FakeCameras(FakeSource source, IReadOnlyList<CameraMode>? frontModes = null) : ICameraEnumerator, ICameraSourceFactory
     {
         public IReadOnlyList<CameraInfo> GetCameras() =>
         [
-            new("front", "Front camera", [Wide, Vga, Small]),
+            new("front", "Front camera", frontModes ?? [Wide, Vga, Small]),
             new("back", "Back camera", [Small]),
         ];
 
@@ -356,12 +399,16 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     private sealed class FakeSource : ICameraSource
     {
         private int _capturing;
+        private int _produced;
 
         public CameraInfo Camera => new("front", "Front camera", [Vga]);
 
         public bool Capturing => Volatile.Read(ref _capturing) != 0;
 
         public string? FailToStart { get; set; }
+
+        /// <summary>How many pictures this camera has produced so far.</summary>
+        public int Produced => Volatile.Read(ref _produced);
 
         public int FailAfterFrames { get; set; } = int.MaxValue;
 
@@ -381,7 +428,8 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
                     }
 
                     await Task.Delay(1000 / mode.FrameRate, cancellationToken).ConfigureAwait(false);
-                    yield return Picture(mode.Width, mode.Height, index);
+                    Interlocked.Increment(ref _produced);
+                    yield return Picture(mode.Width, mode.Height, index, mode.FrameRate);
                 }
             }
             finally
@@ -392,9 +440,9 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        private MemoryVideoFrame Picture(int width, int height, int index)
+        private MemoryVideoFrame Picture(int width, int height, int index, int frameRate)
         {
-            var frame = new MemoryVideoFrame(width, height, Format, TimeSpan.FromMilliseconds(index * 33));
+            var frame = new MemoryVideoFrame(width, height, Format, TimeSpan.FromSeconds(index / (double)frameRate));
             var buffer = frame.Buffer;
             var bar = (index * 8) % width;
 
@@ -457,10 +505,11 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
             bool allowCamera,
             SessionMode mode = SessionMode.Control,
             IUserContextGuard? guard = null,
-            ICameraAccess? cameraAccess = null)
+            ICameraAccess? cameraAccess = null,
+            IReadOnlyList<CameraMode>? frontModes = null)
         {
             var pair = new Pair();
-            var cameras = new FakeCameras(pair.Source);
+            var cameras = new FakeCameras(pair.Source, frontModes);
             var module = new CameraModule(cameras, cameras, guard ?? new SwitchableGuard(), CreateCodecs(), TimeProvider.System, NullLogger<CameraModule>.Instance, cameraAccess);
             pair.Host = await TestDevice.StartAsync(server, forceRelay: false, module);
             if (!allowCamera)

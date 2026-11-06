@@ -2,9 +2,9 @@
 #
 # Packages "Remote Desktop.app" into a macOS .pkg installer.
 #
-# Why a .pkg and not a .dmg: this application is meant to run as an unattended controlled-side host, which on macOS
-# means it has to live in /Applications (SMAppService.mainAppService is keyed to the installed bundle — see
-# src/Core/RemoteDesktop.Abstractions/Platform/ILoginItem.cs). A .pkg installs straight into /Applications with the
+# Why a .pkg and not a .dmg: the application's login item has to live in /Applications (SMAppService.mainAppService
+# is keyed to the installed bundle — see src/Core/RemoteDesktop.Abstractions/Platform/ILoginItem.cs). The unattended
+# host-only role is a separate package, build/installer/macos/host/make-pkg.sh. A .pkg installs straight into /Applications with the
 # right ownership; a .dmg makes the user drag it there themselves. It also gives us a place to explain the two TCC
 # prompts (Screen Recording, Accessibility) that a first-time user will otherwise hit with no context.
 #
@@ -55,7 +55,15 @@ while [[ $# -gt 0 ]]; do
         --configuration)   CONFIGURATION="$2"; shift 2 ;;
         --output)          OUTPUT_DIR="$2";    shift 2 ;;
         --app)             APP_DIR="$2";       shift 2 ;;
-        --arch)            ARCH="$2";          shift 2 ;;
+        --arch)
+            ARCH="$2"
+            # The app bundle is built for osx-arm64 (make-app.sh). A package labelled with any other architecture
+            # would refuse to install on the machine it actually runs on, so say so rather than lie in the metadata.
+            if [[ "$ARCH" != "arm64" ]]; then
+                echo "This package is arm64 only; --arch $ARCH is not supported." >&2
+                exit 2
+            fi
+            shift 2 ;;
         --app-identity)    APP_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
         --identity)        PKG_IDENTITY="$2"; DISTRIBUTION=1; shift 2 ;;
         --distribution)    DISTRIBUTION=1;     shift ;;
@@ -87,9 +95,18 @@ find_identity() {
         | sed -n "s/.*\"\\($1: [^\"]*\\)\".*/\\1/p" | sort | sed -n '1p'
 }
 
+# A Developer ID Installer certificate is not a code-signing identity: it has no Code Signing EKU, so
+# `find-identity -p codesigning` never lists it. Using the code-signing filter here made --distribution fail on every
+# machine that actually had the certificate. Apple DTS: "If you run security find-identity and apply the code signing
+# filter, you'll only see the first type."
+find_installer_identity() {
+    security find-identity -v 2>/dev/null \
+        | sed -n "s/.*\"\\($1: [^\"]*\\)\".*/\\1/p" | sort | sed -n '1p'
+}
+
 if [[ "$DISTRIBUTION" == "1" ]]; then
     [[ -n "$APP_IDENTITY" ]] || APP_IDENTITY="$(find_identity "Developer ID Application")"
-    [[ -n "$PKG_IDENTITY" ]] || PKG_IDENTITY="$(find_identity "Developer ID Installer")"
+    [[ -n "$PKG_IDENTITY" ]] || PKG_IDENTITY="$(find_installer_identity "Developer ID Installer")"
 
     if [[ -z "$APP_IDENTITY" ]]; then
         echo "No 'Developer ID Application' certificate found. Install one, or pass --app-identity." >&2
@@ -136,21 +153,67 @@ RES_DIR="$WORK_DIR/resources"
 mkdir -p "$RES_DIR"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# --- 3. The component package ----------------------------------------------------------------------------------
+# --- 3. The installer pane -------------------------------------------------------------------------------------
+
+# A .pkg has no MSI property mechanism. The pane collects the signaling address and, for a self-signed server, its
+# certificate at install time; the package's preinstall moves the answers to a root-owned file before the payload is
+# unpacked, and the postinstall applies them. Same source for all three roles, different RDRole.
+PLUGIN_DIR="$WORK_DIR/plugins"
+echo "==> Building the installer pane"
+"$REPO_ROOT/native/macos/build-installer-plugin.sh" --role client --output "$PLUGIN_DIR" --version "$VERSION"
+if [[ "$DISTRIBUTION" == "1" ]]; then
+    codesign --force --options runtime --timestamp --sign "$APP_IDENTITY" \
+        "$PLUGIN_DIR/RemoteDesktopSetup.bundle"
+else
+    codesign --force --sign - --timestamp=none "$PLUGIN_DIR/RemoteDesktopSetup.bundle"
+fi
+
+# --- 4. The component package ----------------------------------------------------------------------------------
 
 # --ownership recommended sets the standard system ownership (root:wheel) rather than inheriting whatever the build
 # directory happened to have. --install-location is where the payload lands: /Applications, because that is where a
 # signed bundle has to be for the login item to work.
+#
+# The bundle must also be marked non-relocatable. By default Installer looks for an existing copy of the same bundle
+# identifier anywhere on the machine — LaunchServices knows about the build output this package was just made from —
+# and "upgrades" that copy instead of writing to /Applications. Verified on macOS 26: the install succeeded and
+# /Applications stayed empty while the staged app under artifacts/ was touched. Relocation is right for a library,
+# never for an application whose path is also the path in the documentation and the login item.
+#
+# A component plist is accepted only with --root, so the bundle is staged with ditto (which keeps the extended
+# attributes carrying the per-file signatures; a staging copy that drops them yields an app codesign calls unsigned).
 echo "==> Building the component package"
+APP_STAGE="$WORK_DIR/app-root"
+mkdir -p "$APP_STAGE"
+ditto "$APP_DIR" "$APP_STAGE/$(basename "$APP_DIR")"
+component_plist="$WORK_DIR/component.plist"
+pkgbuild --analyze --root "$APP_STAGE" "$component_plist" >/dev/null
+app_relative="$(basename "$APP_DIR")"
+found=0
+index=0
+while relative="$(plutil -extract "$index.RootRelativeBundlePath" raw "$component_plist" 2>/dev/null)"; do
+    if [[ "$relative" == "$app_relative" ]]; then
+        /usr/libexec/PlistBuddy -c "Set :$index:BundleIsRelocatable false" "$component_plist"
+        found=1
+    fi
+    index=$((index + 1))
+done
+if [[ "$found" != "1" ]]; then
+    echo "Could not analyze $APP_STAGE: pkgbuild did not list $app_relative as a bundle." >&2
+    exit 1
+fi
+
 pkgbuild \
-    --component "$APP_DIR" \
+    --root "$APP_STAGE" \
+    --component-plist "$component_plist" \
     --install-location "$INSTALL_LOCATION" \
     --identifier "$BUNDLE_ID" \
     --version "$VERSION" \
     --ownership recommended \
+    --scripts "$SCRIPT_DIR/scripts" \
     "$WORK_DIR/component.pkg"
 
-# --- 4. Distribution metadata (welcome + conclusion) -----------------------------------------------------------
+# --- 5. Distribution metadata (welcome + conclusion) -----------------------------------------------------------
 
 # The welcome and conclusion screens are the only place a first-time user is told what the two permission prompts
 # they are about to see actually mean. Without them the app looks broken ("why does it want to record my screen?").
@@ -161,17 +224,22 @@ else
 fi
 
 cat > "$RES_DIR/welcome.html" <<HTML
-<html><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Remote Desktop</h2>
 <p>This installs <b>Remote Desktop</b> into <b>/Applications</b>.</p>
 <p>Remote Desktop can act as a controller (connect out to another machine) and as a controlled host (let someone
-else connect in). Both roles live in the same app.</p>
+else connect in). Both roles live in the same app. <b>Remote Desktop Host</b> may be installed alongside it: the
+Host's background service then owns "being controlled", and this app becomes the controller. The two use separate
+device identities, so both can stay connected.</p>
+<p>The next page asks for the signaling server address. If the server uses <b>wss://</b> with a self-signed
+certificate, have the public certificate file ready; Remote Desktop pins exactly that certificate and does not change
+the system's trust settings. A server with a publicly trusted certificate, or a plain <b>ws://</b> one, needs no file.</p>
 $SIGNED_NOTE
 </body></html>
 HTML
 
 cat > "$RES_DIR/conclusion.html" <<HTML
-<html><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body style="font-family: -apple-system, 'Helvetica Neue', sans-serif; font-size: 13px;">
 <h2>Almost done</h2>
 <p>To be <b>controlled</b> by another machine, Remote Desktop needs two permissions, which macOS only grants to you
 manually. Open <b>System Settings → Privacy &amp; Security</b> and enable Remote Desktop under:</p>
@@ -180,7 +248,11 @@ manually. Open <b>System Settings → Privacy &amp; Security</b> and enable Remo
   <li><b>Accessibility</b> — required for remote keyboard and mouse input.</li>
 </ul>
 <p>macOS will ask for these the first time they are used. After granting them you may need to relaunch the app.</p>
+<p>If the server is on this machine's local network, macOS will also ask for <b>Local Network</b> access the first
+time it connects; approve it in <b>System Settings → Privacy &amp; Security → Local Network</b>.</p>
 <p>For unattended access, open the app and enable the login item in its settings.</p>
+<p>The server address is in <b>/Library/Application Support/RemoteDesktop/appsettings.json</b>; the app's own
+settings page writes the same key for the current user and takes precedence.</p>
 </body></html>
 HTML
 
@@ -194,7 +266,12 @@ cat > "$WORK_DIR/distribution.xml" <<XML
     <title>Remote Desktop</title>
     <organization>com.remotedesktop</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-    <options customize="never" require-scripts="false" rootVolumeOnly="true" hostArchitectures="$ARCH"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true" hostArchitectures="$ARCH"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="26.0"/>
+        </allowed-os-versions>
+    </volume-check>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <license file="License.txt"/>
@@ -211,14 +288,15 @@ cat > "$WORK_DIR/distribution.xml" <<XML
 </installer-gui-script>
 XML
 
-# --- 5. The product package ------------------------------------------------------------------------------------
+# --- 6. The product package ------------------------------------------------------------------------------------
 
 # The role is in the file name, like the Linux packages and the release assets: three .pkg files land in one directory
 # and "which one is the controller" should not depend on knowing that the one without a role word is it.
 PKG_NAME="RemoteDesktop-Client-macOS-$ARCH-$VERSION.pkg"
 FINAL_PKG="$OUTPUT_DIR/$PKG_NAME"
 
-BUILD_ARGS=(--distribution "$WORK_DIR/distribution.xml" --resources "$RES_DIR" --package-path "$WORK_DIR")
+BUILD_ARGS=(--distribution "$WORK_DIR/distribution.xml" --resources "$RES_DIR" --package-path "$WORK_DIR"
+    --plugins "$PLUGIN_DIR")
 
 if [[ "$DISTRIBUTION" == "1" ]]; then
     BUILD_ARGS+=(--sign "$PKG_IDENTITY")
@@ -244,7 +322,7 @@ fi
 echo "==> Building $PKG_NAME"
 productbuild "${BUILD_ARGS[@]}" "$FINAL_PKG"
 
-# --- 6. Notarization -------------------------------------------------------------------------------------------
+# --- 7. Notarization -------------------------------------------------------------------------------------------
 
 if [[ "$NOTARIZE" == "1" ]]; then
     if [[ "$DISTRIBUTION" != "1" ]]; then
@@ -277,7 +355,7 @@ ERR
     xcrun stapler staple "$FINAL_PKG"
 fi
 
-# --- 7. Verify -------------------------------------------------------------------------------------------------
+# --- 8. Verify -------------------------------------------------------------------------------------------------
 
 echo "==> Verifying"
 # --check-signature exits non-zero for an unsigned package, which is expected when no certificate is configured, so
@@ -289,8 +367,11 @@ if [[ "$DISTRIBUTION" == "1" ]]; then
     spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
 fi
 echo "    payload:"
-pkgutil --payload-files "$FINAL_PKG" | head -8 | sed 's/^/      /'
-echo "      … ($(pkgutil --payload-files "$FINAL_PKG" | wc -l | tr -d ' ') entries)"
+# Read the listing once. Piping it to `head` closed the pipe after eight lines and pkgutil died of SIGPIPE; with
+# `set -o pipefail` that turned a successful build into exit 141, after the .pkg had already been written.
+payload="$(pkgutil --payload-files "$FINAL_PKG")"
+printf '%s\n' "$payload" | sed -n '1,8p' | sed 's/^/      /'
+echo "      … ($(printf '%s\n' "$payload" | wc -l | tr -d ' ') entries)"
 
 echo
 echo "Built: $FINAL_PKG"

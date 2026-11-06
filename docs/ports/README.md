@@ -6,10 +6,11 @@
 这两个移植**都已完成**（阶段状态见表），所以这份文档不再承担"计划"的职责，它记的是**结论**：
 哪条路走通了、哪条路被平台挡住了、以及踩过哪些"编得过、跑起来才炸"的坑。
 
-> **实测过程不在这里。** 当年那些命令、输出、逐条探针记录（约 1300 行）已从文档中移除——
-> 需要复现某条结论时，去 git 历史里找 `docs/ports/README.md` 与 `docs/ports/README.md`
-> 的最后一版。这里只留结论和它成立的理由。
-> 一次性的评审意见在 [`docs/reviews/`](../reviews/)；功能与平台能力对照见 [使用说明](../usage/README.md)。
+> **实测过程不在这里。** 实测用的命令、输出和逐条探针记录不在文档里——
+> 需要复现某条结论时，去 git 历史里找 `docs/ports/macos-port-plan.md` 与 `docs/ports/linux-port-plan.md`
+> （合并成本文件之前的两份移植计划）的最后一版：它们在提交 `2b01997` 中被删除，
+> 用 `git show 2b01997^:docs/ports/macos-port-plan.md`（Linux 那份同理）即可取出。这里只留结论和它成立的理由。
+> 功能与平台能力对照见 [使用说明](../usage/README.md)。
 
 ## 1. 三平台对照
 
@@ -17,18 +18,22 @@
 |---|---|---|---|
 | 平台项目 | `Platform.Windows` | `Platform.MacOS` | `Platform.Linux`（与 macOS 共享 `Platform.Posix`） |
 | 进程模型 | LocalSystem 服务 + 用户会话 Agent | **单进程**，`.app` 自己是被控端 | **单进程**，`systemd --user` 服务 |
-| 屏幕 | DXGI Desktop Duplication | ScreenCaptureKit | portal + PipeWire |
+| 屏幕 | DXGI Desktop Duplication（失败时回退 GDI） | ScreenCaptureKit | portal + PipeWire |
 | 输入 | `SendInput` / `SendSAS` | CGEvent | libei（EIS） |
 | 编解码 | Media Foundation | VideoToolbox | libavcodec（NVENC / VA-API / x264） |
+| 音频 | WASAPI 环回 | ScreenCaptureKit 环回 + AudioQueue | PulseAudio |
+| 摄像头 | Media Foundation | AVFoundation | portal 摄像头节点 + PipeWire |
+| 录制 | Media Foundation（`MfVideoRecorder`） | AVAssetWriter | libavcodec（`FfmpegVideoRecorder`） |
 | 终端 | ConPTY | PTY（`posix_spawn`，共享 Posix 层） | PTY（同一份共享实现） |
 | 密钥 | DPAPI | Keychain | 0600 文件 |
 | 防休眠 | `SetThreadExecutionState` | IOKit 电源断言 | logind `Inhibit` |
 | 登录前 / 安全桌面 | 支持（换 Agent 接管） | **不支持** | **不支持** |
-| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定） |
+| 无人值守 | 服务 + 固定密码，登录前也在线 | `SMAppService`（client）或 LaunchAgent（host 包）+ 固定密码（仅登录后） | **控制无法无人值守**（portal 规定，见“Linux (Wayland)”一节） |
 | 打包 | MSI（WiX v5） | `.app` + `.pkg` | `.deb` + systemd |
-| 原生代码 | 无（纯 P/Invoke） | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
+| 原生代码 | 手写 P/Invoke + Vortice 生成的 DXGI / Media Foundation 绑定，无编译型原生库 | ObjC 辅助库 `native/macos` | 无（纯 P/Invoke） |
 
-产品形态为什么不同、每个平台不支持什么，见 [使用说明](../usage/README.md) §1。
+能力是否支持（剪贴板、文件传输、多显示器等）以 [使用说明](../usage/README.md) 的“支持矩阵”为准；本表只列
+实现方式与硬约束，不重复那份矩阵。
 
 ## 2. 两个移植共用的做法
 
@@ -40,18 +45,21 @@
   `.desktop`、发布流水线到处写着。做法是在宿主里按平台分支注册。
 - **语义相同的部分抽到 `Platform.Posix`，不要各写一份。** 两个移植里真正值得共享的是 PTY：
   `posix_openpt` / `grantpt` / `unlockpt`、`posix_spawn` + file actions、会话组长、按**进程组**发信号而不是
-  发给 shell 本身、argv 封送、dispose 语义——这些在 macOS 与 Linux 上完全相同（约 455 行），
+  发给 shell 本身、argv 封送、dispose 语义——这些在 macOS 与 Linux 上完全相同，
   不同的只有常量与入口点。0600 文件密钥库与 Unix 用户上下文守卫同理。
   `Platform.Linux → Platform.Posix` 不违反分层规则（规则表不含 `Platform` 自身，一行未改）。
 - **原生互操作保留 `net10.0` 单一 TFM，手写 P/Invoke。** 不用 `net10.0-macos` / `net10.0-linux` TFM，
-  不引入绑定生成器。只有 macOS 的 ObjC-only 框架额外需要一个小的辅助库暴露扁平 C ABI（见 §3）。
+  不引入绑定生成器。只有 macOS 的 ObjC-only 框架额外需要一个小的辅助库暴露扁平 C ABI（见“macOS (Apple Silicon)”一节）。
 - **架构规则会自动覆盖新平台**：`DependencyRuleTests` 按前缀加载程序集
   （`LoadAssemblies("RemoteDesktop.Platform")`），新增 `Platform.X` 无需改测试。
 - **端口按阶段逐个注册，不预先铺桩。** 每个端口都要先是真实现才有意义——构造函数抛异常的桩只会把
   "这个功能还没做"变成"宿主起不来"。
 - **`--self-check` 是每个平台都要有的东西。** 原生子系统多数经 `DllImport` 接入，失败形式常常是没有任何
   上下文的 `DllNotFoundException` 或一个永不返回的调用，而**发现这件事的地方是已经坏了的那台机器**。
-  自检要能自己走一遍真实读写，而不只是列出"端口已注册"。
+  自检要探到能力本身，而不只是列出"端口已注册"。各平台现状不同：macOS 的自检自己走一遍真实读写 / 真帧 / 真注入；
+  Linux 做不弹窗、不开始会话的能力探测（会话、portal、PipeWire、libei、libavcodec 与可用编码器；唯一写入是
+  数据目录里的可写性探针，写后即删）；
+  Windows 只报告数据目录和传输层。
 
 ## 3. macOS (Apple Silicon)
 
@@ -61,20 +69,22 @@
 |---|---|
 | 原生互操作方式 | **混合方案 C**：`net10.0` + C 框架 P/Invoke + 小型 ObjC 辅助库 |
 | 交付范围 | 全功能一次到位（P1–P10） |
-| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（未做公证） |
+| 签名与分发 | 开发期 Apple Development 签名；发布走 Developer ID + 公证（脚本已实现，载荷逐个签名；公证的验证状态见“未验证与已知缺口”一节） |
 | 无人值守 | `SMAppService`（client）或 LaunchAgent（host 包）；新增 `ILoginItem` 端口 |
-| 最低系统版本 | **macOS 26 (Tahoe)** |
+| 最低系统版本 | **macOS 26 (Tahoe)**（成因见下方硬约束） |
 
 ### 硬约束与结论
 
-**最低系统版本是 macOS 26。** 由随包分发的 `libmsquic` / `openssl@4` bottle 记录的 `minos 26.0` 决定，
+**最低系统版本是 macOS 26。** 由随包分发的 `libmsquic` 及其 OpenSSL 依赖（当前是 `openssl@4`）的 bottle 记录的
+`minos 26.0` 决定，
 dyld 拒绝在更老的系统上加载它们。要降低下限只能改走"从源码构建 MsQuic"，
 或者让用户自己 `brew install libmsquic`（那就不能开箱即用）。打包脚本与 CI 都按这个下限写。
 
 **进程模型：没有 Session 0，"服务 + Agent"模型不成立。** 以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 所以 Windows 那套拆分在 macOS 上无法成立。被控端 = 运行在用户图形会话里的一个**已签名 `.app`**：
 client 包是完整的 `Remote Desktop.app`（自带托管能力），host 包是独立的 `Remote Desktop Host.app`
-（`LSUIElement`，无窗口、无控制端，就是 Linux 那个 `HostService` 二进制）。
+（`LSUIElement`，无窗口、无控制端，就是 Linux 那个 `HostService` 二进制；装在
+`Library/Application Support`，不出现在“应用程序”）。
 开机自启：client 用 `SMAppService`，host 包用 `/Library/LaunchAgents` 的 LaunchAgent。两者都只在用户图形登录后生效，这直接导致「登录界面 / 登录前访问」没有对应物。
 
 **TCC 授权按签名身份记账**，这是 macOS 独有的一条：屏幕录制、辅助功能、摄像头授权都记在**签名身份**上，
@@ -86,7 +96,7 @@ client 包是完整的 `Remote Desktop.app`（自带托管能力），host 包�
 的往返（Windows 上是为 SChannel 所需）。在 macOS 上默认加载方式会把私钥存进钥匙串且**不可导出**，
 MsQuic 导出凭证时直接抛异常。修法是加载 PKCS#12 时加 `X509KeyStorageFlags.Exportable`（3 行以内）。
 
-**Keychain 的 `OSStatus 100001` 是 `EPERM`，不是缺 entitlement。** 这条被写错过两次，所以留在这里：
+**Keychain 的 `OSStatus 100001` 是 `EPERM`，不是缺 entitlement。** 这条很容易被误判成别的原因，所以留在这里：
 `100001` = `EPERM`（缺 entitlement 是 `-34018`），成因是**调用方进程被沙箱包裹**，与代码签名、
 entitlement、`.app` 形态都无关。**钥匙串不需要稳定签名身份**；需要稳定身份的只有 TCC。
 两者真正的关系只剩一条：读回"以前由另一个签名创建过的条目"时系统会按"这是另一个程序"要求授权——
@@ -145,13 +155,13 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 | 阶段 | 结果 |
 |---|---|
 | P1 平台骨架与工具链 | ✅ |
-| P2 密钥与设备身份（Keychain） | ✅ 单测 28/28 |
+| P2 密钥与设备身份（Keychain） | ✅ 有单测（`tests/RemoteDesktop.Platform.MacOS.UnitTests`） |
 | P3 屏幕采集 + 输入注入 | ✅ ScreenCaptureKit + CGEvent，`--self-check` 有真帧与真注入探针 |
-| P4 视频编解码（VideoToolbox） | ✅ 端到端探针通过，单测 14/14 |
+| P4 视频编解码（VideoToolbox） | ✅ 端到端探针通过，有单测（`VideoCodecTests`） |
 | P5 剪贴板与防休眠 | ✅ NSPasteboard + IOKit 电源断言 |
 | P6 远程终端（PTY） | ✅ 落在共享 `Platform.Posix`，不用 `forkpty` |
 | P7 文件传输适配 | ✅ 两个真 bug 已修；受保护目录的 TCC 行为已联调 |
-| P8 远程摄像头（AVFoundation） | ✅ 含"能注册 ≠ 能用"的真帧探针 |
+| P8 远程摄像头（AVFoundation） | ✅ 枚举探针（只列名称与模式，不开摄像头，避免消耗首次授权） |
 | P9 音频采集与播放 | ✅ ScreenCaptureKit 环回 + AudioQueue |
 | P10 录制、打包与无人值守 | ✅ AVAssetWriter + `.app` / `.pkg` + `SMAppService` |
 
@@ -166,7 +176,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 | 打包 | 客户端与被控端 `.deb` + systemd **用户**服务；服务端 `.deb` + systemd 系统单元 + debconf |
 | 视频编解码 | 硬件与软件**都经 libavcodec 一把桥**，不手绑 VA-API / NVENC |
 | POSIX 共享 | 新建 `Platform.Posix`，与 macOS 共用语义相同的部分 |
-| 输入注入 | **EIS（libei）为主**，`/dev/uinput` 只作显式启用的后备 |
+| 输入注入 | **只用 EIS（libei）**；`/dev/uinput` 评估后弃用，没有实现 |
 
 ### 硬约束与结论
 
@@ -174,21 +184,22 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 图形会话里的 `systemd --user` 服务，自己就是采集和注入的那一方。这也意味着「登录界面 / 登录前访问」
 没有对应物——GNOME greeter 是另一个用户、另一个 VT，私有用户会话既看不见也驱动不了。
 
-**显示枚举可以免授权。** 走合成器自己的 D-Bus 接口（GNOME 上是 Mutter 的 `DisplayConfig`）
-即返回完整布局，**无需 portal、无需授权**。所以"列出显示器"这件事不需要弹窗。
+**显示枚举可以免授权，但只在 Mutter 上。** 走合成器自己的 D-Bus 接口（GNOME 上是 Mutter 的 `DisplayConfig`）
+即返回完整布局，**无需 portal、无需授权**。其它合成器（KDE / wlroots）不回答时，枚举器报告"没有显示器"，
+工具栏也就没有可切换的项——这不是 bug，是这一节说的硬约束。所以"列出显示器"这件事在 GNOME 上不需要弹窗。
 
 **光标必须用 `Metadata` 模式，而且本机收不到元数据。** `cursor_mode` 必须选 `Metadata`（值是 4，
 **不是 2**——2 是 `Embedded`）：抽象接口写死了指针由客户端自己画，选 `Embedded` 会把指针烧进像素里，
 客户端再画一个就成了重影。但实测本机**始终收不到 `SPA_META_Cursor`**（授权成功，`AvailableCursorModes`
 含 Metadata），所以被控端会警告一次然后照常出帧，控制端只能画自己最后知道的那个指针。
-降级检测做了（连续 10 帧没有 cursor meta 就警告并停止通告），**配置开关没做**——宁可抑制客户端光标
+降级检测做了（连续 10 帧没有 cursor meta 就警告一次），**配置开关没做**——宁可抑制客户端光标
 也不要重影。
 
 **输入注入用 EIS，`/dev/uinput` 是坏账。** 加入可写 `/dev/uinput` 的组意味着"可随时、无需同意地向本机
-任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得：udev 规则随包安装但**默认不生效**，
-也**不自动把用户加进组**。EIS 下一次授权同时覆盖采集与控制，与 Windows 的体验一致。
+任何会话注入输入"。为了屏幕共享而让 `.deb` 授权这个不值得，所以**既没有 uinput 后备实现，包里也没有 udev 规则，
+也不会自动把用户加进任何组**。
 
-**一次授权管两件事被 portal 拒绝了。** 原计划把采集和控制放在同一个会话上；实测报
+**一次授权管两件事被 portal 拒绝了。** 采集和控制不能放在同一个会话上、一次授权两用；实测报
 `org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist`——
 **远程桌面会话不允许持久化**。这是本平台最影响使用的一条：共享屏幕授权一次就记住了，
 **控制屏幕每次连接都要重新授权**。所以一台无人值守的 Linux 机器可以*被观看*，但没人坐在跟前就没法*被操作*。
@@ -200,20 +211,22 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 `object.serial` **不是同一个数**。
 
 **编解码器设备要自己枚举，绝不假设 `renderD128` 就是编码器**（索引跨重启与 GPU 热插拔都不稳定）。
-做法是枚举 `/sys/class/drm/renderD*`，读 `device/vendor` 与 `device/driver`，逐个用 `vaInitialize` +
-`vaQueryConfigEntrypoints` 探测，把选中的节点交给 `av_hwdevice_ctx_create`。
+做法是枚举 `/sys/class/drm/renderD*`，读 `device/vendor` 与 `device/driver`，对每个节点用
+`av_hwdevice_ctx_create` 建设备并试开 libavcodec 的 VA-API 编码器，能打开的才算可用。不直接问 libva
+支持什么——硬件与软件编码都只经 libavcodec 一把桥。
 
 **MsQuic 在 Linux 上要自己弄到。** Windows 由运行时包提供 `msquic.dll`，**Linux 没有**，Ubuntu 仓库也没有。
 缺它时每个开 QUIC 连接的测试都失败并报 `QUIC is not supported on this system`——看着像平台不支持，
-其实是缺库。`.deb` 里随包分发；**开发时框架依赖运行必须设 `LD_LIBRARY_PATH`**（自包含发布不需要）。
+其实是缺库。`.deb` 里随包分发；**开发时是框架依赖运行，库不在可执行文件旁，要么把 `libmsquic` 装到系统里，要么让 `LD_LIBRARY_PATH` 指向它**（自包含发布不需要）。
 
 **密钥是 0600 文件，服务端证书的私钥也只能是文件。** Windows 把证书放进机器证书存储、只导出公钥；
 Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限就是私钥与其他人之间唯一的屏障，
 所以它必须在相信那一点之前先把自己设成 0600。生成证书那一段是共用代码，**保存方式才是平台相关的部分**。
 
-**宿主控制通道在 Unix 上是共享目录里的命名管道。** `PipeHostControl` 用 `NamedPipeServerStream`，
-.NET 在 Unix 上把它映射到 `$TMPDIR/.dotnet/corefx/pipe/`（一个**共享**目录，谁先建谁以 0700 拥有，
-同机两个用户会互相干扰）；`WindowsPipes.CreateServer` 用的 `PipeSecurity` / SID 在 Unix 上不存在。
+**宿主控制通道在 Unix 上是每条用户运行时目录下的 Unix domain socket。** Windows 走命名管道（ACL / SID 由
+`WindowsPipes.CreateServer` 设置）；其余平台走 `XDG_RUNTIME_DIR/remotedesktop/<名字>.sock`（未设置时退回
+`$TMPDIR/remotedesktop-<用户名>/`），目录 0700、拒绝符号链接。.NET 的命名管道在 Unix 上会把 socket 放进
+一个**共享**临时目录（谁先建谁拥有），所以这里没有直接用它——同机两个用户因此不会互相干扰。
 
 **XDG 目录不能被 `SpecialFolder` 取代。** 中文桌面上 `SpecialFolder` 答的 `~/Desktop` **根本不存在**，
 必须读 `~/.config/user-dirs.dirs`（`XdgUserDirectories`）。另外 `ListDrives` 在 Unix 上按 `DriveFormat`
@@ -222,7 +235,7 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 
 **打包要点**：`.deb` 的依赖**必须手写**——`dh_shlibdeps` 从 ELF `NEEDED` 推导，而我们的库是经 `DllImport`
 到达的，**扫描器看不见**，漏写的结果是包装得干干净净、首次使用 `DllNotFoundException`。
-（曾经的担心——含专利的编码器在 `-extra` 包里——实测是多余的：`libavcodec62` 自己就依赖 `libx264`。）
+（含专利的编码器在 `-extra` 包里这一顾虑，实测是多余的：`libavcodec62` 自己就依赖 `libx264`。）
 
 ### 明确不做的范围
 
@@ -260,8 +273,8 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | **Linux 摄像头的授权** | 采集链路已在 Ubuntu 26.04 + 4K USB 摄像头上验证；但后台宿主无法弹出 portal 的摄像头授权框（GNOME 只允许焦点应用弹），需要显式允许一次：客户端「高级设置 → 安全 → 摄像头权限」或 `RemoteDesktop.HostService --camera-access allow` |
 | Linux 硬件编码 | NVENC 已在 NVIDIA RTX A4000（驱动 595）上端到端验证（摄像头与桌面流）；软件 x264 已验证；VA-API 仍未在真硬件上跑过 |
 | Linux X11 会话 | 只在 Wayland 上验证过，portal 路径在 X11 下大概率能用，但不作承诺 |
-| Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见 §4 |
-| macOS 公证（notarization） | 只做到开发签名，发布链未做 |
+| Linux 光标元数据 | 本机收不到 `SPA_META_Cursor`，见“Linux (Wayland)”一节 |
+| macOS 公证（notarization） | 打包脚本已补：`.app`、Installer 面板与 server 载荷的 Mach-O 逐个 Developer ID 签名，`--notarize` 提交并 staple；尚未用真实证书与公证凭据实跑 |
 | 长时间对抗性测试 | 握手洪泛上限、限流窗口这些数字按常见情况选的，没在真实攻击流量下压过 |
 
 ## 6. 风险与缓解
@@ -271,5 +284,5 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | portal 会话状态机繁琐（先订阅后调用、request handle、`Start` 以 variant 返回 streams、restore token、合成器重启后 PipeWire fd 失效） | 先用 shell spike 跑通；持久化 restore token；把"会话失效"当**正常状态**而不是异常 |
 | TCC 权限在开发期反复丢失 | 第一天就用 `.app` + 稳定 Apple Development 签名；不用沙箱环境验证权限 |
 | ScreenCaptureKit 的 ObjC 互操作复杂度 | 用小型 ObjC 辅助库收敛，只暴露扁平 C ABI；新功能先做最小 PoC 再展开 |
-| "能注册 ≠ 能用" | 每加一层都配一条**真帧 / 真注入 / 真读写**探针；`--self-check` 会自己走一遍 |
+| "能注册 ≠ 能用" | 每加一层都配一条**真帧 / 真注入 / 真读写**探针；macOS 的 `--self-check` 会自己走一遍，Linux 的只做能力探测 |
 | 迁移到 `[LibraryImport]` 时静默丢失长度信息 | 凡是"缓冲区 + 长度"的原生签名逐个复查，并从托管侧真的调一次 |

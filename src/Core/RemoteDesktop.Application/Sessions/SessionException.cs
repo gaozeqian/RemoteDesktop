@@ -7,6 +7,7 @@ public enum SessionFailure
     BadPassword,
     TooManyAttempts,
     IncompatibleVersion,
+    TooManySessions,
     ProtocolError,
 }
 
@@ -40,6 +41,7 @@ public sealed class SessionException : Exception
         AuthFailure.BadPassword => new(SessionFailure.BadPassword, "Wrong password."),
         AuthFailure.TooManyAttempts => new(SessionFailure.TooManyAttempts, "Too many failed attempts; try again later."),
         AuthFailure.IncompatibleVersion => new(SessionFailure.IncompatibleVersion, "The remote device runs an incompatible version."),
+        AuthFailure.TooManySessions => new(SessionFailure.TooManySessions, "The remote device is already serving as many sessions as it allows."),
         _ => new(SessionFailure.ProtocolError, "The remote device refused the session."),
     };
 }

@@ -9,30 +9,91 @@
 #     dpkg --purge remotedesktop-server
 set -e
 
+# Only a purge needs debconf (to drop the stored answers). Removal must not depend on it: a half-installed package
+# is exactly when `dpkg -r` has to work, and that is also the state in which debconf itself may be missing.
+have_debconf=false
+if [ "${1:-}" = "purge" ] && [ -f /usr/share/debconf/confmodule ]; then
+    . /usr/share/debconf/confmodule
+    have_debconf=true
+fi
+
 case "$1" in
     remove)
+        # A marker left by an interrupted preconfiguration must not make the next reinstall skip its questions.
+        rm -f /run/remotedesktop-server.questions-asked
+
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-invoke stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
-            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl stop remotedesktop-relay.service remotedesktop-rendezvous.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
         fi
 
         if command -v deb-systemd-helper >/dev/null 2>&1; then
             deb-systemd-helper disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             deb-systemd-helper disable remotedesktop-relay.service >/dev/null 2>&1 || true
             deb-systemd-helper disable remotedesktop-ops.service >/dev/null 2>&1 || true
+            deb-systemd-helper disable remotedesktop-gateway.service >/dev/null 2>&1 || true
         else
             systemctl disable remotedesktop-rendezvous.service >/dev/null 2>&1 || true
             systemctl disable remotedesktop-relay.service >/dev/null 2>&1 || true
             systemctl disable remotedesktop-ops.service >/dev/null 2>&1 || true
+            systemctl disable remotedesktop-gateway.service >/dev/null 2>&1 || true
+        fi
+
+        # The trust entry this package may have added goes with it, as the client's and host's do.
+        rm -f /usr/local/share/ca-certificates/remotedesktop-signaling-server.crt
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            update-ca-certificates >/dev/null 2>&1 || true
         fi
         ;;
 
     purge)
+        # Remove the answers as well as the files: a purge followed by an install is a new installation, and it has
+        # to ask its questions again instead of silently reusing the answers of the one that was purged.
+        if [ "$have_debconf" = true ]; then
+            db_purge || true
+            db_stop
+        fi
+        rm -f /run/remotedesktop-server.questions-asked
+
+        # Forget the "this unit was disabled" state as well. Without this, a purge followed by an install leaves the
+        # state file behind, and the new postinst's `deb-systemd-helper enable` treats the unit as deliberately
+        # disabled: the package installs, no symlink is created, and the server never starts.
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper purge remotedesktop-rendezvous.service \
+                remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
+        fi
+
+        # Whether the post-install step opened the firewall. Read before the data directory goes away; the marker is
+        # what makes removal symmetric without guessing from a settings file dpkg may already have deleted.
+        firewall_opened=false
+        if [ -e /var/lib/remotedesktop-server/.firewall-opened ]; then
+            firewall_opened=true
+        fi
+        # An installation made before the marker existed still has the setting in the conffile. Read it without
+        # sourcing: a conffile is the administrator's file, and this script only wants one value from it.
+        if [ "$firewall_opened" = false ] && [ -r /etc/default/remotedesktop-server ]; then
+            value=$(sed -n 's/^RD_OPEN_FIREWALL=.*\([01]\).*/\1/p' /etc/default/remotedesktop-server | tail -n 1)
+            [ "$value" = "1" ] && firewall_opened=true
+        fi
+
         # Everything this package put outside /usr, now that it has been asked for explicitly.
         rm -rf /etc/remotedesktop-server
         rm -rf /var/lib/remotedesktop-server
         rm -rf /var/log/remotedesktop-server
+
+        # The unit drop-ins and the firewall rules the post-install step added.
+        rm -f /etc/systemd/system/remotedesktop-rendezvous.service.d/database-directory.conf \
+            /etc/systemd/system/remotedesktop-ops.service.d/database-directory.conf
+        rmdir /etc/systemd/system/remotedesktop-rendezvous.service.d \
+            /etc/systemd/system/remotedesktop-ops.service.d 2>/dev/null || true
+
+        if [ "$firewall_opened" = true ] && command -v ufw >/dev/null 2>&1; then
+            ufw delete allow 5080/tcp >/dev/null 2>&1 || true
+            ufw delete allow 5081/udp >/dev/null 2>&1 || true
+            ufw delete allow 5082/udp >/dev/null 2>&1 || true
+            ufw delete allow 5443/tcp >/dev/null 2>&1 || true
+        fi
 
         if getent passwd remotedesktop >/dev/null 2>&1; then
             deluser --system remotedesktop >/dev/null 2>&1 || true

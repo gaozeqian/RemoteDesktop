@@ -3,6 +3,8 @@ Description=Remote Desktop Ops Console (monitoring and management)
 Documentation=https://github.com/gaozeqian/RemoteDesktop
 After=network-online.target remotedesktop-rendezvous.service remotedesktop-relay.service
 Wants=network-online.target
+# The console is meant to keep coming back. This is a [Unit] setting; in [Service] systemd ignores it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
@@ -12,21 +14,25 @@ Group=remotedesktop
 # The console binds to loopback by default: it has its own sign-in and no rate limits worth trusting on a public
 # socket, so exposing it is a reverse-proxy decision, not a default. The database lives beside the server's own, so
 # the one account owns both.
-WorkingDirectory=/usr/lib/remotedesktop-server/Ops
+#
+# The settings come from /etc for the same reason the other two do: the installer writes the provider and the path
+# there, and the same file is what `--create-admin` is pointed at. Keeping the console's settings in the unit
+# instead made the command line and the service read two different configurations.
+WorkingDirectory=/etc/remotedesktop-server/Ops
 ExecStart=/usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops
-
-Environment=Ops__Database__Path=/var/lib/remotedesktop-server/ops.db
-Environment=Ops__Listen=http://127.0.0.1:5090
+# The settings come from the working directory; the static assets do not. Stated here as well as in the program so
+# an operator reading the unit can see where both halves live.
+Environment=ASPNETCORE_WEBROOT=/usr/lib/remotedesktop-server/Ops/wwwroot
 
 Restart=always
 RestartSec=5
-# No start limit: a console being reconfigured should keep coming back.
-StartLimitIntervalSec=0
 
 StandardOutput=journal
 StandardError=journal
 StateDirectory=remotedesktop-server
+StateDirectoryMode=0700
 LogsDirectory=remotedesktop-server
+UMask=0077
 
 # Nothing outside its own state, configuration and logs is writable; the program itself is read-only.
 NoNewPrivileges=yes

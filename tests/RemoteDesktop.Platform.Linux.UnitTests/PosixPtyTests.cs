@@ -1,5 +1,6 @@
 using System.Text;
 using RemoteDesktop.Abstractions.Terminal;
+using RemoteDesktop.Platform.Posix.Interop;
 using RemoteDesktop.Platform.Posix.Terminal;
 
 namespace RemoteDesktop.Platform.Linux.UnitTests;
@@ -142,6 +143,78 @@ public sealed class PosixPtyTests
     }
 
     [Fact]
+    public async Task The_shell_does_not_inherit_the_masters_of_pseudo_terminals()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // A master that is not close-on-exec leaks into every child of the host, so the shell would hold the master of
+        // its own terminal (and of every other session's) open: the pty slot stays allocated and a daemon on the slave
+        // side does not see a hangup when the host closes its end.
+        await using var session = Start("sh");
+
+        var descriptors = await ListOpenDescriptorsAsync(session);
+
+        Assert.DoesNotContain("ptmx", descriptors, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task One_sessions_shell_cannot_see_another_sessions_master()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        await using var first = Start("sh");
+        await using var second = Start("sh");
+
+        // Both are alive at once, which is when a leaked master matters: the second shell is spawned while the first
+        // session's master is open in the host.
+        var seenBySecond = await ListOpenDescriptorsAsync(second);
+        var seenByFirst = await ListOpenDescriptorsAsync(first);
+
+        Assert.DoesNotContain("ptmx", seenBySecond, StringComparison.Ordinal);
+        Assert.DoesNotContain("ptmx", seenByFirst, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public unsafe void Close_on_exec_can_be_set_on_a_descriptor_that_was_opened_without_it()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        // This is the path macOS takes for the master, because posix_openpt there only promises to accept O_RDWR and
+        // O_NOCTTY. Here it is checked against the Linux request number, which is the part that can be measured.
+        var master = LibC.OpenPseudoTerminal(LibC.ORdWr | LibC.ONoCtty);
+        Assert.True(master >= 0);
+        try
+        {
+            Assert.False(HasCloseOnExec(master));
+
+            Assert.True(LibC.TrySetCloseOnExec(master));
+
+            Assert.True(HasCloseOnExec(master));
+        }
+        finally
+        {
+            _ = LibC.Close(master);
+        }
+    }
+
+    [Fact]
+    public void A_pseudo_terminal_is_opened_close_on_exec()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var master = LibC.OpenPseudoTerminalCloseOnExec();
+        Assert.True(master >= 0);
+        try
+        {
+            Assert.True(HasCloseOnExec(master));
+        }
+        finally
+        {
+            _ = LibC.Close(master);
+        }
+    }
+
+    [Fact]
     public void A_shell_that_is_not_offered_is_refused()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), LinuxOnly);
@@ -152,6 +225,32 @@ public sealed class PosixPtyTests
 
         // A path is not a name. Accepting one would turn the shell picker into a way to run anything at all.
         Assert.Throws<InvalidOperationException>(() => host.Start(Options("/bin/sh")));
+    }
+
+    /// <summary>
+    /// What the shell has open, as <c>ls -l</c> prints it: the shell runs <c>ls</c>, so these are the descriptors a
+    /// child of the shell inherits, which is the question.
+    /// </summary>
+    private static async Task<string> ListOpenDescriptorsAsync(IPtySession session)
+    {
+        var output = Read(session);
+
+        // The marker is typed as don""e so that the line the terminal echoes back does not contain it.
+        await WriteAsync(session, "ls -l /proc/self/fd; echo don\"\"e-$((6 * 7))\n");
+        var text = await output.UntilAsync("done-42");
+
+        // The listing must really be there, or "no ptmx" would be true of an empty answer.
+        Assert.Contains("/dev/pts/", text, StringComparison.Ordinal);
+        return text;
+    }
+
+    private static bool HasCloseOnExec(int descriptor)
+    {
+        // The flags line of fdinfo is octal, and O_CLOEXEC is 02000000.
+        var flags = File.ReadAllLines($"/proc/self/fdinfo/{descriptor}")
+            .Single(line => line.StartsWith("flags:", StringComparison.Ordinal))
+            .Split(':')[1].Trim();
+        return (Convert.ToInt32(flags, 8) & 0x80000) != 0;
     }
 
     private static PtyStartOptions Options(string shell) => new(shell, [], null, 80, 24);

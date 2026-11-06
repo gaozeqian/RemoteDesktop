@@ -137,8 +137,11 @@ public static class ActionEndpoints
             {
                 outcome = (ActionStates.Failed, "the approval was cancelled before the node answered");
             }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException)
+            catch (Exception ex)
             {
+                // Every other failure — DNS, TLS, a response over the size limit, an unexpected provider error —
+                // becomes a terminal state too. The row being left approved is the one outcome that cannot be
+                // retried from the UI.
                 outcome = (ActionStates.Failed, $"the node call failed: {ex.Message}");
             }
 
@@ -146,7 +149,16 @@ public static class ActionEndpoints
             // away, which is one of the ways an action used to be left approved forever.
             await store.CompleteActionAsync(approved.Id, outcome.State, time.GetUtcNow().ToUnixTimeMilliseconds(), outcome.Error, CancellationToken.None)
                 .ConfigureAwait(false);
-            await AuditAsync(store, context, actor, "action.execute", approved.Id, $"{outcome.State} {approved.Kind}", time.GetUtcNow(), CancellationToken.None)
+            await AuditAsync(
+                    store,
+                    context,
+                    actor,
+                    "action.execute",
+                    approved.Id,
+                    $"{outcome.State} {approved.Kind}",
+                    time.GetUtcNow(),
+                    CancellationToken.None,
+                    outcome.State == ActionStates.Executed ? "success" : "failed")
                 .ConfigureAwait(false);
 
             return Results.Ok(Describe((await store.FindActionAsync(approved.Id, cancellationToken).ConfigureAwait(false))!));
@@ -168,6 +180,12 @@ public static class ActionEndpoints
             return (ActionStates.Failed, "the rendezvous node is no longer registered");
         }
 
+        var token = NodeHttp.TokenFor(node, options);
+        if (NodeHttp.RefusalReason(node.BaseUrl, token, options) is { } refusal)
+        {
+            return (ActionStates.Failed, refusal);
+        }
+
         var path = action.Kind == ActionKinds.DisconnectSession
             ? "/internal/v1/admin/disconnect"
             : "/internal/v1/admin/revoke";
@@ -180,10 +198,7 @@ public static class ActionEndpoints
         {
             Content = JsonContent.Create(body, options: OpsEventJson.Options),
         };
-        if (!string.IsNullOrEmpty(options.NodeToken))
-        {
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.NodeToken);
-        }
+        NodeHttp.ApplyAuthorization(request, token);
 
         using var client = httpClientFactory.CreateClient(DeviceEndpoints.ClientName);
         using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -193,8 +208,19 @@ public static class ActionEndpoints
             return (ActionStates.Executed, null);
         }
 
-        var message = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return (ActionStates.Failed, $"node answered HTTP {(int)response.StatusCode}: {message.Trim()}");
+        // An error body is shown to an operator and stored in the action row. It does not need to be megabytes, and a
+        // node that answers an error with an unbounded stream must not decide how much the console buffers.
+        const int maxErrorBytes = 64 * 1024;
+        var message = await NodeHttp
+            .ReadStringBoundedAsync(response.Content, maxErrorBytes, cancellationToken)
+            .ConfigureAwait(false);
+        var trimmed = message.Trim();
+        if (trimmed.Length > 512)
+        {
+            trimmed = trimmed[..512];
+        }
+
+        return (ActionStates.Failed, $"node answered HTTP {(int)response.StatusCode}: {trimmed}");
     }
 
     private static object Describe(OpsAdminActionRow row) => new
@@ -221,7 +247,8 @@ public static class ActionEndpoints
         string target,
         string detail,
         DateTimeOffset at,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string result = "success") =>
         store.AppendAuditAsync(
             new OpsAuditEntry(
                 Guid.NewGuid().ToString("N"),
@@ -231,6 +258,6 @@ public static class ActionEndpoints
                 target,
                 JsonSerializer.Serialize(new { detail, ip = context.Connection.RemoteIpAddress?.ToString() }, OpsEventJson.Options),
                 context.Connection.RemoteIpAddress?.ToString() ?? "-",
-                "success"),
+                result),
             cancellationToken);
 }

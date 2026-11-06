@@ -65,8 +65,9 @@ internal static partial class SelfCheck
 
     /// <summary>
     /// The macOS report: the bundle the process was launched from, the container the client would build, and one
-    /// live probe per port. It asks for nothing and leaves nothing behind — the pasteboard probes use a scratch
-    /// pasteboard and the recorder probe a temporary file.
+    /// live probe per port. Most probes leave nothing behind (the pasteboard probes use a scratch pasteboard and the
+    /// recorder probe a temporary file); the exceptions are called out where they happen — the writable probe, the
+    /// keychain round trip, and the protected-folder probe, which deliberately spends the folders' TCC prompt.
     /// </summary>
     /// <returns>Zero when everything required is present, otherwise one.</returns>
     [SupportedOSPlatform("macos")]

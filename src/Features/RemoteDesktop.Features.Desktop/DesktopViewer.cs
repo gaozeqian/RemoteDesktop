@@ -20,46 +20,41 @@ public sealed record DesktopStatistics(double FramesPerSecond, double Kbps, doub
 /// </summary>
 public sealed partial class DesktopViewer : IAsyncDisposable
 {
-    private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
-
     private readonly IChannel _channel;
-    private readonly VideoCodecSelector _codecs;
+    private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Lock _frameLock = new();
+    private readonly VideoFrameBuffer _frames = new();
+    private readonly VideoStatisticsMeter _meter = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-    private IVideoDecoder? _decoder;
-    private byte[] _bgra = [];
-    private long _frameNumber;
     private volatile bool _waitingForKeyFrame = true;
+    private volatile bool _stalled;
 
     private DesktopViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
     {
         _channel = channel;
-        _codecs = codecs;
         _time = time;
         _logger = logger;
+
+        // The stall time is real monotonic time; the viewer's own clock only drives the watchdog tick and the latency.
+        _supervisor = new VideoDecoderSupervisor(codecs, TimeProvider.System, ex => LogDecoderRebuildFailed(_logger, ex));
     }
 
     public DesktopStreamInfo? StreamInfo { get; private set; }
 
     public DesktopStatistics Statistics { get; private set; } = new(0, 0, 0, null);
 
+    /// <summary>
+    /// Whether the host has stopped answering key-frame requests, so the picture on screen is older than it claims
+    /// to be. A static screen is not a stall: the host answers a request even when nothing changed.
+    /// </summary>
+    public bool IsStalled => _stalled;
+
     /// <summary>Total number of frames decoded so far.</summary>
-    public long FrameNumber
-    {
-        get
-        {
-            lock (_frameLock)
-            {
-                return _frameNumber;
-            }
-        }
-    }
+    public long FrameNumber => _frames.FrameNumber;
 
     /// <summary>Displays the host offered, for switching (M4).</summary>
     public IReadOnlyList<DisplayDescription> Displays { get; private set; } = [];
@@ -111,25 +106,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     /// Copies the newest picture into <paramref name="destination"/> (BGRA, <paramref name="stride"/> bytes per row).
     /// Returns its sequence number, or <c>-1</c> when there is no picture of the current size yet.
     /// </summary>
-    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height)
-    {
-        lock (_frameLock)
-        {
-            var info = StreamInfo;
-            if (info is null || _frameNumber == 0 || info.Width != width || info.Height != height)
-            {
-                return -1;
-            }
-
-            var rowBytes = width * 4;
-            for (var y = 0; y < height; y++)
-            {
-                _bgra.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
-            }
-
-            return _frameNumber;
-        }
-    }
+    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height) =>
+        _frames.CopyLatest(destination, stride, width, height);
 
     /// <summary>Asks the host to stream another of its displays; it answers with a new stream info.</summary>
     public Task SelectDisplayAsync(string displayId, CancellationToken cancellationToken) =>
@@ -144,7 +122,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         await _channel.DisposeAsync().ConfigureAwait(false);
         await _loop.ConfigureAwait(false);
         await _watchdog.ConfigureAwait(false);
-        _decoder?.Dispose();
+        _supervisor.Dispose();
         _stop.Dispose();
         _writeLock.Dispose();
     }
@@ -152,11 +130,6 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         var clock = Stopwatch.StartNew();
-        var windowStart = TimeSpan.Zero;
-        int windowFrames = 0;
-        long windowBytes = 0;
-        double windowDecodeMs = 0;
-        double? latencyMs = null;
         try
         {
             while (await FrameCodec.ReadAsync(_channel.Stream, cancellationToken: _stop.Token).ConfigureAwait(false) is { } frame)
@@ -184,23 +157,27 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                     continue;
                 }
 
-                if (frame.MessageType != VideoDataFrame.MessageType || _decoder is null)
+                var decoder = _supervisor.Decoder;
+                if (frame.MessageType != VideoDataFrame.MessageType || decoder is null)
                 {
                     continue;
                 }
 
-                var (encoded, capturedAt) = VideoDataFrame.Parse(frame);
-                windowBytes += frame.Payload.Length;
-                if (_waitingForKeyFrame && !encoded.IsKeyFrame)
-                {
-                    continue;
-                }
-
-                var decodeStarted = clock.Elapsed;
+                // A frame the peer sent malformed costs that frame, not the viewer: it is handled like a decode error.
+                EncodedVideoFrame encoded;
+                DateTimeOffset capturedAt;
+                TimeSpan decodeStarted;
                 VideoFrame? picture;
                 try
                 {
-                    picture = _decoder.Decode(encoded);
+                    (encoded, capturedAt) = VideoDataFrame.Parse(frame);
+                    if (_waitingForKeyFrame && !encoded.IsKeyFrame)
+                    {
+                        continue;
+                    }
+
+                    decodeStarted = clock.Elapsed;
+                    picture = decoder.Decode(encoded);
                 }
                 catch (InvalidDataException ex)
                 {
@@ -213,41 +190,57 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 _waitingForKeyFrame = false;
                 if (picture is null)
                 {
+                    // The host is feeding non-key frames but the decoder stopped producing pictures: it has lost
+                    // sync and is silently dropping everything. Asking for one key frame only hides the problem
+                    // until the next stall, so rebuild the decoder right here (this loop is its only owner) instead
+                    // of leaving the watchdog to wait out the 30 s backoff.
+                    //
+                    // Whether it is a run of silence rather than one quiet answer is the supervisor's call.
+                    if (_supervisor.RecordSilentFrame(encoded.IsKeyFrame))
+                    {
+                        LogDecoderStalled(_logger);
+                        _supervisor.Rebuild();
+                        _waitingForKeyFrame = true;
+                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
                 using (picture)
                 {
-                    lock (_frameLock)
-                    {
-                        ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _bgra, picture.Width * 4);
-                        _frameNumber++;
-                    }
+                    _frames.Publish(picture);
                 }
 
-                windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
-                windowFrames++;
-                latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                // Any picture at all — including a key frame the host encoded from an unchanged screen — proves the
+                // video path is alive, which is what the watchdog below measures.
+                _supervisor.PictureShown();
+                _stalled = false;
+
+                var latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _meter.Add(frame.Payload.Length, clock.Elapsed - decodeStarted, latencyMs);
                 FrameReady?.Invoke(this, EventArgs.Empty);
 
-                var elapsed = clock.Elapsed - windowStart;
-                if (elapsed >= StatisticsWindow)
+                if (_meter.TryTake(out var snapshot))
                 {
                     Statistics = new DesktopStatistics(
-                        windowFrames / elapsed.TotalSeconds,
-                        windowBytes * 8 / elapsed.TotalSeconds / 1000,
-                        windowFrames == 0 ? 0 : windowDecodeMs / windowFrames,
-                        latencyMs);
-                    windowStart = clock.Elapsed;
-                    windowFrames = 0;
-                    windowBytes = 0;
-                    windowDecodeMs = 0;
+                        snapshot.FramesPerSecond,
+                        snapshot.Kbps,
+                        snapshot.DecodeMilliseconds,
+                        snapshot.LatencyMilliseconds);
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException or ObjectDisposedException
-                                       or Google.Protobuf.InvalidProtocolBufferException)
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
+            // The channel closed or the viewer was disposed: the ordinary way for the stream to end.
+            LogStreamEnded(_logger, ex);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or Google.Protobuf.InvalidProtocolBufferException)
+        {
+            // Nothing that can be skipped: an unusable stream description (or a control message that does not parse)
+            // leaves no way to carry on, so the viewer ends, but not without saying why.
+            LogStreamMalformed(_logger, ex);
         }
 #pragma warning disable CA1031 // Decoder setup can fail in many backend-specific ways; the viewer just closes.
         catch (Exception ex)
@@ -257,69 +250,45 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
         finally
         {
-            Closed?.Invoke(this, EventArgs.Empty);
+#pragma warning disable CA1031 // A subscriber's failure must not fault the receive loop (and resurface from Dispose).
+            try
+            {
+                Closed?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogCloseHandlerFailed(_logger, ex);
+            }
+#pragma warning restore CA1031
         }
     }
 
-    // While no picture can be shown (just joined, or a decode error), keep asking for a key frame: the first
-    // request or key frame may have been lost, and a static host screen produces nothing new on its own.
-    private async Task KeyFrameWatchdogAsync()
-    {
-        try
-        {
-            while (true)
-            {
-                await Task.Delay(KeyFrameRetry, _time, _stop.Token).ConfigureAwait(false);
-                if (StreamInfo is not null && _waitingForKeyFrame)
-                {
-                    await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
-                }
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
-        {
-        }
-    }
+    private Task KeyFrameWatchdogAsync() =>
+        Media.KeyFrameWatchdog.RunAsync(
+            _time,
+            () => StreamInfo is not null,
+            () => _waitingForKeyFrame,
+            () => FrameNumber,
+            _supervisor.QuietFor,
+            RequestKeyFrameAsync,
+            value => _stalled = value,
+            _stop.Token);
 
     // The host is trusted to be well-formed, but a size that does not match the pixel data would read out of bounds.
     private static bool IsValidCursor(CursorShapeUpdate shape) =>
         shape.Width is > 0 and <= 512 && shape.Height is > 0 and <= 512 && shape.Bgra.Length == shape.Width * shape.Height * 4;
 
-    /// <summary>
-    /// The largest stream this will set up buffers for. Every stream info allocates four bytes per pixel, and the
-    /// size is whatever the peer says it is, so "the host is trusted to be well-formed" does not cover this: a host
-    /// that is not really a host, or one that is confused, would otherwise have this window allocate a gigabyte on
-    /// request, over and over. 8K UHD is the largest display there is, so nothing real is refused.
-    /// </summary>
-    private const int MaxDimension = 8192;
-
-    private const long MaxPixels = 7680L * 4320;
-
     private void OnStreamInfo(VideoStreamInfo info)
     {
         var width = (int)info.Width;
         var height = (int)info.Height;
-        if (width < 2 || height < 2 || width > MaxDimension || height > MaxDimension || (long)width * height > MaxPixels)
-        {
-            throw new InvalidDataException($"Invalid stream size {width}x{height}.");
-        }
 
         // Every stream info starts a new encoder on the host: the stream is reconfigured, or the host swapped its
-        // agent (login screen, UAC) and continues with a fresh encoder. A decoder from the old stream must not be
-        // fed the new one, even at the same resolution.
-        _decoder?.Dispose();
-        _decoder = _codecs.CreateDecoder(VideoCodec.H264, width, height);
-
-        lock (_frameLock)
-        {
-            if (_bgra.Length != width * height * 4)
-            {
-                _bgra = new byte[width * height * 4];
-            }
-
-            _frameNumber = 0;
-            StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _decoder.Name);
-        }
+        // agent (login screen, UAC) and continues with a fresh encoder. The supervisor refuses an unusable size and
+        // replaces the decoder, so one from the old stream is never fed the new one, even at the same resolution.
+        _supervisor.Start(width, height);
+        _frames.Reset(width, height);
+        StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
 
         Displays = [.. info.Displays];
         _waitingForKeyFrame = true;
@@ -342,6 +311,21 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Decoding failed ({Reason}); requested a key frame.")]
     private static partial void LogDecodeFailed(ILogger logger, string reason);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The decoder stopped producing pictures while being fed; rebuilding it and requesting a key frame.")]
+    private static partial void LogDecoderStalled(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A new decoder could not be created; keeping the old one and requesting a key frame.")]
+    private static partial void LogDecoderRebuildFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The remote desktop stream ended.")]
+    private static partial void LogStreamEnded(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The remote desktop stream ended because the host sent data that cannot be used.")]
+    private static partial void LogStreamMalformed(ILogger logger, Exception exception);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Remote desktop stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A handler for the desktop viewer's Closed event threw.")]
+    private static partial void LogCloseHandlerFailed(ILogger logger, Exception exception);
 }

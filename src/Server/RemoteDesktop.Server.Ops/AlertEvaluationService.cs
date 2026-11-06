@@ -60,30 +60,23 @@ public sealed partial class AlertRuleSeeder(OpsStore store, TimeProvider time, I
 public sealed partial class AlertEvaluationService(
     AlertService alerts,
     OpsOptions options,
+    OpsLease lease,
     TimeProvider time,
-    ILogger<AlertEvaluationService> logger) : BackgroundService
+    ILogger<AlertEvaluationService> logger)
+    : LeasedPeriodicService(lease, "alerts", time, logger)
 {
-    /// <inheritdoc />
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds)), time);
-        try
-        {
-            do
-            {
-                await RunOnceAsync(stoppingToken).ConfigureAwait(false);
-            }
-            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
-        }
-        catch (OperationCanceledException)
-        {
-            // Shutdown.
-        }
-    }
+    protected override TimeSpan Interval => TimeSpan.FromSeconds(Math.Max(5, options.AlertIntervalSeconds));
+
+    protected override Task RunPassAsync(CancellationToken cancellationToken) => RunOnceAsync(cancellationToken);
 
     /// <summary>One pass, public so a test can drive it without waiting for the timer.</summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
+        if (!await Lease.TryAcquireAsync(LeaseName, LeaseDuration, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var (opened, resolved) = await alerts.EvaluateOnceAsync(cancellationToken).ConfigureAwait(false);
         if (opened > 0 || resolved > 0)
         {

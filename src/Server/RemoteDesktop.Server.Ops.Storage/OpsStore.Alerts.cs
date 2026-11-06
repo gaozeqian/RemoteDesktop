@@ -18,6 +18,21 @@ public sealed record OpsAlertRow(
     string? AckedBy,
     long? ResolvedAt);
 
+/// <summary>One notification that still needs a successful delivery, with the alert it describes.</summary>
+public sealed record OpsPendingNotification(
+    string AlertId,
+    string RuleId,
+    string RuleName,
+    string Severity,
+    string DedupeKey,
+    string State,
+    double? Value,
+    long OpenedAt,
+    long? ResolvedAt,
+    string Transition,
+    int Attempts,
+    long? LastAttemptAt);
+
 public sealed partial class OpsStore
 {
     private const string AlertColumns =
@@ -263,12 +278,13 @@ public sealed partial class OpsStore
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO ops_notification_attempt (alert_id, channel_id, transition, attempts, last_error, sent_at)
-            VALUES (@alertId, @channelId, @transition, 1, @error, @sentAt)
+            INSERT INTO ops_notification_attempt (alert_id, channel_id, transition, attempts, last_error, sent_at, last_attempt_at)
+            VALUES (@alertId, @channelId, @transition, 1, @error, @sentAt, @lastAttemptAt)
             ON CONFLICT (alert_id, channel_id, transition) DO UPDATE SET
                 attempts = ops_notification_attempt.attempts + 1,
                 last_error = excluded.last_error,
-                sent_at = COALESCE(excluded.sent_at, ops_notification_attempt.sent_at);
+                sent_at = COALESCE(excluded.sent_at, ops_notification_attempt.sent_at),
+                last_attempt_at = excluded.last_attempt_at;
             """;
         Bind(
             command,
@@ -276,9 +292,109 @@ public sealed partial class OpsStore
             ("@channelId", channelId),
             ("@transition", transition),
             ("@error", error),
-            ("@sentAt", sent ? at : null));
+            ("@sentAt", sent ? at : null),
+            ("@lastAttemptAt", at));
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Notifications that have not been delivered and whose alert is still in the state that transition describes.
+    /// A failed "opened" is not retried after the alert has resolved: the recovery message is the useful one then.
+    /// </summary>
+    public async Task<IReadOnlyList<OpsPendingNotification>> ListPendingNotificationsAsync(
+        string channelId,
+        int maxAttempts,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(channelId);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT a.id, a.rule_id, COALESCE(r.name, a.dedupe_key), a.severity, a.dedupe_key, a.state,
+                   a.value, a.opened_at, a.resolved_at, n.transition, n.attempts, n.last_attempt_at
+            FROM ops_notification_attempt n
+            JOIN ops_alert a ON a.id = n.alert_id
+            LEFT JOIN ops_alert_rule r ON r.id = a.rule_id
+            WHERE n.channel_id = @channel
+              AND n.sent_at IS NULL
+              AND n.attempts < @maxAttempts
+              AND ((a.state = 'open' AND n.transition = 'opened')
+                   OR (a.state = 'resolved' AND n.transition = 'resolved'))
+            ORDER BY COALESCE(n.last_attempt_at, 0)
+            LIMIT @limit;
+            """;
+        Bind(
+            command,
+            ("@channel", channelId),
+            ("@maxAttempts", Math.Max(1, maxAttempts)),
+            ("@limit", Math.Clamp(limit, 1, 1000)));
+
+        var rows = new List<OpsPendingNotification>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new OpsPendingNotification(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetDouble(6),
+                reader.GetInt64(7),
+                reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                reader.GetString(9),
+                reader.GetInt32(10),
+                reader.IsDBNull(11) ? null : reader.GetInt64(11)));
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Deletes resolved alerts older than the cutoff, with their notification attempts, in bounded batches.
+    /// Open alerts are never deleted, however old: an unresolved alert is still a statement about the present.
+    /// </summary>
+    public async Task<int> DeleteResolvedAlertsBeforeAsync(
+        long beforeUnixMilliseconds,
+        int limit = 5000,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await using (var attempts = connection.CreateCommand())
+        {
+            attempts.Transaction = transaction;
+            attempts.CommandText = """
+                DELETE FROM ops_notification_attempt WHERE alert_id IN (
+                    SELECT id FROM ops_alert WHERE state = 'resolved' AND COALESCE(resolved_at, opened_at) < @before
+                );
+                """;
+            Bind(attempts, ("@before", beforeUnixMilliseconds));
+            await attempts.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        int deleted;
+        await using (var alerts = connection.CreateCommand())
+        {
+            alerts.Transaction = transaction;
+            alerts.CommandText = """
+                DELETE FROM ops_alert WHERE id IN (
+                    SELECT id FROM ops_alert
+                    WHERE state = 'resolved' AND COALESCE(resolved_at, opened_at) < @before
+                    LIMIT @limit
+                );
+                """;
+            Bind(alerts, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
+            deleted = await alerts.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return deleted;
     }
 
     private static AlertRule ReadRule(DbDataReader reader) =>

@@ -155,6 +155,39 @@ public class ConnectionQuotaTests
         Assert.True(quota.TryOpen(address));
     }
 
+    [Fact]
+    public void Addresses_in_one_ipv6_subnet_share_a_limit()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 2);
+
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::1")));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2:aaaa:bbbb:cccc:dddd")));
+
+        // A third address of the same /64 is the same subscriber; a different /64 is not.
+        Assert.False(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::99")));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:3::1")));
+    }
+
+    [Fact]
+    public void An_ipv4_mapped_address_counts_as_the_ipv4_address()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 1);
+
+        Assert.True(quota.TryOpen(IPAddress.Parse("10.0.0.1")));
+        Assert.False(quota.TryOpen(IPAddress.Parse("10.0.0.1").MapToIPv6()));
+    }
+
+    [Fact]
+    public void Closing_through_another_spelling_of_the_same_source_gives_the_slot_back()
+    {
+        var quota = Quota(maxConnections: 100, perAddress: 1);
+        var opened = IPAddress.Parse("2001:db8:1:2::1");
+
+        Assert.True(quota.TryOpen(opened));
+        quota.Close(IPAddress.Parse("2001:db8:1:2::1"));
+        Assert.True(quota.TryOpen(IPAddress.Parse("2001:db8:1:2::2")));
+    }
+
     private static ConnectionQuota Quota(int maxConnections, int perAddress) =>
         new(Options.Create(new RendezvousOptions { MaxConnections = maxConnections, MaxConnectionsPerAddress = perAddress }));
 }
@@ -190,6 +223,73 @@ public class RendezvousLimitTests
         // The same address again, with a perfectly good certificate of its own: over the budget.
         using var socket = await RawSignaling.ConnectAsync(uri);
         Assert.Null(await RawSignaling.RegisterAsync(socket));
+    }
+
+    /// <summary>
+    /// The registration budget counts a source the way the connection quota does: an IPv6 subscriber owns a whole /64
+    /// and an IPv4-mapped address is its IPv4 form. Otherwise one machine rotates addresses and is never throttled.
+    /// </summary>
+    [Theory]
+    [InlineData("2001:db8:1:2::1", "2001:db8:1:2:aaaa:bbbb:cccc:dddd")]
+    [InlineData("10.0.0.1", "::ffff:10.0.0.1")]
+    public async Task Registrations_from_one_network_are_throttled_whichever_address_inside_it_is_used(string first, string second)
+    {
+        await using var server = await TestRendezvous.StartAsync(
+            ("Rendezvous:RegistrationBurst", "1"),
+            ("Rendezvous:TrustedProxies:0", "127.0.0.1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: first))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: second))
+        {
+            Assert.Null(await RawSignaling.RegisterAsync(socket));
+        }
+    }
+
+    [Fact]
+    public async Task Registrations_from_different_networks_do_not_share_a_budget()
+    {
+        await using var server = await TestRendezvous.StartAsync(
+            ("Rendezvous:RegistrationBurst", "1"),
+            ("Rendezvous:TrustedProxies:0", "127.0.0.1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:2::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:3::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+    }
+
+    /// <summary>
+    /// With no trusted proxy configured, forwarded headers are not believed at all. Clearing the framework's default
+    /// proxies is not enough: with both lists empty the middleware trusts every caller, so a caller could write its
+    /// own source address and get a fresh registration budget (and, with no node token, look like a loopback caller).
+    /// </summary>
+    [Fact]
+    public async Task A_caller_cannot_choose_its_source_address_when_no_proxy_is_trusted()
+    {
+        await using var server = await TestRendezvous.StartAsync(("Rendezvous:RegistrationBurst", "1"));
+        var uri = TestRendezvous.SignalingUri(server);
+
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "2001:db8:1:2::1"))
+        {
+            Assert.NotNull(await RawSignaling.RegisterAsync(socket));
+        }
+
+        // Same real caller, a different address written into the header: it must still count against one budget.
+        using (var socket = await RawSignaling.ConnectAsync(uri, forwardedFor: "198.51.100.7"))
+        {
+            Assert.Null(await RawSignaling.RegisterAsync(socket));
+        }
     }
 
     [Fact]

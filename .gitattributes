@@ -34,7 +34,12 @@ Dockerfile*         text eol=lf
 build/installer/linux/**/control                             text eol=lf
 build/installer/linux/**/postinst                            text eol=lf
 build/installer/linux/**/postrm                              text eol=lf
+build/installer/linux/**/config                              text eol=lf
+build/installer/linux/**/templates                           text eol=lf
+build/installer/linux/**/*.txt                               text eol=lf
+build/installer/macos/**/*.txt                               text eol=lf
 build/installer/macos/server/scripts/postinstall             text eol=lf
+build/installer/macos/server/scripts/preinstall              text eol=lf
 *.default                                                    text eol=lf
 
 *.plist             text eol=lf
@@ -44,6 +49,7 @@ build/installer/macos/server/scripts/postinstall             text eol=lf
 # Workflow files: their run: blocks are shell, and keeping them LF means the
 # file reads the same whichever OS a maintainer opens it on.
 *.yml               text eol=lf
+build/docker/.env.example                              text eol=lf
 
 # --- Windows tooling and project files ------------------------------------
 # PowerShell accepts LF, but CRLF is what every Windows editor and the WiX

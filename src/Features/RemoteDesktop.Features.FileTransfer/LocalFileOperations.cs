@@ -224,9 +224,9 @@ public sealed class LocalFileOperations(FileAccessPolicy policy)
 
                 drives.Add(new FileEntryInfo(drive.Name, IsDirectory: true, size, DateTimeOffset.MinValue, FileEntryAttributes.None));
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // A drive that went away while being asked.
+                // A drive that went away, or one this account may not query, while being asked.
             }
         }
 

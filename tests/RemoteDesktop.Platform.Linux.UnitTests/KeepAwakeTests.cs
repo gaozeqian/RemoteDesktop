@@ -89,7 +89,17 @@ public sealed class KeepAwakeTests
         var connection = new DBusConnection(address);
         try
         {
-            connection.ConnectAsync().AsTask().GetAwaiter().GetResult();
+            try
+            {
+                connection.ConnectAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex) when (ex is DBusConnectFailedException or System.Net.Sockets.SocketException)
+            {
+                // An address that is configured but unreachable is the same environment as no bus at all. The
+                // product would have said so in its own warning, but this probe runs first, so the skip has to be
+                // decided here instead of looking like a failure of the port.
+                Assert.Skip($"this machine's system bus is not reachable ({ex.Message})");
+            }
 
             var writer = connection.GetMessageWriter();
             writer.WriteMethodCallHeader(

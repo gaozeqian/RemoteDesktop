@@ -28,8 +28,16 @@ public sealed class SqliteDeviceRegistry : RelationalDeviceRegistry
     /// Overrides the random nine-digit draw. Only the tests pass one: the collision retry is otherwise a
     /// one-in-a-billion path that no test could reach.
     /// </param>
-    internal SqliteDeviceRegistry(string path, ILogger<SqliteDeviceRegistry> logger, Func<uint>? allocateId)
-        : base(new SqliteDataSource(ConnectionStringFor(path)), new SqliteDialect(), logger, allocateId)
+    /// <param name="time">
+    /// The clock for the <c>last_seen_at</c> stamps and their write throttle. Only the tests pass one, so a test can
+    /// move past the throttle window without waiting for it.
+    /// </param>
+    internal SqliteDeviceRegistry(
+        string path,
+        ILogger<SqliteDeviceRegistry> logger,
+        Func<uint>? allocateId,
+        TimeProvider? time = null)
+        : base(new SqliteDataSource(ConnectionStringFor(path)), new SqliteDialect(), logger, allocateId, time)
     {
     }
 

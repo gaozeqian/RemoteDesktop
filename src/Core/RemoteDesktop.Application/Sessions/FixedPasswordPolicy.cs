@@ -11,10 +11,10 @@ public static class FixedPasswordPolicy
 {
     /// <summary>How short a fixed password may be. The window that asks for one shows the same number.</summary>
     /// <remarks>
-    /// Raised from 6 to 8 after an offline-attack measurement: at 600k PBKDF2 rounds a 6-character password of
-    /// digits is cracked in seconds on a GPU, and even lowercase+digits in minutes. Eight characters is still only a
-    /// floor, not a recommendation — a fixed password should be long and mixed, because it is the long-lived key to
-    /// an unattended machine (see docs/design/README.md, the "密码证明不是 PAKE" section).
+    /// The SRP-6a handshake leaves a passive eavesdropper nothing to crack offline, but a guesser can still try one
+    /// password per handshake, so the password remains the weakest link. Eight characters is only a floor, not a
+    /// recommendation — a fixed password should be long and mixed, because it is the long-lived key to an unattended
+    /// machine (see docs/design/README.md, "连接与身份" and "PAKE 降低的是离线爆破面，不是口令熵").
     /// </remarks>
     public const int MinimumLength = 8;
 

@@ -172,10 +172,11 @@ public static class SettingsPageActions
 
         if (IsUnset(session["POSTGRESCONNECTIONSTRING"]))
         {
-            // Not a space: an empty box here means "decide for this machine", and the configuration step reads the
-            // word the package ships as exactly that. A space would reach it as an empty string, which means "no
-            // database at all" — the one reading that would lose every device code on the next restart.
-            session["POSTGRESCONNECTIONSTRING"] = "auto";
+            // A space, not "auto": the box is meant to look empty (the label says "leave it empty for SQLite"), and
+            // the property only has to exist for the control to be editable. NormalizeSettings turns the space into
+            // "auto" on the way out, so the configuration step still reads "decide for this machine" rather than an
+            // empty string, which would mean "no database at all".
+            session["POSTGRESCONNECTIONSTRING"] = Space;
         }
 
         return ActionResult.Success;

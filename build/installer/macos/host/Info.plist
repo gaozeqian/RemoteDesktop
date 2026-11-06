@@ -23,8 +23,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.remotedesktop.host</string>
 
-    <!-- Finder/Applications icon. LSUIElement hides the Dock icon at runtime, not this one. Generated from the
-         client's Assets/icon-*.png by make-app.sh, so the two bundles cannot carry different artwork. -->
+    <!-- Bundle icon: TCC prompts, System Settings and Finder (if somebody navigates to the hidden install path).
+         LSUIElement hides the Dock icon at runtime, not this one. Generated from the client's Assets/icon-*.png by
+         make-app.sh, so the two bundles cannot carry different artwork. -->
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
 
@@ -64,6 +65,11 @@
 
     <key>NSMicrophoneUsageDescription</key>
     <string>Remote Desktop 需要访问麦克风，才能把本机声音转发给远端会话。</string>
+
+    <!-- macOS 15 and later gate access to local-network addresses. The host connects out to the rendezvous server and
+         to controllers on the same LAN; a missing key is a silent refusal, not a prompt. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Remote Desktop 需要访问局域网，才能连接同一网络内的信令服务器与其他设备。</string>
 
     <key>NSDesktopFolderUsageDescription</key>
     <string>Remote Desktop 需要访问桌面文件夹，才能在被控时传输其中的文件。</string>

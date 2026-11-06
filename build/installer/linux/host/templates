@@ -1,0 +1,44 @@
+Template: remotedesktop-host/server-address
+Type: string
+Default: @DEFAULT_RENDEZVOUS_URI@
+Description: Signaling server address:
+ The WebSocket address of the server this machine registers with, for
+ example wss://rd.example.com:5080/ws (TLS). Plain ws:// is only accepted
+ for a loopback address such as ws://127.0.0.1:5080/ws; a non-loopback
+ ws:// address is refused at startup unless Transport:AllowInsecureSignaling
+ is set explicitly.
+ .
+ 127.0.0.1 only reaches a server on this machine. Both machines in a
+ session must be pointed at the same server.
+
+Template: remotedesktop-host/server-certificate
+Type: string
+Default:
+Description: Server certificate:
+ Only used for a wss:// address. The PEM certificate of a server that
+ uses a self-signed certificate; it is installed into this machine's
+ trust store.
+ .
+ Leave empty if the server's certificate comes from a public authority,
+ or if the address is ws://.
+
+Template: remotedesktop-host/unattended-password
+Type: password
+Default:
+Description: Unattended access password:
+ The fixed password somebody can use to connect without a person at
+ this machine's keyboard. It is stored for each user who is signed in
+ when the package is configured, and must be at least 8 characters.
+ .
+ Leave empty to set no password on a fresh installation, or to keep the
+ one already stored on an upgrade or reinstall; an empty answer never
+ clears an existing password. Change it later with:
+  dpkg-reconfigure remotedesktop-host
+ .
+ The host runs inside a graphical session. If nobody is signed in at
+ installation time, the password cannot be stored; sign in and run the
+ host with --set-fixed-password as that user instead.
+ .
+ On Linux the password lets a connection through, but the desktop
+ portal still asks for control permission on every session, so an
+ unattended machine can be watched but not typed into.

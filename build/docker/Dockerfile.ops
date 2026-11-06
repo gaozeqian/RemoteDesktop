@@ -27,8 +27,8 @@ COPY --from=build /app ./
 RUN mkdir -p /data /home/app/.aspnet/DataProtection-Keys \
     && chown -R $APP_UID:$APP_UID /data /home/app/.aspnet
 
-# The console listens on all interfaces inside the container so it can be reached by a proxy or a published loopback
-# port; it is not a public listener by default.
+# The console listens on all interfaces inside the container so the gateway container can reach it. Compose does not
+# publish this port on the host.
 EXPOSE 5090/tcp
 
 USER $APP_UID

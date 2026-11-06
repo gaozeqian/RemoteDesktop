@@ -1,0 +1,271 @@
+#!/bin/sh
+#
+# Asks what this installation should use for its database and its TLS certificate.
+#
+# The questions are asked here rather than only in the post-install step so that apt can preconfigure the package
+# before unpacking it, and so that `dpkg-reconfigure remotedesktop-server` finds them. The postinst runs this script
+# again, because plain `dpkg -i` does not preconfigure and the questions still have to be asked during installation.
+#
+# Nothing is written here. The post-install step turns the answers into the settings files with the same
+# --configure-system code the Windows installer uses.
+set -e
+
+. /usr/share/debconf/confmodule
+
+INSTALL_DIRECTORY=/etc/remotedesktop-server
+DEFAULTS=/etc/default/remotedesktop-server
+DEFAULT_DATABASE_PATH=/var/lib/remotedesktop-server/rendezvous.db
+PACKAGE=remotedesktop-server
+MARKER=/run/remotedesktop-server.questions-asked
+
+# The post-install step passes this when it runs the questions itself (plain dpkg -i). apt's preconfiguration does
+# not: it asks before unpacking and leaves the marker the post-install step reads.
+post_install=false
+for argument in "$@"; do
+    [ "$argument" = "--post-install" ] && post_install=true
+done
+
+# A fresh installation and a reinstallation ask again; a version upgrade keeps the answers already given. Both
+# callers can make that decision from `dpkg-query` and their second argument:
+#   - preconfiguration is passed the version being installed, while the installed package is still the old one;
+#   - the post-install step is passed the version that was configured before, while the package is already the new
+#     one.
+# In both cases "not installed" or "the two versions are the same" means this is not an upgrade.
+force_ask=false
+if [ "${1:-}" = "reconfigure" ]; then
+    # `dpkg-reconfigure` exists to ask; the frontend shows the questions again on its own.
+    force_ask=true
+else
+    installed_version=$(dpkg-query -W -f='${Version}' "$PACKAGE" 2>/dev/null || true)
+    if [ -z "$installed_version" ]; then
+        force_ask=true
+    elif [ "$post_install" = true ] && [ -z "${2:-}" ]; then
+        # A fresh install called from the post-install step has no previous version. Debconf may still hold seen
+        # answers from an installation that was removed rather than purged; show them again.
+        force_ask=true
+    elif [ -n "${2:-}" ] && [ "$installed_version" = "$2" ]; then
+        force_ask=true
+    fi
+fi
+
+provider=sqlite
+database_path=$DEFAULT_DATABASE_PATH
+postgres=
+have_postgres=false
+tls_mode=generate
+tls_certificate=
+tls_password=
+tls_hostname=
+
+settings=$INSTALL_DIRECTORY/Rendezvous/appsettings.json
+if [ -r "$settings" ]; then
+    # The section is bounded rather than the whole file: "Path" appears both in the database section and under
+    # Kestrel, and reading the first one from the file would point the database at the certificate on an HTTPS
+    # installation.
+    value=$(sed -n '/"Rendezvous"/,/^  }/p' "$settings" |
+        sed -n 's/.*"Provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    existing_provider=$value
+    case "$value" in
+        sqlite|postgres|none) provider=$value ;;
+    esac
+
+    value=$(sed -n '/"Rendezvous"/,/^  }/p' "$settings" |
+        sed -n 's/.*"Path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    [ -n "$value" ] && database_path=$value
+
+    # A connection string left behind is only an answer to "which PostgreSQL" when the settings use PostgreSQL. The
+    # server removes both keys when it writes sqlite or none, so a string beside another provider is a hand edit,
+    # and the server would reuse it silently if the question were skipped. A file with no provider is the older
+    # layout, where a connection string is how PostgreSQL was chosen.
+    case "$existing_provider" in
+        postgres|"")
+            if grep -q '"ConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings" ||
+                grep -q '"PostgresConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings"; then
+                have_postgres=true
+            fi
+            ;;
+    esac
+
+    if grep -q '"Urls"[[:space:]]*:[[:space:]]*"https://' "$settings"; then
+        value=$(sed -n '/"Kestrel"/,/^  }/p' "$settings" |
+            sed -n 's/.*"Path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        case "$value" in
+            */tls/signaling.crt) tls_mode=generate ;;
+            "") tls_mode=generate ;;
+            *) tls_mode=existing; tls_certificate=$value ;;
+        esac
+
+        # A PFX configured by hand carries its password in Kestrel's settings. Seed the question with it so that
+        # running the installer's step again does not replace it with an empty one.
+        value=$(sed -n '/"Kestrel"/,/^  }/p' "$settings" |
+            sed -n 's/.*"Password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        [ -n "$value" ] && tls_password=$value
+    else
+        tls_mode=none
+    fi
+fi
+
+# The /etc/default file is the preseed and non-interactive interface, and the previous packages' only setting.
+# "auto" there means "keep what this machine already does", which is exactly the value seeded above.
+if [ -r "$DEFAULTS" ]; then
+    # shellcheck disable=SC1090
+    . "$DEFAULTS"
+
+    case "${RD_DATABASE:-}" in
+        sqlite|postgres|none) provider=$RD_DATABASE ;;
+    esac
+
+    [ -n "${RD_DATABASE_PATH:-}" ] && database_path=$RD_DATABASE_PATH
+
+    case "${RD_POSTGRES:-}" in
+        ""|auto) ;;
+        *) postgres=$RD_POSTGRES; have_postgres=true ;;
+    esac
+
+    case "${RD_TLS:-}" in
+        generate) tls_mode=generate ;;
+        auto|"") tls_mode=none ;;
+        /*) tls_mode=existing; tls_certificate=$RD_TLS ;;
+    esac
+
+    [ -n "${RD_TLS_PASSWORD:-}" ] && tls_password=$RD_TLS_PASSWORD
+    [ -n "${RD_TLS_HOSTNAME:-}" ] && tls_hostname=$RD_TLS_HOSTNAME
+fi
+
+# Seed a question the first time it is asked, and make it visible again when this is a reinstall. A question that
+# has been answered before keeps its answer: an upgrade must not silently change what the machine is running.
+ask_question() {
+    question=$1
+    value=$2
+    seen=false
+    if db_fget "$question" seen; then
+        [ "$RET" = "true" ] && seen=true
+    fi
+    if [ "$seen" = false ]; then
+        db_set "$question" "$value" || true
+    fi
+    if [ "$force_ask" = true ]; then
+        # The value already there — the previous installation's answer, or the one preconfiguration just
+        # collected — is the default shown; it is not replaced by the file value.
+        db_fset "$question" seen false || true
+    fi
+}
+
+ask_question remotedesktop-server/database-provider "$provider"
+ask_question remotedesktop-server/database-path "$database_path"
+ask_question remotedesktop-server/postgres-connection "$postgres"
+ask_question remotedesktop-server/tls-mode "$tls_mode"
+ask_question remotedesktop-server/tls-certificate "$tls_certificate"
+ask_question remotedesktop-server/tls-password "$tls_password"
+ask_question remotedesktop-server/tls-hostname "$tls_hostname"
+
+db_input high remotedesktop-server/database-provider || true
+db_go || true
+db_get remotedesktop-server/database-provider || true
+provider=${RET:-sqlite}
+
+case "$provider" in
+    sqlite)
+        db_input high remotedesktop-server/database-path || true
+        db_go || true
+        db_get remotedesktop-server/database-path || true
+        database_path=${RET:-$DEFAULT_DATABASE_PATH}
+
+        case "$database_path" in
+            /*) ;;
+            *)
+                echo "The SQLite database path must be absolute (got '$database_path')." >&2
+                exit 1
+                ;;
+        esac
+        case "$database_path" in
+            *[[:space:]]*|*[[:cntrl:]]*)
+                echo "The SQLite database path contains whitespace or control characters (got '$database_path')." >&2
+                exit 1
+                ;;
+        esac
+        case "$database_path" in
+            */)
+                echo "The SQLite database path must name a file, not a directory (got '$database_path')." >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    postgres)
+        db_input high remotedesktop-server/postgres-connection || true
+        db_go || true
+        db_get remotedesktop-server/postgres-connection || true
+        postgres=$RET
+
+        if [ -z "$postgres" ] && [ "$have_postgres" = false ]; then
+            # Ask again as a critical question, which is how a frontend is told the answer is not usable. A
+            # non-interactive installation that reaches the second empty answer has nothing to fall back on.
+            db_input critical remotedesktop-server/postgres-connection || true
+            db_go || true
+            db_get remotedesktop-server/postgres-connection || true
+            postgres=$RET
+            if [ -z "$postgres" ]; then
+                echo "PostgreSQL was chosen but no connection string was given." >&2
+                exit 1
+            fi
+        fi
+        ;;
+    none)
+        ;;
+    *)
+        echo "Unknown database provider '$provider'." >&2
+        exit 1
+        ;;
+esac
+
+db_input high remotedesktop-server/tls-mode || true
+db_go || true
+db_get remotedesktop-server/tls-mode || true
+tls_mode=${RET:-generate}
+
+case "$tls_mode" in
+    generate)
+        db_input high remotedesktop-server/tls-hostname || true
+        db_go || true
+        db_get remotedesktop-server/tls-hostname || true
+        tls_hostname=$RET
+        ;;
+    existing)
+        db_input high remotedesktop-server/tls-certificate || true
+        db_go || true
+        db_get remotedesktop-server/tls-certificate || true
+        tls_certificate=$RET
+
+        while :; do
+            if [ -n "$tls_certificate" ] && [ -f "$tls_certificate" ] && [ -r "$tls_certificate" ]; then
+                break
+            fi
+            db_input critical remotedesktop-server/tls-certificate || true
+            db_go || true
+            db_get remotedesktop-server/tls-certificate || true
+            tls_certificate=$RET
+            if [ -z "$tls_certificate" ]; then
+                echo "The 'existing' TLS mode needs a certificate file." >&2
+                exit 1
+            fi
+        done
+
+        db_input high remotedesktop-server/tls-password || true
+        db_go || true
+        db_get remotedesktop-server/tls-password || true
+        tls_password=$RET
+        ;;
+    none)
+        ;;
+    *)
+        echo "Unknown TLS mode '$tls_mode'." >&2
+        exit 1
+        ;;
+esac
+
+# Leave a marker when this was apt's preconfiguration. The post-install step runs in the same transaction and must
+# not ask the same questions a second time (or re-seed them from files that have just been unpacked).
+if [ "${1:-}" = "configure" ] && [ "$post_install" = false ] &&
+    [ -d "$(dirname "$MARKER")" ] && [ -w "$(dirname "$MARKER")" ]; then
+    : >"$MARKER" 2>/dev/null || true
+fi

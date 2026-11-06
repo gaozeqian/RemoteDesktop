@@ -1,0 +1,143 @@
+Remote Desktop 服务器（Linux）—— 安装后配置与 Ops 证书信任
+============================================================
+
+安装包把四个程序装到 /usr/lib/remotedesktop-server：
+  Rendezvous/  信令
+  Relay/       中继
+  Ops/         运维监控台
+  Gateway/     运维监控台的 HTTPS 反向代理
+
+真正的设置在 /etc/remotedesktop-server：
+  Rendezvous/appsettings.json
+  Relay/appsettings.json
+  Ops/appsettings.json
+  Gateway/appsettings.json
+  tls/signaling.crt          自动生成的证书公钥
+  tls/signaling.key          私钥，只有 root 和服务组可读
+  server-setup.log
+
+四个 systemd 服务是：
+  remotedesktop-rendezvous
+  remotedesktop-relay
+  remotedesktop-ops
+  remotedesktop-gateway
+
+
+一、访问运维监控台
+------------------
+
+Ops 本身只监听 http://127.0.0.1:5090。Gateway 默认监听：
+
+    https://0.0.0.0:5443
+
+其他机器使用下面的地址：
+
+    https://<服务器IP>:5443
+
+Gateway 使用自签名证书，证书的 IP SAN 自动包含本机 IPv4 地址，不需要域名。
+证书公钥在：
+
+    /etc/remotedesktop-server/tls/signaling.crt
+
+在启用了 ufw 的服务器上，安装包默认不修改防火墙。需要远程访问时，可以：
+  - 在 /etc/default/remotedesktop-server 设置 RD_OPEN_FIREWALL="1" 后重新配置；或
+  - 由管理员手工放行 TCP 5443（不要放行 Ops 的 5090）。
+
+监听地址可在 /etc/default/remotedesktop-server 修改：
+  RD_GATEWAY_LISTEN="https://0.0.0.0:5443"
+  RD_GATEWAY_HOSTNAME=""
+改完后运行：
+
+    sudo dpkg-reconfigure remotedesktop-server
+
+如果只改现有 Gateway 的 appsettings.json，改完重启：
+
+    sudo systemctl restart remotedesktop-gateway
+
+
+二、每台运维电脑必须信任自签名证书
+----------------------------------
+
+不能靠忽略浏览器的证书警告代替导入。配置目录只有 root 和服务组可读，先在服务器上
+导出一份可下载的公钥，再通过可信渠道核对它的 SHA-256 指纹：
+
+    sudo install -m 0644 /etc/remotedesktop-server/tls/signaling.crt /tmp/ops-gateway.crt
+    openssl x509 -in /tmp/ops-gateway.crt -noout -fingerprint -sha256
+
+在运维电脑上下载该公钥，然后执行：
+
+    scp <管理员账号>@<服务器IP>:/tmp/ops-gateway.crt ./signaling.crt
+
+完成后可删除服务器上的 /tmp/ops-gateway.crt。在运维电脑上执行：
+
+Windows（管理员 PowerShell）：
+    Import-Certificate -FilePath .\signaling.crt `
+        -CertStoreLocation Cert:\LocalMachine\Root
+  写入本机受信任的根证书颁发机构；Chrome/Edge 会使用。Firefox 使用独立信任库，
+  应在 Firefox 的 设置 -> 隐私与安全 -> 证书 -> 查看证书 -> 证书颁发机构 中导入，
+  并勾选“信任由此证书颁发机构来标识网站”。
+
+Linux（Debian/Ubuntu）：
+    sudo cp signaling.crt /usr/local/share/ca-certificates/remotedesktop-ops-gateway.crt
+    sudo update-ca-certificates
+
+Linux（Fedora/RHEL）：
+    sudo cp signaling.crt /etc/pki/ca-trust/source/anchors/remotedesktop-ops-gateway.crt
+    sudo update-ca-trust
+
+macOS：
+    sudo security add-trusted-cert -d -r trustRoot \
+        -k /Library/Keychains/System.keychain signaling.crt
+  也可以在“钥匙串访问”中导入证书，把“使用此证书时”设置为“始终信任”。
+
+导入后关闭并重新打开浏览器，访问 https://<服务器IP>:5443。地址栏应显示正常锁标识，
+且没有证书警告。服务器 IP 改变或证书重新生成后，需要重新分发并信任新证书。
+证书私钥只能留在服务器上：信任该证书的电脑会信任持有对应私钥的人提供的服务。
+
+
+三、创建第一个 Ops 管理员
+-------------------------
+
+Ops 没有默认账号，也没有网页初始化入口。执行：
+
+    sudo -u remotedesktop \
+      /usr/lib/remotedesktop-server/Ops/RemoteDesktop.Server.Ops \
+      --create-admin admin --config-directory /etc/remotedesktop-server/Ops
+
+命令会交互式询问口令并打印一次 TOTP 密钥。之后登录需要口令 + TOTP。
+创建账号后不需要重启 Gateway：
+
+    sudo systemctl restart remotedesktop-ops
+
+
+四、改配置和查看日志
+--------------------
+
+常规设置优先通过 /etc/default/remotedesktop-server 和
+dpkg-reconfigure remotedesktop-server 修改。要手工改 appsettings.json 时，
+改完重启对应服务，例如：
+
+    sudo systemctl restart remotedesktop-ops
+    sudo systemctl restart remotedesktop-gateway
+
+日志：
+
+    journalctl -u remotedesktop-ops -f
+    journalctl -u remotedesktop-gateway -f
+
+本机健康检查：
+
+    curl http://127.0.0.1:5090/health
+    curl -k https://127.0.0.1:5443/health
+    第二条必须返回 404：Gateway 的健康检查不会暴露给远程访问者。
+
+
+五、卸载
+--------
+
+    sudo apt remove remotedesktop-server
+
+默认保留 /etc/remotedesktop-server 和 /var/lib/remotedesktop-server。
+彻底删除配置、数据库和证书：
+
+    sudo apt purge remotedesktop-server

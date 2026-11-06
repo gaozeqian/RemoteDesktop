@@ -1,20 +1,55 @@
 #!/bin/sh
 #
-# Takes the host off the list of things that start with a session.
+# Takes the host off the list of things that start with a session, and stops the copies that are running now.
 #
-# It does not stop it in anyone's running session: this script runs as root, and reaching into a user's session from
-# here to stop a service would be a package reaching further than it has any business reaching. The unit is gone from
-# disk by the time a running instance would next be restarted, so it ends by itself.
+# The service is a user unit, so it lives in each signed-in user's session manager and `systemctl --system` cannot
+# reach it. Leaving the process behind after its package is gone is worse than reaching into the session: it is a
+# controlled end nobody can see, and the client trusts its control socket and keeps delegating to it.
 #
 # Nothing belonging to a person is touched — their device identity, remembered grant and logs live in their own home
 # directory, and removing a package is not a reason to make their machine a different device.
 set -e
 
+# Only a purge needs debconf. Removal has to work even when debconf is missing or the package is half-installed.
+have_debconf=false
+if [ "${1:-}" = "purge" ] && [ -f /usr/share/debconf/confmodule ]; then
+    . /usr/share/debconf/confmodule
+    have_debconf=true
+fi
+
+stop_running_services() {
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl list-users --no-legend 2>/dev/null | while read -r uid user _; do
+            [ -n "$uid" ] || continue
+            runtime=/run/user/$uid
+            [ -S "$runtime/bus" ] || continue
+            if command -v runuser >/dev/null 2>&1; then
+                runuser -u "$user" -- env \
+                    XDG_RUNTIME_DIR="$runtime" \
+                    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+                    systemctl --user stop app-RemoteDesktopHost.service >/dev/null 2>&1 || true
+            fi
+        done
+    fi
+
+    # A manager that no longer has the unit (its file can be gone before this script runs) cannot stop it by name.
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -TERM -f '^/usr/lib/remotedesktop-host/RemoteDesktop.HostService( |$)' 2>/dev/null || true
+    fi
+}
+
 case "$1" in
     remove)
+        rm -f /run/remotedesktop-host.questions-asked
+        stop_running_services
+
         if command -v systemctl >/dev/null 2>&1; then
             systemctl --global disable app-RemoteDesktopHost.service >/dev/null 2>&1 || true
+            # The 0.3.0 unit name. Its file is gone, but an enable symlink written by that version is not part of any
+            # package and has to be removed here.
+            systemctl --global disable remotedesktop-host.service >/dev/null 2>&1 || true
         fi
+        rm -f /etc/systemd/user/graphical-session.target.wants/remotedesktop-host.service
 
         # See the client's postrm: the trust entry this package may have added goes with it.
         rm -f /usr/local/share/ca-certificates/remotedesktop-signaling-host.crt
@@ -23,7 +58,18 @@ case "$1" in
         fi
         ;;
 
-    purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    purge)
+        stop_running_services
+
+        # A purge followed by an install is a new installation: ask the questions again.
+        if [ "$have_debconf" = true ]; then
+            db_purge || true
+            db_stop
+        fi
+        rm -f /run/remotedesktop-host.questions-asked
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;
 
     *)

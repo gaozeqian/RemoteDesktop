@@ -1,0 +1,118 @@
+#!/bin/bash
+#
+# Applies the install-time answers to the host and starts the login item in the current graphical session.
+#
+# The answers part is shared with the client package. The launchd part is what makes the package usable immediately:
+# a plist dropped into /Library/LaunchAgents is only loaded at the next login, so without an explicit bootstrap the
+# conclusion page's `launchctl kickstart gui/<uid>/com.remotedesktop.host` fails with "Could not find service" and the
+# first-run permission prompts never appear. Bootstrapping here also restarts the upgraded host with the new binary.
+#
+set -e
+
+# The password file exists only between writing it and the one-shot command reading it. The trap also covers a
+# failed command: a secret must not be left in /var/tmp after the installer exits. The same applies to the root copy
+# of the pane's answers, which can contain the same password when a later validation step fails.
+PASSWORD_FILE=""
+ROOT_ANSWERS=""
+cleanup_install_secrets() {
+    if [ -n "$PASSWORD_FILE" ]; then
+        rm -f "$PASSWORD_FILE"
+    fi
+    if [ -n "$ROOT_ANSWERS" ]; then
+        rm -f "$ROOT_ANSWERS"
+    fi
+}
+trap cleanup_install_secrets EXIT
+
+. "$(dirname "$0")/apply-answers.sh"
+
+# Read the unattended password before apply_rendezvous_answers deletes the root copy of the pane's answers. A blank
+# value means "leave the existing fixed password alone", which is what an upgrade with the field left empty must do.
+ROOT_ANSWERS="$(rd_root_answers host)"
+password_answers="$ROOT_ANSWERS"
+if [ ! -f "$password_answers" ]; then
+    password_answers="/Library/Application Support/RemoteDesktop/install-answers.plist"
+fi
+unattended_password=""
+if [ -f "$password_answers" ]; then
+    ANSWERS="$password_answers"
+    unattended_password="$(rd_answer UnattendedPassword)"
+fi
+
+apply_rendezvous_answers host
+
+PLIST="/Library/LaunchAgents/com.remotedesktop.host.plist"
+APP="/Library/Application Support/RemoteDesktop/Host/Remote Desktop Host.app"
+HOST_BINARY="$APP/Contents/MacOS/RemoteDesktop.HostService"
+console_user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+uid=""
+if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" != "loginwindow" ]; then
+    uid="$(id -u "$console_user" 2>/dev/null || true)"
+fi
+
+# The fixed password lives in the login keychain of the user the host runs as. Running the one-shot command from this
+# root postinstall directly would write a secret the service never reads (root's keychain, root's data directory).
+# launchctl asuser enters that user's GUI session; sudo -H gives the command the user's HOME so Keychain finds the
+# login keychain, and -n keeps a hypothetical prompt from hanging the installer.
+apply_fixed_password() {
+    [ -n "$unattended_password" ] || return 0
+
+    if [ "${#unattended_password}" -lt 8 ]; then
+        echo "Remote Desktop Host: the unattended password is shorter than 8 characters; it was not set." >&2
+        exit 1
+    fi
+    if [ ! -x "$HOST_BINARY" ]; then
+        echo "Remote Desktop Host: the application is missing; the unattended password was not set." >&2
+        exit 1
+    fi
+    if [ -z "$uid" ]; then
+        echo "Remote Desktop Host: no graphical user is logged in, so the unattended password could not be stored." >&2
+        echo "  After logging in, run as that user:" >&2
+        echo "  \"$HOST_BINARY\" --set-fixed-password '<password>'" >&2
+        return 0
+    fi
+
+    # Pass the secret through a 0600 file owned by the console user, not through argv or a pipe: launchctl asuser
+    # does not reliably forward stdin, and argv is visible to every local user.
+    PASSWORD_FILE="$(mktemp /var/tmp/com.remotedesktop.host-password.XXXXXX)"
+    chmod 600 "$PASSWORD_FILE"
+    printf '%s' "$unattended_password" > "$PASSWORD_FILE"
+    chown "$console_user" "$PASSWORD_FILE"
+
+    if /bin/launchctl asuser "$uid" \
+        /usr/bin/sudo -H -n -u "$console_user" "$HOST_BINARY" --set-fixed-password-file "$PASSWORD_FILE"; then
+        echo "Remote Desktop Host: unattended password saved for $console_user."
+    else
+        echo "Remote Desktop Host: could not save the unattended password for $console_user." >&2
+        echo "  After logging in, run as that user:" >&2
+        echo "  \"$HOST_BINARY\" --set-fixed-password '<password>'" >&2
+        exit 1
+    fi
+    rm -f "$PASSWORD_FILE"
+    PASSWORD_FILE=""
+}
+
+apply_fixed_password
+
+if [ ! -d "$APP" ]; then
+    echo "Remote Desktop Host: the application is not in /Applications yet; the host starts at the next login." >&2
+    exit 0
+fi
+
+if [ -z "$uid" ]; then
+    echo "Remote Desktop Host: no graphical session is logged in; the host starts at the next login."
+    echo "Remote Desktop Host: to start it now: launchctl bootstrap gui/\$(id -u) $PLIST"
+    exit 0
+fi
+
+# enable first: a job an earlier administrator disabled would otherwise be loaded but never started.
+launchctl enable "gui/$uid/com.remotedesktop.host" 2>/dev/null || true
+
+if launchctl bootstrap "gui/$uid" "$PLIST"; then
+    echo "Remote Desktop Host: started for $console_user."
+else
+    echo "Remote Desktop Host: could not start the login item for $console_user." >&2
+    echo "  Run: launchctl bootstrap gui/$uid $PLIST" >&2
+fi
+
+exit 0

@@ -41,6 +41,7 @@ public sealed class AuthService(
     OpsStore store,
     OpsOptions options,
     LoginThrottle throttle,
+    AddressThrottle addressThrottle,
     ChallengeStore challenges,
     TimeProvider time)
 {
@@ -64,9 +65,16 @@ public sealed class AuthService(
             return new SignInOutcome(SignInStatus.Locked, RetryAfter: retryAfter);
         }
 
+        // A spray across user names never spends one name's budget; this one counts every failure from the address.
+        if (addressThrottle.IsLocked(address, out var addressRetryAfter))
+        {
+            return new SignInOutcome(SignInStatus.Locked, RetryAfter: addressRetryAfter);
+        }
+
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
         {
             throttle.RecordFailure(key);
+            addressThrottle.RecordFailure(address);
             return new SignInOutcome(SignInStatus.InvalidCredentials);
         }
 
@@ -76,6 +84,7 @@ public sealed class AuthService(
         if (user is null || !matches)
         {
             throttle.RecordFailure(key);
+            addressThrottle.RecordFailure(address);
             if (user is not null)
             {
                 await AuditAsync(user.Username, "auth.login.denied", user.Id, address, "denied", cancellationToken)
@@ -133,9 +142,15 @@ public sealed class AuthService(
             return new SignInOutcome(SignInStatus.Locked, RetryAfter: retryAfter);
         }
 
-        if (!Totp.Verify(user.TotpSecret, code ?? string.Empty, time.GetUtcNow()))
+        if (addressThrottle.IsLocked(address, out var addressRetryAfter))
+        {
+            return new SignInOutcome(SignInStatus.Locked, RetryAfter: addressRetryAfter);
+        }
+
+        if (!Totp.TryVerify(user.TotpSecret, code ?? string.Empty, time.GetUtcNow(), out var step))
         {
             throttle.RecordFailure(totpKey);
+            addressThrottle.RecordFailure(address);
 
             if (!challenges.RecordFailure(challengeId!))
             {
@@ -143,6 +158,18 @@ public sealed class AuthService(
                     .ConfigureAwait(false);
             }
 
+            return new SignInOutcome(SignInStatus.InvalidCredentials);
+        }
+
+        // A valid code is still only valid once. Without this, anyone who sees the six digits — over a shoulder, in a
+        // screenshot, in a proxy log — can present them again with their own password challenge inside the
+        // acceptance window. The update is atomic, so two simultaneous requests cannot both consume the same step.
+        if (!await store.TryConsumeTotpStepAsync(user.Id, step, cancellationToken).ConfigureAwait(false))
+        {
+            throttle.RecordFailure(totpKey);
+            addressThrottle.RecordFailure(address);
+            await AuditAsync(user.Username, "auth.totp.replay", user.Id, address, "denied", cancellationToken)
+                .ConfigureAwait(false);
             return new SignInOutcome(SignInStatus.InvalidCredentials);
         }
 
@@ -174,7 +201,7 @@ public sealed class AuthService(
     {
         var now = time.GetUtcNow();
         var token = SessionToken.Create();
-        var csrf = SessionToken.Create();
+        var csrf = SessionToken.CsrfFor(token);
 
         await store.CreateSessionAsync(
             new OpsSessionRecord(

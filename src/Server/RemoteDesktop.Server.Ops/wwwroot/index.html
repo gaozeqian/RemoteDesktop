@@ -16,7 +16,7 @@
       <div class="brand-logo">RD</div>
       <div>
         <div class="brand-name">RemoteDesktop</div>
-        <div class="brand-sub">运维监控台 · M1</div>
+        <div class="brand-sub">运维监控台</div>
       </div>
     </div>
 
@@ -68,7 +68,7 @@
       <button class="nav-item" type="button" data-page="alerts">告警中心</button>
       <button class="nav-item" type="button" data-page="actions">管理动作</button>
       <button class="nav-item" type="button" data-page="audit" id="navAudit">审计日志</button>
-      <button class="nav-item" type="button" disabled>系统设置 <span class="soon">M6</span></button>
+      <button class="nav-item" type="button" data-page="users" id="navUsers" hidden>账号管理</button>
     </nav>
 
     <div class="sidebar-foot">
@@ -127,7 +127,7 @@
           <div class="card kpi">
             <div class="kpi-label">今日告警</div>
             <div class="kpi-value" id="kpiAlerts">—</div>
-            <div class="kpi-foot">M3 接入规则引擎后可见</div>
+            <div class="kpi-foot">UTC 当日 0 点起触发的告警</div>
           </div>
         </section>
 
@@ -221,6 +221,17 @@
         </div>
 
         <div class="card">
+          <div class="card-head"><h2>静默</h2><span class="muted" id="silencesHint"></span></div>
+          <p class="muted">静默只压通知：告警照常打开与恢复、照常写审计。窗口结束后不会补发这段时间跳过的消息，
+            需要重新触发一次才会再通知。</p>
+          <table class="data-table">
+            <thead><tr><th>范围</th><th>原因</th><th>到</th><th>创建人</th><th></th></tr></thead>
+            <tbody id="silenceTbody"></tbody>
+          </table>
+          <p class="empty" id="silencesEmpty" hidden>当前没有静默。</p>
+        </div>
+
+        <div class="card">
           <div class="card-head"><h2>规则</h2><span class="muted" id="rulesHint"></span></div>
           <table class="data-table">
             <thead><tr><th>名称</th><th>类型</th><th>条件</th><th>持续时间</th><th>严重度</th><th>启用</th><th></th></tr></thead>
@@ -233,11 +244,13 @@
               <select id="ruleKind">
                 <option value="scrape">抓取失败</option>
                 <option value="single">单指标</option>
+                <option value="ratio">比值</option>
                 <option value="session.rtt">会话 RTT</option>
                 <option value="session.direct">直连率</option>
               </select>
             </label>
-            <label class="field"><span>指标 / 分子</span><input id="ruleMetric" type="text" placeholder="remotedesktop_devices_online"></label>
+            <label class="field" id="ruleMetricField"><span>指标 / 分子</span><select id="ruleMetric"></select></label>
+            <label class="field" id="ruleDenominatorField" hidden><span>分母指标</span><select id="ruleDenominator"></select></label>
             <label class="field"><span>比较</span>
               <select id="ruleComparator"><option value="gt">大于</option><option value="lt">小于</option></select>
             </label>
@@ -325,6 +338,45 @@
         </div>
       </section>
 
+      <!-- ---------- 账号管理 ---------- -->
+      <section class="page" id="page-users" hidden>
+        <div class="banner">
+          <div>
+            <strong>改口令、重置动态码、停用或删除账号，都会立刻结束该账号的所有会话。</strong>
+            <p>最后一个可用的管理员不能被停用或删除。新账号的 TOTP 密钥只显示一次；丢失后用“重置 TOTP”生成新的。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>账号</h2><span class="muted" id="usersHint"></span></div>
+          <table class="data-table">
+            <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th><th></th></tr></thead>
+            <tbody id="userTbody"></tbody>
+          </table>
+          <p class="empty" id="usersEmpty" hidden>还没有账号。</p>
+          <p class="hint mono" id="usersNotice" hidden></p>
+        </div>
+
+        <div class="card" id="userFormCard" hidden>
+          <div class="card-head"><h2>新建账号</h2><span class="muted">管理员</span></div>
+          <form id="userForm" class="form-grid">
+            <label class="field"><span>账号</span><input id="newUserName" type="text" required maxlength="64" autocomplete="off"></label>
+            <label class="field"><span>口令（至少 12 位）</span><input id="userPassword" type="password" required minlength="12" autocomplete="new-password"></label>
+            <label class="field"><span>角色</span>
+              <select id="newUserRole">
+                <option value="viewer">viewer（只读）</option>
+                <option value="operator">operator（可确认告警）</option>
+                <option value="admin">admin（管理员）</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button class="primary" type="submit" id="userSubmit">创建</button>
+              <span class="error inline" id="userError" hidden></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
       <!-- ---------- 节点管理 ---------- -->
       <section class="page" id="page-nodes" hidden>
         <div class="banner">
@@ -343,6 +395,33 @@
             <tbody id="nodeTbody"></tbody>
           </table>
           <p class="empty" id="nodesEmpty" hidden>还没有节点。在下面登记第一个。</p>
+        </div>
+
+        <div class="card" id="nodeDetailCard" hidden>
+          <div class="card-head">
+            <h2 id="nodeDetailTitle">节点详情</h2>
+            <div class="toolbar">
+              <button class="small" type="button" id="nodeDetailClose">关闭</button>
+            </div>
+          </div>
+          <div id="nodeDetailInfo" class="muted"></div>
+
+          <div class="token-panel">
+            <div class="toolbar">
+              <strong>独立令牌</strong>
+              <span id="nodeTokenState" class="muted"></span>
+              <button class="small" type="button" id="nodeTokenRotate">生成独立令牌</button>
+              <button class="small danger" type="button" id="nodeTokenClear" hidden>清除</button>
+            </div>
+            <p class="muted">生成后把令牌填到该节点的 <code>Rendezvous:NodeToken</code> 或 <code>Relay:NodeToken</code>
+              并重启节点；控制台只在生成时显示一次。重置会立刻让旧令牌失效，节点在改好配置前抓取会失败。</p>
+          </div>
+
+          <table class="data-table">
+            <thead><tr><th>指标</th><th>最新值</th><th>采样时间</th></tr></thead>
+            <tbody id="nodeMetricTbody"></tbody>
+          </table>
+          <p class="empty" id="nodeMetricsEmpty" hidden>该节点还没有被抓取到指标。</p>
         </div>
 
         <div class="card" id="nodeFormCard" hidden>

@@ -14,13 +14,13 @@ namespace RemoteDesktop.Architecture.UnitTests;
 ///
 /// Formatting (blank lines around headings and lists, code fences tagged with a language) is deliberately *not*
 /// here — that is markdownlint's job in CI. This class checks meaning: does the file belong there, and does the
-/// link go anywhere. The split is spelled out in docs/STYLE.md §7.
+/// link go anywhere. The split is spelled out in the “靠测试，不靠自觉” section of docs/STYLE.md.
 /// </summary>
 public class DocumentationTests
 {
     private static readonly string Root = FindRepositoryRoot();
 
-    /// <summary>docs/STYLE.md §4 — the entry points a reader is expected to be able to reach.</summary>
+    /// <summary>The entry points a reader is expected to be able to reach (“必备文件” in docs/STYLE.md).</summary>
     private static readonly string[] RequiredDocuments =
     [
         "README.md",
@@ -30,11 +30,15 @@ public class DocumentationTests
         "LICENSE",
         "docs/README.md",
         "docs/STYLE.md",
+        "docs/usage/README.md",
+        "docs/design/README.md",
+        "docs/ops/README.md",
+        "docs/ports/README.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
     ];
 
     /// <summary>
-    /// The only names allowed at the repository root (docs/STYLE.md §3): every one of them is a name GitHub or
+    /// The only names allowed at the repository root (“叫什么：文件名规范” in docs/STYLE.md): every one of them is a name GitHub or
     /// convention fixes, so a new one appearing here is a decision nobody made.
     /// CODE_OF_CONDUCT.md is on the list because it is the one that will be added if this ever takes outside
     /// contributors; it is not required.
@@ -49,10 +53,10 @@ public class DocumentationTests
         "CODE_OF_CONDUCT.md",
     ];
 
-    /// <summary>docs/STYLE.md §2 — the index and the style guide, and nothing else.</summary>
+    /// <summary>The index and the style guide, and nothing else (“放哪：按读者分目录” in docs/STYLE.md).</summary>
     private static readonly string[] DocsRootAllowance = ["docs/README.md", "docs/STYLE.md"];
 
-    /// <summary>The three sections an outside reader looks for first (docs/STYLE.md §5).</summary>
+    /// <summary>The three sections an outside reader looks for first (“怎么写：README 是落地页” in docs/STYLE.md).</summary>
     private static readonly string[] RequiredReadmeSections = ["构建与测试", "文档", "许可证"];
 
     /// <summary>
@@ -69,7 +73,7 @@ public class DocumentationTests
             .Where(relative => !File.Exists(Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar))))
             .ToArray();
 
-        AssertNoOffenders(missing, "documents docs/STYLE.md §4 requires but which do not exist:");
+        AssertNoOffenders(missing, "documents the “必备文件” section of docs/STYLE.md requires but which do not exist:");
     }
 
     /// <summary>
@@ -174,9 +178,8 @@ public class DocumentationTests
     }
 
     /// <summary>
-    /// docs/STYLE.md §3. docs/ and the script trees are lower-case kebab-case; docs/reviews/ additionally names its
-    /// snapshots after their subject and date; the repository root and .github/ are the two places where the name is
-    /// fixed by GitHub rather than by us.
+    /// The naming rules in docs/STYLE.md (“叫什么：文件名规范”). docs/ and the script trees are lower-case kebab-case;
+    /// the two places where the name is fixed by GitHub rather than by us.
     /// </summary>
     [Fact]
     public void Document_file_names_follow_the_conventions()
@@ -186,30 +189,11 @@ public class DocumentationTests
             .Where(relative => !FollowsNamingRule(relative))
             .ToArray();
 
-        AssertNoOffenders(offenders, "documents whose name does not follow docs/STYLE.md §3:");
+        AssertNoOffenders(offenders, "documents whose name does not follow the “叫什么：文件名规范” section of docs/STYLE.md:");
     }
 
     /// <summary>
-    /// A review is a snapshot, and snapshots live together — see docs/reviews/README.md. Naming is what makes it
-    /// possible to tell one apart from the living documents around it. The dated form is matched explicitly: the
-    /// generic kebab-case rule in <see cref="Document_file_names_follow_the_conventions"/> cannot tell
-    /// "foo-review-2026-11-01.md" outside docs/reviews/ from an ordinary document, so without the date alternative
-    /// here a misplaced dated review would slip past both tests.
-    /// </summary>
-    [Fact]
-    public void Reviews_are_archived_under_docs_reviews()
-    {
-        var misplaced = MarkdownDocuments()
-            .Select(Relative)
-            .Where(relative => Regex.IsMatch(Path.GetFileName(relative), @"-review(-\d{4}-\d{2}-\d{2})?\.md$"))
-            .Where(relative => !relative.StartsWith("docs/reviews/", StringComparison.Ordinal))
-            .ToArray();
-
-        AssertNoOffenders(misplaced, "review snapshots outside docs/reviews/:");
-    }
-
-    /// <summary>
-    /// docs/STYLE.md §2. The root of docs/ is the index and the rules, nothing else; the moment a third file lands
+    /// docs/STYLE.md 的“放哪：按读者分目录”一节. The root of docs/ is the index and the rules, nothing else; the moment a third file lands
     /// there, "everything is in docs/" stops being true for the reader who skims.
     /// </summary>
     [Fact]
@@ -224,7 +208,7 @@ public class DocumentationTests
         AssertNoOffenders(extras, "files at the root of docs/ that belong in a subdirectory:");
     }
 
-    /// <summary>docs/STYLE.md §5 — README is a landing page; these are the things people come to it for.</summary>
+    /// <summary>docs/STYLE.md 的“怎么写：README 是落地页”一节 — README is a landing page; these are the things people come to it for.</summary>
     [Fact]
     public void Readme_carries_the_required_sections()
     {
@@ -261,13 +245,6 @@ public class DocumentationTests
         if (!relative.Contains('/'))
         {
             return RootDocumentNames.Contains(name);
-        }
-
-        if (relative.StartsWith("docs/reviews/", StringComparison.Ordinal))
-        {
-            // Dated names only: docs/STYLE.md §3 — no "-2"/"-3" ordinals, and same-day rounds of one subject are
-            // combined into a single file instead of getting one file per round.
-            return Regex.IsMatch(name, @"^[a-z0-9]+(-[a-z0-9]+)*-review-\d{4}-\d{2}-\d{2}\.md$");
         }
 
         return Regex.IsMatch(name, @"^[a-z0-9]+(-[a-z0-9]+)*\.md$");

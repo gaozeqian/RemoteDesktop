@@ -13,5 +13,8 @@
     <!-- Building a provider, rather than only inspecting the registrations, is what lets the test fail when a port is
          registered with an implementation that cannot actually be constructed. -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- AddLogging, so the composition-root test can build the ports that take an ILogger<T>: the platform project
+         itself only references Logging.Abstractions, which carries the interfaces and no provider. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 </Project>

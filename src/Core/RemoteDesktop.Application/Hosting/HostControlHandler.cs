@@ -9,7 +9,9 @@ public static partial class HostControlHandler
 
     /// <summary>
     /// Reads a request, runs it against <paramref name="control"/> and writes the response. A peer that goes away or
-    /// sends garbage just ends the exchange; nothing is thrown at the caller.
+    /// sends garbage just ends the exchange. Failures of <paramref name="control"/> itself that the protocol has no
+    /// answer for (for example a camera state query that throws) are not swallowed here: they propagate, and the
+    /// caller is responsible for logging them.
     /// </summary>
     public static async Task HandleAsync(Stream stream, IHostControl control, ILogger logger, CancellationToken cancellationToken)
     {

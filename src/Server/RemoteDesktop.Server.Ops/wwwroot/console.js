@@ -9,8 +9,10 @@ const state = {
   nodes: [],
   sessions: [],
   alerts: [],
+  silences: [],
   rules: [],
   actions: [],
+  users: [],
   devices: [],
   deviceCursor: null,
   timer: null,
@@ -46,6 +48,7 @@ const el = {
     audit: document.getElementById("page-audit"),
     devices: document.getElementById("page-devices"),
     nodes: document.getElementById("page-nodes"),
+    users: document.getElementById("page-users"),
   },
   kpiDevices: document.getElementById("kpiDevices"),
   kpiSessions: document.getElementById("kpiSessions"),
@@ -69,6 +72,15 @@ const el = {
   nodeRegion: document.getElementById("nodeRegion"),
   nodeSubmit: document.getElementById("nodeSubmit"),
   nodeError: document.getElementById("nodeError"),
+  nodeDetailCard: document.getElementById("nodeDetailCard"),
+  nodeDetailTitle: document.getElementById("nodeDetailTitle"),
+  nodeDetailClose: document.getElementById("nodeDetailClose"),
+  nodeTokenState: document.getElementById("nodeTokenState"),
+  nodeTokenRotate: document.getElementById("nodeTokenRotate"),
+  nodeTokenClear: document.getElementById("nodeTokenClear"),
+  nodeDetailInfo: document.getElementById("nodeDetailInfo"),
+  nodeMetricTbody: document.getElementById("nodeMetricTbody"),
+  nodeMetricsEmpty: document.getElementById("nodeMetricsEmpty"),
   sessionTbody: document.getElementById("sessionTbody"),
   sessionsEmpty: document.getElementById("sessionsEmpty"),
   sessionsHint: document.getElementById("sessionsHint"),
@@ -90,15 +102,33 @@ const el = {
   platformMix: document.getElementById("platformMix"),
   mixEmpty: document.getElementById("mixEmpty"),
   navAudit: document.getElementById("navAudit"),
+  navUsers: document.getElementById("navUsers"),
+  userTbody: document.getElementById("userTbody"),
+  usersEmpty: document.getElementById("usersEmpty"),
+  usersHint: document.getElementById("usersHint"),
+  usersNotice: document.getElementById("usersNotice"),
+  userFormCard: document.getElementById("userFormCard"),
+  userForm: document.getElementById("userForm"),
+  newUserName: document.getElementById("newUserName"),
+  userPassword: document.getElementById("userPassword"),
+  newUserRole: document.getElementById("newUserRole"),
+  userSubmit: document.getElementById("userSubmit"),
+  userError: document.getElementById("userError"),
   alertsHint: document.getElementById("alertsHint"),
   alertTbody: document.getElementById("alertTbody"),
   alertsEmpty: document.getElementById("alertsEmpty"),
+  silencesHint: document.getElementById("silencesHint"),
+  silenceTbody: document.getElementById("silenceTbody"),
+  silencesEmpty: document.getElementById("silencesEmpty"),
   rulesHint: document.getElementById("rulesHint"),
   ruleTbody: document.getElementById("ruleTbody"),
   ruleForm: document.getElementById("ruleForm"),
   ruleName: document.getElementById("ruleName"),
   ruleKind: document.getElementById("ruleKind"),
   ruleMetric: document.getElementById("ruleMetric"),
+  ruleMetricField: document.getElementById("ruleMetricField"),
+  ruleDenominator: document.getElementById("ruleDenominator"),
+  ruleDenominatorField: document.getElementById("ruleDenominatorField"),
   ruleComparator: document.getElementById("ruleComparator"),
   ruleThreshold: document.getElementById("ruleThreshold"),
   ruleFor: document.getElementById("ruleFor"),
@@ -119,6 +149,7 @@ const pageTitles = {
   audit: "审计日志",
   devices: "设备管理",
   nodes: "节点管理",
+  users: "账号管理",
 };
 
 /* ---------------- theme ---------------- */
@@ -232,6 +263,8 @@ function showApp(user) {
   el.nodeFormCard.hidden = user.role !== "admin";
   el.ruleForm.hidden = user.role !== "admin";
   el.navAudit.hidden = user.role !== "admin";
+  el.navUsers.hidden = user.role !== "admin";
+  el.userFormCard.hidden = user.role !== "admin";
 
   switchPage("overview");
   startPolling();
@@ -256,12 +289,16 @@ function switchPage(page) {
   if (page === "alerts") {
     void loadRules();
     void loadAlerts();
+    void loadMetrics();
   }
   if (page === "audit") {
     void loadAudit();
   }
   if (page === "actions") {
     void loadActions();
+  }
+  if (page === "users") {
+    void loadUsers();
   }
   if (page === "devices") {
     void (async () => {
@@ -636,6 +673,75 @@ async function loadAlerts() {
   state.alerts = payload;
   el.alertsHint.textContent = payload.length === 0 ? "" : `${payload.filter((alert) => alert.active).length} 条未恢复`;
   renderAlerts();
+  void loadSilences();
+}
+
+async function loadSilences() {
+  const { status, payload } = await api("/api/silences");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  state.silences = payload;
+  el.silencesHint.textContent = payload.length === 0 ? "" : `${payload.length} 条生效中`;
+  renderSilences();
+}
+
+function renderSilences() {
+  el.silenceTbody.replaceChildren();
+  el.silencesEmpty.hidden = state.silences.length > 0;
+
+  const canManage = state.user && state.user.role === "admin";
+
+  for (const silence of state.silences) {
+    const row = document.createElement("tr");
+
+    const scope = document.createElement("td");
+    const rule = silence.ruleId ? state.rules.find((candidate) => candidate.id === silence.ruleId) : null;
+    if (rule) {
+      scope.textContent = silence.node ? `${rule.name} · 节点 ${silence.node}` : rule.name;
+    } else if (silence.node) {
+      scope.textContent = `节点 ${silence.node}`;
+    } else {
+      scope.textContent = silence.ruleId || "全部";
+    }
+
+    const reason = document.createElement("td");
+    reason.textContent = silence.reason;
+
+    const until = document.createElement("td");
+    until.className = "mono";
+    until.textContent = formatDateTime(silence.untilAt);
+
+    const createdBy = document.createElement("td");
+    createdBy.textContent = silence.createdBy;
+
+    const action = document.createElement("td");
+    if (canManage) {
+      const remove = document.createElement("button");
+      remove.className = "small";
+      remove.type = "button";
+      remove.textContent = "解除";
+      remove.addEventListener("click", () => void removeSilence(silence.id));
+      action.append(remove);
+    }
+
+    row.append(scope, reason, until, createdBy, action);
+    el.silenceTbody.append(row);
+  }
+}
+
+async function silenceRule(ruleId) {
+  await api("/api/silences", {
+    method: "POST",
+    body: { ruleId, hours: 1, reason: "从告警页静默 1 小时" },
+  });
+  await loadSilences();
+}
+
+async function removeSilence(id) {
+  await api(`/api/silences/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await loadSilences();
 }
 
 function renderAlerts() {
@@ -681,6 +787,16 @@ function renderAlerts() {
       action.append(ack);
     }
 
+    // Silence is an admin's decision (it changes who gets paged), so it is not offered to operators or viewers.
+    if (state.user && state.user.role === "admin" && alert.active) {
+      const mute = document.createElement("button");
+      mute.className = "small";
+      mute.type = "button";
+      mute.textContent = "静默 1 小时";
+      mute.addEventListener("click", () => void silenceRule(alert.ruleId));
+      action.append(mute);
+    }
+
     row.append(severity, ruleCell, value, opened, statusCell, action);
     el.alertTbody.append(row);
   }
@@ -689,6 +805,39 @@ function renderAlerts() {
 async function ackAlert(id) {
   await api(`/api/alerts/${encodeURIComponent(id)}/ack`, { method: "POST" });
   await loadAlerts();
+}
+
+async function loadMetrics() {
+  const { status, payload } = await api("/api/metrics");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  const options = payload.map((entry) => entry.metric);
+  for (const select of [el.ruleMetric, el.ruleDenominator]) {
+    select.replaceChildren();
+    for (const metric of options) {
+      const option = document.createElement("option");
+      option.value = metric;
+      option.textContent = metric;
+      select.append(option);
+    }
+  }
+
+  el.ruleMetricField.title = options.length === 0
+    ? "还没有已抓取指标，节点抓取成功后这里会出现可选项。"
+    : "";
+  updateRuleFields();
+}
+
+function updateRuleFields() {
+  const kind = el.ruleKind.value;
+  const needsMetric = kind === "single";
+  const isRatio = kind === "ratio";
+  el.ruleMetricField.hidden = !needsMetric && !isRatio;
+  el.ruleDenominatorField.hidden = !isRatio;
+  el.ruleMetric.required = needsMetric || isRatio;
+  el.ruleDenominator.required = isRatio;
 }
 
 async function loadRules() {
@@ -701,6 +850,7 @@ async function loadRules() {
   el.rulesHint.textContent = `${payload.length} 条规则`;
   renderRules();
   renderAlerts();
+  renderSilences();
 }
 
 function ruleCondition(rule) {
@@ -772,6 +922,8 @@ async function deleteRule(rule) {
   }
 }
 
+el.ruleKind.addEventListener("change", updateRuleFields);
+
 el.ruleForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   el.ruleError.hidden = true;
@@ -784,8 +936,11 @@ el.ruleForm.addEventListener("submit", async (event) => {
       body: {
         name: el.ruleName.value.trim(),
         kind,
-        // The two session rules read their own numbers; a metric name would only be stored and ignored.
-        metric: kind === "scrape" || kind.startsWith("session.") ? null : el.ruleMetric.value.trim(),
+        // Single-metric rules name one series; ratio rules name a numerator and a denominator. Session rules read
+        // their own numbers, so a metric name would only be stored and ignored.
+        metric: kind === "single" ? el.ruleMetric.value : null,
+        numerator: kind === "ratio" ? el.ruleMetric.value : null,
+        denominator: kind === "ratio" ? el.ruleDenominator.value : null,
         comparator: el.ruleComparator.value,
         threshold: Number(el.ruleThreshold.value),
         forSeconds: Number(el.ruleFor.value),
@@ -1301,7 +1456,21 @@ function renderNodes() {
     const actions = document.createElement("div");
     actions.className = "actions";
 
+    const detail = document.createElement("button");
+    detail.className = "small";
+    detail.type = "button";
+    detail.textContent = "详情";
+    detail.addEventListener("click", () => showNodeDetail(node));
+    actions.append(detail);
+
     if (isAdmin) {
+      const edit = document.createElement("button");
+      edit.className = "small";
+      edit.type = "button";
+      edit.textContent = "改地址";
+      edit.addEventListener("click", () => editNode(node));
+      actions.append(edit);
+
       const toggle = document.createElement("button");
       toggle.className = "small";
       toggle.type = "button";
@@ -1321,6 +1490,152 @@ function renderNodes() {
     row.append(nameCell, roleCell, urlCell, statusCell, whenCell, actionCell);
     el.nodeTbody.append(row);
   }
+}
+
+// The node the detail card is showing; the token buttons act on it.
+let nodeDetailNode = null;
+
+async function showNodeDetail(node) {
+  el.nodeDetailCard.hidden = false;
+  el.nodeDetailTitle.textContent = `节点详情 · ${node.name}`;
+  el.nodeDetailInfo.textContent = "正在读取…";
+  el.nodeMetricTbody.replaceChildren();
+  el.nodeMetricsEmpty.hidden = true;
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}/detail`);
+  if (status !== 200 || !payload) {
+    el.nodeDetailInfo.textContent = "读取失败。";
+    return;
+  }
+
+  nodeDetailNode = payload.node;
+  renderNodeToken(payload.node);
+
+  const info = payload.info;
+  if (info) {
+    const started = info.startedAtUnixMilliseconds
+      ? `${clockText(new Date(info.startedAtUnixMilliseconds))} · 已运行 ${formatDuration(info.uptimeSeconds * 1000)}`
+      : "—";
+    el.nodeDetailInfo.textContent = `${info.version || "未知版本"} · ${started}`;
+  } else if (payload.infoError) {
+    el.nodeDetailInfo.textContent = `节点信息不可用：${payload.infoError}`;
+  } else {
+    el.nodeDetailInfo.textContent = "";
+  }
+
+  const metrics = payload.metrics || [];
+  el.nodeMetricsEmpty.hidden = metrics.length > 0;
+  for (const point of metrics) {
+    const row = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.className = "mono";
+    name.textContent = point.metric;
+
+    const value = document.createElement("td");
+    value.className = "mono";
+    value.textContent = formatMetricValue(point.value);
+
+    const when = document.createElement("td");
+    when.className = "mono";
+    when.textContent = clockText(new Date(point.timestamp));
+
+    row.append(name, value, when);
+    el.nodeMetricTbody.append(row);
+  }
+}
+
+function renderNodeToken(node) {
+  if (!node) {
+    return;
+  }
+
+  el.nodeTokenState.textContent = node.hasOwnToken
+    ? "该节点使用自己的令牌。"
+    : "该节点使用控制台的 Ops:NodeToken。";
+  el.nodeTokenRotate.textContent = node.hasOwnToken ? "重置令牌" : "生成独立令牌";
+  el.nodeTokenClear.hidden = !node.hasOwnToken;
+}
+
+async function rotateNodeToken() {
+  const node = nodeDetailNode;
+  if (!node) {
+    return;
+  }
+
+  if (!window.confirm(
+    node.hasOwnToken
+      ? `重新生成「${node.name}」的令牌？旧令牌立刻失效，节点在改好配置前会抓取失败。`
+      : `为「${node.name}」生成独立令牌？之后要把令牌填进该节点的配置里。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}/token`, {
+    method: "POST",
+    body: {},
+  });
+
+  if (status !== 200 || !payload || !payload.token) {
+    window.alert(payload && payload.message ? payload.message : "生成失败。");
+    return;
+  }
+
+  // Shown once, by design: there is no read-back endpoint, so this dialog is the only place it can be copied from.
+  window.prompt(
+    `「${node.name}」的令牌。填到该节点的 Rendezvous:NodeToken 或 Relay:NodeToken 后重启节点；关闭后不再显示：`,
+    payload.token);
+  await loadNodes();
+  renderNodeToken({ ...node, hasOwnToken: true });
+}
+
+async function clearNodeToken() {
+  const node = nodeDetailNode;
+  if (!node) {
+    return;
+  }
+
+  if (!window.confirm(`清除「${node.name}」的独立令牌？它会改回使用控制台的 Ops:NodeToken。`)) {
+    return;
+  }
+
+  const { status } = await api(`/api/nodes/${encodeURIComponent(node.id)}/token`, { method: "DELETE" });
+  if (status !== 204) {
+    window.alert("清除失败。");
+    return;
+  }
+
+  await loadNodes();
+  renderNodeToken({ ...node, hasOwnToken: false });
+}
+
+function formatMetricValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  if (Number.isInteger(value) && Math.abs(value) < 1_000_000_000) {
+    return String(value);
+  }
+  return value.toFixed(2);
+}
+
+async function editNode(node) {
+  const baseUrl = window.prompt(`节点「${node.name}」的新基础地址（http:// 或 https://）`, node.baseUrl);
+  if (baseUrl === null) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/nodes/${encodeURIComponent(node.id)}`, {
+    method: "PATCH",
+    body: { baseUrl: baseUrl.trim() },
+  });
+
+  if (status === 204) {
+    await loadNodes();
+    await loadOverview();
+    return;
+  }
+
+  window.alert(payload && payload.message ? payload.message : "修改失败。");
 }
 
 async function toggleNode(node) {
@@ -1346,6 +1661,13 @@ async function deleteNode(node) {
     await loadOverview();
   }
 }
+
+el.nodeDetailClose.addEventListener("click", () => {
+  el.nodeDetailCard.hidden = true;
+});
+
+el.nodeTokenRotate.addEventListener("click", () => void rotateNodeToken());
+el.nodeTokenClear.addEventListener("click", () => void clearNodeToken());
 
 el.nodeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1377,6 +1699,212 @@ el.nodeForm.addEventListener("submit", async (event) => {
     el.nodeError.hidden = false;
   } finally {
     el.nodeSubmit.disabled = false;
+  }
+});
+
+/* ---------------- accounts ---------------- */
+
+async function loadUsers() {
+  const { status, payload } = await api("/api/users");
+  if (status !== 200 || !Array.isArray(payload)) {
+    return;
+  }
+
+  state.users = payload;
+  renderUsers();
+}
+
+function setUsersNotice(message) {
+  el.usersNotice.textContent = message || "";
+  el.usersNotice.hidden = !message;
+}
+
+function renderUsers() {
+  const users = state.users;
+  const current = state.user ? state.user.name : "";
+
+  el.userTbody.replaceChildren();
+  el.usersEmpty.hidden = users.length > 0;
+  el.usersHint.textContent = users.length === 0 ? "" : `共 ${users.length} 个`;
+
+  for (const user of users) {
+    const row = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.className = "mono";
+    name.textContent = user.username;
+
+    const roleCell = document.createElement("td");
+    const role = document.createElement("span");
+    role.className = "role-pill";
+    role.textContent = user.role;
+    roleCell.append(role);
+
+    const statusCell = document.createElement("td");
+    const status = document.createElement("span");
+    status.textContent = user.disabled ? "已停用" : "正常";
+    status.className = user.disabled ? "state-bad" : "state-ok";
+    statusCell.append(status);
+
+    const created = document.createElement("td");
+    created.className = "mono";
+    created.textContent = formatRelative(user.createdAt);
+
+    const actionCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const password = document.createElement("button");
+    password.className = "small";
+    password.type = "button";
+    password.textContent = "改密";
+    password.addEventListener("click", () => resetUserPassword(user));
+    actions.append(password);
+
+    const totp = document.createElement("button");
+    totp.className = "small";
+    totp.type = "button";
+    totp.textContent = "重置 TOTP";
+    totp.addEventListener("click", () => resetUserTotp(user));
+    actions.append(totp);
+
+    if (user.username !== current) {
+      const toggle = document.createElement("button");
+      toggle.className = "small";
+      toggle.type = "button";
+      toggle.textContent = user.disabled ? "启用" : "停用";
+      toggle.addEventListener("click", () => toggleUser(user));
+      actions.append(toggle);
+
+      const remove = document.createElement("button");
+      remove.className = "small danger";
+      remove.type = "button";
+      remove.textContent = "删除";
+      remove.addEventListener("click", () => deleteUser(user));
+      actions.append(remove);
+    }
+
+    actionCell.append(actions);
+    row.append(name, roleCell, statusCell, created, actionCell);
+    el.userTbody.append(row);
+  }
+}
+
+async function resetUserPassword(user) {
+  const password = window.prompt(`为「${user.username}」设置新口令（至少 12 位）。\n如果这是当前账号，完成后需要重新登录。`);
+  if (password === null) {
+    return;
+  }
+  if (password.length < 12) {
+    setUsersNotice("口令太短：至少 12 位。");
+    return;
+  }
+
+  const confirmation = window.prompt("再输入一次新口令。");
+  if (confirmation !== password) {
+    setUsersNotice("两次输入不一致。");
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/password`, {
+    method: "POST",
+    body: { password },
+  });
+
+  setUsersNotice(status === 204
+    ? `「${user.username}」的口令已重置，它的所有会话已退出。`
+    : payload && payload.message ? `重置失败：${payload.message}` : "重置失败。");
+
+  if (status === 204) {
+    await loadUsers();
+  }
+}
+
+async function resetUserTotp(user) {
+  if (!window.confirm(`为「${user.username}」生成新的 TOTP 密钥？旧的验证器条目将不能再登录。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/totp`, { method: "POST" });
+  if (status !== 200 || !payload) {
+    setUsersNotice(payload && payload.message ? `重置失败：${payload.message}` : "重置失败。");
+    return;
+  }
+
+  if (user.username === state.user.name) {
+    // Resetting your own secret revoked the session this page is using. Keep the once-only secret in front of the
+    // operator before the page returns to the sign-in screen.
+    window.alert(`新的 TOTP 密钥（只显示一次）：\n${payload.totpSecret}\n${payload.otpauthUri}\n\n当前会话已退出，请用新动态码重新登录。`);
+    signedOut();
+    return;
+  }
+
+  setUsersNotice(`「${user.username}」的新 TOTP 密钥（只显示一次）：${payload.totpSecret}\n${payload.otpauthUri}`);
+  await loadUsers();
+}
+
+async function toggleUser(user) {
+  if (!user.disabled && !window.confirm(`停用「${user.username}」？它的所有会话会立刻退出。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}/disabled`, {
+    method: "POST",
+    body: { disabled: !user.disabled },
+  });
+
+  if (status !== 204) {
+    setUsersNotice(payload && payload.message ? `操作失败：${payload.message}` : "操作失败。");
+    return;
+  }
+
+  await loadUsers();
+}
+
+async function deleteUser(user) {
+  if (!window.confirm(`删除账号「${user.username}」？这个操作不能撤销。`)) {
+    return;
+  }
+
+  const { status, payload } = await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+  if (status !== 204) {
+    setUsersNotice(payload && payload.message ? `删除失败：${payload.message}` : "删除失败。");
+    return;
+  }
+
+  await loadUsers();
+}
+
+el.userForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  el.userError.hidden = true;
+  el.userSubmit.disabled = true;
+  setUsersNotice(null);
+
+  try {
+    const { status, payload } = await api("/api/users", {
+      method: "POST",
+      body: {
+        username: el.newUserName.value.trim(),
+        password: el.userPassword.value,
+        role: el.newUserRole.value,
+      },
+    });
+
+    if (status === 200 && payload) {
+      el.userForm.reset();
+      setUsersNotice(`账号「${payload.username}」已创建。TOTP 密钥（只显示一次）：${payload.totpSecret}\n${payload.otpauthUri}`);
+      await loadUsers();
+      return;
+    }
+
+    el.userError.textContent = payload && payload.message ? `创建失败：${payload.message}` : "创建失败。";
+    el.userError.hidden = false;
+  } catch {
+    el.userError.textContent = "无法连接服务器。";
+    el.userError.hidden = false;
+  } finally {
+    el.userSubmit.disabled = false;
   }
 });
 

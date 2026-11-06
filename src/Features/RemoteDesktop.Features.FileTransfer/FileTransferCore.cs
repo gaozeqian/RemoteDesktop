@@ -14,21 +14,79 @@ public static class PartialFile
     /// The partial file for a transfer that will end up at <paramref name="finalPath"/>. Size and modification time are
     /// part of the name, so a partial of an older version of the file is never continued by mistake.
     /// </summary>
-    public static string PathFor(string finalPath, long size, DateTimeOffset modified) =>
-        $"{finalPath}.{size}-{modified.ToUnixTimeMilliseconds():x}{Extension}";
+    /// <remarks>
+    /// The suffix adds up to about 40 characters, so a file whose own name is already near the 255-character limit
+    /// would get a partial name no filesystem accepts. Such a name is shortened, deterministically and with a hash of
+    /// the full name in it so two long names that start alike still get different partials; every name that fits is
+    /// left exactly as it was, which keeps partials from earlier versions resumable.
+    /// </remarks>
+    public static string PathFor(string finalPath, long size, DateTimeOffset modified)
+    {
+        var suffix = $".{size}-{modified.ToUnixTimeMilliseconds():x}{Extension}";
+        var name = Path.GetFileName(finalPath);
+        if (name.Length + suffix.Length <= MaxFileNameLength)
+        {
+            return finalPath + suffix;
+        }
 
-    /// <summary>Whether <paramref name="directory"/>'s drive has room for <paramref name="bytes"/> more; true when that cannot be told.</summary>
+        var tag = $"~{XxHash64.HashToUInt64(System.Text.Encoding.UTF8.GetBytes(name)):x16}";
+        var keep = MaxFileNameLength - suffix.Length - tag.Length;
+        if (keep > 0 && char.IsHighSurrogate(name[keep - 1]))
+        {
+            keep--; // never cut a surrogate pair in half
+        }
+
+        var directory = finalPath[..^name.Length];
+        return directory + name[..Math.Max(keep, 0)] + tag + suffix;
+    }
+
+    /// <summary>The longest file name the filesystems here accept, in characters.</summary>
+    private const int MaxFileNameLength = 255;
+
+    /// <summary>Whether <paramref name="directory"/>'s volume has room for <paramref name="bytes"/> more; true when that cannot be told.</summary>
     public static bool HasRoomFor(string directory, long bytes)
     {
         try
         {
-            var root = Path.GetPathRoot(directory);
-            return root is null || bytes <= 0 || new DriveInfo(root).AvailableFreeSpace >= bytes;
+            if (string.IsNullOrEmpty(directory) || bytes <= 0)
+            {
+                return true;
+            }
+
+            var full = Path.GetFullPath(directory);
+            var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var root = VolumeRootFor(full, DriveInfo.GetDrives().Select(drive => drive.Name), comparison) ?? Path.GetPathRoot(full);
+            return root is null || new DriveInfo(root).AvailableFreeSpace >= bytes;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             return true; // cannot tell (network share); let the write fail if there is really no room
         }
+    }
+
+    /// <summary>
+    /// The volume <paramref name="fullPath"/> lives on: the longest of <paramref name="volumeRoots"/> (drive letters, or
+    /// mount points on Unix) that is a prefix of it, or null when none is. The path root alone is no answer on Unix,
+    /// where it is always "/" even for a folder on a USB stick or a separate /home.
+    /// </summary>
+    internal static string? VolumeRootFor(string fullPath, IEnumerable<string> volumeRoots, StringComparison comparison)
+    {
+        string? best = null;
+        foreach (var root in volumeRoots)
+        {
+            if (string.IsNullOrEmpty(root) || (best is not null && root.Length <= best.Length))
+            {
+                continue;
+            }
+
+            var prefix = root[^1] == Path.DirectorySeparatorChar ? root : root + Path.DirectorySeparatorChar;
+            if (fullPath.StartsWith(prefix, comparison) || string.Equals(fullPath, root, comparison))
+            {
+                best = root;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>Picks "name (1).ext", "name (2).ext"... for the first one that does not exist yet.</summary>
@@ -81,50 +139,67 @@ public static class FileSender
 
         await using (file.ConfigureAwait(false))
         {
-            if (file.Length < size)
-            {
-                throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-            }
+            return await SendOpenAsync(wire, file, size, startOffset, progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-            var hash = new XxHash64();
-            var buffer = ArrayPool<byte>.Shared.Rent(FileChunkFrame.ChunkSize);
-            try
+    /// <summary>
+    /// Sends an already opened file. The caller owns and disposes <paramref name="file"/>; the host uses this overload
+    /// after <see cref="FileAccessPolicy.OpenRead"/> has verified the file behind the handle, so a link swapped after
+    /// the path check cannot turn the transfer into a read outside the shared roots.
+    /// </summary>
+    public static async Task<ulong> SendOpenAsync(Stream wire, FileStream file, long size, long startOffset, Action<long>? progress, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(wire);
+        ArgumentNullException.ThrowIfNull(file);
+        if (startOffset < 0 || startOffset > size)
+        {
+            throw new FileOperationException(FileError.Changed, "The requested start is beyond the end of the file.");
+        }
+
+        if (file.Length < size)
+        {
+            throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
+        }
+
+        var hash = new XxHash64();
+        var buffer = ArrayPool<byte>.Shared.Rent(FileChunkFrame.ChunkSize);
+        try
+        {
+            // The part the receiver already has still belongs in the hash.
+            for (var remaining = startOffset; remaining > 0;)
             {
-                // The part the receiver already has still belongs in the hash.
-                for (var remaining = startOffset; remaining > 0;)
+                var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
                 {
-                    var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-                    }
-
-                    hash.Append(buffer.AsSpan(0, read));
-                    remaining -= read;
+                    throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
                 }
 
-                var sent = startOffset;
+                hash.Append(buffer.AsSpan(0, read));
+                remaining -= read;
+            }
+
+            var sent = startOffset;
+            progress?.Invoke(sent);
+            while (sent < size)
+            {
+                var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(FileChunkFrame.ChunkSize, size - sent)), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
+                }
+
+                hash.Append(buffer.AsSpan(0, read));
+                await FileChunkFrame.WriteAsync(wire, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                sent += read;
                 progress?.Invoke(sent);
-                while (sent < size)
-                {
-                    var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(FileChunkFrame.ChunkSize, size - sent)), cancellationToken).ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        throw new FileOperationException(FileError.Changed, "The file became smaller during the transfer.");
-                    }
-
-                    hash.Append(buffer.AsSpan(0, read));
-                    await FileChunkFrame.WriteAsync(wire, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    sent += read;
-                    progress?.Invoke(sent);
-                }
-
-                return hash.GetCurrentHashAsUInt64();
             }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
+
+            return hash.GetCurrentHashAsUInt64();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }
@@ -147,14 +222,17 @@ public static class FileReceiver
         long startOffset,
         Action<long>? progress,
         CancellationToken cancellationToken,
-        Func<Frame, FileOperationException?>? interpretControl = null)
+        Func<Frame, FileOperationException?>? interpretControl = null,
+        FileAccessPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(wire);
 
         FileStream file;
         try
         {
-            file = new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous);
+            file = policy is null
+                ? new FileStream(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous)
+                : policy.OpenWrite(partialPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete);
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -182,6 +260,13 @@ public static class FileReceiver
                 for (var remaining = startOffset; remaining > 0;)
                 {
                     var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        // The partial was longer a moment ago (Length was checked above) and is shorter now: somebody
+                        // else is truncating it. Without this the loop would ask for the same bytes for ever.
+                        throw new FileOperationException(FileError.Changed, "The partial file became shorter during the transfer.");
+                    }
+
                     hash.Append(buffer.AsSpan(0, read));
                     remaining -= read;
                 }

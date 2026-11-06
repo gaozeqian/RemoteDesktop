@@ -29,7 +29,7 @@
 #                               TCC grants are keyed to the signing identity and the fallback below cannot know
 #                               which one you meant.
 #                               With no identity available the bundle is ad-hoc signed and this script says so
-#                               loudly: it will run, but TCC grants and the keychain will keep failing (§3.7).
+#                               loudly: it will run, but TCC grants will keep failing (see docs/ports/README.md, "TCC 授权按签名身份记账").
 #   RD_SKIP_PUBLISH=1           Reuse an existing publish output instead of running `dotnet publish`.
 #
 set -euo pipefail
@@ -232,7 +232,7 @@ else
     # (The keychain is NOT affected — that failure is the caller being sandboxed, not the      #
     # signature. See docs/ports/README.md, "Keychain 的 OSStatus 100001 是 EPERM".)                                             #
     #                                                                                         #
-    # Install a free Apple Development certificate in Xcode and re-run. §3.9 has the steps.    #
+    # Install a free Apple Development certificate in Xcode and re-run.                        #
     ###########################################################################################
 
 WARNING
@@ -271,6 +271,10 @@ if [[ -f "$MACOS_DIR/libmsquic.dylib" ]]; then
     echo "    libmsquic.dylib present; its dependencies:"
     otool -L "$MACOS_DIR/libmsquic.dylib" | tail -n +2 | sed 's/^/      /'
 else
+    if [[ "$DISTRIBUTION" == "1" ]]; then
+        echo "    ERROR: libmsquic.dylib is missing — QUIC will not start. Run native/macos/fetch-libmsquic.sh." >&2
+        exit 1
+    fi
     echo "    WARNING: libmsquic.dylib is missing — QUIC will not start. Run native/macos/fetch-libmsquic.sh." >&2
 fi
 
@@ -281,6 +285,11 @@ if [[ -f "$MACOS_DIR/libRemoteDesktopMacNative.dylib" ]]; then
     echo "    libRemoteDesktopMacNative.dylib present; exported entry points:"
     nm -gU "$MACOS_DIR/libRemoteDesktopMacNative.dylib" | grep ' _rd_' | sed 's/^/      /' || echo "      (none!)"
 else
+    if [[ "$DISTRIBUTION" == "1" ]]; then
+        echo "    ERROR: libRemoteDesktopMacNative.dylib is missing — screen capture will not work." >&2
+        echo "           Run native/macos/build-native.sh, then rebuild and repackage." >&2
+        exit 1
+    fi
     echo "    WARNING: libRemoteDesktopMacNative.dylib is missing — screen capture will not work." >&2
     echo "             Run native/macos/build-native.sh, then rebuild and repackage." >&2
 fi

@@ -5,6 +5,10 @@ namespace RemoteDesktop.Server.Ops.Storage;
 
 /// <summary>A node the console scrapes. Its display name is the console's own; the node's <c>/internal/v1/info</c>
 /// name is informational, because renaming must not require touching the server.</summary>
+/// <param name="Token">
+/// The bearer token this node expects, or <c>null</c> to use the deployment's <c>Ops:NodeToken</c>. It is never part of
+/// an API response: the console returns it once, when it is created or rotated, and otherwise only says one is set.
+/// </param>
 public sealed record OpsNode(
     string Id,
     string Name,
@@ -14,11 +18,12 @@ public sealed record OpsNode(
     bool Enabled,
     long? LastScrapeAt,
     bool? LastScrapeOk,
-    long CreatedAt);
+    long CreatedAt,
+    string? Token = null);
 
 public sealed partial class OpsStore
 {
-    private const string NodeColumns = "id, name, role, base_url, region, enabled, last_scrape_at, last_scrape_ok, created_at";
+    private const string NodeColumns = "id, name, role, base_url, region, enabled, last_scrape_at, last_scrape_ok, created_at, token";
 
     /// <summary>Every node, enabled or not, by name. The console shows disabled ones so an operator can see what was
     /// switched off rather than wonder where it went.</summary>
@@ -38,6 +43,20 @@ public sealed partial class OpsStore
         return nodes;
     }
 
+    /// <summary>One node by id, or <c>null</c>.</summary>
+    public async Task<OpsNode?> FindNodeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {NodeColumns} FROM ops_node WHERE id = @id;";
+        Bind(command, ("@id", id));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadNode(reader) : null;
+    }
+
     /// <summary>Adds a node. A duplicate name surfaces as the provider's unique-constraint error.</summary>
     public async Task CreateNodeAsync(OpsNode node, CancellationToken cancellationToken = default)
     {
@@ -46,8 +65,8 @@ public sealed partial class OpsStore
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO ops_node (id, name, role, base_url, region, enabled, last_scrape_at, last_scrape_ok, created_at)
-            VALUES (@id, @name, @role, @baseUrl, @region, @enabled, NULL, NULL, @createdAt);
+            INSERT INTO ops_node (id, name, role, base_url, region, enabled, last_scrape_at, last_scrape_ok, created_at, token)
+            VALUES (@id, @name, @role, @baseUrl, @region, @enabled, NULL, NULL, @createdAt, @token);
             """;
         Bind(
             command,
@@ -57,9 +76,92 @@ public sealed partial class OpsStore
             ("@baseUrl", node.BaseUrl),
             ("@region", node.Region),
             ("@enabled", node.Enabled ? 1 : 0),
-            ("@createdAt", node.CreatedAt));
+            ("@createdAt", node.CreatedAt),
+            ("@token", node.Token));
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Changes a node's address by name. Returns false when no node has that name, so a row an operator deleted is not
+    /// re-created by an upgrade.
+    /// </summary>
+    public async Task<bool> UpdateNodeBaseUrlAsync(string name, string baseUrl, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(baseUrl);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE ops_node SET base_url = @baseUrl WHERE name = @name;";
+        Bind(command, ("@name", name), ("@baseUrl", baseUrl));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>
+    /// Changes a node's enabled flag and/or address. A new address clears the last-scrape status: the old success
+    /// says nothing about a different endpoint.
+    /// </summary>
+    public async Task<bool> UpdateNodeAsync(
+        string id,
+        bool? enabled,
+        string? baseUrl,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        if (enabled is null && baseUrl is null)
+        {
+            throw new ArgumentException("At least one of enabled or baseUrl is required.", nameof(enabled));
+        }
+
+        var assignments = new List<string>(5);
+        if (enabled is { } value)
+        {
+            assignments.Add("enabled = @enabled");
+        }
+
+        if (baseUrl is not null)
+        {
+            assignments.Add("base_url = @baseUrl");
+            assignments.Add("last_scrape_at = NULL");
+            assignments.Add("last_scrape_ok = NULL");
+        }
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"UPDATE ops_node SET {string.Join(", ", assignments)} WHERE id = @id;";
+
+        // Only bind parameters the generated statement contains; Npgsql is stricter than SQLite about unused ones.
+        Bind(command, ("@id", id));
+        if (enabled is { } flag)
+        {
+            Bind(command, ("@enabled", flag ? 1 : 0));
+        }
+
+        if (baseUrl is not null)
+        {
+            Bind(command, ("@baseUrl", baseUrl));
+        }
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>
+    /// Sets or clears the token this node expects. <c>null</c> falls back to the deployment token; the caller decides
+    /// which of the two it wants, this only stores what it was given.
+    /// </summary>
+    /// <returns>False when the id is unknown.</returns>
+    public async Task<bool> SetNodeTokenAsync(string id, string? token, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE ops_node SET token = @token WHERE id = @id;";
+        Bind(command, ("@id", id), ("@token", token));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
     }
 
     /// <summary>Enables or disables a node. Returns false when the id is unknown.</summary>
@@ -135,5 +237,6 @@ public sealed partial class OpsStore
             reader.GetInt64(5) != 0,
             reader.IsDBNull(6) ? null : reader.GetInt64(6),
             reader.IsDBNull(7) ? null : reader.GetInt64(7) != 0,
-            reader.GetInt64(8));
+            reader.GetInt64(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9));
 }

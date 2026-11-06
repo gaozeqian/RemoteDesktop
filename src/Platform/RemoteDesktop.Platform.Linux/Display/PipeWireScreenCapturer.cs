@@ -85,9 +85,11 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         _stride = width * 4;
         _frames = Channel.CreateBounded<Captured>(new BoundedChannelOptions(QueueLength)
         {
-            SingleReader = true,
+            // Not SingleReader: the process callback also drains the reader when it replaces a stale frame, so two
+            // threads read the channel.
+            SingleReader = false,
             SingleWriter = true,
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.DropWrite,
         });
 
         _stateChanged = OnStateChanged;
@@ -148,7 +150,25 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         }
 
         _frames.Writer.TryComplete();
+        DrainFrames();
+        ReleaseNativeResources();
 
+        await ValueTask.CompletedTask.ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the pooled buffer of every frame still queued. Called after the channel is completed.</summary>
+    private void DrainFrames()
+    {
+        while (_frames.Reader.TryRead(out var stale))
+        {
+            stale.Frame.Dispose();
+        }
+    }
+
+    /// <summary>Releases every PipeWire and managed handle this capturer may have created, in dependency order.</summary>
+    /// <remarks>Also called from <see cref="Open"/>'s failure path, where a partially-built capturer must not leak.</remarks>
+    private unsafe void ReleaseNativeResources()
+    {
         if (_stream != 0)
         {
             PipeWire.ThreadLoopLock(_loop);
@@ -164,15 +184,23 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             }
         }
 
-        PipeWire.ThreadLoopStop(_loop);
+        if (_loop != 0)
+        {
+            PipeWire.ThreadLoopStop(_loop);
+        }
 
         if (_core != 0)
         {
             PipeWire.ContextDestroy(_context);
+            _context = 0;
             _core = 0;
         }
 
-        PipeWire.ThreadLoopDestroy(_loop);
+        if (_loop != 0)
+        {
+            PipeWire.ThreadLoopDestroy(_loop);
+            _loop = 0;
+        }
 
         if (_format != 0)
         {
@@ -196,11 +224,9 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         {
             _self.Free();
         }
-
-        await ValueTask.CompletedTask.ConfigureAwait(false);
     }
 
-    /// <summary>Brings up the loop, the connection and the stream.</summary>
+    /// <summary>Starts the loop, then brings up the connection and the stream, releasing everything on failure.</summary>
     private unsafe void Open(int fileDescriptor, uint nodeId, int width, int height)
     {
         // Idempotent, and has to happen before anything else. The arguments are only used for logging.
@@ -214,6 +240,20 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
 
         _ = PipeWire.ThreadLoopStart(_loop);
 
+        try
+        {
+            OpenCore(fileDescriptor, nodeId, width, height);
+        }
+        catch
+        {
+            ReleaseNativeResources();
+            throw;
+        }
+    }
+
+    /// <summary>Brings up the connection and the stream once the loop is running.</summary>
+    private unsafe void OpenCore(int fileDescriptor, uint nodeId, int width, int height)
+    {
         PipeWire.ThreadLoopLock(_loop);
         try
         {
@@ -356,6 +396,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             var message = error == 0 ? "no reason given" : Marshal.PtrToStringUTF8(error) ?? "unreadable reason";
             LogStreamError(_logger, message);
             _frames.Writer.TryComplete();
+            DrainFrames();
         }
         else
         {
@@ -460,7 +501,18 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
                 return;
             }
 
-            _frames.Writer.TryWrite(new Captured(frame, cursor));
+            // The queue holds one frame. A frame that is still queued is stale — the newest picture wins — and its
+            // pooled buffer must be returned before it is dropped, or it leaks.
+            while (_frames.Reader.TryRead(out var stale))
+            {
+                stale.Frame.Dispose();
+            }
+
+            if (!_frames.Writer.TryWrite(new Captured(frame, cursor)))
+            {
+                // The channel was completed (stream error or disposal), so the frame can never be delivered.
+                frame.Dispose();
+            }
         }
         catch (Exception error) when (error is InvalidDataException or ArgumentException)
         {

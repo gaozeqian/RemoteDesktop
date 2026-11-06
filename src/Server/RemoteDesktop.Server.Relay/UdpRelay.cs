@@ -30,7 +30,28 @@ public sealed partial class UdpRelay : IDisposable
     private readonly ILogger<UdpRelay> _logger;
     private readonly Dictionary<Guid, Pairing> _pairings = [];
     private readonly Dictionary<IPEndPoint, Route> _routes = [];
+
+    // Reverse index: which pairing, if any, holds this endpoint. Kept beside _routes so "is this endpoint already
+    // bound to another session?" is a lookup instead of a scan of every pairing.
+    private readonly Dictionary<IPEndPoint, Pairing> _endpoints = [];
     private DateTimeOffset _nextCleanup;
+
+    // The receive loop is unauthenticated and public on UDP. Logging every bad ticket makes a trivial packet flood a
+    // disk and alert flood, so rejects are counted and a summary is written at most once a minute. Every way a bind
+    // can be refused feeds the same summary: a token that does not match and a full table are as much a free packet
+    // flood to anyone holding a valid ticket as a bad ticket is to anyone at all.
+    private static readonly TimeSpan RejectedBindLogInterval = TimeSpan.FromMinutes(1);
+    private DateTimeOffset _nextRejectedBindLog;
+    private long _rejectedTickets;
+    private long _rejectedCookies;
+    private long _rejectedForCapacity;
+
+    // Faults in packet handling are summarized the same way, and receive errors are reported once until a receive
+    // succeeds again, so a persistent failure cannot flood the log while the loop waits it out.
+    private static readonly TimeSpan ReceiveRetryDelay = TimeSpan.FromMilliseconds(100);
+    private DateTimeOffset _nextHandlerFaultLog;
+    private long _handlerFaults;
+    private bool _receiveFaulted;
 
     // Exported numbers. The receive loop owns the tables above and runs on one thread; these five are read from an HTTP
     // thread, so they are touched only through Interlocked/Volatile and never while holding a reference to a pairing.
@@ -103,7 +124,7 @@ public sealed partial class UdpRelay : IDisposable
                     // console never received its relay_closed event.
                     receiveWindow.Dispose();
                     receiveWindow = null;
-                    CleanupIfDue();
+                    CleanupGuarded();
                     continue;
                 }
                 catch (OperationCanceledException)
@@ -115,16 +136,104 @@ public sealed partial class UdpRelay : IDisposable
                     // ICMP port unreachable from a peer that went away; keep serving the others.
                     continue;
                 }
+                catch (SocketException ex)
+                {
+                    // Any other receive error (a network interface going away, no buffer space, a transient driver
+                    // fault) used to leave this method, and the worker's default is to stop the whole process. The
+                    // socket is usually usable again a moment later; the pause keeps a persistent error from spinning.
+                    if (!_receiveFaulted)
+                    {
+                        _receiveFaulted = true;
+                        LogReceiveFailed(_logger, ex.SocketErrorCode, ex);
+                    }
+
+                    try
+                    {
+                        await Task.Delay(ReceiveRetryDelay, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The socket was closed under the loop: the relay is being disposed.
+                    break;
+                }
+
+                if (_receiveFaulted)
+                {
+                    _receiveFaulted = false;
+                    LogReceiveRecovered(_logger);
+                }
 
                 var from = (IPEndPoint)received.RemoteEndPoint;
-                await HandleAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false);
-                CleanupIfDue();
+                if (!await HandleGuardedAsync(buffer.AsMemory(0, received.ReceivedBytes), from, cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+
+                CleanupGuarded();
             }
         }
         finally
         {
             receiveWindow?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Handles one packet and keeps the loop alive when that fails. A packet comes from the public internet and the
+    /// handler reaches into the console's event queue, so neither a malformed packet nor a broken sink may take the
+    /// relay down with every other session on it. Cancellation is not a failure and is left to propagate.
+    /// </summary>
+    /// <returns><c>false</c> when the relay is shutting down and the loop should end.</returns>
+    private async ValueTask<bool> HandleGuardedAsync(ReadOnlyMemory<byte> packet, IPEndPoint from, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleAsync(packet, from, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            RecordHandlerFault(ex);
+            return true;
+        }
+    }
+
+    private void CleanupGuarded()
+    {
+        try
+        {
+            CleanupIfDue();
+        }
+        catch (Exception ex)
+        {
+            RecordHandlerFault(ex);
+        }
+    }
+
+    /// <summary>Logs the first fault at once, then at most one line a minute saying how many more there were.</summary>
+    private void RecordHandlerFault(Exception exception)
+    {
+        _handlerFaults++;
+        var now = _time.GetUtcNow();
+        if (now < _nextHandlerFaultLog)
+        {
+            return;
+        }
+
+        LogHandlerFailed(_logger, _handlerFaults, exception);
+        _nextHandlerFaultLog = now + RejectedBindLogInterval;
+        _handlerFaults = 0;
     }
 
     private async ValueTask HandleAsync(ReadOnlyMemory<byte> packet, IPEndPoint from, CancellationToken cancellationToken)
@@ -185,7 +294,7 @@ public sealed partial class UdpRelay : IDisposable
         var ticket = RelayTicket.Validate(ticketBytes, _key, now);
         if (ticket is null)
         {
-            LogRejectedBind(_logger, from);
+            RecordRejectedBind(Rejection.Ticket, from, now);
             return BindResult.Ignored;
         }
 
@@ -199,7 +308,7 @@ public sealed partial class UdpRelay : IDisposable
 
         if (!RelayCookie.Verify(presented, _key, ticketBytes, roleByte, from, now))
         {
-            LogRejectedCookie(_logger, from);
+            RecordRejectedBind(Rejection.Cookie, from, now);
             return BindResult.Ignored;
         }
 
@@ -207,7 +316,7 @@ public sealed partial class UdpRelay : IDisposable
         {
             if (_pairings.Count >= MaxSessions)
             {
-                LogTooManySessions(_logger, _pairings.Count);
+                RecordRejectedBind(Rejection.Capacity, from, now);
                 return BindResult.Ignored;
             }
 
@@ -244,6 +353,8 @@ public sealed partial class UdpRelay : IDisposable
         {
             pairing.Host = from;
         }
+
+        _endpoints[from] = pairing;
 
         pairing.LastActivity = _time.GetUtcNow();
         if (pairing.Controller is not null && pairing.Host is not null)
@@ -282,18 +393,20 @@ public sealed partial class UdpRelay : IDisposable
     }
 
     private bool IsBoundElsewhere(IPEndPoint endPoint, Pairing except) =>
-        _pairings.Values.Any(p => p != except && (endPoint.Equals(p.Controller) || endPoint.Equals(p.Host)));
+        _endpoints.TryGetValue(endPoint, out var owner) && owner != except;
 
     private void Unroute(Pairing pairing)
     {
         if (pairing.Controller is not null)
         {
             _routes.Remove(pairing.Controller);
+            _endpoints.Remove(pairing.Controller);
         }
 
         if (pairing.Host is not null)
         {
             _routes.Remove(pairing.Host);
+            _endpoints.Remove(pairing.Host);
         }
     }
 
@@ -316,7 +429,8 @@ public sealed partial class UdpRelay : IDisposable
         });
     }
 
-    private void CleanupIfDue()    {
+    private void CleanupIfDue()
+    {
         var now = _time.GetUtcNow();
         if (now < _nextCleanup)
         {
@@ -358,17 +472,59 @@ public sealed partial class UdpRelay : IDisposable
 
     public void Dispose() => _socket.Dispose();
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: the token did not match this address.")]
-    private static partial void LogRejectedCookie(ILogger logger, IPEndPoint endPoint);
+    private enum Rejection
+    {
+        /// <summary>The ticket is not signed by this deployment, or has expired.</summary>
+        Ticket,
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a relay session: {Sessions} are already open.")]
-    private static partial void LogTooManySessions(ILogger logger, int sessions);
+        /// <summary>The ticket is good but the token does not belong to this address and role.</summary>
+        Cookie,
+
+        /// <summary>Everything checked out and the relay already holds as many sessions as it allows.</summary>
+        Capacity,
+    }
+
+    private void RecordRejectedBind(Rejection reason, IPEndPoint from, DateTimeOffset now)
+    {
+        switch (reason)
+        {
+            case Rejection.Ticket:
+                _rejectedTickets++;
+                break;
+            case Rejection.Cookie:
+                _rejectedCookies++;
+                break;
+            default:
+                _rejectedForCapacity++;
+                break;
+        }
+
+        if (now < _nextRejectedBindLog)
+        {
+            return;
+        }
+
+        LogRejectedBinds(_logger, from, _rejectedTickets, _rejectedCookies, _rejectedForCapacity, _pairings.Count);
+        _nextRejectedBindLog = now + RejectedBindLogInterval;
+        _rejectedTickets = 0;
+        _rejectedCookies = 0;
+        _rejectedForCapacity = 0;
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay binds since the last summary: {Tickets} invalid or expired ticket, {Cookies} token that did not match the address, {Capacity} refused because {Sessions} sessions are open (most recently from {EndPoint}).")]
+    private static partial void LogRejectedBinds(ILogger logger, IPEndPoint endPoint, long tickets, long cookies, long capacity, int sessions);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Relay receive failed with {Error}; retrying. Further receive errors are not logged until a receive succeeds.")]
+    private static partial void LogReceiveFailed(ILogger logger, SocketError error, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Relay receive is working again.")]
+    private static partial void LogReceiveRecovered(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Relay packet handling failed ({Count} failures since the last report); the relay keeps serving.")]
+    private static partial void LogHandlerFailed(ILogger logger, long count, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId}: {Role} moved from {Previous} to {Current}.")]
     private static partial void LogRebind(ILogger logger, Guid sessionId, RelayRole role, IPEndPoint previous, IPEndPoint current);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Rejected relay bind from {EndPoint}: invalid or expired ticket.")]
-    private static partial void LogRejectedBind(ILogger logger, IPEndPoint endPoint);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Relay session {SessionId} paired: {Controller} <-> {Host}.")]
     private static partial void LogPaired(ILogger logger, Guid sessionId, IPEndPoint controller, IPEndPoint host);

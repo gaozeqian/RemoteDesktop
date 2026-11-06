@@ -52,7 +52,9 @@ public interface IVideoRecorder : IAsyncDisposable
     /// <summary>
     /// Stops the recording, flushes data to disk, and returns the output file path. Throws
     /// <see cref="InvalidOperationException"/> when no frame ever reached the encoder: there is nothing to finalize,
-    /// and the file that would have held it is removed rather than left behind unplayable.
+    /// and the file that would have held it is removed rather than left behind unplayable. When no recording is
+    /// running (none was started, or it was already stopped) nothing is stopped and nothing throws: the result is the
+    /// path of the latest recording, or an empty string when there has not been one.
     /// </summary>
     Task<string> StopAsync();
 }

@@ -21,7 +21,7 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
     }
 
     /// <summary>
-    /// PostgreSQL's half of the four statements. The upsert names the fingerprint as the conflict target, so a
+    /// PostgreSQL's half of the dialect's seven statements. The upsert names the fingerprint as the conflict target, so a
     /// collision on the device id itself still raises a unique violation and is retried by the base class.
     /// </summary>
     /// <remarks>
@@ -42,6 +42,10 @@ public sealed class PostgresDeviceRegistry : RelationalDeviceRegistry
             );
             CREATE INDEX IF NOT EXISTS idx_device_registrations_device_id ON device_registrations(device_id);
             """;
+
+        public string? SchemaLockSql => "SELECT pg_advisory_lock(hashtext('remotedesktop.devices.schema'));";
+
+        public string? SchemaUnlockSql => "SELECT pg_advisory_unlock(hashtext('remotedesktop.devices.schema'));";
 
         public string AddRevokedAtSql =>
             "ALTER TABLE device_registrations ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;";

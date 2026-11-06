@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.Versioning;
 
 namespace RemoteDesktop.Platform.Windows.UnitTests;
@@ -83,15 +84,26 @@ public sealed class HostInstallerPackageTests
         Assert.Equal("5", host[4]);
 
         // --- firewall, no shortcut -------------------------------------------------------------------------------
-        var firewall = Assert.Single(package.Rows("SELECT `Name`, `Protocol`, `Program` FROM `Wix5FirewallException`", 3));
+        var firewall = Assert.Single(package.Rows("SELECT `Name`, `Protocol`, `Program`, `InterfaceTypes` FROM `Wix5FirewallException`", 4));
         Assert.Equal("17", firewall[1]); // UDP, what hole punching needs
         Assert.Contains("HostServiceExeFile", firewall[2], StringComparison.Ordinal);
+        Assert.Equal("all", firewall[3]); // explicit intent; the extension's "empty Interfaces" log is about NICs, not this
         Assert.Empty(package.Rows("SELECT `Name` FROM `Shortcut`", 1));
 
         // --- what the installer tells the service ---------------------------------------------------------------
         var properties = package.Rows("SELECT `Property`, `Value` FROM `Property`", 2).ToDictionary(row => row[0], row => row[1]);
         Assert.Contains("RENDEZVOUSURI", properties.Keys);
+        Assert.Contains("SERVERCERTIFICATEPATH", properties.Keys);
+        Assert.Contains("RENDEZVOUSCERTIFICATEPATH", properties.Keys);
+        Assert.Contains("DEFAULT_RENDEZVOUSURI", properties.Keys);
+        Assert.Contains("CONNECTIONEDITED", properties.Keys);
         Assert.Contains("REMOVEDATA", properties.Keys);
+        Assert.Contains("FIXEDPASSWORDFILE", properties.Keys);
+        Assert.Contains("FIXEDPASSWORDFILE", properties["SecureCustomProperties"], StringComparison.Ordinal);
+        Assert.Contains("SERVERCERTIFICATEPATH", properties["SecureCustomProperties"], StringComparison.Ordinal);
+        Assert.Contains("RENDEZVOUSCERTIFICATEPATH", properties["SecureCustomProperties"], StringComparison.Ordinal);
+        // The password itself is hidden from the log; the path the deferred action reads is not a secret.
+        Assert.Contains("FIXEDPASSWORD", properties["MsiHiddenProperties"], StringComparison.Ordinal);
         // Its own product identity: a host package must not upgrade, or be upgraded by, the client package.
         Assert.Equal("Remote Desktop Host", properties["ProductName"]);
 
@@ -115,11 +127,57 @@ public sealed class HostInstallerPackageTests
         Assert.Single(package.Rows("SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = 'HostSettingsDlg'", 1));
         Assert.Single(package.Rows(
             "SELECT `Control` FROM `Control` WHERE `Dialog_` = 'HostSettingsDlg' AND `Property` = 'FIXEDPASSWORD'", 1));
-        var actions = package.Rows("SELECT `Action` FROM `CustomAction`", 1).Select(row => row[0]).ToList();
+
+        // The host's only installer UI for the server connection: the address and the optional self-signed certificate.
+        Assert.Single(package.Rows("SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = 'ConnectionDlg'", 1));
+        var connectionControls = package.Rows(
+            "SELECT `Control` FROM `Control` WHERE `Dialog_` = 'ConnectionDlg'", 1).Select(row => row[0]).ToList();
+        foreach (var control in new[] { "AddressEdit", "CertificateEdit", "CertificateBrowse" })
+        {
+            Assert.Contains(control, connectionControls);
+        }
+
+        // Fresh install / major upgrade -> Connection -> HostSettings. A repair keeps the live values and does not
+        // offer the connection page from the password page's Back button.
+        var controlEvents = package.Rows(
+            "SELECT `Dialog_`, `Control_`, `Event`, `Argument`, `Condition` FROM `ControlEvent`", 5);
+        Assert.Contains(controlEvents, row =>
+            row[0] == "InstallDirDlg" && row[1] == "Next" && row[3] == "ConnectionDlg"
+            && row[4].Contains("NOT Installed", StringComparison.Ordinal));
+        Assert.Contains(controlEvents, row =>
+            row[0] == "HostSettingsDlg" && row[1] == "Back" && row[3] == "ConnectionDlg"
+            && row[4].Contains("NOT Installed", StringComparison.Ordinal));
+        Assert.Contains(controlEvents, row =>
+            row[0] == "HostSettingsDlg" && row[1] == "Back" && row[3] == "InstallDirDlg"
+            && row[4].Contains("Installed", StringComparison.Ordinal)
+            && !row[4].Contains("NOT", StringComparison.Ordinal));
+
+        var actionRows = package.Rows("SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`", 4);
+        var actions = actionRows.Select(row => row[0]).ToList();
         Assert.Contains("SetFixedPassword", actions);
         Assert.Contains("ClearFixedPassword", actions);
+        foreach (var action in new[]
+                 {
+                     "WriteFixedPasswordFile", "DeleteFixedPasswordFile", "DeleteFixedPasswordFileRollback",
+                     "PrefillConnectionSettings", "ValidateConnectionSettings", "BrowseForServerCertificate",
+                     "PrepareRendezvousCertificate",
+                 })
+        {
+            Assert.Contains(action, actions);
+        }
+
+        // The password goes to a file, not to the host process's command line.
+        var setPassword = Assert.Single(actionRows, row => row[0] == "SetFixedPassword");
+        Assert.Contains("--set-fixed-password-file", setPassword[3], StringComparison.Ordinal);
+        Assert.Contains("[FIXEDPASSWORDFILE]", setPassword[3], StringComparison.Ordinal);
+        var setSequence = Assert.Single(package.Rows(
+            "SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = 'SetFixedPassword'", 2));
+        Assert.Contains("FIXEDPASSWORDFILE", setSequence[1], StringComparison.Ordinal);
+
+        // The first upgrade from the old layout copies the address to ProgramData before the old product is removed.
+        Assert.Contains("MigrateClientSettings", actions);
         Assert.Single(package.Rows(
-            "SELECT `Action` FROM `InstallExecuteSequence` WHERE `Action` = 'SetFixedPassword'", 1));
+            "SELECT `Action` FROM `InstallExecuteSequence` WHERE `Action` = 'MigrateClientSettings'", 1));
 
         // --- the machine setup actions ---------------------------------------------------------------------------
         foreach (var action in new[] { "ConfigureSystem", "CleanupKeepData", "CleanupRemoveData" })
@@ -127,8 +185,14 @@ public sealed class HostInstallerPackageTests
             Assert.Contains(action, actions);
         }
 
+        var configureAction = Assert.Single(actionRows, row => row[0] == "ConfigureSystem");
+        Assert.Contains("--rendezvous", configureAction[3], StringComparison.Ordinal);
+        Assert.Contains("--rendezvous-certificate", configureAction[3], StringComparison.Ordinal);
+        Assert.Equal(0, int.Parse(configureAction[1], CultureInfo.InvariantCulture) & 64); // failures are visible
+
         var sequence = package.Rows("SELECT `Action`, `Condition` FROM `InstallExecuteSequence`", 2);
         var configure = Assert.Single(sequence, row => row[0] == "ConfigureSystem");
         Assert.Contains("NOT REMOVE", configure[1], StringComparison.Ordinal);
+        Assert.Contains("CONNECTIONEDITED", configure[1], StringComparison.Ordinal);
     }
 }

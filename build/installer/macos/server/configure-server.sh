@@ -3,7 +3,7 @@
 # Changes what the installed servers are configured with, after the installation.
 #
 # The installer asks for these once, when the package is built. This is the way back in: give it the settings you want
-# to change and it writes them, then restarts the two launchd jobs so they take effect. Anything you leave out is left
+# to change and it writes them, then restarts the four launchd jobs (rendezvous, relay, ops, gateway) so they take effect. Anything you leave out is left
 # alone.
 #
 # It runs the same configuration step the package's postinstall runs
@@ -25,6 +25,10 @@
 #   --relay-key <base64>             the key relay tickets are signed with (must match a relay on another machine)
 #   --tls-certificate <file.pfx>     serve TLS with this certificate
 #   --tls-password <password>        its password
+#   --ops-listen <url>               the monitoring console's address (default http://127.0.0.1:5090)
+#   --ops-database-path <file>       the console's SQLite file (default .../var/ops.db)
+#   --gateway-listen <url>           the console's public HTTPS listener (default https://0.0.0.0:5443)
+#   --gateway-hostname <names>       extra comma-separated IPs or DNS names for its generated certificate
 #   --no-restart                     write the settings but leave the jobs running on the old ones
 #
 # Examples:
@@ -62,6 +66,10 @@ while [ "$#" -gt 0 ]; do
         --relay-key)       shift; args[${#args[@]}]="--relay-key";       args[${#args[@]}]="$1" ;;
         --tls-certificate) shift; args[${#args[@]}]="--tls-certificate"; args[${#args[@]}]="$1" ;;
         --tls-password)    shift; args[${#args[@]}]="--tls-password";    args[${#args[@]}]="$1" ;;
+        --ops-listen)      shift; args[${#args[@]}]="--ops-listen";      args[${#args[@]}]="$1" ;;
+        --ops-database-path) shift; args[${#args[@]}]="--ops-database-path"; args[${#args[@]}]="$1" ;;
+        --gateway-listen)  shift; args[${#args[@]}]="--gateway-listen";  args[${#args[@]}]="$1" ;;
+        --gateway-hostname) shift; args[${#args[@]}]="--gateway-hostname"; args[${#args[@]}]="$1" ;;
         --no-restart)      restart=0 ;;
         -h|--help)         sed -n '2,/^set -e/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -76,13 +84,64 @@ else
     "$RENDEZVOUS" --configure-system --install-directory "$INSTALL_DIR"
 fi
 
+# The step above runs as root and writes root:wheel 0640, which is right for a file only root reads. Once the package
+# has handed the jobs to their own account, this script has to put the group back, or the servers cannot read the
+# settings they were just given and restart into a loop. A machine installed before that account existed keeps root.
+SERVICE_GROUP=_remotedesktop
+apply_service_group() {
+    if ! dscl . -read "/Groups/$SERVICE_GROUP" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local folder file
+    for folder in Rendezvous Relay Ops Gateway; do
+        file="$INSTALL_DIR/$folder/appsettings.json"
+        if [ -f "$file" ]; then
+            chown "root:$SERVICE_GROUP" "$file"
+            chmod 640 "$file"
+        fi
+    done
+
+    if [ -d "$INSTALL_DIR/tls" ]; then
+        chown -R "root:$SERVICE_GROUP" "$INSTALL_DIR/tls"
+        find "$INSTALL_DIR/tls" -type d -exec chmod 750 {} +
+        find "$INSTALL_DIR/tls" -type f -exec chmod 640 {} +
+        if [ -f "$INSTALL_DIR/tls/signaling.crt" ]; then
+            chmod 644 "$INSTALL_DIR/tls/signaling.crt"
+        fi
+    fi
+
+    # A certificate the operator named may live outside the install directory, where this script changes nothing.
+    # Root used to be able to read it anywhere; the service account cannot, and Kestrel would restart forever.
+    if [ -x /usr/bin/sudo ]; then
+        local settings key path
+        for settings in "$INSTALL_DIR/Rendezvous/appsettings.json" "$INSTALL_DIR/Gateway/appsettings.json"; do
+            [ -f "$settings" ] || continue
+            for key in Path KeyPath; do
+                path="$(plutil -extract "Kestrel.Certificates.Default.$key" raw "$settings" 2>/dev/null || true)"
+                case "$path" in
+                    /*)
+                        if ! /usr/bin/sudo -u "_remotedesktop" /usr/bin/test -r "$path" >/dev/null 2>&1; then
+                            echo "  warning: _remotedesktop cannot read $path; give it group read or move the file under $INSTALL_DIR" >&2
+                        fi
+                        ;;
+                esac
+            done
+        done
+    fi
+}
+apply_service_group
+
 if [ "$restart" -eq 0 ]; then
     echo "==> Not restarting (--no-restart): the new settings take effect on the next start"
     exit 0
 fi
 
 echo "==> Restarting the servers"
-for label in com.remotedesktop.rendezvous com.remotedesktop.relay; do
+# The console restarts too: the database provider is shared with the signaling server, so a --database or --postgres
+# change rewrites the console's settings as well. Leaving it running would keep the old database (and make history
+# look as if it had disappeared) until somebody restarted it by hand.
+for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
     # kickstart -k restarts a running job and starts a stopped one, which is what "restart the service" means on
     # Windows. `launchctl stop` alone would only stop it, and KeepAlive would bring it back on the old settings.
     launchctl kickstart -k "system/$label" || echo "  warning: could not restart $label" >&2

@@ -5,9 +5,9 @@ namespace RemoteDesktop.Server.Storage;
 /// reachable.
 /// </summary>
 /// <remarks>
-/// This is what the host asks instead of testing the concrete type. A registry that does not implement it has no
-/// schema to create and nothing to probe, so the host starts no initializer and adds no health check for it — the
-/// answer to "is this deployment persistent" and the answer to "is it registered" become the same question.
+/// This is what the initializer and the health check depend on instead of the concrete type. A registry that does
+/// not implement it has no schema to create and nothing to probe. The host decides whether to start them from the
+/// configured provider (<c>Provider != DatabaseSettings.None</c>), which is exactly when this is registered.
 /// </remarks>
 public interface IDeviceRegistryStore : IDeviceRegistry
 {

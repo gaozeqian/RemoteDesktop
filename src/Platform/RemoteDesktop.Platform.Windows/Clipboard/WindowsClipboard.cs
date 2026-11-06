@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Clipboard;
 
 namespace RemoteDesktop.Platform.Windows.Clipboard;
@@ -25,6 +27,7 @@ public sealed partial class WindowsClipboard : IClipboard, IDisposable
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly uint _pngFormat = RegisterClipboardFormat("PNG");
+    private readonly ILogger<WindowsClipboard> _logger;
     private readonly Lock _lock = new();
     private readonly ManualResetEventSlim _windowReady = new();
     private Thread? _windowThread;
@@ -35,6 +38,9 @@ public sealed partial class WindowsClipboard : IClipboard, IDisposable
     private int _listeners;
     private EventHandler? _changed;
     private bool _disposed;
+
+    public WindowsClipboard(ILogger<WindowsClipboard>? logger = null) =>
+        _logger = logger ?? NullLogger<WindowsClipboard>.Instance;
 
     public event EventHandler? Changed
     {
@@ -188,8 +194,20 @@ public sealed partial class WindowsClipboard : IClipboard, IDisposable
             handler = _changed;
         }
 
-        handler?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            handler?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            // A timer callback is a thread-pool entry point: an exception escaping here ends the process. The next
+            // clipboard change is still picked up, so dropping this one is the safer failure.
+            LogHandlerFailed(_logger, ex);
+        }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A clipboard change handler threw; that change was not reported.")]
+    private static partial void LogHandlerFailed(ILogger logger, Exception exception);
 
     private nint EnsureWindow()
     {

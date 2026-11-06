@@ -24,7 +24,7 @@ public sealed record CameraChoice(CameraInfo Camera)
 
 public sealed record CameraModeChoice(CameraMode Mode)
 {
-    public string Label => string.Create(CultureInfo.InvariantCulture, $"{Mode.Width}×{Mode.Height} · {Mode.FrameRate} fps");
+    public string Label => string.Create(CultureInfo.InvariantCulture, $"{Mode.Width}×{Mode.Height} · {Math.Min(Mode.FrameRate, CameraModes.MaxFrameRate)} fps");
 
     public override string ToString() => Label;
 }
@@ -155,8 +155,9 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             return;
         }
 
-        // Picture sizes are offered once each, at their best rate; more than 30 fps is not streamed.
-        foreach (var mode in value.Camera.Modes.Where(m => m.FrameRate <= 30).GroupBy(m => (m.Width, m.Height)).Select(g => g.OrderByDescending(m => m.FrameRate).First()))
+        // Picture sizes are offered once each, at their best rate; more than 30 fps is not streamed (a camera that
+        // only has faster modes is offered its slowest ones, which the host thins down to 30 fps).
+        foreach (var mode in CameraModes.Usable(value.Camera.Modes).GroupBy(m => (m.Width, m.Height)).Select(g => g.OrderByDescending(m => m.FrameRate).First()))
         {
             Modes.Add(new CameraModeChoice(mode));
         }
@@ -195,12 +196,14 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             Message = ex.Message;
             IsStreaming = false;
         }
-        catch (OperationCanceledException)
+        catch (TimeoutException)
         {
-            // CameraViewer gives the host thirty seconds to answer. An unanswered permission prompt on the other
+            // CameraViewer gives the host one request deadline to answer. An unanswered permission prompt on the other
             // machine is the ordinary way to reach this, and it must read as a timeout, not end the command on the
             // UI thread — an unobserved exception there used to take the whole client down.
-            Message = "被控端没有在 30 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。";
+            Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"被控端没有在 {RequestTimeout.Default.TotalSeconds:0} 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。");
             IsStreaming = false;
         }
     }

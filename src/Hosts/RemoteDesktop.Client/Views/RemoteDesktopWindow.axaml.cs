@@ -138,6 +138,9 @@ public sealed partial class RemoteDesktopWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // The window is going away; make sure a blank cursor is not the last thing the pointer was told to show over
+        // the window that takes focus next.
+        Screen.Cursor = Cursor.Default;
         base.OnClosed(e);
         _filesWindow?.Close();
         _terminalWindow?.Close();
@@ -170,9 +173,13 @@ public sealed partial class RemoteDesktopWindow : Window
         PositionCursor();
     }
 
-    // In control mode the host's own pointer is what the user steers, so the local one is hidden; while only watching, it stays.
+    // In control mode the host's own pointer is what the user steers, so the local one is hidden — but only once a
+    // remote cursor image has actually arrived. A host that does not report cursor shapes would otherwise leave the
+    // window with no pointer at all.
     private void UpdateLocalCursor() =>
-        Screen.Cursor = _viewModel is { CanControl: true } ? new Cursor(StandardCursorType.None) : Cursor.Default;
+        Screen.Cursor = _viewModel is { CanControl: true } && _cursorBitmap is not null
+            ? new Cursor(StandardCursorType.None)
+            : Cursor.Default;
 
     private unsafe void SetCursorShape(CursorShape shape)
     {
@@ -190,6 +197,7 @@ public sealed partial class RemoteDesktopWindow : Window
         _cursorBitmap = bitmap;
         RemoteCursor.Source = bitmap;
         previous?.Dispose();
+        UpdateLocalCursor();
         PositionCursor();
     }
 

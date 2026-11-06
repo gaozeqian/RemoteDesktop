@@ -1,0 +1,39 @@
+[Unit]
+Description=Remote Desktop Ops HTTPS Gateway
+Documentation=https://github.com/gaozeqian/RemoteDesktop
+After=network-online.target remotedesktop-ops.service
+Wants=network-online.target remotedesktop-ops.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+User=remotedesktop
+Group=remotedesktop
+
+# The gateway owns the only public listener for the console. Ops itself stays on loopback, and this service terminates
+# TLS with the machine certificate the shared configuration step generates.
+WorkingDirectory=/etc/remotedesktop-server/Gateway
+ExecStart=/usr/lib/remotedesktop-server/Gateway/RemoteDesktop.Server.Gateway
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+StateDirectory=remotedesktop-server
+StateDirectoryMode=0700
+LogsDirectory=remotedesktop-server
+UMask=0077
+
+# The gateway only needs its settings and its certificate: it writes no data of its own.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=multi-user.target

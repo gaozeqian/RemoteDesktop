@@ -50,15 +50,22 @@ public static class SelfSignedCertificate
 
     private static readonly TimeSpan Validity = TimeSpan.FromDays(3 * 365);
 
+    /// <summary>An existing certificate this close to expiry is replaced instead of being served until it fails.</summary>
+    private static readonly TimeSpan RenewBefore = TimeSpan.FromDays(30);
+
     /// <summary>
     /// The subject of this machine's certificate, creating it when it is not there yet.
     /// </summary>
     /// <param name="installDirectory">Where the public half is written for clients to be given.</param>
     /// <param name="notes">One line per thing that happened, for whoever is watching the installation.</param>
+    /// <param name="additionalDnsNames">
+    /// Names the certificate should answer to besides this machine's own. A deployment reached through a DNS name or a
+    /// NAT address has to name that address here, or clients reject a certificate that is otherwise trusted.
+    /// </param>
     /// <returns>The subject, which is what the settings file refers to the certificate by.</returns>
     /// <exception cref="CryptographicException">The certificate could not be created or stored.</exception>
     /// <exception cref="UnauthorizedAccessException">Not allowed to write to the machine's certificate store.</exception>
-    public static string Ensure(string installDirectory, List<string> notes)
+    public static string Ensure(string installDirectory, List<string> notes, IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installDirectory);
         ArgumentNullException.ThrowIfNull(notes);
@@ -70,7 +77,9 @@ public static class SelfSignedCertificate
         store.Open(OpenFlags.ReadWrite);
 
         var existing = store.Certificates
-            .Where(certificate => certificate.Subject == subject && certificate.HasPrivateKey)
+            .Where(certificate => certificate.Subject == subject
+                && certificate.HasPrivateKey
+                && certificate.NotAfter > DateTime.Now.Add(RenewBefore))
             .OrderByDescending(certificate => certificate.NotAfter)
             .FirstOrDefault();
 
@@ -78,14 +87,24 @@ public static class SelfSignedCertificate
         {
             // Kept, not replaced: a client that trusted this certificate yesterday must still trust it today, and
             // reinstalling or upgrading the server runs this step again.
-            WritePublicHalf(installDirectory, publicPath, existing);
+            WritePublicHalf(publicPath, existing);
             notes.Add($"Signaling TLS uses the existing certificate '{subject}' from {CertificateStoreLocation}\\{CertificateStoreName}; its public half is at {publicPath}.");
             return subject;
         }
 
-        var created = CreateForThisMachine(subject);
+        // An expired (or nearly expired) certificate would be served until clients started rejecting it. It is this
+        // product's own subject, so removing it cannot remove somebody else's certificate.
+        foreach (var stale in store.Certificates
+                     .Where(certificate => certificate.Subject == subject && certificate.NotAfter <= DateTime.Now.Add(RenewBefore))
+                     .ToArray())
+        {
+            store.Remove(stale);
+            notes.Add($"Removed the expired certificate '{subject}' from {CertificateStoreLocation}\\{CertificateStoreName}.");
+        }
+
+        var created = CreateForThisMachine(subject, additionalDnsNames);
         store.Add(created);
-        WritePublicHalf(installDirectory, publicPath, created);
+        WritePublicHalf(publicPath, created);
 
         notes.Add($"A self-signed certificate '{subject}' was created and stored in {CertificateStoreLocation}\\{CertificateStoreName} (valid until {created.NotAfter:yyyy-MM-dd}).");
         notes.Add($"Clients must trust it, or they will refuse the connection: give them {publicPath} (Import-Certificate -FilePath ... -CertStoreLocation Cert:\\LocalMachine\\Root), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
@@ -113,7 +132,10 @@ public static class SelfSignedCertificate
     /// </remarks>
     /// <exception cref="CryptographicException">The certificate could not be created.</exception>
     [UnsupportedOSPlatform("windows")]
-    public static (string Certificate, string Key) EnsurePem(string tlsDirectory, List<string> notes)
+    public static (string Certificate, string Key) EnsurePem(
+        string tlsDirectory,
+        List<string> notes,
+        IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tlsDirectory);
         ArgumentNullException.ThrowIfNull(notes);
@@ -123,22 +145,44 @@ public static class SelfSignedCertificate
 
         if (File.Exists(certificatePath) && File.Exists(keyPath))
         {
-            // Kept, not replaced: a client that trusted this certificate yesterday must still trust it today, and
-            // reinstalling or upgrading the server runs this step again.
-            notes.Add($"Signaling TLS uses the existing certificate at {certificatePath}.");
-            return (certificatePath, keyPath);
+            // Kept, not replaced unless it is about to expire: a client that trusted this certificate yesterday must
+            // still trust it today, and reinstalling or upgrading the server runs this step again.
+            try
+            {
+                using var existing = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+                if (existing.NotAfter > DateTime.Now.Add(RenewBefore))
+                {
+                    notes.Add($"Signaling TLS uses the existing certificate at {certificatePath}.");
+                    return (certificatePath, keyPath);
+                }
+
+                notes.Add($"The certificate at {certificatePath} expires on {existing.NotAfter:yyyy-MM-dd}; it is being replaced.");
+            }
+            catch (CryptographicException)
+            {
+                notes.Add($"The certificate at {certificatePath} could not be read; it is being replaced.");
+            }
         }
 
         Directory.CreateDirectory(tlsDirectory);
         File.SetUnixFileMode(tlsDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-        using var created = CreateForThisMachine(SubjectForThisMachine);
+        using var created = CreateForThisMachine(SubjectForThisMachine, additionalDnsNames);
 
-        // The key is written and tightened before anything else happens, so it is never on disk with permissions
-        // wider than its owner even for a moment.
+        // The key file is created with an owner-only mode (applied by open(2), so it is never on disk wider than
+        // that, even for a moment; a umask can only narrow it further). Any older file is removed first, because
+        // opening an existing one would keep its old mode. The explicit chmod afterwards is a second guarantee.
         using (var key = created.GetRSAPrivateKey() ?? throw new CryptographicException("The new certificate has no private key."))
         {
-            File.WriteAllText(keyPath, key.ExportPkcs8PrivateKeyPem());
+            File.Delete(keyPath);
+            using var stream = new FileStream(keyPath, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+            using var writer = new StreamWriter(stream);
+            writer.Write(key.ExportPkcs8PrivateKeyPem());
         }
 
         File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
@@ -150,22 +194,52 @@ public static class SelfSignedCertificate
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
         notes.Add($"A self-signed certificate '{SubjectForThisMachine}' was created (valid until {created.NotAfter:yyyy-MM-dd}); the private key is at {keyPath} and readable only by its owner.");
-        notes.Add($"Clients must trust it, or they will refuse the connection: give them {certificatePath} (on a client, copy it into /usr/local/share/ca-certificates and run update-ca-certificates), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
+        notes.Add(OperatingSystem.IsMacOS()
+            ? $"Clients must trust it, or they will refuse the connection: give them {certificatePath}. The macOS client and host installers accept that file and pin exactly that certificate (no system trust change), or put a certificate from a real authority in Kestrel:Certificates:Default instead."
+            : $"Clients must trust it, or they will refuse the connection: give them {certificatePath} (on a client, copy it into /usr/local/share/ca-certificates and run update-ca-certificates), or put a certificate from a real authority in Kestrel:Certificates:Default instead.");
 
         return (certificatePath, keyPath);
     }
 
     /// <summary>The names this machine answers to, which is what the certificate has to cover.</summary>
-    private static SubjectAlternativeNameBuilder AlternativeNames()
+    /// <param name="additionalDnsNames">
+    /// Names a deployment is reached through. An entry that parses as an IP address becomes an IP SAN; anything else
+    /// is a DNS name. Duplicates and blanks are dropped rather than handed to the certificate builder, which refuses
+    /// an empty name and would turn a harmless duplicate into a failed installation.
+    /// </param>
+    private static SubjectAlternativeNameBuilder AlternativeNames(IEnumerable<string>? additionalDnsNames)
     {
         var names = new SubjectAlternativeNameBuilder();
-        names.AddDnsName(Environment.MachineName);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddName(string? name)
+        {
+            name = name?.Trim();
+            if (string.IsNullOrEmpty(name) || !seen.Add(name))
+            {
+                return;
+            }
+
+            if (IPAddress.TryParse(name, out var address))
+            {
+                names.AddIpAddress(address);
+            }
+            else
+            {
+                names.AddDnsName(name);
+            }
+        }
+
+        AddName(Environment.MachineName);
 
         var host = Dns.GetHostName();
-        if (!string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-        {
-            names.AddDnsName(host);
-        }
+        AddName(host);
+
+        // Loopback is not necessarily an address this machine's name resolves to: Debian and Ubuntu map the host
+        // name to 127.0.1.1 in /etc/hosts. The console calls its own signaling server on 127.0.0.1 and the local
+        // gateway is reached there as well, so a certificate that omits it is refused by name even where it is
+        // trusted — which left a fresh installation with "抓取失败" on its local node and an empty device page.
+        AddName(IPAddress.Loopback.ToString());
 
         try
         {
@@ -174,13 +248,18 @@ public static class SelfSignedCertificate
                 // IPv4 only: what the rest of the product speaks (the relay endpoint is an IPv4 address or a name).
                 if (address.AddressFamily == AddressFamily.InterNetwork)
                 {
-                    names.AddIpAddress(address);
+                    AddName(address.ToString());
                 }
             }
         }
         catch (SocketException)
         {
             // A machine whose own name does not resolve still gets a usable certificate; the name is in there.
+        }
+
+        foreach (var name in additionalDnsNames ?? [])
+        {
+            AddName(name);
         }
 
         return names;
@@ -195,7 +274,7 @@ public static class SelfSignedCertificate
     /// PKCS#12 — a certificate straight out of <c>CreateSelfSigned</c> has a key that lives only as long as the RSA
     /// object, and a store cannot keep that one.
     /// </remarks>
-    public static X509Certificate2 CreateForThisMachine(string subject)
+    public static X509Certificate2 CreateForThisMachine(string subject, IEnumerable<string>? additionalDnsNames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
 
@@ -204,7 +283,7 @@ public static class SelfSignedCertificate
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(certificateAuthority: false, hasPathLengthConstraint: false, pathLengthConstraint: 0, critical: false));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, critical: false));
         request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], critical: false)); // serverAuth
-        request.CertificateExtensions.Add(AlternativeNames().Build());
+        request.CertificateExtensions.Add(AlternativeNames(additionalDnsNames).Build());
 
         using var selfSigned = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.Add(Validity));
 
@@ -216,7 +295,7 @@ public static class SelfSignedCertificate
             X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
     }
 
-    private static void WritePublicHalf(string installDirectory, string publicPath, X509Certificate2 certificate)
+    private static void WritePublicHalf(string publicPath, X509Certificate2 certificate)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(publicPath)!);
         File.WriteAllBytes(publicPath, certificate.Export(X509ContentType.Cert));

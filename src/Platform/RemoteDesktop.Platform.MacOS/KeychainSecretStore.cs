@@ -84,11 +84,8 @@ public sealed unsafe class KeychainSecretStore(string dataDirectory) : ISecretSt
         {
             var length = (int)CoreFoundation.CFDataGetLength(data);
             var result = new byte[length];
-            unsafe
-            {
-                var source = CoreFoundation.CFDataGetBytePtr(data);
-                new ReadOnlySpan<byte>(source, length).CopyTo(result);
-            }
+            var source = CoreFoundation.CFDataGetBytePtr(data);
+            new ReadOnlySpan<byte>(source, length).CopyTo(result);
 
             return result;
         }

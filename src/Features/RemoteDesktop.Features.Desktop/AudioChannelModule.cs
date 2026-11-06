@@ -18,7 +18,7 @@ namespace RemoteDesktop.Features.Desktop;
 /// </summary>
 public sealed partial class AudioChannelModule(IAudioCapturerFactory capturers, ILogger<AudioChannelModule> logger) : IFeatureModule
 {
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan SetupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RestartDelay = TimeSpan.FromSeconds(1);
 
     public ChannelType ChannelType => ChannelType.Audio;
@@ -31,7 +31,7 @@ public sealed partial class AudioChannelModule(IAudioCapturerFactory capturers, 
 
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
-            timeout.CancelAfter(RequestTimeout);
+            timeout.CancelAfter(SetupTimeout);
             var first = await ProtobufFrames.ReadAsync(channel.Stream, AudioControl.Parser, 4096, timeout.Token).ConfigureAwait(false);
             if (first?.BodyCase != AudioControl.BodyOneofCase.Request)
             {

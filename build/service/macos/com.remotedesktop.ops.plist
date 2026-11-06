@@ -23,11 +23,23 @@
     <key>WorkingDirectory</key>
     <string>/usr/local/remotedesktop-server/Ops</string>
 
+    <!-- Same account as the two servers; see com.remotedesktop.rendezvous.plist. -->
+    <key>UserName</key>
+    <string>_remotedesktop</string>
+    <key>GroupName</key>
+    <string>_remotedesktop</string>
+
     <!-- The console's database lives beside the signaling server's, in the 0700 var/ directory the postinstall makes.
          Set here rather than in appsettings.json so that a console installed before this key existed still gets the
-         right location, and so that "where is the data" has one answer on this platform. -->
+         right location, and so that "where is the data" has one answer on this platform.
+
+         HOME is set because it is what ASP.NET Core uses to place the DataProtection key ring: a LaunchDaemon's
+         environment has no HOME, and a key ring that cannot be written means every restart signs everybody out. It
+         points at the same writable directory for the same reason as the database. -->
     <key>EnvironmentVariables</key>
     <dict>
+        <key>HOME</key>
+        <string>/usr/local/remotedesktop-server/var</string>
         <key>Ops__Database__Path</key>
         <string>/usr/local/remotedesktop-server/var/ops.db</string>
         <key>Ops__Listen</key>

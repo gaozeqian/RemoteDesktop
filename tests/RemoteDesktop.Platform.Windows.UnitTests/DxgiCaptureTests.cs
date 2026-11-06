@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows.Display;
@@ -30,7 +31,7 @@ public class DxgiCaptureTests
         DxgiScreenCapturer capturer;
         try
         {
-            capturer = new DxgiScreenCapturer(primary!);
+            capturer = new DxgiScreenCapturer(primary!, NullLogger.Instance);
         }
         catch (SharpGenException ex)
         {
@@ -76,7 +77,7 @@ public class DxgiCaptureTests
             DxgiScreenCapturer capturer;
             try
             {
-                capturer = new DxgiScreenCapturer(display);
+                capturer = new DxgiScreenCapturer(display, NullLogger.Instance);
             }
             catch (SharpGenException ex)
             {

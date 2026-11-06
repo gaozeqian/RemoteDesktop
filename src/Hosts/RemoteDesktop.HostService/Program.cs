@@ -103,7 +103,6 @@ const string ServiceName = "RemoteDesktopHost";
 if (OperatingSystem.IsWindows() &&
     SetupCommands.TryRun(
         args,
-        AppContext.BaseDirectory,
         DataDirectory.ForMachine(),
         Console.Out,
         out var setupExitCode))
@@ -111,20 +110,28 @@ if (OperatingSystem.IsWindows() &&
     return setupExitCode;
 }
 
-var builder = Host.CreateApplicationBuilder(args);
+// The content root matters when launchd starts this executable straight out of the bundle: the working directory is
+// not Contents/MacOS, so without it the appsettings.json next to the program is never read. The same setting is what
+// the client uses. It has to be given at construction, before the file sources are layered on top.
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
 
 var dataDirectory = builder.Configuration["DataDirectory"] ?? DataDirectory.ForMachine();
 
-// The same layering the client does, and the same file: off Windows the controlled end runs as the person whose
-// desktop it serves, so there is one settings file between them rather than the two accounts Windows has. What the
-// package shipped beside the program stays the defaults; this is what the person can change.
+// The machine-wide file the installer writes sits between the shipped defaults and the person's own file. On macOS it
+// is /Library/Application Support/RemoteDesktop because the shipped file is inside the signed bundle; on Windows it is
+// %ProgramData%\RemoteDesktop because the MSI's major upgrade removes the old product's files from Program Files.
+MachineSettings.AddConfigurationSource(builder.Configuration);
+
+// Off Windows the controlled end runs as the person whose desktop it serves, so there is one settings file between
+// them rather than the two accounts Windows has.
 if (!OperatingSystem.IsWindows())
 {
-    builder.Configuration.AddJsonFile(
-        Path.Combine(dataDirectory, "appsettings.json"),
-        optional: true,
-        reloadOnChange: false);
+    UserSettings.AddConfigurationSource(builder.Configuration, dataDirectory);
 }
 
 // A service has no console and no window: if the settings cannot be read, the reason goes to a file in the log folder
@@ -144,7 +151,9 @@ builder.Logging.ClearProviders().AddSerilog(
     new LoggerConfiguration()
         .MinimumLevel.Information()
         .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
-        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, shared: true, formatProvider: CultureInfo.InvariantCulture)
+        // Only this process writes this file, so the regular sink works and its periodic flush keeps the log on
+        // disk while the service runs — the shared sink would ignore the flush interval entirely.
+        .WriteTo.File(Path.Combine(dataDirectory, "logs", "service-.log"), rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14, flushToDiskInterval: TimeSpan.FromSeconds(1), formatProvider: CultureInfo.InvariantCulture)
         .CreateLogger(),
     dispose: true);
 

@@ -5,6 +5,7 @@
         x:DataType="vm:MainWindowViewModel"
         Title="Remote Desktop"
         Icon="/Assets/icon-256.png"
+        Cursor="Arrow"
         Background="{DynamicResource RdWindowBackgroundBrush}"
         Width="860" Height="560" MinWidth="860" MinHeight="560">
 
@@ -114,6 +115,12 @@
         <!-- The client keeps no log file, so this text is the only place a wrong server address can be diagnosed. -->
         <Border Classes="banner danger" IsVisible="{Binding ServerHint, Converter={x:Static ObjectConverters.IsNotNull}}">
           <TextBlock Text="{Binding ServerHint}" Classes="danger" />
+        </Border>
+
+        <!-- Outside the pages for the same reason as the alerts above: the handover has to be visible from whichever
+             tab the person happened to be on when the background service started. -->
+        <Border Classes="banner warning" IsVisible="{Binding HostServiceHint, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <TextBlock Text="{Binding HostServiceHint}" Classes="warning" TextWrapping="Wrap" />
         </Border>
       </StackPanel>
 
@@ -371,7 +378,12 @@
                                 IsVisible="{Binding !HasFixedPassword}" />
                         <Button Content="修改" Command="{Binding OpenFixedPasswordEditorCommand}"
                                 IsVisible="{Binding HasFixedPassword}" />
-                        <Button Content="关闭" Command="{Binding ClearFixedPasswordCommand}"
+                        <!-- "关闭" read as if it turned the feature off temporarily; it deletes the stored password
+                             outright, and there is no undo short of setting it again. The label, the tooltip and the
+                             accessible name now say the same thing. -->
+                        <Button Content="删除" Command="{Binding ClearFixedPasswordCommand}"
+                                AutomationProperties.Name="删除固定密码"
+                                ToolTip.Tip="删除已保存的固定密码；之后只能用临时密码连接，直到重新设置"
                                 IsVisible="{Binding HasFixedPassword}" />
                       </StackPanel>
 

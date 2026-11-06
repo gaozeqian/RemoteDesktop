@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Rendezvous;
@@ -10,7 +11,7 @@ using RemoteDesktop.Server.Storage;
 namespace RemoteDesktop.Transport.IntegrationTests;
 
 /// <summary>
-/// What the server installer writes into the two settings files. The point of checking it here rather than by
+/// What the server installer writes into the settings files. The point of checking it here rather than by
 /// installing is the contract: the files have to be readable by the servers' own option types, and a value that
 /// would stop a server from starting has to be refused while somebody is still watching the installation.
 /// </summary>
@@ -49,6 +50,37 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal("https://0.0.0.0:5443", urls);
     }
 
+    /// <summary>
+    /// Windows keeps the programs under Program Files and the live settings under ProgramData. The shipped file is
+    /// the base for a first install, and the live file wins on every later run: the installer must not put the
+    /// package's defaults back over what an operator changed.
+    /// </summary>
+    [Fact]
+    public void A_live_file_wins_and_the_shipped_file_is_the_first_install_base()
+    {
+        var install = Path.Combine(_folder, "install");
+        var config = Path.Combine(_folder, "config");
+        var shipped = Path.Combine(install, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(shipped)!);
+        File.WriteAllText(shipped, """{"Urls":"http://0.0.0.0:5080","Rendezvous":{"ReflectorPort":6000}}""");
+
+        ServerSetup.Configure(config, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" }, install);
+
+        var live = Path.Combine(config, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Assert.True(File.Exists(live));
+        Assert.Equal(6000, JsonNode.Parse(File.ReadAllText(live))!["Rendezvous"]!["ReflectorPort"]!.GetValue<int>());
+
+        // A later run reads the live file, not the shipped one.
+        var changed = JsonNode.Parse(File.ReadAllText(live))!.AsObject();
+        changed["Rendezvous"]!["ReflectorPort"] = 6001;
+        File.WriteAllText(live, changed.ToJsonString());
+
+        ServerSetup.Configure(config, new ServerSetupOptions { Urls = "http://0.0.0.0:5081" }, install);
+
+        Assert.Equal(6001, JsonNode.Parse(File.ReadAllText(live))!["Rendezvous"]!["ReflectorPort"]!.GetValue<int>());
+        Assert.Equal("http://0.0.0.0:5081", JsonNode.Parse(File.ReadAllText(live))!["Urls"]!.GetValue<string>());
+    }
+
     [Fact]
     public void A_key_is_generated_once_and_kept_afterwards()
     {
@@ -62,6 +94,122 @@ public sealed class ServerSetupTests : IDisposable
 
         Assert.Equal(first, second);
         Assert.True(Convert.FromBase64String(first).Length >= 32);
+    }
+
+    [Fact]
+    public void The_ops_event_channel_is_generated_once_and_shared_by_all_three_services()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        var rendezvous = Configuration(ServerSetup.RendezvousFolder);
+        var relay = Configuration(ServerSetup.RelayFolder);
+        var ops = Configuration(ServerSetup.OpsFolder);
+        var key = rendezvous["OpsEvents:Key"];
+
+        Assert.False(string.IsNullOrWhiteSpace(key));
+        Assert.Equal(32, Convert.FromBase64String(key).Length);
+        Assert.Equal(key, relay["OpsEvents:Key"]);
+        Assert.Equal(key, ops["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("k1", rendezvous["OpsEvents:KeyId"]);
+        Assert.Equal("k1", relay["OpsEvents:KeyId"]);
+        Assert.Equal("http://127.0.0.1:5090", rendezvous["OpsEvents:Endpoint"]);
+        Assert.Equal("http://127.0.0.1:5090", relay["OpsEvents:Endpoint"]);
+        Assert.NotEqual(rendezvous["Rendezvous:RelaySharedKey"], key);
+
+        // Upgrades run the same setup with no event options. The existing secret must not be rotated.
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        Assert.Equal(key, Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void An_old_or_incomplete_ops_event_channel_is_repaired_with_the_existing_key()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var key = Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"];
+
+        var relay = MutableSettings(ServerSetup.RelayFolder);
+        relay.Remove("OpsEvents");
+        WriteSettings(ServerSetup.RelayFolder, relay);
+        var ops = MutableSettings(ServerSetup.OpsFolder);
+        ops["Ops"]!.AsObject().Remove("Ingest");
+        WriteSettings(ServerSetup.OpsFolder, ops);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("http://127.0.0.1:5090", Configuration(ServerSetup.RelayFolder)["OpsEvents:Endpoint"]);
+    }
+
+    [Fact]
+    public void Custom_ops_event_keys_endpoints_and_extra_console_keys_survive_an_upgrade()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var customKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)7, 32)]);
+        var extraKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)9, 32)]);
+
+        foreach (var folder in new[] { ServerSetup.RendezvousFolder, ServerSetup.RelayFolder })
+        {
+            var settings = MutableSettings(folder);
+            settings["OpsEvents"] = new JsonObject
+            {
+                ["Endpoint"] = "https://ops.example.test/ingest/events",
+                ["KeyId"] = "k2",
+                ["Key"] = customKey,
+                ["Node"] = "operator-name",
+            };
+            WriteSettings(folder, settings);
+        }
+
+        var ops = MutableSettings(ServerSetup.OpsFolder);
+        ops["Ops"]!["Ingest"]!["Keys"] = new JsonObject
+        {
+            ["k2"] = customKey,
+            ["another-node"] = extraKey,
+        };
+        WriteSettings(ServerSetup.OpsFolder, ops);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+
+        var rendezvous = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("https://ops.example.test/ingest/events", rendezvous["OpsEvents:Endpoint"]);
+        Assert.Equal("k2", rendezvous["OpsEvents:KeyId"]);
+        Assert.Equal(customKey, rendezvous["OpsEvents:Key"]);
+        Assert.Equal("operator-name", rendezvous["OpsEvents:Node"]);
+        var console = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(customKey, console["Ops:Ingest:Keys:k2"]);
+        Assert.Equal(extraKey, console["Ops:Ingest:Keys:another-node"]);
+        Assert.Null(console["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void Conflicting_ops_keys_are_refused_instead_of_one_side_being_overwritten()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        var relay = MutableSettings(ServerSetup.RelayFolder);
+        var conflictingKey = Convert.ToBase64String([.. Enumerable.Repeat((byte)11, 32)]);
+        relay["OpsEvents"]!["Key"] = conflictingKey;
+        WriteSettings(ServerSetup.RelayFolder, relay);
+
+        var error = Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions()));
+
+        Assert.Contains("different values", error.Message, StringComparison.Ordinal);
+        Assert.Equal(conflictingKey, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+    }
+
+    [Theory]
+    [InlineData("not base64 at all")]
+    [InlineData("c2hvcnQ=")]
+    public void An_invalid_ops_ingest_key_is_refused_before_anything_is_written(string key)
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ServerSetup.Configure(_folder, new ServerSetupOptions { OpsIngestKey = key }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.OpsFolder, ServerSetup.SettingsFileName)));
     }
 
     /// <summary>
@@ -90,6 +238,21 @@ public sealed class ServerSetupTests : IDisposable
         ServerSetup.Configure(_folder, new ServerSetupOptions { RelaySharedKey = key });
 
         Assert.Equal(key, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).SharedKey);
+    }
+
+    [Fact]
+    public void Metrics_are_mounted_only_when_the_installer_asks()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        Assert.False(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { MetricsEnabled = true });
+        Assert.True(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
+
+        // A later run that says nothing about metrics must not switch them off: an operator who turned them on by
+        // hand keeps them.
+        ServerSetup.Configure(_folder, new ServerSetupOptions());
+        Assert.True(Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName).MetricsEnabled);
     }
 
     [Theory]
@@ -128,9 +291,11 @@ public sealed class ServerSetupTests : IDisposable
     [Fact]
     public void A_name_in_the_relay_address_is_resolved_to_an_address()
     {
-        // This machine's own name, spelled portably — "%COMPUTERNAME%" only expands on Windows, because .NET reads
-        // %NAME% there and $NAME everywhere else.
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = $"{Environment.MachineName}:5083" });
+        // "localhost" rather than Environment.MachineName: on a Mac whose own name does not resolve (which is a normal
+        // configuration, and was the machine this suite ran on), the machine-name form fails for a reason that has
+        // nothing to do with the code under test. The point here is "a name is resolved once and written as an
+        // address", and localhost is a name every platform resolves.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { RelayPublicEndpoint = "localhost:5083" });
 
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
         rendezvous.Validate();
@@ -160,6 +325,51 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal(DatabaseSettings.Postgres, rendezvous.Database.Provider);
         Assert.Equal(ConnectionString, rendezvous.Database.ConnectionString);
         Assert.Equal(ConnectionString, rendezvous.PostgresConnectionString); // what an older server reads
+    }
+
+    /// <summary>
+    /// An upgrade or configure-server.sh passes only what changed. An address that was not mentioned has to stay
+    /// exactly where the operator put it — including TLS: rewriting it to the build's http default silently downgrades
+    /// a server that was configured for https.
+    /// </summary>
+    [Fact]
+    public void Nothing_said_about_the_addresses_leaves_them_alone()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            RelayPublicEndpoint = "203.0.113.10:5082",
+            DatabaseProvider = "sqlite",
+        });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        Assert.Equal("https://0.0.0.0:5443", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Equal("203.0.113.10:5082", Read<RendezvousOptions>(
+            ServerSetup.RendezvousFolder,
+            RendezvousOptions.SectionName).RelayEndpoint);
+        Assert.Equal(5082, Read<RelayOptions>(ServerSetup.RelayFolder, RelayOptions.SectionName).Port);
+    }
+
+    /// <summary>
+    /// A certificate is a TLS request on its own. configure-server.sh documents --tls-certificate as "serve TLS with
+    /// this certificate"; requiring the operator to repeat --urls https://… is a trap that leaves the new certificate
+    /// unused.
+    /// </summary>
+    [Fact]
+    public void A_certificate_without_an_address_upgrades_the_existing_http_address()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        var root = Configuration(ServerSetup.RendezvousFolder);
+        Assert.Equal("https://0.0.0.0:5080", root["Urls"]);
+        Assert.NotNull(root["Kestrel:Certificates:Default:Path"]);
     }
 
     /// <summary>
@@ -206,6 +416,21 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Contains(notes, note => note.Contains("SQLite", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// "auto" keeps what the machine already chose. A memory-only installation is a choice, not a missing value: an
+    /// upgrade that passes the package's auto default must not turn it into a SQLite file behind the operator's back.
+    /// </summary>
+    [Fact]
+    public void Auto_keeps_the_memory_only_choice()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "none" });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "auto" });
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal(DatabaseSettings.None, rendezvous.Database.Provider);
+    }
+
     [Fact]
     public void A_sqlite_file_the_installer_names_is_the_one_written()
     {
@@ -217,6 +442,21 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal(DatabaseSettings.Sqlite, rendezvous.Database.Provider);
         Assert.Equal(path, rendezvous.Database.Path);
         Assert.Null(rendezvous.PostgresConnectionString);
+    }
+
+    /// <summary>
+    /// An empty path with nothing else naming a database would otherwise be written as an empty
+    /// <c>Rendezvous:Database:Path</c> and only be refused when the service starts.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void An_empty_database_path_is_refused_at_setup(string path)
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => ServerSetup.Configure(_folder, new ServerSetupOptions { DatabasePath = path }));
+
+        Assert.Contains("database path", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -246,8 +486,17 @@ public sealed class ServerSetupTests : IDisposable
     {
         var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "auto" });
 
-        Assert.Equal("http://0.0.0.0:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.Equal("http://127.0.0.1:5080", Configuration(ServerSetup.RendezvousFolder)["Urls"]);
+        Assert.False(bool.Parse(Configuration(ServerSetup.RendezvousFolder)["Rendezvous:AllowInsecureSignaling"]!));
         Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void An_explicit_public_plaintext_address_is_recorded_as_an_opt_in()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { Urls = "http://0.0.0.0:5080" });
+
+        Assert.True(bool.Parse(Configuration(ServerSetup.RendezvousFolder)["Rendezvous:AllowInsecureSignaling"]!));
     }
 
     /// <summary>
@@ -281,6 +530,60 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Equal("https://0.0.0.0:5080", root["Urls"]);
         Assert.NotNull(root["Kestrel:Certificates:Default:Path"]);
         Assert.Equal("pfx-password", root["Kestrel:Certificates:Default:Password"]);
+    }
+
+    /// <summary>
+    /// The console cannot trust a self-signed signaling certificate through the System keychain (macOS refuses the
+    /// trust change from a package postinstall), so it pins the certificate file instead.
+    /// </summary>
+    [Fact]
+    public void A_node_certificate_can_be_pinned_in_the_console_settings()
+    {
+        var certificate = WriteCertificate();
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = certificate });
+
+        Assert.Equal(certificate, Configuration(ServerSetup.OpsFolder)["Ops:NodeCertificatePath"]);
+    }
+
+    /// <summary>
+    /// Turning TLS off has to remove the pin as well. A stale path would leave the console validating every node
+    /// call against a certificate the signaling server no longer presents.
+    /// </summary>
+    [Fact]
+    public void An_empty_node_certificate_path_removes_the_pin()
+    {
+        var certificate = WriteCertificate();
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = certificate });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsNodeCertificatePath = string.Empty });
+
+        Assert.Null(Configuration(ServerSetup.OpsFolder)["Ops:NodeCertificatePath"]);
+    }
+
+    /// <summary>
+    /// The password is never stored in the installer's summary, so an upgrade pane sends the certificate path with an
+    /// empty password field. Reusing the same PFX must keep the password that is already on the machine, or the
+    /// reconfiguration clears it and the server refuses to start.
+    /// </summary>
+    [Fact]
+    public void A_certificate_password_is_kept_when_the_certificate_did_not_change()
+    {
+        var certificate = WriteCertificate();
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = certificate,
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = certificate,
+        });
+
+        Assert.Equal("pfx-password", Configuration(ServerSetup.RendezvousFolder)["Kestrel:Certificates:Default:Password"]);
     }
 
     /// <summary>An operator's own settings are not the installer's to throw away.</summary>
@@ -338,6 +641,40 @@ public sealed class ServerSetupTests : IDisposable
         var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
         rendezvous.Validate();
         Assert.Equal("203.0.113.10:5082", rendezvous.RelayEndpoint);
+
+        // This is the command every native installer runs without extra event options. A successful install must
+        // already have a working console event channel.
+        var key = Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"];
+        Assert.False(string.IsNullOrWhiteSpace(key));
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+    }
+
+    [Fact]
+    public void A_remote_node_can_be_given_the_central_ops_endpoint_and_key_without_logging_the_secret()
+    {
+        var key = Convert.ToBase64String([.. Enumerable.Repeat((byte)5, 32)]);
+        var output = new StringWriter();
+
+        var handled = SetupCommands.TryRun(
+            [
+                "--configure-system",
+                "--install-directory", _folder,
+                "--ops-events-endpoint", "https://ops.example.test/ingest/events",
+                "--ops-ingest-key", key,
+            ],
+            _folder,
+            output,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(SetupCommands.Success, exitCode);
+        Assert.Equal(key, Configuration(ServerSetup.RendezvousFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.RelayFolder)["OpsEvents:Key"]);
+        Assert.Equal(key, Configuration(ServerSetup.OpsFolder)["Ops:Ingest:Keys:k1"]);
+        Assert.Equal("https://ops.example.test/ingest/events", Configuration(ServerSetup.RelayFolder)["OpsEvents:Endpoint"]);
+        Assert.DoesNotContain(key, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(key, File.ReadAllText(Path.Combine(_folder, SetupCommands.LogFileName)), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -372,8 +709,14 @@ public sealed class ServerSetupTests : IDisposable
     public void A_certificate_value_of_auto_is_the_same_as_none_and_says_so()
     {
         // "auto" is what the installer's property defaults to. It used to fall through to the file check and come back
-        // as "the certificate 'auto' is not there", which reads like the operator did something wrong.
-        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions { TlsCertificatePath = ServerSetupOptions.Auto });
+        // as "the certificate 'auto' is not there", which reads like the operator did something wrong. The address is
+        // passed as auto too: a run that says nothing about the address now leaves it alone, and this test is about
+        // the certificate value, not about that distinction.
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = ServerSetupOptions.Auto,
+            TlsCertificatePath = ServerSetupOptions.Auto,
+        });
 
         Assert.Contains(notes, note => note.Contains("plain http", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(notes, note => note.Contains("'auto' is not there", StringComparison.Ordinal));
@@ -450,6 +793,13 @@ public sealed class ServerSetupTests : IDisposable
 
         var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
         Assert.Contains(Environment.MachineName, names.EnumerateDnsNames());
+
+        // The console calls its own signaling server on 127.0.0.1. A machine whose name resolves to 127.0.1.1 (the
+        // Debian and Ubuntu default) would otherwise be given a certificate that does not cover the address it
+        // connected to, and every scrape would fail with a name mismatch.
+        Assert.Contains(
+            IPAddress.Loopback.ToString(),
+            names.EnumerateIPAddresses().Select(address => address.ToString()));
 
         var usage = certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single();
         Assert.Contains(usage.EnhancedKeyUsages.Cast<Oid>(), oid => oid.Value == "1.3.6.1.5.5.7.3.1"); // serverAuth
@@ -549,10 +899,303 @@ public sealed class ServerSetupTests : IDisposable
         Assert.Contains("self-signed", string.Join(' ', notes), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void The_console_follows_the_database_provider()
+    {
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            DatabaseProvider = "sqlite",
+            DatabasePath = Path.Combine(_folder, "data", "rendezvous.db"),
+            OpsDatabasePath = Path.Combine(_folder, "data", "ops.db"),
+            OpsListen = "http://127.0.0.1:5090",
+        });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Sqlite, ops["Ops:Database:Provider"]);
+        Assert.Equal(Path.Combine(_folder, "data", "ops.db"), ops["Ops:Database:Path"]);
+        Assert.Equal("http://127.0.0.1:5090", ops["Ops:Listen"]);
+        Assert.Contains(notes, note => note.Contains("monitoring console", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void The_ops_gateway_is_https_on_loopback_upstream_with_an_ip_certificate()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "https://0.0.0.0:5443",
+            GatewayHostName = "203.0.113.77, ops.internal",
+            OpsListen = "http://127.0.0.1:5090",
+        });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal("https://0.0.0.0:5443", gateway["Gateway:Listen"]);
+        Assert.Equal("/{**catch-all}", gateway["ReverseProxy:Routes:ops:Match:Path"]);
+        Assert.Equal("Set", gateway["ReverseProxy:Routes:ops:Transforms:0:X-Forwarded"]);
+        Assert.Equal(ServerSetup.DefaultGatewayUpstream, gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+
+        // The console stays on loopback. Its trusted-proxy list is what makes the forwarded TLS scheme and real client
+        // address usable for Secure cookies, audit entries and sign-in throttling.
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal("http://127.0.0.1:5090", ops["Ops:Listen"]);
+        var trusted = JsonNode.Parse(File.ReadAllText(
+            Path.Combine(_folder, ServerSetup.OpsFolder, ServerSetup.SettingsFileName)))!["Ops"]!["TrustedProxies"]!.AsArray();
+        Assert.Contains(trusted, entry => entry!.GetValue<string>() == "127.0.0.1");
+
+        // The gateway generates the machine certificate when signaling did not. The extra address becomes an IP SAN,
+        // which is what lets an operator open https://203.0.113.77:5443 without a DNS name.
+        var certificatePath = gateway["Kestrel:Certificates:Default:Path"]!;
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+        Assert.Contains("203.0.113.77", names.EnumerateIPAddresses().Select(address => address.ToString()));
+        Assert.Contains("ops.internal", names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(notes, note => note.Contains("HTTPS gateway", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The gateway forwards to wherever the console was told to listen. Pinning it to port 5090 left a console moved
+    /// to another port unreachable through the gateway, which is the only way in from outside.
+    /// </summary>
+    [Theory]
+    [InlineData("http://127.0.0.1:5091", "http://127.0.0.1:5091")]
+    [InlineData("http://0.0.0.0:5091", "http://127.0.0.1:5091")]
+    [InlineData("http://[::]:5091", "http://127.0.0.1:5091")]
+    public void The_ops_gateway_forwards_to_the_port_the_console_listens_on(string opsListen, string expectedUpstream)
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        var notes = ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "https://0.0.0.0:5443",
+            OpsListen = opsListen,
+        });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal(expectedUpstream, gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+        Assert.Contains(notes, note => note.Contains($"its upstream is {expectedUpstream}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_ops_gateway_follows_a_console_port_set_by_an_earlier_run()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The generated certificate is written as PEM here.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { OpsListen = "http://127.0.0.1:5091" });
+
+        // A later run that does not mention the console's address must not point the gateway back at 5090.
+        ServerSetup.Configure(_folder, new ServerSetupOptions { GatewayListen = "https://0.0.0.0:5443" });
+
+        var gateway = Configuration(ServerSetup.GatewayFolder);
+        Assert.Equal("http://127.0.0.1:5091", gateway["ReverseProxy:Clusters:ops:Destinations:loopback:Address"]);
+    }
+
+    [Fact]
+    public void The_ops_gateway_refuses_plain_http_before_writing_any_settings()
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            GatewayListen = "http://0.0.0.0:5443",
+        }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.GatewayFolder, ServerSetup.SettingsFileName)));
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    [Fact]
+    public void The_console_shares_the_postgres_database()
+    {
+        const string ConnectionString = "Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=x";
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            DatabaseProvider = "postgres",
+            PostgresConnectionString = ConnectionString,
+        });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Postgres, ops["Ops:Database:Provider"]);
+        Assert.Equal(ConnectionString, ops["Ops:Database:ConnectionString"]);
+        Assert.Null(ops["Ops:Database:Path"]);
+    }
+
+    /// <summary>
+    /// A console cannot keep its data in memory, so "none" for the signaling server still gives it a SQLite file.
+    /// </summary>
+    [Fact]
+    public void The_console_still_gets_a_database_when_the_signaling_server_has_none()
+    {
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "none" });
+
+        var ops = Configuration(ServerSetup.OpsFolder);
+        Assert.Equal(DatabaseSettings.Sqlite, ops["Ops:Database:Provider"]);
+        Assert.False(string.IsNullOrWhiteSpace(ops["Ops:Database:Path"]));
+    }
+
+    [Fact]
+    public void Postgres_without_a_connection_string_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "postgres" }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    /// <summary>
+    /// A file that exists is not a certificate. Loading it the way Kestrel will is what turns a typo into a failed
+    /// installation rather than a service that dies on its first start.
+    /// </summary>
+    [Fact]
+    public void An_invalid_certificate_is_refused_before_anything_is_written()
+    {
+        var path = Path.Combine(_folder, "not-a-certificate.pfx");
+        File.WriteAllText(path, "not a certificate");
+
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = path,
+        }));
+
+        Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
+    }
+
+    [Fact]
+    public void A_pfx_with_the_wrong_password_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = WriteCertificate(),
+            TlsCertificatePassword = "not-the-password",
+        }));
+    }
+
+    [Fact]
+    public void A_generated_certificate_carries_the_names_it_was_given()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The PEM form.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5443",
+            TlsCertificatePath = ServerSetupOptions.GenerateCertificate,
+            TlsHostName = "rd.example.com, 203.0.113.10",
+        });
+
+        var certificatePath = Configuration(ServerSetup.RendezvousFolder)["Kestrel:Certificates:Default:Path"]!;
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
+        var names = certificate.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single();
+
+        Assert.Contains("rd.example.com", names.EnumerateDnsNames(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("203.0.113.10", names.EnumerateIPAddresses().Select(address => address.ToString()));
+
+        // Whatever the deployment is reached through, loopback is in there: it is the address the console reads its
+        // own node on.
+        Assert.Contains(
+            IPAddress.Loopback.ToString(),
+            names.EnumerateIPAddresses().Select(address => address.ToString()));
+    }
+
+    /// <summary>
+    /// The settings carry the relay key and, in the PostgreSQL case, a password. The service account reads them
+    /// through its group; every other account is kept out.
+    /// </summary>
+    [Fact]
+    public void On_unix_the_settings_are_readable_by_the_service_group_only()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        var mode = new FileInfo(path).UnixFileMode;
+
+        Assert.True(mode.HasFlag(UnixFileMode.UserRead));
+        Assert.True(mode.HasFlag(UnixFileMode.UserWrite));
+        Assert.True(mode.HasFlag(UnixFileMode.GroupRead));
+        Assert.False(mode.HasFlag(UnixFileMode.GroupWrite));
+        Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
+    }
+
+    /// <summary>
+    /// The settings file is created owner-plus-group-read in the first place, not tightened afterwards: with a wide
+    /// umask (a manual run in a shell that has one) the key must not sit on disk readable by everyone in between.
+    /// </summary>
+    [Fact]
+    public void On_unix_the_settings_are_created_with_the_final_mode_even_under_an_open_umask()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+            new FileInfo(path).UnixFileMode);
+    }
+
+    [Fact]
+    public void On_unix_a_wide_leftover_temporary_settings_file_does_not_pass_its_mode_on()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        // An interrupted earlier run: the temporary file is still there, readable by everyone.
+        var folder = Path.Combine(_folder, ServerSetup.RendezvousFolder);
+        Directory.CreateDirectory(folder);
+        var leftover = Path.Combine(folder, ServerSetup.SettingsFileName + ".tmp");
+        File.WriteAllText(leftover, "stale");
+        File.SetUnixFileMode(leftover, (UnixFileMode)0x1FF); // 0777
+
+        ServerSetup.Configure(_folder, new ServerSetupOptions { DatabaseProvider = "sqlite" });
+
+        var path = Path.Combine(folder, ServerSetup.SettingsFileName);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+            new FileInfo(path).UnixFileMode);
+        Assert.False(File.Exists(leftover));
+        Assert.DoesNotContain("stale", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void On_unix_the_private_key_is_owner_only_under_an_open_umask_and_over_a_wide_old_file()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "Unix file permissions.");
+
+        using var umask = new UmaskScope(0);
+
+        // A key file from an earlier run that is readable by everyone: generating a new key must not inherit that.
+        var tls = Path.Combine(_folder, "tls");
+        Directory.CreateDirectory(tls);
+        var staleKey = Path.Combine(tls, "signaling.key");
+        File.WriteAllText(staleKey, "stale");
+        File.SetUnixFileMode(staleKey, (UnixFileMode)0x1FF); // 0777
+
+        var (_, keyPath) = SelfSignedCertificate.EnsurePem(tls, []);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, new FileInfo(keyPath).UnixFileMode);
+        Assert.Contains("BEGIN PRIVATE KEY", File.ReadAllText(keyPath), StringComparison.Ordinal);
+    }
+
+    private JsonObject MutableSettings(string folder) =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(_folder, folder, ServerSetup.SettingsFileName)))!.AsObject();
+
+    private void WriteSettings(string folder, JsonObject settings)
+    {
+        File.WriteAllText(Path.Combine(_folder, folder, ServerSetup.SettingsFileName), settings.ToJsonString());
+    }
+
     private string WriteCertificate()
     {
+        // A real PFX, because the step now loads it the way Kestrel will: a file that merely exists is not enough to
+        // promise the server will start, which is exactly what the check is for.
         var path = Path.Combine(_folder, "signaling.pfx");
-        File.WriteAllBytes(path, [1, 2, 3]); // only its presence matters here; the TLS test covers a real one
+        using var certificate = SelfSignedCertificate.CreateForThisMachine(SelfSignedCertificate.SubjectForThisMachine);
+        File.WriteAllBytes(path, certificate.Export(X509ContentType.Pfx, "pfx-password"));
         return path;
     }
 
@@ -564,4 +1207,50 @@ public sealed class ServerSetupTests : IDisposable
     private T Read<T>(string folder, string section)
         where T : new() =>
         Configuration(folder).GetSection(section).Get<T>() ?? new T();
+}
+
+/// <summary>The signaling listener itself refuses to expose plaintext beyond loopback unless the deployment opted in.</summary>
+public class RendezvousListeningPolicyTests
+{
+    [Fact]
+    public void Loopback_plaintext_is_the_default_local_listener() =>
+        RendezvousOptions.ValidateListeningUrls("http://127.0.0.1:5080", allowInsecureSignaling: false);
+
+    [Fact]
+    public void Public_plaintext_requires_an_explicit_opt_in()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => RendezvousOptions.ValidateListeningUrls("http://0.0.0.0:5080", allowInsecureSignaling: false));
+
+        RendezvousOptions.ValidateListeningUrls("http://0.0.0.0:5080", allowInsecureSignaling: true);
+    }
+
+    [Fact]
+    public void Public_tls_needs_no_opt_in() =>
+        RendezvousOptions.ValidateListeningUrls("https://0.0.0.0:5080", allowInsecureSignaling: false);
+
+    [Theory]
+    [InlineData("http://*:5080")]
+    [InlineData("http://+:5080")]
+    [InlineData("https://127.0.0.1:5443;http://0.0.0.0:5082")]
+    public void Wildcard_hosts_and_address_lists_are_judged_like_any_other_public_address(string urls)
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => RendezvousOptions.ValidateListeningUrls(urls, allowInsecureSignaling: false));
+
+        RendezvousOptions.ValidateListeningUrls(urls, allowInsecureSignaling: true);
+    }
+
+    [Fact]
+    public void A_list_of_loopback_and_tls_addresses_needs_no_opt_in() =>
+        RendezvousOptions.ValidateListeningUrls("http://127.0.0.1:5080;https://*:5443", allowInsecureSignaling: false);
+
+    [Theory]
+    [InlineData("http://0.0.0.0:5080;https://0.0.0.0:5443", true)]
+    [InlineData("http://*:5080", true)]
+    [InlineData("http://127.0.0.1:5080", false)]
+    [InlineData("https://0.0.0.0:5443", false)]
+    [InlineData("", false)]
+    public void The_installer_records_an_opt_in_for_any_public_plaintext_address(string urls, bool expected) =>
+        Assert.Equal(expected, ListeningUrl.HasPublicPlaintext(urls));
 }

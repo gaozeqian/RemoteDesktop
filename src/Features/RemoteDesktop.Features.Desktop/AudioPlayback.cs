@@ -132,7 +132,16 @@ public sealed partial class AudioPlayback : IAsyncDisposable
                 await player.DisposeAsync().ConfigureAwait(false);
             }
 
-            Closed?.Invoke(this, EventArgs.Empty);
+#pragma warning disable CA1031 // A subscriber's failure must not fault the receive loop (and resurface from Dispose).
+            try
+            {
+                Closed?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogCloseHandlerFailed(_logger, ex);
+            }
+#pragma warning restore CA1031
         }
     }
 
@@ -141,4 +150,7 @@ public sealed partial class AudioPlayback : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Audio playback stopped.")]
     private static partial void LogPlaybackFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A handler for the audio playback's Closed event threw.")]
+    private static partial void LogCloseHandlerFailed(ILogger logger, Exception exception);
 }

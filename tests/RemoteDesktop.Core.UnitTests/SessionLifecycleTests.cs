@@ -55,6 +55,38 @@ public class SessionLifecycleTests
     }
 
     [Fact]
+    public void A_session_whose_end_token_is_already_cancelled_is_reported_straight_away_and_only_once()
+    {
+        var rendezvous = new RecordingRendezvous();
+        var lifecycle = new SessionLifecycle(rendezvous);
+        using var end = new CancellationTokenSource();
+        end.Cancel();
+
+        lifecycle.Track(Context(SessionId.New(), SessionRole.Host, RelaySessionId), end.Token);
+
+        Assert.Single(rendezvous.Ends);
+    }
+
+    [Fact]
+    public void Two_sessions_are_reported_separately_under_their_own_ids()
+    {
+        var rendezvous = new RecordingRendezvous();
+        var lifecycle = new SessionLifecycle(rendezvous);
+        var first = SessionId.New();
+        var second = SessionId.New();
+        using var firstEnd = new CancellationTokenSource();
+        using var secondEnd = new CancellationTokenSource();
+        lifecycle.Track(Context(first, SessionRole.Host, RelaySessionId), firstEnd.Token);
+        lifecycle.Track(Context(second, SessionRole.Host, RelaySessionId), secondEnd.Token);
+
+        secondEnd.Cancel();
+
+        Assert.Equal(second.ToString(), Assert.Single(rendezvous.Ends).SessionId);
+        firstEnd.Cancel();
+        Assert.Equal([second.ToString(), first.ToString()], rendezvous.Ends.Select(e => e.SessionId));
+    }
+
+    [Fact]
     public void A_composition_without_signaling_has_nothing_to_report()
     {
         var lifecycle = new SessionLifecycle(rendezvous: null);

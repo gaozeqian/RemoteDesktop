@@ -31,6 +31,8 @@ public class ServiceCollectionExtensionsTests
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The macOS platform is macOS only.");
 
         var services = new ServiceCollection();
+        // Hosts always add logging, and a port that takes a logger cannot be built without a provider.
+        services.AddLogging();
         services.AddMacOSPlatform(Path.Combine(Path.GetTempPath(), "remote-desktop-platform-tests"));
 
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
@@ -64,6 +66,8 @@ public class ServiceCollectionExtensionsTests
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The macOS platform is macOS only.");
 
         var services = new ServiceCollection();
+        // Hosts always add logging, and a port that takes a logger cannot be built without a provider.
+        services.AddLogging();
         services.AddMacOSPlatform(Path.Combine(Path.GetTempPath(), "remote-desktop-platform-tests"));
 
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });

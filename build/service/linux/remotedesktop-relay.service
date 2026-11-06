@@ -4,6 +4,8 @@ Documentation=https://github.com/gaozeqian/RemoteDesktop
 After=network-online.target remotedesktop-rendezvous.service
 Wants=network-online.target
 PartOf=remotedesktop-rendezvous.service
+# A server being reconfigured should keep coming back. This is a [Unit] setting; in [Service] systemd ignores it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
@@ -16,12 +18,13 @@ ExecStart=/usr/lib/remotedesktop-server/Relay/RemoteDesktop.Server.Relay
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 
 StandardOutput=journal
 StandardError=journal
 StateDirectory=remotedesktop-server
+StateDirectoryMode=0700
 LogsDirectory=remotedesktop-server
+UMask=0077
 
 NoNewPrivileges=yes
 ProtectSystem=strict

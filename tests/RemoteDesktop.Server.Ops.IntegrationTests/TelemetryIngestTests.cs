@@ -21,7 +21,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     public async Task A_heartbeat_lands_on_the_relay_row_instead_of_adding_one()
     {
         var correlation = Guid.NewGuid();
-        var start = DateTimeOffset.UtcNow.AddSeconds(-20);
+        var start = fixture.Now.AddSeconds(-20);
 
         var accepted = await SendAsync(
         [
@@ -65,7 +65,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     public async Task A_direct_session_exists_only_because_a_heartbeat_said_so()
     {
         var sessionId = Guid.NewGuid();
-        var start = DateTimeOffset.UtcNow.AddSeconds(-5);
+        var start = fixture.Now.AddSeconds(-5);
 
         await SendAsync(
         [
@@ -106,7 +106,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
         [
             Event(
                 OpsEventKinds.SessionTelemetry,
-                DateTimeOffset.UtcNow,
+                fixture.Now,
                 new
                 {
                     sessionId = sessionId.ToString("N"),
@@ -131,6 +131,39 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
         }
     }
 
+    [Fact]
+    public async Task A_relay_session_does_not_count_until_a_heartbeat_reports_on_it()
+    {
+        var (client, _) = await SignInAsync();
+        using (client)
+        {
+            var before = await client.GetFromJsonAsync<OverviewDto>("/api/overview", Ct);
+
+            var correlation = Guid.NewGuid();
+            await SendAsync(
+            [
+                Event(OpsEventKinds.SessionRequested, fixture.Now.AddSeconds(-10), new { controllerDeviceId = 333u, hostDeviceId = 444u }, correlation),
+                Event(OpsEventKinds.RelayPaired, fixture.Now.AddSeconds(-8), new { relaySessionId = correlation.ToString("D") }, correlation),
+            ]);
+
+            var relayOnly = await client.GetFromJsonAsync<OverviewDto>("/api/overview", Ct);
+            Assert.Equal(before!.RelayedSessions, relayOnly!.RelayedSessions);
+            Assert.Equal(before.DirectSessions, relayOnly.DirectSessions);
+
+            await SendAsync(
+            [
+                Event(
+                    OpsEventKinds.SessionTelemetry,
+                    fixture.Now.AddSeconds(-2),
+                    new { sessionId = Guid.NewGuid().ToString("N"), relaySessionId = correlation.ToString("N"), role = "controller", mode = "control", transport = "relayed", rttMilliseconds = 20, version = "1.2.3" },
+                    correlation),
+            ]);
+
+            var measured = await client.GetFromJsonAsync<OverviewDto>("/api/overview", Ct);
+            Assert.Equal(before.RelayedSessions + 1, measured!.RelayedSessions);
+        }
+    }
+
     private static OpsEventEnvelope Event(string kind, DateTimeOffset at, object payload, Guid correlation) => new()
     {
         V = 1,
@@ -145,7 +178,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
     private async Task<HttpResponseMessage> SendAsync(List<OpsEventEnvelope> batch)
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var timestamp = fixture.Now.ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")
         {
@@ -168,7 +201,7 @@ public class TelemetryIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHos
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 

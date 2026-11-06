@@ -162,7 +162,11 @@ public sealed partial class QuicPeerListener(
 
         // Bound up front so the relay fallback works even though the port is QUIC-owned afterwards.
         IPEndPoint? relay = null;
-        if (incoming.Relay?.Endpoint is { } relayEndpoint && IPAddress.TryParse(relayEndpoint.Address, out var relayAddress))
+        // The endpoint came from the server. The connector validates the same value before using it; without this
+        // check a zero or out-of-range port would throw out of the listener loop and hide behind a generic warning.
+        if (incoming.Relay?.Endpoint is { } relayEndpoint
+            && relayEndpoint.Port is >= 1 and <= 65535
+            && IPAddress.TryParse(relayEndpoint.Address, out var relayAddress))
         {
             relay = new IPEndPoint(relayAddress, (int)relayEndpoint.Port);
             if (!await punch.BindRelayAsync(relay, incoming.Relay.Ticket.Span, RelayRole.Host, options.UdpRequestTimeout, cancellationToken)

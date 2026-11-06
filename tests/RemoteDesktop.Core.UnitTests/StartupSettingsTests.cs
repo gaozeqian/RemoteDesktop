@@ -104,6 +104,47 @@ public class TransportOptionsTests
     }
 
     /// <summary>
+    /// Typing "ws://host:5080" without the path is common, and the server only maps /ws. The parser fills it in so
+    /// the connection does not go to "/" and fail as if the server were unreachable.
+    /// </summary>
+    [Theory]
+    [InlineData("ws://rd.example.com:5080", "ws://rd.example.com:5080/ws")]
+    [InlineData("wss://rd.example.com/", "wss://rd.example.com/ws")]
+    public void An_address_without_the_signaling_path_gets_it(string address, string expected)
+    {
+        var options = new TransportOptions { RendezvousUri = new Uri(address), AllowInsecureSignaling = true };
+
+        options.Validate();
+
+        Assert.Equal(expected, options.RendezvousUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Remote_plaintext_signaling_needs_an_explicit_opt_in()
+    {
+        var options = new TransportOptions { RendezvousUri = new Uri("ws://rd.example.com:5080/ws") };
+
+        var error = Assert.Throws<InvalidOperationException>(options.Validate);
+        Assert.Contains("wss://", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Loopback_plaintext_signaling_remains_the_safe_local_default()
+    {
+        new TransportOptions { RendezvousUri = new Uri("ws://127.0.0.1:5080/ws") }.Validate();
+    }
+
+    [Fact]
+    public void A_reverse_proxy_path_is_kept()
+    {
+        var options = new TransportOptions { RendezvousUri = new Uri("wss://rd.example.com/rd/ws") };
+
+        options.Validate();
+
+        Assert.Equal("wss://rd.example.com/rd/ws", options.RendezvousUri.AbsoluteUri);
+    }
+
+    /// <summary>
     /// A timeout of zero or less does not fail where it is set; it fails later, somewhere with no idea what caused it.
     /// </summary>
     [Fact]

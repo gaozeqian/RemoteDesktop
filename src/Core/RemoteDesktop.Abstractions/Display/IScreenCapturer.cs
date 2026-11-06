@@ -13,6 +13,23 @@ public interface IScreenCapturer : IAsyncDisposable
     DisplayInfo Display { get; }
 
     /// <summary>
+    /// Whether the capturer knows it cannot deliver pictures any more: a lost device, a duplication that will not be
+    /// recreated, a dead capture loop. <c>null</c> frames alone say nothing — a screen nobody is touching produces
+    /// none either — so only the backend can tell "nothing changed" from "broken", and callers must not guess.
+    /// </summary>
+    bool IsFaulted => false;
+
+    /// <summary>
+    /// Throws away whatever the backend holds and starts over on the next capture. Some failures cannot be retried
+    /// on the same object (a removed graphics device, for instance), and a capture object left alone after one is
+    /// what turns a glitch into a picture that never moves again until the process restarts. A no-op where the
+    /// backend has nothing to rebuild.
+    /// </summary>
+    void Reset()
+    {
+    }
+
+    /// <summary>
     /// Waits for the next changed frame. Returns <c>null</c> when nothing changed within <paramref name="timeout"/>,
     /// which lets the pipeline lower the frame rate for static content.
     /// </summary>

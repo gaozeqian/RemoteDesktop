@@ -11,18 +11,16 @@ public sealed record RecentDeviceEntry
 
     public string? Alias { get; init; }
 
-    /// <summary>When this device was last connected to. Two machines merge this by taking the later value.</summary>
+    /// <summary>When this device was last connected to.</summary>
     public DateTimeOffset LastConnectedUtc { get; init; }
 
     /// <summary>
     /// When the user last changed the entry itself (its alias, or removing it) — not when it was last connected to.
-    /// A future per-account sync resolves conflicts with it: the newer edit wins.
     /// </summary>
     public required DateTimeOffset UpdatedAtUtc { get; init; }
 
     /// <summary>
-    /// Set when the user removed the device. The entry stays behind as a tombstone so that one machine's removal is
-    /// not undone by another machine's copy on the next sync; with no sync it is simply hidden from
+    /// Set when the user removed the device. The entry stays behind as a tombstone and is hidden from
     /// <see cref="IRecentDevicesStore.GetAllAsync"/>. Connecting to the device again revives it.
     /// </summary>
     public DateTimeOffset? DeletedAtUtc { get; init; }

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using Google.Protobuf;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -34,11 +33,18 @@ public sealed partial class HostSessionService(
     ISystemKeepAwake? keepAwake = null,
     IInputAccess? inputAccess = null) : BackgroundService
 {
-    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultHandshakeTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>How many controllers may be in a session at once. Well past what a person connecting from a
     /// phone and a laptop needs, and low enough that opening sessions in a loop cannot spend the machine.</summary>
-    private const int MaxSessions = 16;
+    private const int DefaultMaxSessions = 16;
+
+    /// <summary>The ceiling in force; only tests lower it, so that reaching it does not take sixteen real sessions.</summary>
+    internal int MaxSessions { get; set; } = DefaultMaxSessions;
+
+    /// <summary>How long a controller may take to finish the handshake; only tests shorten it, so that a stalled
+    /// handshake can be seen to time out without waiting fifteen real seconds.</summary>
+    internal TimeSpan HandshakeTimeout { get; set; } = DefaultHandshakeTimeout;
 
     /// <summary>
     /// How many channels one session may have open at once. The products use fewer than ten (video, input, clipboard,
@@ -128,6 +134,7 @@ public sealed partial class HostSessionService(
         await using (connection.ConfigureAwait(false))
         {
             IChannel? control = null;
+            SessionId? runningSession = null;
             try
             {
                 SessionContext? session;
@@ -156,6 +163,8 @@ public sealed partial class HostSessionService(
                 // Every session holds its own channels and buffers, and each of those costs this machine memory for
                 // as long as it lives. A password is all it takes to get this far, so without a ceiling one
                 // controller — or somebody who was given the password — can open sessions until the machine gives up.
+                // AuthenticateAsync has already turned away the ordinary case with a reason; this is the authoritative
+                // check for the controllers that were all admitted below the limit at the same time.
                 using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 HostedSession hosted;
                 lock (_hostedGate)
@@ -173,6 +182,7 @@ public sealed partial class HostSessionService(
                     session = ReserveId(session);
                     hosted = new HostedSession(session, control!, end);
                     _hosted[session.Id] = hosted;
+                    runningSession = session.Id;
                 }
 
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
@@ -184,28 +194,55 @@ public sealed partial class HostSessionService(
                     await SendCurrentInputAccessAsync(hosted, end.Token).ConfigureAwait(false);
                 }
 
-                keepAwake?.Acquire();
-                telemetry.Track(session, end.Token);
-                lifecycle.Track(session, end.Token);
-                SessionStarted?.Invoke(this, new HostSessionEventArgs(session));
                 try
                 {
+                    // Fenced off from the session's lifetime: an event handler that throws must not prevent the cleanup
+                    // in the finally below, nor escape ServeAsync as an unobserved task exception.
+                    keepAwake?.Acquire();
+                    telemetry.Track(session, end.Token);
+                    lifecycle.Track(session, end.Token);
+                    RaiseSessionEvent(SessionStarted, session, nameof(SessionStarted));
                     await RunSessionAsync(hosted).ConfigureAwait(false);
                 }
                 finally
                 {
+                    // The session is over however it ended (the controller left, the link broke, the host stopped), but
+                    // only Disconnect cancels this token on its own. The end report and the heartbeat hang on it, so
+                    // without this they would never learn that a session ended by the other side. Cancelling twice is
+                    // a no-op, which is what keeps this and Disconnect from disagreeing.
+                    end.Cancel();
+
                     // Value-aware: a controller may announce an id again after the first session with it ended, and a
                     // late finally from the first must not remove the second.
                     _hosted.TryRemove(new KeyValuePair<SessionId, HostedSession>(session.Id, hosted));
                     hosted.Dispose();
                     keepAwake?.Release();
                     LogSessionEnded(logger, session.Id);
-                    SessionEnded?.Invoke(this, new HostSessionEventArgs(session));
+                    RaiseSessionEvent(SessionEnded, session, nameof(SessionEnded));
                 }
+            }
+            catch (OperationCanceledException) when (runningSession is not null)
+            {
+                // The host is stopping or the session was ended on purpose; LogSessionEnded has already said so.
+            }
+            catch (Exception ex) when (runningSession is { } sessionId && ex is IOException or InvalidDataException or SessionException)
+            {
+                // Past the handshake: a channel failure that RunSessionAsync rethrows is not a handshake problem.
+                LogSessionEndedWithError(logger, sessionId, ex.Message);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or SessionException or OperationCanceledException)
             {
                 LogHandshakeFailed(logger, connection.RemoteDevice, ex.Message);
+            }
+#pragma warning disable CA1031 // This task is started and forgotten: nothing awaits it, so an exception escaping would go unobserved.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                // A connection torn down mid-handshake (ObjectDisposedException) or a handler that failed in a way
+                // nobody listed above. The controller is not answered - the failure is on this side and its nature is
+                // unknown - but the connection and the control channel are closed by the disposals around this
+                // block, which is what the controller sees as a refused session.
+                LogSessionFailed(logger, connection.RemoteDevice, ex);
             }
             finally
             {
@@ -217,11 +254,34 @@ public sealed partial class HostSessionService(
         }
     }
 
+    /// <summary>
+    /// Raises a session event without letting a handler's exception end the session's lifetime: the session must
+    /// still run, and its cleanup must still happen.
+    /// </summary>
+    private void RaiseSessionEvent(EventHandler<HostSessionEventArgs>? handler, SessionContext session, string name)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(this, new HostSessionEventArgs(session));
+        }
+#pragma warning disable CA1031 // A handler's exception must not end the session.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogSessionEventFailed(logger, session.Id, name, ex);
+        }
+    }
+
     private async Task<SessionContext?> AuthenticateAsync(IPeerConnection connection, IChannel control, CancellationToken cancellationToken)
     {
         var hello = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.Hello, cancellationToken).ConfigureAwait(false)).Hello;
 
-        var controllerVersion = new ProtocolVersion((ushort)hello.ProtocolMajor, (ushort)hello.ProtocolMinor);
+        var controllerVersion = ProtocolVersion.FromWire(hello.ProtocolMajor, hello.ProtocolMinor);
         if (!ProtocolVersion.Current.IsCompatibleWith(controllerVersion))
         {
             await RefuseAsync(control, AuthFailure.IncompatibleVersion, cancellationToken).ConfigureAwait(false);
@@ -229,36 +289,86 @@ public sealed partial class HostSessionService(
         }
 
         var controller = connection.RemoteDevice;
-        if (limiter.IsBlocked(controller))
+        // The attempt is taken here, not counted when it fails: the password round trip below takes several network
+        // hops, and handshakes of one device that were only checked for a lock at the start could all get through
+        // before the first failure was recorded. The reservation is settled by the outcome of the password check; any
+        // other way out of this method (the controller leaving, a timeout, cancellation, an exception) gives the
+        // attempt back without counting a failure, as a flaky link must not lock a legitimate controller out.
+        using var attempt = limiter.TryReserve(controller);
+        if (attempt is null)
         {
             await RefuseAsync(control, AuthFailure.TooManyAttempts, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
-        var nonce = RandomNumberGenerator.GetBytes(PasswordProof.NonceSize);
-        await ControlMessages.WriteAsync(control, new ControlMessage
+        // Both slots are always challenged: the fixed slot gets a random dummy when no fixed password exists, so the
+        // wire shape and the amount of work do not reveal whether the device is set up for unattended access.
+        var challenges = credentials.BeginAuthentication(connection.LocalFingerprint, connection.RemoteFingerprint);
+        var authChallenge = new AuthChallenge
         {
-            AuthChallenge = new AuthChallenge
+            ProtocolMajor = ProtocolVersion.Current.Major,
+            ProtocolMinor = ProtocolVersion.Current.Minor,
+        };
+        foreach (var challenge in challenges)
+        {
+            authChallenge.Credentials.Add(new SrpChallenge
             {
-                Nonce = ByteString.CopyFrom(nonce),
-                ProtocolMajor = ProtocolVersion.Current.Major,
-                ProtocolMinor = ProtocolVersion.Current.Minor,
-            },
-        }, cancellationToken).ConfigureAwait(false);
+                Salt = ByteString.CopyFrom(challenge.Salt),
+                ServerPublic = ByteString.CopyFrom(challenge.ServerPublic),
+            });
+        }
+
+        await ControlMessages.WriteAsync(control, new ControlMessage { AuthChallenge = authChallenge }, cancellationToken)
+            .ConfigureAwait(false);
 
         var response = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthResponse, cancellationToken)
             .ConfigureAwait(false)).AuthResponse;
 
-        // Fingerprints come from the pinned TLS certificates, binding the proof to this very connection.
-        if (!credentials.Verify(response.Proof.Span, nonce, connection.LocalFingerprint, connection.RemoteFingerprint))
+        int? matched = null;
+        byte[] serverEvidence = [];
+        if (response.Credentials.Count == challenges.Count)
         {
-            limiter.RecordFailure(controller);
+            // Verify every slot rather than stopping at the first match: the time taken must not say which credential
+            // was used, and a client supplying an equal temporary and fixed password still produces two responses.
+            for (var index = 0; index < challenges.Count; index++)
+            {
+                var credential = response.Credentials[index];
+                if (PasswordAuthenticator.VerifyHost(
+                        challenges[index],
+                        credential.ClientPublic.Span,
+                        credential.ClientEvidence.Span,
+                        out var evidence))
+                {
+                    matched ??= index;
+                    if (index == matched)
+                    {
+                        serverEvidence = evidence;
+                    }
+                }
+            }
+        }
+
+        if (matched is null)
+        {
+            attempt.RecordFailure();
             LogBadPassword(logger, controller);
             await RefuseAsync(control, AuthFailure.BadPassword, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
-        limiter.RecordSuccess(controller);
+        attempt.RecordSuccess();
+
+        // Say so before accepting: once AuthResult.Accepted has gone out the controller believes it has a session, and
+        // closing the connection afterwards looks like a network fault. This is only a courtesy check; the decision
+        // that counts is the one in ServeAsync, made under the lock, because several controllers can pass this point
+        // at the same moment.
+        if (_hosted.Count >= MaxSessions)
+        {
+            LogTooManySessions(logger, controller, _hosted.Count);
+            await RefuseAsync(control, AuthFailure.TooManySessions, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
         var grant = AccessGrant.Create(
             ControlMessages.FromMessage(hello.Mode),
             ControlMessages.FromWire(hello.RequestedPermissions),
@@ -271,6 +381,8 @@ public sealed partial class HostSessionService(
                 Accepted = true,
                 Mode = ControlMessages.ToMessage(grant.Mode),
                 GrantedPermissions = (uint)grant.Permissions,
+                ServerEvidence = ByteString.CopyFrom(serverEvidence),
+                CredentialIndex = (uint)matched.Value,
             },
         }, cancellationToken).ConfigureAwait(false);
 
@@ -387,7 +499,7 @@ public sealed partial class HostSessionService(
             return false;
         }
 
-        hosted.Context.Grant = hosted.Context.Grant.DowngradeToView();
+        hosted.Context.UpdateGrant(grant => grant.DowngradeToView());
         LogDowngraded(logger, id);
         await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
         return true;
@@ -405,7 +517,7 @@ public sealed partial class HostSessionService(
             return false;
         }
 
-        hosted.Context.Grant = hosted.Context.Grant.Revoke(permissions);
+        hosted.Context.UpdateGrant(grant => grant.Revoke(permissions));
         LogRevoked(logger, id, permissions);
         await ApplyGrantAsync(hosted, cancellationToken).ConfigureAwait(false);
         return true;
@@ -563,6 +675,9 @@ public sealed partial class HostSessionService(
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} ended.")]
     private static partial void LogSessionEnded(ILogger logger, SessionId sessionId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId} ended with an error: {Reason}.")]
+    private static partial void LogSessionEndedWithError(ILogger logger, SessionId sessionId, string reason);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Wrong password from {Controller}.")]
     private static partial void LogBadPassword(ILogger logger, DeviceId controller);
 
@@ -589,4 +704,10 @@ public sealed partial class HostSessionService(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Session {SessionId}: {Channel} channel failed.")]
     private static partial void LogChannelFailed(ILogger logger, SessionId sessionId, ChannelType channel, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Serving {Controller} failed unexpectedly; the connection is closed.")]
+    private static partial void LogSessionFailed(ILogger logger, DeviceId controller, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: the {Handler} handler threw; the session proceeds.")]
+    private static partial void LogSessionEventFailed(ILogger logger, SessionId sessionId, string handler, Exception exception);
 }

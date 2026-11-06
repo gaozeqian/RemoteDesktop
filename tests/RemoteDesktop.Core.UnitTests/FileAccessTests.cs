@@ -37,6 +37,42 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(FileError.InvalidPath, ex.Error);
     }
 
+    // The forward-slash spellings reach the same devices once GetFullPath has canonicalized them, so the device check
+    // cannot rely on the raw spelling alone. A configured UNC root must not change the answer either.
+    [Theory]
+    [InlineData("//./PhysicalDrive0")]
+    [InlineData("//?/C:/Windows")]
+    [InlineData("/\\./PhysicalDrive0")]
+    [InlineData("\\\\?/C:\\Windows")]
+    public void Device_paths_are_rejected_in_every_spelling_even_with_a_network_root_configured(string path)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+        foreach (var policy in new[] { Open, new FileAccessPolicy([@"\\configured.invalid\share"]) })
+        {
+            var ex = Assert.Throws<FileOperationException>(() => policy.Normalize(path));
+            Assert.Equal(FileError.InvalidPath, ex.Error);
+        }
+    }
+
+    // A root that is a filesystem root already ends in the separator; paths beneath it must still count as inside.
+    [Fact]
+    public void A_filesystem_root_configured_as_the_shared_root_allows_the_paths_beneath_it()
+    {
+        var folder = Directory.CreateTempSubdirectory("rd-fsroot-").FullName;
+        try
+        {
+            var root = Path.GetPathRoot(folder)!;
+            var policy = new FileAccessPolicy([root]);
+
+            Assert.Equal(Path.Combine(folder, "file.txt"), policy.Normalize(Path.Combine(folder, "file.txt")));
+            Assert.Equal(folder, policy.Normalize(folder));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("relative/path.txt")]
     [InlineData("../etc/passwd")]
@@ -150,6 +186,93 @@ public sealed class FileAccessPolicyTests
         Assert.Equal(FileError.NotAllowed, ex.Error);
     }
 
+    /// <summary>
+    /// The check that closes the check/use race is the one made on the opened handle, not the one made on its spelling
+    /// before the open. This exercises that half directly with an outside file that a swapped link could have produced.
+    /// </summary>
+    [Fact]
+    public void A_handle_that_really_points_outside_the_root_is_refused_after_the_open()
+    {
+        var outside = Directory.CreateTempSubdirectory("rd-handle-outside-").FullName;
+        var root = Directory.CreateTempSubdirectory("rd-handle-root-").FullName;
+        var secret = Path.Combine(outside, "secret.txt");
+        File.WriteAllText(secret, "x");
+
+        var policy = new FileAccessPolicy([root]);
+        using var opened = File.OpenRead(secret);
+
+        var ex = Assert.Throws<FileOperationException>(() => policy.ValidateOpenedFile(opened.SafeFileHandle));
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+    }
+
+    /// <summary>
+    /// A UNC path is refused from its spelling alone. Resolving it first would already ask the named server about the
+    /// path (an SMB connection authenticated as the logged-in user), so the refusal has to come before any lookup.
+    /// </summary>
+    [Theory]
+    [InlineData(@"\\attacker.invalid\share\x")]
+    [InlineData(@"\\attacker.invalid\share\sub\..\x")]
+    public void A_network_share_is_refused_without_looking_at_it(string path)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+
+        var ex = Assert.Throws<FileOperationException>(() => Open.Normalize(path));
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+        Assert.Contains("Network shares", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_network_share_other_than_the_configured_one_is_refused()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+
+        // The host names do not exist: resolving the configured root fails at once and keeps its spelling, and the
+        // candidates below are refused from their spelling without a lookup.
+        var policy = new FileAccessPolicy([@"\\configured.invalid\share"]);
+        foreach (var other in new[] { @"\\attacker.invalid\share\x", @"\\configured.invalid\other\x" })
+        {
+            var ex = Assert.Throws<FileOperationException>(() => policy.Normalize(other));
+            Assert.Equal(FileError.NotAllowed, ex.Error);
+        }
+    }
+
+    [Fact]
+    public void Creating_a_file_that_exists_says_so()
+    {
+        var root = Directory.CreateTempSubdirectory("rd-exists-").FullName;
+        try
+        {
+            var path = Path.Combine(root, "taken.txt");
+            File.WriteAllText(path, "mine");
+
+            var ex = Assert.Throws<FileOperationException>(() =>
+                new FileAccessPolicy([root]).OpenWrite(path, FileMode.CreateNew, FileAccess.Write, FileShare.None));
+
+            // A caller that can pick another name needs to tell this apart from a failing disk.
+            Assert.Equal(FileError.AlreadyExists, ex.Error);
+            Assert.Equal("mine", File.ReadAllText(path));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_verified_handle_can_be_read_after_the_path_is_gone()
+    {
+        var root = Directory.CreateTempSubdirectory("rd-handle-inside-").FullName;
+        var path = Path.Combine(root, "file.txt");
+        File.WriteAllText(path, "content");
+
+        var policy = new FileAccessPolicy([root]);
+        using var opened = policy.OpenRead(path);
+        File.Delete(path);
+
+        using var reader = new StreamReader(opened);
+        Assert.Equal("content", reader.ReadToEnd());
+    }
+
     [Theory]
     [InlineData("report.txt")]
     [InlineData("name with spaces.docx")]
@@ -203,6 +326,31 @@ public sealed class FileAccessPolicyTests
         // Every one of these is a name the filesystem accepts. Refusing them would make files that exist on disk
         // impossible to rename or create over the network.
         Assert.Equal(name, FileAccessPolicy.NormalizeName(name));
+    }
+
+    // Line breaks in a path are not refused by Normalize: on Unix they are ordinary characters of a legal file name, and
+    // on Windows the path is accepted here and the operating system refuses it when the file is opened. This pins the
+    // CURRENT behavior, it is not a statement that such paths are wanted. What keeps a path like this from forging a
+    // log line is that log messages carry paths escaped, not that the policy turns them away.
+    [Theory]
+    [InlineData("a\nb.txt")]
+    [InlineData("a\r\nb.txt")]
+    [InlineData("file.txt\n")]
+    public void A_line_break_in_a_path_is_passed_through_unchanged(string leaf)
+    {
+        var path = OperatingSystem.IsWindows() ? @"C:\dir\" + leaf : "/home/u/" + leaf;
+
+        Assert.Equal(path, Open.Normalize(path));
+    }
+
+    [Theory]
+    [InlineData("a\nb")]
+    [InlineData("a\r\nb")]
+    [InlineData("file.txt\n")]
+    public void A_line_break_in_a_file_name_is_rejected(string name)
+    {
+        var ex = Assert.Throws<FileOperationException>(() => FileAccessPolicy.NormalizeName(name));
+        Assert.Equal(FileError.InvalidPath, ex.Error);
     }
 
     [Fact]
@@ -357,6 +505,55 @@ public sealed class PartialFileTests : IDisposable
         Assert.NotEqual(a, PartialFile.PathFor(@"C:\x\f.bin", 101, time));
         Assert.NotEqual(a, PartialFile.PathFor(@"C:\x\f.bin", 100, time.AddMilliseconds(1)));
         Assert.Equal(a, PartialFile.PathFor(@"C:\x\f.bin", 100, time));
+    }
+
+    [Fact]
+    public void A_name_that_fits_keeps_its_partial_name_exactly()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(_root, new string('a', 200) + ".bin");
+
+        // Partials written by earlier versions have to stay resumable, so a name that fits is never rewritten.
+        Assert.Equal($"{path}.100-{time.ToUnixTimeMilliseconds():x}{PartialFile.Extension}", PartialFile.PathFor(path, 100, time));
+    }
+
+    [Fact]
+    public void A_name_too_long_for_the_suffix_gets_a_shortened_but_stable_partial_name()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var first = Path.Combine(_root, new string('a', 255));
+        var second = Path.Combine(_root, new string('a', 254) + "b");
+
+        var partial = PartialFile.PathFor(first, long.MaxValue, time);
+
+        Assert.True(Path.GetFileName(partial).Length <= 255, "The partial's own name must be a name the filesystem accepts.");
+        Assert.Equal(_root, Path.GetDirectoryName(partial));
+        Assert.EndsWith($".{long.MaxValue}-{time.ToUnixTimeMilliseconds():x}{PartialFile.Extension}", partial, StringComparison.Ordinal);
+        Assert.Equal(partial, PartialFile.PathFor(first, long.MaxValue, time));
+        Assert.NotEqual(partial, PartialFile.PathFor(second, long.MaxValue, time));
+
+        // The result can really be created.
+        File.WriteAllText(partial, "x");
+        Assert.True(File.Exists(partial));
+    }
+
+    [Fact]
+    public void Shortening_a_partial_name_never_cuts_a_surrogate_pair()
+    {
+        var time = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(_root, string.Concat(Enumerable.Repeat("\U0001F600", 120)));
+
+        // A size with one more digit moves the cut by one character, so one of the two lands inside a pair.
+        foreach (var size in new[] { 1L, 10L })
+        {
+            var name = Path.GetFileName(PartialFile.PathFor(path, size, time));
+
+            Assert.True(name.Length <= 255);
+            for (var i = 0; i < name.Length; i++)
+            {
+                Assert.Equal(char.IsHighSurrogate(name[i]), i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]));
+            }
+        }
     }
 
     [Fact]

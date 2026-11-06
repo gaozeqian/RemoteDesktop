@@ -15,6 +15,9 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Server.Ops.IntegrationTests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- dotnet build does not copy static assets into the output; only publish does. Running the built dll — which is
          what an unpacked build and the smoke test do — would then serve 404 for the shell while every API works, the
          least obvious way for it to be broken. -->

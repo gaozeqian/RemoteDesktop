@@ -1,13 +1,24 @@
 # Settings for the Remote Desktop server.
 #
-# This file is read when the package is configured and whenever you run
+# The database and TLS choices are asked during installation and can be changed
+# later with
 #
 #     dpkg-reconfigure remotedesktop-server
 #
-# Editing it alone changes nothing: both servers run with the settings in
-# /etc/remotedesktop-server, which are written from this file. The package never
-# overwrites them, so a change here only takes effect through one of the two
-# commands above.
+# The values below are the defaults those questions are seeded with when the
+# post-install step asks them (plain `dpkg -i`). For a non-interactive install,
+# preseed before installing — that works with apt, which asks before the package
+# (and this file) is unpacked:
+#
+#     debconf-set-selections <<'EOF'
+#     remotedesktop-server remotedesktop-server/database-provider select postgres
+#     ...
+#     EOF
+#
+# To change an installed server's database or TLS, answer the questions from
+# `dpkg-reconfigure remotedesktop-server`; the answers live in debconf, not in
+# this file. The other values below (URLs, relay address, shared key, firewall)
+# are read from here on every run, and are the server's advanced settings.
 #
 # Every one of these may be left as it is.
 
@@ -35,18 +46,22 @@ RD_RELAY_KEY="auto"
 
 # Where device codes are kept.
 #
-#   auto      keep the PostgreSQL this machine already has, and otherwise start a
-#             SQLite database in /var/lib/remotedesktop-server (the default)
-#   sqlite    always SQLite
+#   auto      keep what this machine already does, and otherwise start SQLite
+#   sqlite    always SQLite (the installation question's default)
 #   postgres  always PostgreSQL; RD_POSTGRES below has to hold a connection string
 #   none      memory only — every device gets a different code each time the
 #             server restarts, which breaks unattended access
+#
+# The monitoring console (Ops) uses the same provider. It cannot run without a
+# database, so with "none" it keeps its own SQLite file.
 #
 # With a database the device codes survive a restart, which is what makes a
 # machine reachable without anybody present.
 RD_DATABASE="auto"
 
 # The SQLite file. Empty means /var/lib/remotedesktop-server/rendezvous.db.
+# The file's directory is created and made writable by the service account; the
+# monitoring console's ops.db goes in the same directory.
 #
 # It has to be on a local disk: SQLite corrupts on a network share. Back it up —
 # losing it gives every device a new code.
@@ -63,23 +78,51 @@ RD_POSTGRES=""
 
 # Whether the signaling server speaks TLS.
 #
-#   generate  make a self-signed certificate on this machine (the default)
-#   auto      serve plain HTTP, and say so in the notes
+#   generate  make a self-signed certificate on this machine (the default, and
+#             the installation question's first choice)
+#   auto      serve plain HTTP, and say so in the notes (the question's "none")
 #   /path     use a certificate you already have — a PKCS#12 file (.pfx/.p12), or
 #             a PEM certificate with its key beside it under the same name and a
-#             .key extension (signaling.crt and signaling.key)
+#             .key extension (signaling.crt and signaling.key). The package
+#             copies it into /etc/remotedesktop-server/tls/custom and makes it
+#             readable by the service account.
 #
 # A certificate made here is not trusted by anything, so each client has to be
-# given the public half: /etc/remotedesktop-server/tls/signaling.crt. On a client,
+# given the public half: /etc/remotedesktop-server/tls/signaling.crt. The client
+# and host packages can import it during installation. On a client by hand,
 #
 #     cp signaling.crt /usr/local/share/ca-certificates/ && update-ca-certificates
 RD_TLS="generate"
 
-# Whether to open the three ports in ufw, if ufw is installed and active.
+# The password of a PKCS#12 certificate. Empty means none, or a PEM certificate.
+RD_TLS_PASSWORD=""
+
+# Extra DNS names (comma-separated) clients reach this server through. They are
+# added to a certificate this package generates. A certificate only answers the
+# names that are in it: clients using a public DNS name or a NAT address have to
+# see that name here, or they reject the certificate even though they trust it.
+RD_TLS_HOSTNAME=""
+
+# The public HTTPS listener for the Ops monitoring console. The console itself
+# remains on http://127.0.0.1:5090; this gateway is the only network-facing
+# listener and terminates TLS.
+#
+# The generated certificate contains this machine's IPv4 addresses as IP SAN
+# entries. Its public half is /etc/remotedesktop-server/tls/signaling.crt;
+# administrators must trust that file on the machines they use to open the
+# console. No DNS name is required.
+RD_GATEWAY_LISTEN="https://0.0.0.0:5443"
+
+# Extra comma-separated DNS names or IP addresses for the generated certificate,
+# for an address that is not assigned to this machine (for example a NAT IP).
+RD_GATEWAY_HOSTNAME=""
+
+# Whether to open the public ports in ufw, if ufw is installed and active.
 #
 #   5080/tcp  signaling
 #   5081/udp  address reflection
 #   5082/udp  relay
+#   5443/tcp  Ops HTTPS gateway
 #
 # Left at 0 by default: a package that changes a machine's firewall decides for
 # whoever administers it. Nothing here touches nftables or iptables directly.

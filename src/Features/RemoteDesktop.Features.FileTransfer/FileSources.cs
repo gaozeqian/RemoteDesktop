@@ -53,8 +53,16 @@ public sealed class LocalFileSource : IFileSource
 /// The other computer's files, asked for over one long-lived channel. The channel is opened on first use and reopened
 /// when it turns out to be broken (the host may have restarted its agent, for instance).
 /// </summary>
-public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, IAsyncDisposable
+/// <param name="connection">The session to ask over.</param>
+/// <param name="requestTimeout">
+/// How long one request waits for its answer; <see cref="RequestTimeout.Default"/> when omitted. Exposed so a test can
+/// use a deadline it does not have to wait out.
+/// </param>
+public sealed class RemoteFileSource(IPeerConnection connection, TimeSpan? requestTimeout = null) : IFileSource, IAsyncDisposable
 {
+    private const string OutcomeUnknownMessage =
+        "The connection to the remote computer was lost; the operation may already have taken effect. Refresh the list to check.";
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private IChannel? _channel;
 
@@ -74,7 +82,7 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
             [.. listing.Entries.Select(e => new FileEntryInfo(
                 e.Name,
                 e.IsDirectory,
-                (long)e.Size,
+                FileTransferClient.ToLength(e.Size),
                 e.ModifiedUnixMs == 0 ? DateTimeOffset.MinValue : FileTimestamps.FromUnixMilliseconds(e.ModifiedUnixMs),
                 (FileEntryAttributes)e.Attributes))],
             listing.Truncated);
@@ -169,22 +177,48 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
     }
 
     /// <remarks>
-    /// Only a channel that worked before is retried on a fresh one: when a brand-new channel fails, asking again would
-    /// not help, and repeating a folder operation that may already have happened would be wrong.
+    /// A brand-new channel that fails is never retried: asking again would not help. A reused channel (one that
+    /// answered before) may simply have gone stale, so a read-only request (list, places) is repeated once on a fresh
+    /// channel. A changing request (make directory, rename, delete) is not: the host may have carried it out before the
+    /// connection broke, and repeating it would report a misleading "not found" or "already exists". It fails instead,
+    /// saying the outcome is unknown.
     /// </remarks>
     private async Task<FileResponse> RequestAsync(FileRequest request, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var idempotent = request.BodyCase is FileRequest.BodyOneofCase.List or FileRequest.BodyOneofCase.Places;
             for (var reused = _channel is not null; ; reused = false)
             {
                 try
                 {
                     _channel ??= await connection.OpenChannelAsync(ChannelType.FileTransfer, bidirectional: true, cancellationToken).ConfigureAwait(false);
-                    await ProtobufFrames.WriteAsync(_channel.Stream, request, cancellationToken).ConfigureAwait(false);
-                    return await ProtobufFrames.ReadAsync(_channel.Stream, FileResponse.Parser, cancellationToken: cancellationToken).ConfigureAwait(false)
-                        ?? throw new EndOfStreamException("The remote computer closed the file channel.");
+                    var channel = _channel;
+                    return await RequestTimeout.RunAsync(
+                        async token =>
+                        {
+                            await ProtobufFrames.WriteAsync(channel.Stream, request, token).ConfigureAwait(false);
+                            return await ProtobufFrames.ReadAsync(channel.Stream, FileResponse.Parser, cancellationToken: token).ConfigureAwait(false)
+                                ?? throw new EndOfStreamException("The remote computer closed the file channel.");
+                        },
+                        cancellationToken,
+                        requestTimeout).ConfigureAwait(false);
+                }
+                catch (TimeoutException) when (reused && idempotent)
+                {
+                    // A channel that used to answer and now says nothing is as good as broken: ask again on a fresh one.
+                    await DropChannelAsync().ConfigureAwait(false);
+                }
+                catch (TimeoutException ex) when (reused)
+                {
+                    await DropChannelAsync().ConfigureAwait(false);
+                    throw new FileOperationException(FileError.Io, OutcomeUnknownMessage, ex);
+                }
+                catch (TimeoutException ex)
+                {
+                    await DropChannelAsync().ConfigureAwait(false);
+                    throw new FileOperationException(FileError.Io, ex.Message, ex);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException && !cancellationToken.IsCancellationRequested)
                 {
@@ -193,12 +227,24 @@ public sealed class RemoteFileSource(IPeerConnection connection) : IFileSource, 
                     {
                         throw new FileOperationException(FileError.Io, "The connection to the remote computer failed.", ex);
                     }
+
+                    if (!idempotent)
+                    {
+                        throw new FileOperationException(FileError.Io, OutcomeUnknownMessage, ex);
+                    }
                 }
             }
         }
         finally
         {
-            _gate.Release();
+            try
+            {
+                _gate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // DisposeAsync ran while this request was in flight; its own outcome must not be replaced by that.
+            }
         }
     }
 

@@ -7,10 +7,15 @@
 # The controlling end: the window somebody drives another machine from. Separate from the host package because they
 # are separate things to want — most machines are one or the other, and a package that installed both would make
 # every controller a machine that can also be reached.
+#
+# The signaling address is baked in as the default the installation offers, and the installation can replace it; see
+# remotedesktop-client.default. RD_SERVER_CERTIFICATE is the site-build shortcut for a self-signed server
+# certificate: it travels inside the package, and an installation can supply a different one.
 set -eu
 
 root=$(cd "$(dirname "$0")/../../../.." && pwd)
 . "$root/build/installer/version.sh"
+. "$root/build/installer/linux/common.sh"
 version=$(read_product_version "$root")
 architecture=${DEB_ARCHITECTURE:-amd64}
 runtime=${DEB_RUNTIME:-linux-x64}
@@ -20,9 +25,8 @@ runtime=${DEB_RUNTIME:-linux-x64}
 out=${1:-$root/artifacts/installer/linux}
 work="$out/remotedesktop-client_${version}_${architecture}"
 program="$work/usr/lib/remotedesktop-client"
-icons="$work/usr/share/icons/hicolor"
 
-for tool in dpkg-deb dotnet; do
+for tool in dpkg-deb dotnet gzip md5sum; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing required tool: $tool" >&2
         exit 1
@@ -31,14 +35,10 @@ done
 
 # Same reasoning as the host's package: the .NET runtime does not ship libmsquic on Linux, and a self-contained
 # program looks for it beside itself and nowhere else.
-native="$root/artifacts/lib/linux"
-if [ ! -f "$native/libmsquic.so.2" ]; then
-    echo "Fetching libmsquic..."
-    "$root/native/linux/fetch-libmsquic.sh"
-fi
+native=$(rd_stage_libmsquic "$root")
 
 rm -rf "$work"
-mkdir -p "$work/DEBIAN" "$work/usr/bin" "$work/usr/share/applications" "$program"
+mkdir -p "$work/DEBIAN" "$work/usr/bin" "$work/usr/share/applications" "$work/etc/default" "$program"
 
 echo "Publishing the client for $runtime (version $version)..."
 dotnet publish "$root/src/Hosts/RemoteDesktop.Client" \
@@ -47,32 +47,16 @@ dotnet publish "$root/src/Hosts/RemoteDesktop.Client" \
     -o "$program" \
     --nologo -v quiet
 
-cp -a "$native/libmsquic.so.2" "$native/libmsquic.so.2.6.2" "$program/" 2>/dev/null || cp -a "$native/libmsquic.so.2" "$program/"
+rd_copy_libmsquic "$native" "$program"
 
 # Symbols are for the machine that built the package, not the one that installs it. The MSIs already strip them.
 find "$program" -type f -name '*.pdb' -delete
-# A package built for a particular deployment can carry that deployment's address, so the client works on first
-# launch instead of asking the person to find the setting. Empty keeps the built-in default.
-rendezvous=${RD_RENDEZVOUS_URI:-}
-if [ -n "$rendezvous" ]; then
-    case "$rendezvous" in
-        ws://*|wss://*) ;;
-        *) echo "RD_RENDEZVOUS_URI must start with ws:// or wss:// (got '$rendezvous')." >&2; exit 1 ;;
-    esac
-    case "$rendezvous" in
-        *'&'*|*'#'*|*'\\'*|*'"'*)
-            echo "RD_RENDEZVOUS_URI contains a character this script cannot safely substitute." >&2; exit 1 ;;
-    esac
 
-    settings="$program/appsettings.json"
-    sed "s#\"RendezvousUri\"[[:space:]]*:[[:space:]]*\"[^\"]*\"#\"RendezvousUri\": \"$rendezvous\"#" \
-        "$settings" > "$settings.new"
-    mv "$settings.new" "$settings"
-    grep -Fq "\"$rendezvous\"" "$settings" || {
-        echo "Could not set Transport:RendezvousUri in $settings." >&2
-        exit 1
-    }
-fi
+# A package built for a particular deployment can carry that deployment's address as the default the installation
+# offers, so the client works on first launch instead of asking the person to find the setting.
+rendezvous=${RD_RENDEZVOUS_URI:-ws://127.0.0.1:5080/ws}
+rd_validate_rendezvous_uri "$rendezvous"
+rd_apply_rendezvous_uri "$program/appsettings.json" "$rendezvous"
 
 # A self-signed signaling certificate has to be trusted as a root before wss:// works. Installing it through
 # update-ca-certificates makes it part of the system bundle the .NET client reads.
@@ -82,30 +66,19 @@ if [ -n "$server_certificate" ]; then
         echo "RD_SERVER_CERTIFICATE '$server_certificate' does not exist." >&2
         exit 1
     }
+    rd_validate_certificate "$server_certificate"
+
     certificate_directory="$work/usr/local/share/ca-certificates"
     mkdir -p "$certificate_directory"
     install -m 0644 "$server_certificate" "$certificate_directory/remotedesktop-signaling-client.crt"
 fi
 
-
-# The licence and the third-party notices travel with the binaries they cover. Debian expects the licence at
-# /usr/share/doc/<package>/copyright; the notices sit beside it under the name the generator gives them.
-doc="$work/usr/share/doc/remotedesktop-client"
-mkdir -p "$doc"
-install -m 0644 "$root/LICENSE" "$doc/copyright"
-install -m 0644 "$root/THIRD-PARTY-NOTICES.md" "$doc/third-party-notices.md"
+# The licence, the third-party notices and the changelog travel with the binaries they cover.
+rd_install_docs "$root" "$work/usr/share/doc/remotedesktop-client"
 
 # The icons go where a desktop looks for them, at every size the artwork comes in. A single large one would be scaled
 # down for the launcher and look it.
-for icon in "$root"/src/Hosts/RemoteDesktop.Client/Assets/icon-*.png; do
-    size=$(basename "$icon" .png | sed 's/^icon-//')
-    case "$size" in
-        16|24|32|48|64|128|256|512)
-            mkdir -p "$icons/${size}x${size}/apps"
-            install -m 0644 "$icon" "$icons/${size}x${size}/apps/remotedesktop.png"
-            ;;
-    esac
-done
+rd_install_icons "$root" "$work"
 
 install -m 0644 "$root/build/installer/linux/client/remotedesktop.desktop" "$work/usr/share/applications/"
 
@@ -115,20 +88,20 @@ ln -s "/usr/lib/remotedesktop-client/RemoteDesktop.Client" "$work/usr/bin/remote
 
 install -m 0755 "$root/build/installer/linux/client/postinst" "$work/DEBIAN/postinst"
 install -m 0755 "$root/build/installer/linux/client/postrm" "$work/DEBIAN/postrm"
+rd_install_debconf "$root/build/installer/linux/client" "$work" "$rendezvous"
+
+install -m 0644 "$root/build/installer/linux/client/remotedesktop-client.default" \
+    "$work/etc/default/remotedesktop-client"
+printf '%s\n' /etc/default/remotedesktop-client >"$work/DEBIAN/conffiles"
 
 sed -e "s/@VERSION@/$version/" -e "s/@ARCHITECTURE@/$architecture/" \
     "$root/build/installer/linux/client/control" >"$work/DEBIAN/control"
 
-installed_size=$(du -sk "$work" | cut -f1)
-# awk and a move rather than `sed -i`: the in-place flag is GNU-only (BSD sed reads -i as a backup suffix),
-# and the \n in the replacement is not portable either.
-awk -v size="$installed_size" '/^Description:/ { print "Installed-Size: " size } { print }' \
-    "$work/DEBIAN/control" >"$work/DEBIAN/control.new"
-mv "$work/DEBIAN/control.new" "$work/DEBIAN/control"
+rd_finalize_control "$work"
 
 echo "Building the package..."
 package="$out/RemoteDesktop-Client-Linux-${architecture}-${version}.deb"
 dpkg-deb --build --root-owner-group "$work" "$package"
 
 echo "Built $package"
-dpkg-deb --info "$package" | sed -n '1,16p'
+dpkg-deb --info "$package" | sed -n '1,20p'

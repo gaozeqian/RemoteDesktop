@@ -78,6 +78,18 @@ public sealed class VideoRecorderTests : IDisposable
     }
 
     [Fact]
+    public async Task Stopping_a_recorder_that_never_started_returns_an_empty_path_instead_of_throwing()
+    {
+        // Needs no FFmpeg: nothing is loaded until a recording starts. Windows and macOS answer the same way.
+        await using var recorder = new FfmpegVideoRecorder();
+
+        Assert.Equal(string.Empty, await recorder.StopAsync());
+
+        Assert.False(recorder.IsRecording);
+        Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+    }
+
+    [Fact]
     public async Task A_recording_of_nothing_says_so_and_leaves_no_file_behind()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
@@ -142,6 +154,27 @@ public sealed class VideoRecorderTests : IDisposable
         Assert.Equal(VideoRecorderFailure.PictureSizeChanged, recorder.Failure);
 
         await recorder.StopAsync();
+    }
+
+    [Fact]
+    public async Task A_padded_frame_without_the_padding_after_its_last_row_is_accepted()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var path = PathFor("padded");
+        await using var recorder = new FfmpegVideoRecorder();
+        recorder.Start(path, Width, Height);
+
+        // Rows 64 bytes wider than the picture, and a buffer that ends where the last visible pixel does: the
+        // contract is the visible bytes of every row, the same as the Windows and macOS recorders accept.
+        const int paddedStride = Stride + 64;
+        var pixels = new byte[((Height - 1) * paddedStride) + Stride];
+        recorder.RecordFrame(pixels, paddedStride, Width, Height);
+
+        await recorder.StopAsync();
+
+        Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+        Assert.True(recorder.WrittenFrames > 0, "The frame was refused.");
     }
 
     [Fact]

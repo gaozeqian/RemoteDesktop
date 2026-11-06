@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops;
+using RemoteDesktop.Server.Shared;
 
 // The installer, or an operator on a fresh box, runs this executable for its setup step; the server itself is not
 // started then.
@@ -7,7 +8,18 @@ if (SetupCommands.TryRun(args, Console.Out, out var setupExitCode))
     return setupExitCode;
 }
 
-var builder = WebApplication.CreateBuilder(args);
+// The Linux package starts this program with /etc as its working directory so that appsettings.json is read from
+// /etc; the console's static assets stay next to the program. The web root is a separate setting, and without this
+// the sign-in page is a 404 on every packaged installation. In development the published directory is not there, and
+// the default (the project's own wwwroot) is the right one.
+var publishedWebRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+var builder = Directory.Exists(publishedWebRoot)
+    ? WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = publishedWebRoot })
+    : WebApplication.CreateBuilder(args);
+
+// The console's live settings are next to the program on Linux and macOS, and in ProgramData on Windows (where the
+// MSI's major upgrade would otherwise delete them). Add the Windows layer before AddOps binds the options.
+ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.OpsFolder);
 
 // Same three deployment shapes as the signaling server: console, systemd unit, Windows service.
 if (OperatingSystem.IsWindows())
@@ -25,7 +37,18 @@ if (!string.IsNullOrWhiteSpace(listen))
     builder.WebHost.UseUrls(listen);
 }
 
-builder.AddOps();
+// The live settings on Windows are in ProgramData, so a relative SQLite path in that file has to resolve there too —
+// resolving it against Program Files would put the database beside the program the MSI replaces on every upgrade.
+// When the live file does not exist this is a development run reading the project's appsettings, and the content
+// root is the right base. On Linux and macOS the content root is the settings directory, and AddOps uses it.
+var liveOpsSettings = Path.Combine(
+    ServerSetup.WindowsConfigDirectory,
+    ServerSetup.OpsFolder,
+    ServerSetup.SettingsFileName);
+var databasePathBase = OperatingSystem.IsWindows() && File.Exists(liveOpsSettings)
+    ? Path.GetDirectoryName(liveOpsSettings)
+    : null;
+builder.AddOps(databasePathBase);
 
 var app = builder.Build();
 app.UseOps();

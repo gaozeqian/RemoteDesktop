@@ -1,3 +1,4 @@
+using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Server.Storage;
 
 namespace RemoteDesktop.Server.Rendezvous;
@@ -13,8 +14,8 @@ public sealed class RendezvousOptions
     public string Name { get; set; } = "rendezvous";
 
     /// <summary>
-    /// Bearer token the console must present to <c>/metrics</c> and <c>/internal/*</c>. Empty means no check, which is
-    /// only acceptable on a loopback listener. The same value is configured on the relay and the console.
+    /// Bearer token the console must present to <c>/metrics</c> and <c>/internal/*</c>. Empty means only callers on the loopback
+    /// interface are accepted, so a console on another machine needs it set. The same value is configured on the relay and the console.
     /// </summary>
     public string NodeToken { get; set; } = string.Empty;
 
@@ -26,6 +27,12 @@ public sealed class RendezvousOptions
 
     /// <summary>Base64 HMAC key shared with the relay.</summary>
     public string RelaySharedKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Allows the signaling listener to bind plain HTTP on a non-loopback address. Off by default: device codes, IP
+    /// candidates and relay tickets would otherwise be readable and replayable on the path.
+    /// </summary>
+    public bool AllowInsecureSignaling { get; set; }
 
     public TimeSpan RelayTicketLifetime { get; set; } = TimeSpan.FromMinutes(2);
 
@@ -113,6 +120,33 @@ public sealed class RendezvousOptions
     public bool MetricsEnabled { get; set; }
 
     /// <summary>
+    /// Refuses a public plaintext listener unless the deployment explicitly opted in. Kestrel's URL list is outside
+    /// this options section, so the entry point passes it here before the server starts.
+    /// </summary>
+    public static void ValidateListeningUrls(string? urls, bool allowInsecureSignaling)
+    {
+        if (string.IsNullOrWhiteSpace(urls))
+        {
+            return;
+        }
+
+        foreach (var value in ListeningUrl.Split(urls))
+        {
+            // Wildcard hosts (http://*:5080, http://+:5080) are valid for Kestrel and mean every interface.
+            if (!ListeningUrl.TryParse(value, out var uri))
+            {
+                throw new InvalidOperationException($"Urls must contain absolute http:// or https:// addresses (got '{value}').");
+            }
+
+            if (uri.Scheme == "http" && !uri.IsLoopback && !allowInsecureSignaling)
+            {
+                throw new InvalidOperationException(
+                    $"Urls exposes signaling as plain HTTP on '{value}'. Use https:// (or set Rendezvous:AllowInsecureSignaling=true only for an isolated plaintext network).");
+            }
+        }
+    }
+
+    /// <summary>
     /// Checks the settings the server cannot work without. Called when the options are first used (ValidateOnStart), so
     /// a misconfigured deployment stops at start-up with a sentence instead of failing later on the first connection.
     /// </summary>
@@ -134,21 +168,10 @@ public sealed class RendezvousOptions
 
         // The key signs the tickets that let a peer use the relay; an empty or short one would let anybody relay through
         // this server. The relay checks the same thing on its side, so a mismatch is caught at start-up as well.
-        var key = Array.Empty<byte>();
-        try
-        {
-            key = string.IsNullOrEmpty(RelaySharedKey) ? [] : Convert.FromBase64String(RelaySharedKey);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException("Rendezvous:RelaySharedKey must be base64 (generate one with: openssl rand -base64 48).");
-        }
-
-        if (key.Length < 32)
-        {
-            throw new InvalidOperationException(
-                $"Rendezvous:RelaySharedKey must be at least 32 bytes when Rendezvous:RelayEndpoint is set (it is {(key.Length == 0 ? "empty" : $"only {key.Length} bytes")}). Generate one with: openssl rand -base64 48");
-        }
+        _ = Base64Key.Decode(
+            RelaySharedKey ?? string.Empty,
+            "Rendezvous:RelaySharedKey must be base64 (generate one with: openssl rand -base64 48).",
+            length => $"Rendezvous:RelaySharedKey must be at least 32 bytes when Rendezvous:RelayEndpoint is set (it is {(length == 0 ? "empty" : $"only {length} bytes")}). Generate one with: openssl rand -base64 48");
     }
 
     /// <summary>

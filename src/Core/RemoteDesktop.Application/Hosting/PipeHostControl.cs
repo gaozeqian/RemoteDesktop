@@ -9,6 +9,11 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     /// How long the service has to answer once connected. The pipe name is global on Windows, so another local
     /// process can own an instance and simply never reply; without this the client waited before its window appeared,
     /// with no way to tell a wedged service from a slow one.
+    /// The service now creates the first instance of the name with <c>FirstPipeInstance</c>, so a process that is
+    /// already holding the name stops the service from serving it (it logs an error and retries) rather than sharing
+    /// it, and this client connects with the Identification impersonation level, so whatever owns the name cannot act
+    /// as the caller. What is still not checked is who the server is: a process that creates the name while the
+    /// service is down (at boot, or in the pause after a crash) can still answer, and this client will talk to it.
     /// </summary>
     private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
 
@@ -24,6 +29,56 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Waits for a service that is still starting. A client launched from the same login can reach its mode decision
+    /// before the service has created its control socket; one probe then says "no service" and the client hosts
+    /// incoming sessions itself, under the device identity the service is about to claim.
+    /// </summary>
+    public static async Task<bool> WaitUntilAvailableAsync(
+        string pipeName,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
+        if (timeout <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        overall.CancelAfter(timeout);
+
+        while (!overall.IsCancellationRequested)
+        {
+            // The socket may exist before the service can answer; cap one attempt so a wedged instance does not use
+            // the whole budget and hide a healthy one that comes up a moment later.
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(overall.Token);
+            attempt.CancelAfter(TimeSpan.FromSeconds(1));
+            try
+            {
+                if (await IsAvailableAsync(pipeName, attempt.Token).ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // This attempt timed out (or the overall budget did); the loop condition decides which.
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), overall.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        return false;
     }
 
     public async Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>

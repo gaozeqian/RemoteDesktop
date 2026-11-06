@@ -3,13 +3,14 @@ using System.Globalization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Client.ViewModels;
 
 /// <summary>One tab of the terminal window: a remote shell that is started once the tab knows how big it is.</summary>
-public sealed partial class TerminalTabViewModel(IPeerConnection connection, string? shell, int number) : ObservableObject, IAsyncDisposable
+public sealed partial class TerminalTabViewModel(IPeerConnection connection, string? shell, int number, ILogger? logger = null) : ObservableObject, IAsyncDisposable
 {
     private int _starting;
 
@@ -41,7 +42,7 @@ public sealed partial class TerminalTabViewModel(IPeerConnection connection, str
 
         try
         {
-            var session = await TerminalSession.StartAsync(connection, shell, columns, rows, CancellationToken.None);
+            var session = await TerminalSession.StartAsync(connection, shell, columns, rows, CancellationToken.None, logger: logger);
             session.Emulator.TitleChanged += (_, _) => Dispatcher.UIThread.Post(() => UpdateTitle(session));
             session.Ended += (_, _) => Dispatcher.UIThread.Post(() => OnEnded(session));
             Session = session;
@@ -79,7 +80,7 @@ public sealed partial class TerminalTabViewModel(IPeerConnection connection, str
 }
 
 /// <summary>The terminal window: tabs of remote shells on the host, and the choice of which shell a new tab starts.</summary>
-public sealed partial class TerminalWindowViewModel(IPeerConnection connection) : ObservableObject, IAsyncDisposable
+public sealed partial class TerminalWindowViewModel(IPeerConnection connection, ILogger? logger = null) : ObservableObject, IAsyncDisposable
 {
     private int _counter;
 
@@ -122,7 +123,7 @@ public sealed partial class TerminalWindowViewModel(IPeerConnection connection) 
     [RelayCommand]
     private void NewTab()
     {
-        var tab = new TerminalTabViewModel(connection, SelectedShell, ++_counter);
+        var tab = new TerminalTabViewModel(connection, SelectedShell, ++_counter, logger);
         tab.CloseRequested += (_, _) => _ = CloseTabAsync(tab);
         Tabs.Add(tab);
         SelectedTab = tab;

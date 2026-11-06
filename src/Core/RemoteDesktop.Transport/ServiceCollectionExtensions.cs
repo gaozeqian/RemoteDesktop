@@ -13,10 +13,17 @@ public static class ServiceCollectionExtensions
     [SupportedOSPlatform("windows")]
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("macos")]
-    public static IServiceCollection AddQuicTransport(this IServiceCollection services, TransportOptions options)
+    /// <param name="identitySecretName">
+    /// Where the device's key is kept. A client running beside a background service names its own, so the two
+    /// processes do not register under the same device id; see <see cref="DeviceIdentity.ControllerSecretName"/>.
+    /// </param>
+    public static IServiceCollection AddQuicTransport(
+        this IServiceCollection services,
+        TransportOptions options,
+        string identitySecretName = DeviceIdentity.SecretName)
     {
         services.AddSingleton(options);
-        services.AddSingleton(sp => DeviceIdentity.LoadOrCreate(sp.GetRequiredService<ISecretStore>()));
+        services.AddSingleton(sp => DeviceIdentity.LoadOrCreate(sp.GetRequiredService<ISecretStore>(), identitySecretName));
         services.AddSingleton<IRendezvousClient, RendezvousClient>();
         services.AddSingleton<IPeerConnector, QuicPeerConnector>();
         services.AddSingleton<IPeerListener, QuicPeerListener>();

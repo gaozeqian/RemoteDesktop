@@ -44,6 +44,38 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     }
 
     [Fact]
+    public void A_link_swapped_in_after_the_check_leaves_no_file_behind_outside_the_root()
+    {
+        var probe = CreateDirectoryLinkOrJunction(Path.Combine(_root, "probe"), _outside);
+        if (probe is null)
+        {
+            return; // no privilege to make a symlink; nothing to test here
+        }
+
+        Directory.Delete(probe); // removes the link, not its target
+
+        var folder = Path.Combine(_root, "folder");
+        Directory.CreateDirectory(folder);
+        var policy = new FileAccessPolicy([_root])
+        {
+            // The path has been judged inside the root; now the folder becomes a link to the outside, which is the
+            // window a local process needs. The handle check refuses the file, and the empty file the open made out
+            // there must not stay behind.
+            AfterNormalizeForTests = () =>
+            {
+                Directory.Delete(folder);
+                _ = CreateDirectoryLinkOrJunction(folder, _outside);
+            },
+        };
+
+        var ex = Assert.Throws<FileOperationException>(() =>
+            policy.OpenWrite(Path.Combine(folder, "new.txt"), FileMode.CreateNew, FileAccess.Write, FileShare.None));
+
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+        Assert.False(File.Exists(Path.Combine(_outside, "new.txt")), "The file created outside the root was left behind.");
+    }
+
+    [Fact]
     public void Listing_through_a_link_is_refused()
     {
         var link = CreateDirectoryLink(Path.Combine(_root, "link"), _outside);
@@ -117,6 +149,29 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
         // Both spellings walk through the cycle; neither may hang, and neither may escape the root while doing so.
         _ = policy.Normalize(Path.Combine(_root, "first"));
         _ = policy.Normalize(Path.Combine(_root, "second"));
+    }
+
+    /// <summary>A symbolic link where one can be made, otherwise a junction (Windows makes those without elevation).</summary>
+    private static string? CreateDirectoryLinkOrJunction(string link, string target)
+    {
+        if (CreateDirectoryLink(link, target) is { } made)
+        {
+            return made;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+        });
+        process?.WaitForExit();
+        return process?.ExitCode == 0 ? link : null;
     }
 
     /// <summary>

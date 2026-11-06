@@ -18,7 +18,7 @@
 set -e
 
 INSTALL_DIR="/usr/local/remotedesktop-server"
-LABELS="com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops"
+LABELS="com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway"
 
 keep_settings=0
 assume_yes=0
@@ -58,8 +58,15 @@ done
 if [ "$keep_settings" -eq 0 ]; then
     echo "==> Removing $INSTALL_DIR"
     rm -rf "$INSTALL_DIR"
+    # The licence, notices and the exported signaling certificate live outside the install directory; leaving them
+    # behind would make a removal look incomplete for a file the package is responsible for.
+    rm -rf "/usr/local/share/doc/remotedesktop-server"
 else
-    echo "==> Leaving $INSTALL_DIR in place"
+    echo "==> Leaving $INSTALL_DIR in place (and /usr/local/share/doc/remotedesktop-server)"
 fi
+
+# The receipt is what makes pkgutil and the Installer think the product is still installed. There is no uninstaller
+# in a .pkg, so this script is also the place that forgets it.
+/usr/sbin/pkgutil --forget com.remotedesktop.server >/dev/null 2>&1 || true
 
 echo "==> Done. The servers are gone."

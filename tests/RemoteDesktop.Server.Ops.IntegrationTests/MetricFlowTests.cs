@@ -70,6 +70,51 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
     }
 
     [Fact]
+    public async Task A_node_detail_lists_every_latest_metric_and_the_node_info()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            await RegisterAsync(client, cookies, node);
+
+            var scraper = fixture.Services.GetRequiredService<MetricScraper>();
+            await scraper.RunOnceAsync(Ct);
+
+            var nodes = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
+            var detail = await client.GetFromJsonAsync<NodeDetailDto>(
+                $"/api/nodes/{Uri.EscapeDataString(Assert.Single(nodes!).Id)}/detail",
+                Ct);
+
+            Assert.NotNull(detail);
+            Assert.Null(detail.InfoError);
+            Assert.Equal("9.9.9-test", detail.Info!.Version);
+            Assert.True(detail.Info.UptimeSeconds >= 0);
+            Assert.Contains(detail.Metrics, point => point.Metric == "remotedesktop_devices_online" && point.Value == 7);
+            Assert.Contains(detail.Metrics, point => point.Metric == "remotedesktop_relay_bytes_to_host_total");
+        }
+    }
+
+    [Fact]
+    public async Task The_metric_catalog_names_what_has_been_scraped()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            await RegisterAsync(client, cookies, node);
+            await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+            var catalog = await client.GetFromJsonAsync<List<CatalogDto>>("/api/metrics", Ct);
+
+            Assert.NotEmpty(catalog!);
+            Assert.Contains(catalog!, entry => entry.Metric == "remotedesktop_devices_online" && entry.Kind == "gauge");
+        }
+    }
+
+    [Fact]
     public async Task Two_scrapes_produce_a_bandwidth_rate_and_traffic_points()
     {
         await using var node = await FakeNode.StartAsync();
@@ -83,7 +128,10 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
             await scraper.RunOnceAsync(Ct);
             node.Advance(64 * 1024);
-            await Task.Delay(1100, Ct);
+
+            // The scraper timestamps samples from the host clock, which is virtual here; without moving it the second
+            // scrape replaces the first at the same timestamp and there is no interval to compute a rate from.
+            fixture.Time.Advance(TimeSpan.FromSeconds(2));
             await scraper.RunOnceAsync(Ct);
 
             var overview = await client.GetFromJsonAsync<OverviewDto>("/api/overview", Ct);
@@ -135,6 +183,90 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         }
     }
 
+    /// <summary>Simultaneous registrations of one name pass the name check together; the unique index must answer 409, not 500.</summary>
+    [Fact]
+    public async Task Simultaneous_registrations_of_one_name_end_in_one_node_and_conflicts()
+    {
+        await using var node = await FakeNode.StartAsync();
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            var responses = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => Task.Run(
+                async () =>
+                {
+                    var response = await CreateNodeAsync(client, cookies, node);
+                    if (response.StatusCode == HttpStatusCode.Created)
+                    {
+                        _created.Add((await response.Content.ReadFromJsonAsync<CreatedNode>(Ct))!.Id);
+                    }
+
+                    return response.StatusCode;
+                },
+                Ct)));
+
+            Assert.Equal(1, responses.Count(status => status == HttpStatusCode.Created));
+            Assert.All(responses, status => Assert.True(status is HttpStatusCode.Created or HttpStatusCode.Conflict, $"unexpected {status}"));
+        }
+    }
+
+    /// <summary>
+    /// The scrape has to present the node's own secret when it has one, and the deployment's when it does not. The
+    /// header is asserted on the node side, because "the token is stored" is not the same claim as "the token is sent".
+    /// </summary>
+    [Fact]
+    public async Task The_scrape_presents_the_nodes_own_token_instead_of_the_deployment_token()
+    {
+        await using var node = await FakeNode.StartAsync();
+        var options = fixture.Services.GetRequiredService<OpsOptions>();
+        var previous = options.NodeToken;
+        options.NodeToken = "deployment-secret";
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            try
+            {
+                await RegisterAsync(client, cookies, node, token: "node-secret-0123456789");
+
+                await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+                Assert.Equal("Bearer node-secret-0123456789", Assert.Single(node.SeenAuthorizations));
+            }
+            finally
+            {
+                options.NodeToken = previous;
+            }
+        }
+    }
+
+    /// <summary>A node without its own token keeps authenticating with the deployment one: an upgrade changes nothing.</summary>
+    [Fact]
+    public async Task A_node_without_its_own_token_still_uses_the_deployment_token()
+    {
+        await using var node = await FakeNode.StartAsync();
+        var options = fixture.Services.GetRequiredService<OpsOptions>();
+        var previous = options.NodeToken;
+        options.NodeToken = "deployment-secret";
+
+        var (client, cookies) = await SignInAsync();
+        using (client)
+        {
+            try
+            {
+                await RegisterAsync(client, cookies, node);
+
+                await fixture.Services.GetRequiredService<MetricScraper>().RunOnceAsync(Ct);
+
+                Assert.Equal("Bearer deployment-secret", Assert.Single(node.SeenAuthorizations));
+            }
+            finally
+            {
+                options.NodeToken = previous;
+            }
+        }
+    }
+
     private async Task<(HttpClient Client, CookieContainer Cookies)> SignInAsync()
     {
         var (client, cookies) = fixture.CreateClient();
@@ -146,22 +278,26 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
         var totp = await client.PostAsJsonAsync(
             "/api/auth/totp",
-            new { challenge, code = Totp.Compute(fixture.AdminSecret, DateTimeOffset.UtcNow) },
+            new { challenge, code = fixture.NextTotp(fixture.AdminSecret) },
             Ct);
         Assert.Equal(HttpStatusCode.OK, totp.StatusCode);
 
         return (client, cookies);
     }
 
-    private async Task RegisterAsync(HttpClient client, CookieContainer cookies, FakeNode node)
+    private async Task RegisterAsync(HttpClient client, CookieContainer cookies, FakeNode node, string? token = null)
     {
-        var response = await CreateNodeAsync(client, cookies, node);
+        var response = await CreateNodeAsync(client, cookies, node, token);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var created = await response.Content.ReadFromJsonAsync<CreatedNode>(Ct);
         _created.Add(created!.Id);
     }
 
-    private static async Task<HttpResponseMessage> CreateNodeAsync(HttpClient client, CookieContainer cookies, FakeNode node)
+    private static async Task<HttpResponseMessage> CreateNodeAsync(
+        HttpClient client,
+        CookieContainer cookies,
+        FakeNode node,
+        string? token = null)
     {
         var csrf = cookies.GetCookies(client.BaseAddress!)["ops_csrf"]!.Value;
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/nodes")
@@ -172,6 +308,7 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
                 role = "relay",
                 baseUrl = node.BaseUrl,
                 region = "test",
+                token,
             }),
         };
         request.Headers.Add("X-Ops-CSRF", csrf);
@@ -198,6 +335,13 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         /// <summary>Whether the node answers 503, which is how a broken scrape is simulated.</summary>
         public bool Fail { get; set; }
 
+        public string Version { get; } = "9.9.9-test";
+
+        /// <summary>Every <c>Authorization</c> header the node saw on <c>/metrics</c>, in order.</summary>
+        public List<string?> SeenAuthorizations { get; } = [];
+
+        public long StartedAtUnixMilliseconds { get; } = DateTimeOffset.UtcNow.AddMinutes(-3).ToUnixTimeMilliseconds();
+
         private long Bytes { get; set; }
 
         public void Advance(long bytes) => Bytes += bytes;
@@ -211,8 +355,10 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
             var app = builder.Build();
             var node = new FakeNode(app);
 
-            app.MapGet("/metrics", () =>
+            app.MapGet("/metrics", (HttpContext context) =>
             {
+                node.SeenAuthorizations.Add(context.Request.Headers.Authorization);
+
                 if (node.Fail)
                 {
                     return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
@@ -230,6 +376,14 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
                     """;
                 return Results.Text(text, "text/plain; version=0.0.4; charset=utf-8");
             });
+
+            app.MapGet("/internal/v1/info", () => Results.Ok(new
+            {
+                name = node.Name,
+                role = "relay",
+                version = node.Version,
+                startedAtUnixMilliseconds = node.StartedAtUnixMilliseconds,
+            }));
 
             await app.StartAsync(TestContext.Current.CancellationToken);
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
@@ -257,4 +411,16 @@ public class MetricFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
 
     /// <summary>What the node endpoint returns after registering one.</summary>
     public sealed record CreatedNode(string Id);
+
+    /// <summary>The node detail, as much of it as these tests read.</summary>
+    public sealed record NodeDetailDto(InfoDto? Info, string? InfoError, List<MetricDto> Metrics);
+
+    /// <summary>The node's self-description.</summary>
+    public sealed record InfoDto(string Name, string Role, string Version, long StartedAtUnixMilliseconds, long UptimeSeconds);
+
+    /// <summary>One latest reading.</summary>
+    public sealed record MetricDto(string Metric, long Timestamp, double Value);
+
+    /// <summary>One metric catalog row.</summary>
+    public sealed record CatalogDto(string Metric, string Kind);
 }

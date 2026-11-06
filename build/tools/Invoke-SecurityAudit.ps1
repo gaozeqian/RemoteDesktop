@@ -12,22 +12,25 @@
     3  文件不存在或读不了（可能是指错了目录）
 
 .EXAMPLE
-  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "C:\Program Files\Remote Desktop Server"
+  # MSI 部署：Program Files 下的 appsettings.json 只是随包出厂的默认，实际生效的配置在 ProgramData 下。
+  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\Remote Desktop Server"
 
 .EXAMPLE
-  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/appsettings.json
+  # 单个文件（手工部署，或检查构建产物里的默认值）。
+  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/Rendezvous/appsettings.json
 
 .NOTES
   这份脚本只读文件、不改任何东西。它不能代替真正的渗透测试，但能在"看着正常、其实在裸奔"的部署上线前
   拦住它。
 
   三个平台都能跑：它只读文件、不调用任何平台专有 API，所以在 Linux 或 macOS 上用 pwsh 跑同一份脚本，就能
-  审那边的服务端部署（配置换成 /etc/remotedesktop-server/ 下那两份）。图标与第三方许可清单那两份脚本没有
-  这个性质，见 build/README.md。
+  审那边的服务端部署（配置换成 /etc/remotedesktop-server/ 下那两份）。
 #>
 [CmdletBinding()]
 param(
-    # 服务端安装目录（Rendezvous\appsettings.json 与 Relay\appsettings.json 都在它下面）。
+    # 服务端配置所在的目录（Rendezvous\appsettings.json 与 Relay\appsettings.json 都在它下面）。
+    # MSI 部署不要指向 Program Files 下的安装目录：那里的文件是随包出厂的默认，升级时会被覆盖，服务读的是
+    # %ProgramData%\Remote Desktop Server\<角色>\appsettings.json，所以应指向 %ProgramData%\Remote Desktop Server。
     [string]$InstallDirectory = '',
 
     # 单个 appsettings.json 文件（手工部署时用；给了它就只查这一份）。
@@ -104,6 +107,9 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
 
     if ($Url.StartsWith('https://')) {
         Add-Ok "$Where 信令走 TLS（$Url）。"
+    }
+    elseif ($Url.StartsWith('http://') -and (Test-IsLoopbackUrl $Url)) {
+        Add-Ok "$Where 的明文信令只监听回环（$Url），公网无法访问。"
     }
     elseif ($Url.StartsWith('http://')) {
         Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的 TLS 一节。"
@@ -236,11 +242,22 @@ foreach ($entry in $settingsToCheck) {
     $settings = Read-Settings -Path $entry.Path
     if ($null -eq $settings) { exit 3 }
 
-    # 中继共享密钥：Rendezvous 里叫 RelaySharedKey，Relay 里叫 SharedKey。
+    # 中继共享密钥：Rendezvous 里叫 RelaySharedKey，Relay 里叫 SharedKey。信令没有配置 RelayEndpoint 时
+    # 根本不会签发中继票据，空密钥不是暴露面；Relay 进程本身仍然必须配置它才能启动。
     $relayKey = $null
-    if ($settings.PSObject.Properties['Rendezvous'] -and $settings.Rendezvous.PSObject.Properties['RelaySharedKey'] -and $settings.Rendezvous.RelaySharedKey) { $relayKey = [string]$settings.Rendezvous.RelaySharedKey }
+    $relayDisabled = $false
+    if ($settings.PSObject.Properties['Rendezvous']) {
+        if ($settings.Rendezvous.PSObject.Properties['RelaySharedKey'] -and $settings.Rendezvous.RelaySharedKey) { $relayKey = [string]$settings.Rendezvous.RelaySharedKey }
+        $relayEndpoint = if ($settings.Rendezvous.PSObject.Properties['RelayEndpoint']) { [string]$settings.Rendezvous.RelayEndpoint } else { '' }
+        $relayDisabled = [string]::IsNullOrWhiteSpace($relayEndpoint)
+    }
     if ($settings.PSObject.Properties['Relay'] -and $settings.Relay.PSObject.Properties['SharedKey'] -and $settings.Relay.SharedKey) { $relayKey = [string]$settings.Relay.SharedKey }
-    Test-WeakRelayKey -Key $relayKey -Where $entry.Role
+    if ($relayDisabled) {
+        Add-Ok "$($entry.Role) 没有配置中继端点，不需要签署中继票据。"
+    }
+    else {
+        Test-WeakRelayKey -Key $relayKey -Where $entry.Role
+    }
 
     # 信令监听地址。
     if ($settings.PSObject.Properties['Urls']) { Test-SignalingUrl -Url ([string]$settings.Urls) -Where $entry.Role }

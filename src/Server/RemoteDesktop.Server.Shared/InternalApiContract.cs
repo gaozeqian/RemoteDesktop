@@ -20,7 +20,7 @@ public sealed record NodeInfo(
 /// </summary>
 /// <param name="DeviceId">The nine-digit id handed to the device.</param>
 /// <param name="FirstSeenUnixMilliseconds">When the id was first allocated.</param>
-/// <param name="LastSeenUnixMilliseconds">The last registration by that device.</param>
+/// <param name="LastSeenUnixMilliseconds">The last registration by that device, to within about a minute.</param>
 /// <param name="Online">Whether it holds a signaling connection right now.</param>
 /// <param name="Revoked">Whether an operator revoked it; the server refuses its next registration.</param>
 public sealed record NodeDeviceSummary(

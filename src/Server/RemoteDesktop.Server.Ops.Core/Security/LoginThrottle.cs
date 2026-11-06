@@ -7,18 +7,21 @@ namespace RemoteDesktop.Server.Ops.Core;
 /// guessing by accident.
 /// </summary>
 /// <remarks>
-/// In memory on purpose: the console is a single instance (see the plan, §3.3) and a lockout that survives a restart is
+/// In memory on purpose: the console is a single instance and a lockout that survives a restart is
 /// also a lockout an operator cannot clear without editing the database. The table of attempts is bounded — an
 /// unbounded dictionary keyed by attacker-chosen input is a memory leak with extra steps.
 /// </remarks>
-public sealed class LoginThrottle(TimeProvider time, int maxFailures = 5, int lockSeconds = 300)
+public sealed class LoginThrottle(
+    TimeProvider time,
+    int maxFailures = 5,
+    int lockSeconds = 300,
+    int maxTrackedKeys = 10_000)
 {
-    private const int MaxTrackedKeys = 10_000;
-
     private readonly Dictionary<string, Attempts> _byKey = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
     private readonly TimeSpan _lockFor = TimeSpan.FromSeconds(lockSeconds);
     private readonly TimeSpan _forgetAfter = TimeSpan.FromHours(1);
+    private readonly int _maxTrackedKeys = Math.Max(1, maxTrackedKeys);
 
     /// <summary>True when <paramref name="key"/> has spent its attempts; <paramref name="retryAfter"/> says for how long.</summary>
     public bool IsLocked(string key, out TimeSpan retryAfter)
@@ -36,14 +39,9 @@ public sealed class LoginThrottle(TimeProvider time, int maxFailures = 5, int lo
                 return true;
             }
 
-            // At capacity with an unknown key: refuse it rather than start tracking it. The alternative — dropping
-            // somebody else's lockout — hands an attacker a way to clear their own by spraying names.
-            if (!_byKey.ContainsKey(key) && _byKey.Count >= MaxTrackedKeys)
-            {
-                retryAfter = TimeSpan.FromMinutes(1);
-                return true;
-            }
-
+            // An unknown key is never locked just because the table is full. The old behaviour — lock every new key
+            // at capacity — let an unauthenticated attacker send ten thousand user names and stop every sign-in,
+            // including the administrator's. Room is made in RecordFailure by evicting the oldest entry instead.
             retryAfter = TimeSpan.Zero;
             return false;
         }
@@ -61,6 +59,7 @@ public sealed class LoginThrottle(TimeProvider time, int maxFailures = 5, int lo
 
             if (!_byKey.TryGetValue(key, out var attempts))
             {
+                MakeRoom();
                 attempts = new Attempts();
                 _byKey[key] = attempts;
             }
@@ -98,8 +97,50 @@ public sealed class LoginThrottle(TimeProvider time, int maxFailures = 5, int lo
     public static string KeyFor(string? address, string? username) =>
         string.Concat(address ?? "-", "\n", NormalizeUsername(username));
 
+    /// <summary>
+    /// The budget for one address, independent of the user name. A spray across thousands of names spends this one,
+    /// while the per-name key above stays small enough to see the account it belongs to.
+    /// </summary>
+    public static string AddressKey(string? address) => string.Concat("addr\n", address ?? "-");
+
     private static string NormalizeUsername(string? username) =>
         string.IsNullOrWhiteSpace(username) ? "-" : username.Trim().ToUpperInvariant();
+
+    /// <summary>
+    /// Evicts one entry when the table is at capacity. The oldest entry with no live lockout goes first; if every
+    /// entry is currently locked, the oldest lockout goes anyway. Evicting a lockout is the lesser evil: the address
+    /// budget is the backstop that keeps one client from clearing its own lockout by spraying names.
+    /// </summary>
+    private void MakeRoom()
+    {
+        if (_byKey.Count < _maxTrackedKeys)
+        {
+            return;
+        }
+
+        var now = time.GetUtcNow();
+        string? victim = null;
+        var oldest = DateTimeOffset.MaxValue;
+        var oldestOverall = DateTimeOffset.MaxValue;
+        string? fallback = null;
+
+        foreach (var (key, attempts) in _byKey)
+        {
+            if (attempts.LastSeen < oldestOverall)
+            {
+                oldestOverall = attempts.LastSeen;
+                fallback = key;
+            }
+
+            if (attempts.LockedUntil <= now && attempts.LastSeen < oldest)
+            {
+                oldest = attempts.LastSeen;
+                victim = key;
+            }
+        }
+
+        _byKey.Remove(victim ?? fallback!);
+    }
 
     private void Prune(DateTimeOffset now)
     {

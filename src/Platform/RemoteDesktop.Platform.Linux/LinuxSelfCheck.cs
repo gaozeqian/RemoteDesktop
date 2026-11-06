@@ -223,10 +223,11 @@ public static class LinuxSelfCheck
             using var connection = new PortalConnection();
             var camera = connection.CameraPresentAsync().GetAwaiter().GetResult();
 
-            // A camera belongs here because its absence is not a fault and its presence is not a promise: the path
-            // that would use one has never been run against real hardware.
+            // A camera belongs here because its absence is not a fault and its presence is not a promise: this asks
+            // the portal whether one exists, not whether the capture path works. That path has been verified on real
+            // hardware (see WaylandCameras).
             return camera
-                ? new Probe(Name, true, true, "answered; a camera is present (the camera path is unverified)")
+                ? new Probe(Name, true, true, "answered; a camera is present")
                 : new Probe(Name, true, true, "answered; no camera on this machine");
         }
         catch (Exception error) when (error is PortalException or InvalidOperationException)

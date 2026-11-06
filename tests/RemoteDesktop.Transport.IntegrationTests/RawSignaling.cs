@@ -17,12 +17,23 @@ public static class RawSignaling
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public static async Task<ClientWebSocket> ConnectAsync(Uri uri, RemoteCertificateValidationCallback? validate = null)
+    /// <param name="uri">The signaling address.</param>
+    /// <param name="validate">Server certificate validation, for a server whose certificate only the test knows.</param>
+    /// <param name="forwardedFor">An <c>X-Forwarded-For</c> value, for a server that trusts the test as its proxy.</param>
+    public static async Task<ClientWebSocket> ConnectAsync(
+        Uri uri,
+        RemoteCertificateValidationCallback? validate = null,
+        string? forwardedFor = null)
     {
         var socket = new ClientWebSocket();
         if (validate is not null)
         {
             socket.Options.RemoteCertificateValidationCallback = validate;
+        }
+
+        if (forwardedFor is not null)
+        {
+            socket.Options.SetRequestHeader("X-Forwarded-For", forwardedFor);
         }
 
         try
