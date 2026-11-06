@@ -33,8 +33,8 @@ runs:
 
         # The dependencies have to be written by hand — our libraries are reached through DllImport, which
         # dpkg-shlibdeps cannot see — so a control file that has lost them installs cleanly and then fails on first
-        # use. Every package declares something, whether in Depends or in Recommends (the server's msquic is
-        # optional, so it is a Recommends).
+        # use. Every package declares something, whether in Depends or in Recommends (the client and host packages
+        # recommend a desktop portal, which is optional; the server declares only Depends and bundles no msquic).
         check() {
           package=$1
           binary=$2
