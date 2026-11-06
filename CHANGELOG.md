@@ -192,6 +192,10 @@
 
 ### Fixed
 
+**Linux 安装包（在 Ubuntu 26.04 上实测）**
+
+- **首次安装客户端或被控端 `.deb` 时不再误报库不在 loader 缓存**：postinst 在 dpkg 配置阶段检查 `ldconfig -p`，而缓存由 libc-bin 的 trigger 在本事务所有包配置完成之后才刷新，所以同一次安装里刚装好的 libavcodec、libei 等必然被列成“缺失”，提示窗口会黑屏。检查前先刷新一次缓存（已是最新时为空操作）；真正缺库（例如 `--force-depends`）仍会警告。
+
 **PostgreSQL 后端（在 postgres:18 上实测）**
 
 - **管理动作列表在 PostgreSQL 上打不开**：按状态筛选时把可空的 `@state` 直接与 `IS NULL` 比较，Postgres 无法推断参数类型，请求以 `42P08: could not determine data type of parameter $1` 失败（状态为空时必现）。改为与同库其它查询一致的 `CAST(@state AS TEXT) IS NULL`。SQLite 不受影响。

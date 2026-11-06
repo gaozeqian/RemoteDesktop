@@ -145,6 +145,11 @@ case "$1" in
         # the declared ones were missing, so this is about the two cases dpkg cannot see: a package installed with
         # --force-depends, and the libraries the in-process controlled end reaches for (PipeWire, libei) — a client
         # without the host package still offers itself as a controlled end while it runs.
+        #
+        # The cache is refreshed by a libc-bin trigger that runs after every package in the dpkg transaction is
+        # configured, so during a first install the libraries this package pulled in are on disk but not yet in
+        # `ldconfig -p`. Refresh it here (a no-op when it is already current) rather than reporting them missing.
+        ldconfig 2>/dev/null || true
         missing=""
         for library in libavcodec.so.62 libavformat.so.62 libX11.so.6 libGL.so.1 libpipewire-0.3.so.0 libei.so.1; do
             if ! ldconfig -p 2>/dev/null | grep -q "$library"; then
