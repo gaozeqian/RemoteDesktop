@@ -383,7 +383,7 @@
         <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
-        <Control Id="PasswordLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="固定密码（至少 8 位，不能包含双引号；输入内容会显示在框中）" />
+        <Control Id="PasswordLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="固定密码（至少 8 位；输入内容会显示在框中）" />
         <Control Id="PasswordEdit" Type="Edit" X="20" Y="80" Width="330" Height="18" Property="FIXEDPASSWORD" Text="[FIXEDPASSWORD]" />
         <Control Id="ClearCheck" Type="CheckBox" X="20" Y="108" Width="330" Height="18" Property="CLEARFIXEDPASSWORD" CheckBoxValue="1" Text="清除已设置的固定密码（勾选后忽略上面的输入）" />
         <Control Id="Note" Type="Text" X="20" Y="136" Width="330" Height="48" NoPrefix="yes" Text="没有固定密码时，host 包没有任何界面可以显示设备代码或临时密码，只能等有人在本机用客户端设置。安装程序会在服务启动前写入这个密码；之后在客户端里修改才需要重启服务。" />

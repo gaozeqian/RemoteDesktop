@@ -192,6 +192,10 @@
 
 ### Fixed
 
+**Windows 安装包（在 Windows Sandbox 中实测）**
+
+- **固定密码不再禁止双引号**：这条限制来自旧实现——密码当时作为 `--set-fixed-password` 的参数放在命令行上，双引号会破坏命令。现在密码由立即动作写到仅 SYSTEM/Administrators 可读的临时文件、再以 `--set-fixed-password-file` 交给服务；实测含双引号、`$`、反引号、反斜杠、`;`、`&`、`<`、`>` 的 13 位口令从 MSI 属性一路到服务的 DPAPI 密钥库逐字符一致（Host MSI），安装向导说明、源码注释与运维文档随之更新；静默安装时仍按所用 shell 的引号规则书写。
+
 **Linux 安装包（在 Ubuntu 26.04 上实测）**
 
 - **首次安装客户端或被控端 `.deb` 时不再误报库不在 loader 缓存**：postinst 在 dpkg 配置阶段检查 `ldconfig -p`，而缓存由 libc-bin 的 trigger 在本事务所有包配置完成之后才刷新，所以同一次安装里刚装好的 libavcodec、libei 等必然被列成“缺失”，提示窗口会黑屏。检查前先刷新一次缓存（已是最新时为空操作）；真正缺库（例如 `--force-depends`）仍会警告。

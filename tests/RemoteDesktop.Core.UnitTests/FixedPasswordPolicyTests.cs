@@ -66,6 +66,21 @@ public class FixedPasswordPolicyTests
         Assert.Equal(shortest, FixedPasswordPolicy.Load(store));
     }
 
+    /// <summary>
+    /// The Windows installer writes the password to a file rather than a command line, so characters a command line
+    /// would need escaped are ordinary here; the service's rule is the length floor, not an alphabet.
+    /// </summary>
+    [Fact]
+    public void A_password_may_contain_characters_a_command_line_would_need_escaped()
+    {
+        var store = new MemorySecrets();
+        const string password = "pa\"ss $HOME `id` 'q\\x;&|<>";
+
+        FixedPasswordPolicy.Save(store, password);
+
+        Assert.Equal(password, FixedPasswordPolicy.Load(store));
+    }
+
     private sealed class MemorySecrets : ISecretStore
     {
         private readonly Dictionary<string, byte[]> _data = [];

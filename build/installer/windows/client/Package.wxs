@@ -102,8 +102,8 @@
       and may not be authored directly (WiX 5 errors WIX0070); Hidden is the supported way to add to it.
 
       The host package has no window, so this page is the only place a fresh host can be given a password without a
-      command line. The value is passed to the service executable as an argument; a double quote in it would break the
-      command line, and the page says so.
+      command line. The value reaches the service in a file written by WriteFixedPasswordFile, never as an argument, so
+      it may contain any character including a double quote; only the 8-character floor applies.
     -->
     <Property Id="FIXEDPASSWORD" Value=" " Secure="yes" Hidden="yes" />
     <Property Id="CLEARFIXEDPASSWORD" Value="0" Secure="yes" />

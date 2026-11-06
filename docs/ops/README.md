@@ -1629,8 +1629,9 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn `
 密码先由立即动作 `WriteFixedPasswordFile` 写到 `%ProgramData%\RemoteDesktop\.fixed-password`（仅 SYSTEM 与
 Administrators 可读），再由 deferred 自定义动作用 `--set-fixed-password-file` 让服务读入自己的 DPAPI
 **LocalMachine** 密钥库，随后另一个动作把该文件删除；`FIXEDPASSWORD` 在
-`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码不能包含双引号（Windows Installer
-的命令行限制）；少于 8 位时安装会失败并在日志里说明，而不是装出一个连不上的 host。
+`MsiHiddenProperties` 里、动作带 `HideTarget="yes"`，不进安装日志。密码经文件传给服务、不经过命令行，因此
+可以包含双引号等字符（静默安装时按所用 shell 的引号规则书写）；少于 8 位时安装会失败并在日志里说明，而不是
+装出一个连不上的 host。
 
 设备码在服务的日志里：`%ProgramData%\RemoteDesktop\logs\service-<日期>.log`，搜索
 `Registered with the rendezvous server as`。host 没有 UI 可以显示它。
