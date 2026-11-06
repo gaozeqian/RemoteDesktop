@@ -28,12 +28,12 @@
 
 ## 检查清单
 
-- [ ] `dotnet test RemoteDesktop.slnx` 通过（含架构依赖与仓库结构断言）
+- [ ] `dotnet test --solution RemoteDesktop.slnx` 通过（含架构依赖与仓库结构断言）
 - [ ] 新增的核心网络 / 编解码 / 平台功能补了对应测试
 - [ ] 改了用户可见行为或平台能力，已同步更新对应的 `docs/` 文档
 - [ ] 有值得记录的变更，已写入 `CHANGELOG.md` 的 `[未发布]` 一节
 - [ ] 移动或重命名了文件？已全仓搜索旧路径（引用散在 `.md`、`.cs`、`.yml`、`.sh`、`.ps1` 里）
-- [ ] 只改了文档？`dotnet test tests/RemoteDesktop.Architecture.UnitTests` 通过（含文档规范断言）
+- [ ] 只改了文档？`dotnet test --project tests/RemoteDesktop.Architecture.UnitTests` 通过（含文档规范断言）
 
 ## 备注
 

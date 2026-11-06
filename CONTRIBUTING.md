@@ -18,7 +18,7 @@
 dotnet build RemoteDesktop.slnx
 
 # 2. 运行单元测试与架构校验（非常重要！）
-dotnet test RemoteDesktop.slnx
+dotnet test --solution RemoteDesktop.slnx
 ```
 
 > `dotnet test` 不带 `--results-directory` 时会在当前目录建一个**空的** `TestResults/`，这是
@@ -238,7 +238,7 @@ WiX 转义等），改这些脚本前先看一眼那个测试文件。
 **格式**（空行、缩进、代码块标注）由 CI 的 `docs` 作业跑。所以只改了文档也要跑一次测试：
 
 ```bash
-dotnet test tests/RemoteDesktop.Architecture.UnitTests
+dotnet test --project tests/RemoteDesktop.Architecture.UnitTests
 ```
 
 ## 📝 提交规范

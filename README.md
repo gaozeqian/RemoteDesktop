@@ -40,7 +40,7 @@
 
 ```bash
 dotnet build RemoteDesktop.slnx
-dotnet test RemoteDesktop.slnx
+dotnet test --solution RemoteDesktop.slnx
 ```
 
 依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← {Features, Hosts}`

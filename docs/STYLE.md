@@ -138,7 +138,7 @@ markdownlint 管**格式**（空行、缩进、代码块标注）。前者需要
 # 3. 把它加进索引
 $EDITOR docs/README.md
 # 4. 本地验证：结构、命名、链接
-dotnet test tests/RemoteDesktop.Architecture.UnitTests
+dotnet test --project tests/RemoteDesktop.Architecture.UnitTests
 # 5. 格式（若本地装了 node；版本以 .github/workflows/ci.yml 为准）
 npx --yes markdownlint-cli2@0.23.3 "**/*.md"
 ```
