@@ -186,6 +186,10 @@ public sealed partial class FileManagerViewModel : ObservableObject, IAsyncDispo
         {
             Message = ex.Message;
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Message = ex.Message;
+        }
     }
 
     public async ValueTask DisposeAsync()

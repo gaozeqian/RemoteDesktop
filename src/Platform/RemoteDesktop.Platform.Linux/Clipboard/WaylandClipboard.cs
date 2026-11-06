@@ -288,7 +288,16 @@ public sealed partial class WaylandClipboard(
                         changed = _changed;
                     }
 
-                    changed?.Invoke(this, EventArgs.Empty);
+                    try
+                    {
+                        changed?.Invoke(this, EventArgs.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        // This runs on the portal connection's dispatch thread: an exception escaping here would take
+                        // down the process (or stop the dispatch loop), and the next change would never be seen.
+                        LogHandlerFailed(logger, ex);
+                    }
                 }
             },
             // Queued, not answered here — see the note on the queue. This runs on the connection's dispatch thread.
@@ -484,6 +493,9 @@ public sealed partial class WaylandClipboard(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "The clipboard has changed; {Count} format(s) on offer.")]
     private static partial void LogOwnerChanged(ILogger logger, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A clipboard change handler threw; that change was not reported.")]
+    private static partial void LogHandlerFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Published the clipboard as {Format} ({What}).")]
     private static partial void LogPublished(ILogger logger, string format, string what);

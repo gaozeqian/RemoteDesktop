@@ -23,6 +23,7 @@ builder.Services.Configure<RelayOptions>(builder.Configuration.GetSection(RelayO
 builder.Services.AddSingleton(TimeProvider.System);
 
 var relayOptions = builder.Configuration.GetSection(RelayOptions.SectionName).Get<RelayOptions>() ?? new RelayOptions();
+relayOptions.Validate();
 builder.Services.AddOpsEvents(builder.Configuration, relayOptions.Name);
 
 builder.Services.AddSingleton(sp =>

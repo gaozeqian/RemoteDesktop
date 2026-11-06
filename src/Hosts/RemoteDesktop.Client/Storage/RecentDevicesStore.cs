@@ -284,7 +284,15 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
                     return await MigrateLegacyAsync(root, cancellationToken).ConfigureAwait(false);
                 }
 
-                return root.ValueKind == JsonValueKind.Object ? ReadCurrentFile(root) : [];
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    // Not a shape this store ever wrote. Treat it like any other unreadable file rather than letting
+                    // the next save overwrite it.
+                    PreserveUnreadableFile();
+                    return [];
+                }
+
+                return ReadCurrentFile(root);
             }
             catch (JsonException)
             {
@@ -331,16 +339,24 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
 
         if (!root.TryGetProperty(nameof(RecentDevicesFile.Devices), out var devices) || devices.ValueKind != JsonValueKind.Array)
         {
+            // The file says it is ours but has no list in it. Keeping it lets a person recover whatever is left;
+            // returning an empty list would let the next save replace it without a word.
+            PreserveUnreadableFile();
             return [];
         }
 
         var list = new List<RecentDeviceEntry>();
         foreach (var element in devices.EnumerateArray())
         {
-            if (element.Deserialize<RecentDeviceEntry>(JsonOptions) is { DeviceId.Length: > 0 } entry)
+            if (element.Deserialize<RecentDeviceEntry>(JsonOptions) is not { DeviceId.Length: > 0 } entry)
             {
-                list.Add(entry);
+                // One unreadable entry makes the whole file unreadable: skipping it would drop it on the next save,
+                // which is the silent loss this store promises not to do.
+                PreserveUnreadableFile();
+                return [];
             }
+
+            list.Add(entry);
         }
 
         return list;

@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Camera;
@@ -40,7 +41,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPtyHost, ConPtyHost>();
         services.AddSingleton<ICameraEnumerator, MediaFoundationCameraEnumerator>();
         services.AddSingleton<ICameraSourceFactory, MediaFoundationCameraSourceFactory>();
-        services.AddSingleton<IClipboard>(_ => new WindowsClipboard());
+        services.AddSingleton<IClipboard>(sp =>
+            new WindowsClipboard(sp.GetRequiredService<ILogger<WindowsClipboard>>()));
         services.AddSingleton<IAudioCapturerFactory, WasapiAudioCapturerFactory>();
         services.AddSingleton<IAudioPlayerFactory, WasapiAudioPlayerFactory>();
         services.AddSingleton<IVideoEncoderFactory>(new MediaFoundationH264EncoderFactory(hardware: true));

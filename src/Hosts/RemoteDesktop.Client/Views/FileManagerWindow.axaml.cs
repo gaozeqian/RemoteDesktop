@@ -27,6 +27,15 @@ public sealed partial class FileManagerWindow : Window
         }
 
         var paths = files.Select(f => f.TryGetLocalPath()).Where(p => !string.IsNullOrEmpty(p)).Select(p => p!).ToList();
-        await viewModel.DropAsync(paths);
+        try
+        {
+            await viewModel.DropAsync(paths);
+        }
+#pragma warning disable CA1031 // This is an async void event handler: an exception here would take the process down.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            viewModel.Message = $"无法上传拖入的文件：{ex.Message}";
+        }
     }
 }

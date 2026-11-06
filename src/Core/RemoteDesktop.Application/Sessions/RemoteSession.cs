@@ -227,6 +227,14 @@ public sealed class RemoteSession : IAsyncDisposable
             _closedHandlers = null;
         }
 
-        handlers?.Invoke(this, EventArgs.Empty);
+#pragma warning disable CA1031 // A subscriber's failure must not turn "the session ended" into a teardown exception.
+        try
+        {
+            handlers?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception)
+        {
+        }
+#pragma warning restore CA1031
     }
 }

@@ -310,7 +310,16 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
         finally
         {
-            Closed?.Invoke(this, EventArgs.Empty);
+#pragma warning disable CA1031 // A subscriber's failure must not fault the receive loop (and resurface from Dispose).
+            try
+            {
+                Closed?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogCloseHandlerFailed(_logger, ex);
+            }
+#pragma warning restore CA1031
         }
     }
 
@@ -446,4 +455,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Remote desktop stream failed.")]
     private static partial void LogViewerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A handler for the desktop viewer's Closed event threw.")]
+    private static partial void LogCloseHandlerFailed(ILogger logger, Exception exception);
 }

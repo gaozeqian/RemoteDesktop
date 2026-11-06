@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Clipboard;
@@ -55,7 +56,8 @@ public static class ServiceCollectionExtensions
 
         // A factory rather than an instance so the container owns the object and disposes it on shutdown, which is
         // what stops the pasteboard polling. The Windows registration does the same for the same reason.
-        services.AddSingleton<IClipboard>(_ => new MacClipboard());
+        services.AddSingleton<IClipboard>(sp =>
+            new MacClipboard(logger: sp.GetRequiredService<ILogger<MacClipboard>>()));
 
         // Audio capture is loopback through ScreenCaptureKit, so it rides on the same Screen Recording grant the
         // display capture already needs rather than introducing a permission of its own.

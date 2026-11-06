@@ -224,6 +224,57 @@ public class RecentDevicesTests
     }
 
     [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_file_without_a_devices_array()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            // Ours by version, but the list itself is missing: a save would otherwise replace it with an empty list.
+            await File.WriteAllTextAsync(file, """{ "Version": 1 }""", TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+
+            await store.SaveOrUpdateAsync("444 555 666", cancellationToken: ct);
+            Assert.Equal("444 555 666", Assert.Single(await store.GetAllAsync(ct)).DeviceId);
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_file_with_an_entry_that_has_no_device_id()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            // Deserializes, but the id is empty: skipping the entry would silently drop it on the next save.
+            await File.WriteAllTextAsync(file, """
+                { "Version": 1, "Devices": [ { "DeviceId": "", "Alias": "Dev1", "LastConnectedUtc": "2026-01-01T00:00:00Z", "UpdatedAtUtc": "2026-01-01T00:00:00Z" } ] }
+                """, TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public async Task RecentDevicesStore_forgets_the_password_but_keeps_the_device_when_it_is_cleared()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");

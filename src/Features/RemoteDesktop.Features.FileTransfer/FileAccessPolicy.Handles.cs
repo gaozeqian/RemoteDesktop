@@ -96,9 +96,10 @@ public sealed partial class FileAccessPolicy
         }
         catch
         {
-            // CreateNew means this call made the file. If the handle turned out to lead outside the policy (a link was
-            // swapped in after Normalize), the empty file it made out there is ours to take back.
-            var stray = mode == FileMode.CreateNew ? EmptyFileLocation(handle) : null;
+            // CreateNew and OpenOrCreate can both make a brand-new empty file. If the handle turned out to lead
+            // outside the policy (a link was swapped in after Normalize), the empty file it made out there is ours to
+            // take back. OpenOrCreate on an existing non-empty file answers null and is left alone.
+            var stray = mode is FileMode.CreateNew or FileMode.OpenOrCreate ? EmptyFileLocation(handle) : null;
             handle.Dispose();
             if (stray is not null)
             {

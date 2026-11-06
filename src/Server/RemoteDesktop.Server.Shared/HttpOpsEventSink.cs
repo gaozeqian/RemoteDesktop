@@ -59,9 +59,11 @@ public sealed partial class HttpOpsEventSink : BackgroundService, IOpsEventSink
         _keyId = keyId;
         _node = node;
         _logger = logger;
+        // DropWrite matches what Publish actually does: it calls TryWrite and counts a full queue as a drop. Wait
+        // would only matter to a WriteAsync caller, and there is none.
         _queue = Channel.CreateBounded<OpsEventEnvelope>(new BoundedChannelOptions(Capacity)
         {
-            FullMode = BoundedChannelFullMode.Wait,
+            FullMode = BoundedChannelFullMode.DropWrite,
             SingleReader = true,
             SingleWriter = false,
         });
@@ -113,6 +115,9 @@ public sealed partial class HttpOpsEventSink : BackgroundService, IOpsEventSink
     /// <inheritdoc />
     public override void Dispose()
     {
+        // Complete the writer so a reader blocked in WaitToReadAsync observes the end instead of waiting for a
+        // cancellation that may never come (a direct Dispose call outside the host's shutdown path).
+        _queue.Writer.TryComplete();
         _http.Dispose();
         base.Dispose();
     }
