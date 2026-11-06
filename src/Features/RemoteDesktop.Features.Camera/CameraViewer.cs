@@ -46,9 +46,6 @@ public sealed record CameraStatistics(double FramesPerSecond, double Kbps, doubl
 /// </summary>
 public sealed partial class CameraViewer : IAsyncDisposable
 {
-    private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
-
     private const int MaxEventBytes = 256 * 1024;
 
     private readonly IChannel _channel;
@@ -57,16 +54,12 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Lock _frameLock = new();
+    private readonly VideoFrameBuffer _frames = new();
+    private readonly VideoStatisticsMeter _meter = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-
-    // Two buffers: the decode loop converts into _back outside the lock and swaps, while the UI copies _front under
-    // the lock. Only the decode loop touches _back; _front is guarded by _frameLock.
-    private byte[] _front = [];
-    private byte[] _back = [];
-    private long _frameNumber;
     private volatile bool _waitingForKeyFrame = true;
+    private volatile bool _stalled;
     private volatile string? _failure;
 
     private CameraViewer(IChannel channel, VideoCodecSelector codecs, TimeProvider time, ILogger logger)
@@ -82,16 +75,13 @@ public sealed partial class CameraViewer : IAsyncDisposable
     public CameraDetails? Details { get; private set; }
 
     /// <summary>Total number of frames decoded so far. Zero means the stream is up but no picture has arrived.</summary>
-    public long FrameNumber
-    {
-        get
-        {
-            lock (_frameLock)
-            {
-                return _frameNumber;
-            }
-        }
-    }
+    public long FrameNumber => _frames.FrameNumber;
+
+    /// <summary>
+    /// Whether the host stopped answering key-frame requests, so the picture is older than the window says. A camera
+    /// never idles the way a desktop does, so this is a genuine stall rather than an unchanged screen.
+    /// </summary>
+    public bool IsStalled => _stalled;
 
     public CameraStatistics Statistics { get; private set; } = new(0, 0, 0, null);
 
@@ -210,25 +200,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
     /// Copies the newest picture into <paramref name="destination"/> (BGRA, <paramref name="stride"/> bytes per row).
     /// Returns its sequence number, or <c>-1</c> when there is no picture of the current size yet.
     /// </summary>
-    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height)
-    {
-        lock (_frameLock)
-        {
-            var info = Details;
-            if (info is null || _frameNumber == 0 || info.Width != width || info.Height != height)
-            {
-                return -1;
-            }
-
-            var rowBytes = width * 4;
-            for (var y = 0; y < height; y++)
-            {
-                _front.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
-            }
-
-            return _frameNumber;
-        }
-    }
+    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height) =>
+        _frames.CopyLatest(destination, stride, width, height);
 
     public Task RequestKeyFrameAsync(CancellationToken cancellationToken) =>
         WriteAsync(new CameraRequest { KeyFrameRequest = new KeyFrameRequest() }, cancellationToken).AsTask();
@@ -247,11 +220,6 @@ public sealed partial class CameraViewer : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         var clock = Stopwatch.StartNew();
-        var windowStart = TimeSpan.Zero;
-        var windowFrames = 0;
-        long windowBytes = 0;
-        double windowDecodeMs = 0;
-        double? latencyMs = null;
         try
         {
             while (await FrameCodec.ReadAsync(_channel.Stream, cancellationToken: _stop.Token).ConfigureAwait(false) is { } frame)
@@ -286,7 +254,6 @@ public sealed partial class CameraViewer : IAsyncDisposable
                 try
                 {
                     (encoded, capturedAt) = VideoDataFrame.Parse(frame);
-                    windowBytes += frame.Payload.Length;
                     if (_waitingForKeyFrame && !encoded.IsKeyFrame)
                     {
                         continue;
@@ -325,35 +292,23 @@ public sealed partial class CameraViewer : IAsyncDisposable
 
                 using (picture)
                 {
-                    // Convert into the back buffer outside the lock: the UI copies the front buffer under the same
-                    // lock, and a full-frame colour conversion here must not serialize the two against each other.
-                    ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _back, picture.Width * 4);
-
-                    lock (_frameLock)
-                    {
-                        (_front, _back) = (_back, _front);
-                        _frameNumber++;
-                    }
+                    _frames.Publish(picture);
                 }
 
                 _supervisor.PictureShown();
-                windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
-                windowFrames++;
-                latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _stalled = false;
+
+                var latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _meter.Add(frame.Payload.Length, clock.Elapsed - decodeStarted, latencyMs);
                 FrameReady?.Invoke(this, EventArgs.Empty);
 
-                var elapsed = clock.Elapsed - windowStart;
-                if (elapsed >= StatisticsWindow)
+                if (_meter.TryTake(out var snapshot))
                 {
                     Statistics = new CameraStatistics(
-                        windowFrames / elapsed.TotalSeconds,
-                        windowBytes * 8 / elapsed.TotalSeconds / 1000,
-                        windowFrames == 0 ? 0 : windowDecodeMs / windowFrames,
-                        latencyMs);
-                    windowStart = clock.Elapsed;
-                    windowFrames = 0;
-                    windowBytes = 0;
-                    windowDecodeMs = 0;
+                        snapshot.FramesPerSecond,
+                        snapshot.Kbps,
+                        snapshot.DecodeMilliseconds,
+                        snapshot.LatencyMilliseconds);
                 }
             }
         }
@@ -389,25 +344,16 @@ public sealed partial class CameraViewer : IAsyncDisposable
         }
     }
 
-    // While no picture can be shown (just joined, or a decode error), keep asking for a key frame: the first request
-    // or key frame may have been lost.
-    private async Task KeyFrameWatchdogAsync()
-    {
-        try
-        {
-            while (true)
-            {
-                await Task.Delay(KeyFrameRetry, _time, _stop.Token).ConfigureAwait(false);
-                if (Details is not null && _waitingForKeyFrame)
-                {
-                    await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
-                }
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
-        {
-        }
-    }
+    private Task KeyFrameWatchdogAsync() =>
+        Media.KeyFrameWatchdog.RunAsync(
+            _time,
+            () => Details is not null,
+            () => _waitingForKeyFrame,
+            () => FrameNumber,
+            _supervisor.QuietFor,
+            RequestKeyFrameAsync,
+            value => _stalled = value,
+            _stop.Token);
 
     private void OnStreamInfo(CameraStreamInfo info)
     {
@@ -417,17 +363,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
         // A stream info always means a fresh encoder on the host; the old decoder must not be fed the new stream. The
         // supervisor refuses an unusable size (the size is whatever the other computer says it is) and replaces it.
         _supervisor.Start(width, height);
-        lock (_frameLock)
-        {
-            if (_front.Length != width * height * 4)
-            {
-                _front = new byte[width * height * 4];
-                _back = new byte[width * height * 4];
-            }
-
-            _frameNumber = 0;
-            Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
-        }
+        _frames.Reset(width, height);
+        Details = new CameraDetails(info.CameraName, width, height, (int)info.FrameRate, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
 
         _waitingForKeyFrame = true;
     }

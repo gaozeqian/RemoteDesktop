@@ -20,30 +20,16 @@ public sealed record DesktopStatistics(double FramesPerSecond, double Kbps, doub
 /// </summary>
 public sealed partial class DesktopViewer : IAsyncDisposable
 {
-    private static readonly TimeSpan StatisticsWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan KeyFrameRetry = TimeSpan.FromSeconds(2);
-
-    /// <summary>A key frame asked for and not answered for this long: what is on screen is old, not just unchanged.</summary>
-    private static readonly TimeSpan StallAlarm = TimeSpan.FromSeconds(4);
-
-    /// <summary>Retries stretch out to this, so a static host screen costs a handful of key frames, not a stream of them.</summary>
-    private static readonly TimeSpan MaxKeyFrameBackoff = TimeSpan.FromSeconds(30);
-
     private readonly IChannel _channel;
     private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Lock _frameLock = new();
+    private readonly VideoFrameBuffer _frames = new();
+    private readonly VideoStatisticsMeter _meter = new();
     private Task _loop = Task.CompletedTask;
     private Task _watchdog = Task.CompletedTask;
-
-    // Two buffers: the decode loop converts into _back outside the lock and swaps, while the UI copies _front under
-    // the lock. Only the decode loop touches _back; _front is guarded by _frameLock.
-    private byte[] _front = [];
-    private byte[] _back = [];
-    private long _frameNumber;
     private volatile bool _waitingForKeyFrame = true;
     private volatile bool _stalled;
 
@@ -68,16 +54,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     public bool IsStalled => _stalled;
 
     /// <summary>Total number of frames decoded so far.</summary>
-    public long FrameNumber
-    {
-        get
-        {
-            lock (_frameLock)
-            {
-                return _frameNumber;
-            }
-        }
-    }
+    public long FrameNumber => _frames.FrameNumber;
 
     /// <summary>Displays the host offered, for switching (M4).</summary>
     public IReadOnlyList<DisplayDescription> Displays { get; private set; } = [];
@@ -129,25 +106,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     /// Copies the newest picture into <paramref name="destination"/> (BGRA, <paramref name="stride"/> bytes per row).
     /// Returns its sequence number, or <c>-1</c> when there is no picture of the current size yet.
     /// </summary>
-    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height)
-    {
-        lock (_frameLock)
-        {
-            var info = StreamInfo;
-            if (info is null || _frameNumber == 0 || info.Width != width || info.Height != height)
-            {
-                return -1;
-            }
-
-            var rowBytes = width * 4;
-            for (var y = 0; y < height; y++)
-            {
-                _front.AsSpan(y * rowBytes, rowBytes).CopyTo(destination.Slice(y * stride, rowBytes));
-            }
-
-            return _frameNumber;
-        }
-    }
+    public long CopyLatestFrame(Span<byte> destination, int stride, int width, int height) =>
+        _frames.CopyLatest(destination, stride, width, height);
 
     /// <summary>Asks the host to stream another of its displays; it answers with a new stream info.</summary>
     public Task SelectDisplayAsync(string displayId, CancellationToken cancellationToken) =>
@@ -170,11 +130,6 @@ public sealed partial class DesktopViewer : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         var clock = Stopwatch.StartNew();
-        var windowStart = TimeSpan.Zero;
-        int windowFrames = 0;
-        long windowBytes = 0;
-        double windowDecodeMs = 0;
-        double? latencyMs = null;
         try
         {
             while (await FrameCodec.ReadAsync(_channel.Stream, cancellationToken: _stop.Token).ConfigureAwait(false) is { } frame)
@@ -216,7 +171,6 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 try
                 {
                     (encoded, capturedAt) = VideoDataFrame.Parse(frame);
-                    windowBytes += frame.Payload.Length;
                     if (_waitingForKeyFrame && !encoded.IsKeyFrame)
                     {
                         continue;
@@ -255,15 +209,7 @@ public sealed partial class DesktopViewer : IAsyncDisposable
 
                 using (picture)
                 {
-                    // Convert into the back buffer outside the lock: the UI copies the front buffer under the same
-                    // lock, and a 4K colour conversion here must not serialize the two against each other.
-                    ColorConversion.Nv12ToBgra(picture.GetPixels(out var stride), stride, picture.Width, picture.Height, _back, picture.Width * 4);
-
-                    lock (_frameLock)
-                    {
-                        (_front, _back) = (_back, _front);
-                        _frameNumber++;
-                    }
+                    _frames.Publish(picture);
                 }
 
                 // Any picture at all — including a key frame the host encoded from an unchanged screen — proves the
@@ -271,23 +217,17 @@ public sealed partial class DesktopViewer : IAsyncDisposable
                 _supervisor.PictureShown();
                 _stalled = false;
 
-                windowDecodeMs += (clock.Elapsed - decodeStarted).TotalMilliseconds;
-                windowFrames++;
-                latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                var latencyMs = (_time.GetUtcNow() - capturedAt).TotalMilliseconds;
+                _meter.Add(frame.Payload.Length, clock.Elapsed - decodeStarted, latencyMs);
                 FrameReady?.Invoke(this, EventArgs.Empty);
 
-                var elapsed = clock.Elapsed - windowStart;
-                if (elapsed >= StatisticsWindow)
+                if (_meter.TryTake(out var snapshot))
                 {
                     Statistics = new DesktopStatistics(
-                        windowFrames / elapsed.TotalSeconds,
-                        windowBytes * 8 / elapsed.TotalSeconds / 1000,
-                        windowFrames == 0 ? 0 : windowDecodeMs / windowFrames,
-                        latencyMs);
-                    windowStart = clock.Elapsed;
-                    windowFrames = 0;
-                    windowBytes = 0;
-                    windowDecodeMs = 0;
+                        snapshot.FramesPerSecond,
+                        snapshot.Kbps,
+                        snapshot.DecodeMilliseconds,
+                        snapshot.LatencyMilliseconds);
                 }
             }
         }
@@ -323,76 +263,16 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         }
     }
 
-    // While no picture can be shown (just joined, a decode error, or a stream that stopped mid-way), keep asking for
-    // a key frame: the first request or key frame may have been lost, and a static host screen produces nothing new
-    // on its own. The host answers from its newest picture even when nothing changed, so an answer proves the video
-    // path is alive and an unanswered request proves it is not — which is the only way to tell "old picture" from
-    // "unchanged picture" on this side.
-    private async Task KeyFrameWatchdogAsync()
-    {
-        var backoff = KeyFrameRetry;
-        var askedAt = 0L;
-        var framesWhenAsked = 0L;
-        try
-        {
-            while (true)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1), _time, _stop.Token).ConfigureAwait(false);
-                if (StreamInfo is null)
-                {
-                    continue;
-                }
-
-                var now = Stopwatch.GetTimestamp();
-                var quiet = _supervisor.QuietFor(now);
-                if (quiet < VideoDecoderSupervisor.StallTimeout)
-                {
-                    // More than the single answer to our request arrived: the screen is really changing, so the
-                    // fast retry rate is right again. A static screen only ever produces that one answer, which is
-                    // why it keeps backing off instead of asking for a key frame every couple of seconds.
-                    if (FrameNumber - framesWhenAsked >= 2)
-                    {
-                        backoff = KeyFrameRetry;
-                    }
-
-                    continue;
-                }
-
-                if (_waitingForKeyFrame)
-                {
-                    // Nothing decodable has ever arrived: ask at a steady rate, there is no picture to lose.
-                    if (askedAt == 0 || Stopwatch.GetElapsedTime(askedAt, now) >= KeyFrameRetry)
-                    {
-                        await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
-                        askedAt = now;
-                        framesWhenAsked = FrameNumber;
-                    }
-
-                    continue;
-                }
-
-                var answered = FrameNumber != framesWhenAsked;
-                if (!answered && askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) >= StallAlarm)
-                {
-                    // Asked and unanswered: the host has nothing to send, so what is on screen is stale.
-                    _stalled = true;
-                }
-
-                if (askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) < backoff)
-                {
-                    continue;
-                }
-
-                await RequestKeyFrameAsync(_stop.Token).ConfigureAwait(false);
-                askedAt = now;
-                framesWhenAsked = FrameNumber;
-                backoff = TimeSpan.FromTicks(Math.Min(MaxKeyFrameBackoff.Ticks, backoff.Ticks * 2));
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
-        {
-        }
-    }
+    private Task KeyFrameWatchdogAsync() =>
+        Media.KeyFrameWatchdog.RunAsync(
+            _time,
+            () => StreamInfo is not null,
+            () => _waitingForKeyFrame,
+            () => FrameNumber,
+            _supervisor.QuietFor,
+            RequestKeyFrameAsync,
+            value => _stalled = value,
+            _stop.Token);
 
     // The host is trusted to be well-formed, but a size that does not match the pixel data would read out of bounds.
     private static bool IsValidCursor(CursorShapeUpdate shape) =>
@@ -407,18 +287,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         // agent (login screen, UAC) and continues with a fresh encoder. The supervisor refuses an unusable size and
         // replaces the decoder, so one from the old stream is never fed the new one, even at the same resolution.
         _supervisor.Start(width, height);
-
-        lock (_frameLock)
-        {
-            if (_front.Length != width * height * 4)
-            {
-                _front = new byte[width * height * 4];
-                _back = new byte[width * height * 4];
-            }
-
-            _frameNumber = 0;
-            StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
-        }
+        _frames.Reset(width, height);
+        StreamInfo = new DesktopStreamInfo(info.DisplayId, width, height, info.EncoderName, info.HardwareEncoder, _supervisor.Decoder!.Name);
 
         Displays = [.. info.Displays];
         _waitingForKeyFrame = true;

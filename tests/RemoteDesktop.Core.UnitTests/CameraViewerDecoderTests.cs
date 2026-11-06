@@ -3,8 +3,8 @@ using RemoteDesktop.Features.Camera;
 namespace RemoteDesktop.Core.UnitTests;
 
 /// <summary>
-/// <see cref="CameraViewer"/> on top of the behaviour both viewers share (<see cref="ViewerDecoderTests"/>): its
-/// simpler key frame watchdog, and the refusal of an unusable first stream description.
+/// <see cref="CameraViewer"/> on top of the behaviour both viewers share (<see cref="ViewerDecoderTests"/>): the key
+/// frame watchdog it now shares with the desktop viewer, and the refusal of an unusable first stream description.
 /// </summary>
 public sealed class CameraViewerDecoderTests : ViewerDecoderTests
 {
@@ -26,19 +26,21 @@ public sealed class CameraViewerDecoderTests : ViewerDecoderTests
     }
 
     [Fact]
-    public async Task The_watchdog_asks_for_a_key_frame_every_two_seconds_while_no_picture_has_been_decoded()
+    public async Task The_watchdog_asks_for_a_key_frame_once_the_stall_timeout_has_passed()
     {
         await using var rig = await CameraViewerRig.StartAsync();
 
-        // Not due yet.
-        rig.Time.Advance(TimeSpan.FromMilliseconds(1900));
+        // Waiting for a key frame, but the stream began a moment ago: not yet a reason to ask.
+        await rig.TickAsync(TimeSpan.FromSeconds(1));
         await rig.ExpectKeyFrameRequestsAsync(0);
 
-        await rig.TickAsync(TimeSpan.FromMilliseconds(100));
-        await rig.ExpectKeyFrameRequestsAsync(1);
+        await Task.Delay(PastStallTimeout, Ct);
+        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the first pass asks");
 
-        await rig.TickAsync(TimeSpan.FromSeconds(2));
-        await rig.ExpectKeyFrameRequestsAsync(2);
+        // The retry rate while no picture can be shown is one request per two seconds of real time.
+        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.ExpectKeyFrameRequestsAsync(1);
     }
 
     [Fact]
@@ -66,7 +68,9 @@ public sealed class CameraViewerDecoderTests : ViewerDecoderTests
         await rig.SendRawVideoFrameAsync(new byte[3]);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the bad frame is answered with a request");
 
-        await rig.TickAsync(TimeSpan.FromSeconds(2));
+        // The shared watchdog waits for the stall timeout of silence before asking again, as the desktop one does.
+        await Task.Delay(PastStallTimeout, Ct);
+        await rig.TickAsync(TimeSpan.FromSeconds(1));
         await rig.ExpectKeyFrameRequestsAsync(2);
     }
 }
