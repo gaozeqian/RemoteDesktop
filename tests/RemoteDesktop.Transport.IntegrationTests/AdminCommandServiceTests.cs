@@ -37,6 +37,9 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
 
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await WaitForAsync(() => host.HostSessions.ActiveSessions.Count == 0, "the session to disappear from the host");
+        // Cancelling the session is what closes it, and that can complete on another thread before the loop writes its
+        // line; wait for the line rather than assuming it is already there.
+        await WaitForAsync(() => log.Messages.Any(m => m.Level == LogLevel.Information), "the command to be logged");
         var line = Assert.Single(log.Messages, m => m.Level == LogLevel.Information);
         Assert.Contains("cmd-1", line.Text, StringComparison.Ordinal);
         Assert.Contains(id.ToString(), line.Text, StringComparison.Ordinal);
