@@ -42,8 +42,18 @@ public class PresenceQueryTests(ServerFixture server) : IClassFixture<ServerFixt
 
         await target.DisposeAsync();
 
+        // Disposing the host closes the socket but does not wait for the server to observe the close, so the device
+        // can still be in the presence map when the next query arrives. Poll briefly instead of requiring it to be
+        // gone at once; the queries stay inside the server's burst of ten, so none of them is refused.
         var after = await asker.Rendezvous.QueryPresenceAsync([targetId], Ct);
         Assert.NotNull(after);
+        for (var attempt = 0; after.Contains(targetId) && attempt < 6; attempt++)
+        {
+            await Task.Delay(500, Ct);
+            after = await asker.Rendezvous.QueryPresenceAsync([targetId], Ct);
+            Assert.NotNull(after);
+        }
+
         Assert.DoesNotContain(targetId, after);
     }
 
