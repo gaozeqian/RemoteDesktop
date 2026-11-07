@@ -14,19 +14,19 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 
 | 组件 | 版本 | 许可 | 项目主页 |
 |---|---|---|---|
-| Avalonia | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
 | Avalonia.Angle.Windows.Natives | 2.1.27548.20260419 | 见项目主页 | https://avaloniaui.net/ |
 | Avalonia.BuildServices | 11.3.2 | MIT | https://avaloniaui.net/ |
-| Avalonia.Desktop | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.FreeDesktop | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.FreeDesktop.AtSpi | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.HarfBuzz | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Native | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Remote.Protocol | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Skia | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Themes.Fluent | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.Win32 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
-| Avalonia.X11 | 12.1.4 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Desktop | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.FreeDesktop | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.FreeDesktop.AtSpi | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.HarfBuzz | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Native | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Remote.Protocol | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Skia | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Themes.Fluent | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.Win32 | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
+| Avalonia.X11 | 12.1.5 | MIT | https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link |
 | BouncyCastle.Cryptography | 2.7.0 | MIT | https://www.bouncycastle.org/stable/nuget/csharp/website |
 | CommunityToolkit.Mvvm | 8.4.2 | MIT | https://github.com/CommunityToolkit/dotnet |
 | Concentus | 2.2.2 | 见项目主页 | https://github.com/lostromb/concentus |
