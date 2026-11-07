@@ -23,7 +23,7 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.14" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
     <!-- The setup command restarts the installed service (ServiceController) -->
     <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.14" />
     <!-- Windows platform: DXGI capture, Media Foundation codecs -->
