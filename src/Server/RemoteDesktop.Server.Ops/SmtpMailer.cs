@@ -183,7 +183,7 @@ internal static class SmtpMailer
     private static async Task<(int Code, List<string> Lines)> ReadReplyAsync(Stream stream, CancellationToken cancellationToken)
     {
         var lines = new List<string>();
-        var builder = new StringBuilder();
+        var bytes = new List<byte>();
         var single = new byte[1];
 
         while (true)
@@ -194,20 +194,20 @@ internal static class SmtpMailer
                 throw new SmtpDeliveryException("the mail server closed the connection");
             }
 
-            var character = (char)single[0];
-            if (character != '\n')
+            var b = single[0];
+            if (b != (byte)'\n')
             {
-                if (builder.Length >= MaxReplyLength)
+                if (bytes.Count >= MaxReplyLength)
                 {
                     throw new SmtpDeliveryException("the mail server sent a reply longer than any SMTP reply");
                 }
 
-                builder.Append(character);
+                bytes.Add(b);
                 continue;
             }
 
-            var line = builder.ToString().TrimEnd('\r');
-            builder.Clear();
+            var line = Encoding.UTF8.GetString(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(bytes)).TrimEnd('\r');
+            bytes.Clear();
             lines.Add(line);
 
             // "250-text" continues, "250 text" ends. A line too short to carry a code ends the reply as well.

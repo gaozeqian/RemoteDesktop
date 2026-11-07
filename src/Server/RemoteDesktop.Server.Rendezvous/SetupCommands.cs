@@ -41,7 +41,7 @@ public static class SetupCommands
             // the Windows installer, the Linux postinst and the macOS postinstall all do. The command-line options
             // stay for hand runs, which is also what configure-server.sh forwards.
             RelaySharedKey = Argument(args, "--relay-key") ?? Environment.GetEnvironmentVariable("RD_RELAY_KEY"),
-            DatabaseProvider = Argument(args, "--database"),
+            DatabaseProvider = Argument(args, "--database") ?? Argument(args, "--database-provider"),
             DatabasePath = Argument(args, "--database-path"),
             PostgresConnectionString = Argument(args, "--postgres") ?? Environment.GetEnvironmentVariable("RD_POSTGRES"),
             TlsCertificatePath = Argument(args, "--tls-certificate"),

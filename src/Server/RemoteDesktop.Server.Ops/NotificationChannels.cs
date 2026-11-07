@@ -56,7 +56,7 @@ internal static class AlertNotification
             text.Append("恢复时间: ").Append(Iso(resolved)).Append('\n');
         }
 
-        text.Append('\n').Append("这台控制台由 Remote Desktop 运维监控台发送。").Append('\n');
+        text.Append('\n').Append("此邮件由 Remote Desktop 运维监控台发送。").Append('\n');
         return text.ToString();
     }
 

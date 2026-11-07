@@ -43,6 +43,17 @@ public sealed class SmtpMailerTests
     }
 
     [Fact]
+    public async Task A_multibyte_utf8_reply_is_decoded_without_mojibake()
+    {
+        await using var server = new FakeSmtpServer(rejectMailWith: "550 拒绝发送：账号异常");
+
+        var ex = await Assert.ThrowsAsync<SmtpDeliveryException>(() =>
+            SmtpMailer.SendAsync(Settings(server.Port, username: null), "subject", "body", Ct));
+
+        Assert.Contains("拒绝发送：账号异常", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Credentials_travel_only_when_the_relay_asks_for_them()
     {
         await using var server = new FakeSmtpServer(requireAuth: true);

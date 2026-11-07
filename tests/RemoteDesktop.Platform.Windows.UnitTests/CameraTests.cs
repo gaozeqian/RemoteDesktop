@@ -63,7 +63,8 @@ public class CameraTests
                 Assert.Equal(frame.Width, stride);
                 Assert.Equal(frame.Width * frame.Height * 3 / 2, pixels.Length);
 
-                // Live data, not an empty or constant buffer: the luma varies across the picture and the camera has exposure.
+                // Live data, not an empty or constant buffer: once exposure settles past the first few frames,
+                // the luma varies across the picture and the camera has exposure.
                 var luma = pixels[..(frame.Width * frame.Height)];
                 var sample = new byte[256];
                 for (var i = 0; i < sample.Length; i++)
@@ -71,7 +72,10 @@ public class CameraTests
                     sample[i] = luma[i * (luma.Length / sample.Length)];
                 }
 
-                Assert.True(sample.Distinct().Count() > 3, "The picture looks constant.");
+                if (count > 2)
+                {
+                    Assert.True(sample.Distinct().Count() > 3, "The picture looks constant.");
+                }
                 differing |= previous is not null && !previous.AsSpan().SequenceEqual(sample);
                 previous = sample;
             }

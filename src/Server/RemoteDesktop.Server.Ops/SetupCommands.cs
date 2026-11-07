@@ -108,7 +108,7 @@ public static class SetupCommands
         var existing = await store.FindUserAsync(username).ConfigureAwait(false);
         if (existing is not null)
         {
-            output.WriteLine($"账号 {existing.Username} 已存在，未做任何修改。改口令请用 --reset-password {existing.Username}，或让另一位管理员在控制台的账号管理里修改。");
+            output.WriteLine($"账号 {existing.Username} 已存在，未做任何修改。改口令请用 --reset-password {existing.Username}，或让另一位管理员在监控台的账号管理里修改。");
             return 3;
         }
 
@@ -156,7 +156,7 @@ public static class SetupCommands
         output.WriteLine($"otpauth URI: {uri}");
         output.WriteLine();
         output.WriteLine("把上面的 URI 导入验证器（大多数应用也支持手动输入密钥）。");
-        output.WriteLine("密钥只显示这一次；丢失后可用 --reset-totp 重置，或让另一位管理员在控制台重置。");
+        output.WriteLine("密钥只显示这一次；丢失后可用 --reset-totp 重置，或让另一位管理员在监控台重置。");
         return 0;
     }
 
@@ -186,7 +186,7 @@ public static class SetupCommands
         await store.EnsureSchemaAsync().ConfigureAwait(false);
         if (await store.CountNodesAsync().ConfigureAwait(false) > 0)
         {
-            output.WriteLine("控制台里已经登记过节点，未做任何修改。");
+            output.WriteLine("监控台里已经登记过节点，未做任何修改。");
             return 0;
         }
 
@@ -207,7 +207,7 @@ public static class SetupCommands
             output.WriteLine($"已登记节点: {name}（{role}）→ {url}");
         }
 
-        output.WriteLine("控制台启动后约 10 秒出现第一份节点数据；设备管理页从信令节点读取设备列表。");
+        output.WriteLine("监控台启动后约 10 秒出现第一份节点数据；设备管理页从信令节点读取设备列表。");
         return 0;
     }
 
@@ -246,7 +246,7 @@ public static class SetupCommands
             }
             else
             {
-                output.WriteLine($"节点 {name} 不在控制台里，未创建。");
+                output.WriteLine($"节点 {name} 不在监控台里，未创建。");
             }
         }
 

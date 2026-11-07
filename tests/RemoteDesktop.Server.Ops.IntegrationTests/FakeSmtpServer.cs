@@ -28,15 +28,16 @@ internal sealed class FakeSmtpServer : IAsyncDisposable
     public string? AuthToken { get; private set; }
 
     /// <param name="requireAuth">Advertise AUTH and refuse MAIL until it happened.</param>
-    public FakeSmtpServer(bool requireAuth = false)
+    /// <param name="rejectMailWith">A custom rejection for the MAIL command, e.g. a localized error string.</param>
+    public FakeSmtpServer(bool requireAuth = false, string? rejectMailWith = null)
     {
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-        _serving = Task.Run(() => ServeAsync(requireAuth));
+        _serving = Task.Run(() => ServeAsync(requireAuth, rejectMailWith));
     }
 
-    private async Task ServeAsync(bool requireAuth)
+    private async Task ServeAsync(bool requireAuth, string? rejectMailWith)
     {
         using var client = await _listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false);
         await using var stream = client.GetStream();
@@ -69,7 +70,14 @@ internal sealed class FakeSmtpServer : IAsyncDisposable
                     break;
 
                 case "MAIL":
-                    await writer.WriteLineAsync(authenticated ? "250 sender ok" : "530 authenticate first").ConfigureAwait(false);
+                    if (rejectMailWith is not null)
+                    {
+                        await writer.WriteLineAsync(rejectMailWith).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await writer.WriteLineAsync(authenticated ? "250 sender ok" : "530 authenticate first").ConfigureAwait(false);
+                    }
                     break;
 
                 case "RCPT":

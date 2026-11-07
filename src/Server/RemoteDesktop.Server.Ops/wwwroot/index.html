@@ -47,7 +47,7 @@
   </form>
 </main>
 
-<!-- ============ 控制台 ============ -->
+<!-- ============ 监控台 ============ -->
 <div class="app" id="appView" hidden>
   <aside class="sidebar">
     <div class="brand">
@@ -315,7 +315,7 @@
       <section class="page" id="page-devices" hidden>
         <div class="banner">
           <div>
-            <strong>设备代码由信令服务持有，控制台只转述。</strong>
+            <strong>设备代码由信令服务持有，监控台只转述。</strong>
             <p>列表经 <code>/internal/v1/devices</code> 分页读取，按设备代码排序。设备名、版本、无人值守模式服务器并不知道——那些属于客户端，等心跳接入。</p>
           </div>
         </div>
@@ -414,7 +414,7 @@
               <button class="small danger" type="button" id="nodeTokenClear" hidden>清除</button>
             </div>
             <p class="muted">生成后把令牌填到该节点的 <code>Rendezvous:NodeToken</code> 或 <code>Relay:NodeToken</code>
-              并重启节点；控制台只在生成时显示一次。重置会立刻让旧令牌失效，节点在改好配置前抓取会失败。</p>
+              并重启节点；监控台只在生成时显示一次。重置会立刻让旧令牌失效，节点在改好配置前抓取会失败。</p>
           </div>
 
           <table class="data-table">

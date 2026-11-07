@@ -1469,7 +1469,7 @@ portal 不允许远程桌面会话持久化，这是它的规定而不是本程�
    这是被控端唯一的入口。
 2. **是不是 Wayland 会话**：只在 Wayland 上验证过。
 3. **日志里有没有 `The compositor is not describing the pointer`**：那意味着光标位置不会实时更新，画面本身正常。
-4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。
+4. **日志里有没有 `libavcodec` 相关的拒绝**：编码器缺失或版本不对会明确报出来，不会静默黑屏。若 FFmpeg 装在非标准路径，可用环境变量 `RD_FFMPEG_PATH=/path/to/lib` 指向包含 `libavcodec.so.62` 的目录。
 
 ## 六、部署客户端 / 被控端（.pkg，macOS）
 

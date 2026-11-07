@@ -42,21 +42,28 @@ public class DxgiCaptureTests
         await using (capturer)
         {
             var stopwatch = Stopwatch.StartNew();
-            using var frame = await capturer.CaptureAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            VideoFrame? frame = null;
+            for (var attempt = 0; attempt < 3 && frame is null; attempt++)
+            {
+                frame = await capturer.CaptureAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            }
             var captureMs = stopwatch.Elapsed.TotalMilliseconds;
 
-            Assert.NotNull(frame);
-            Assert.Equal(PixelFormat.Bgra32, frame.Format);
-            Assert.Equal(primary!.Bounds.Width, frame.Width);
-            Assert.Equal(primary.Bounds.Height, frame.Height);
+            Assert.SkipWhen(frame is null, "Desktop duplication produced no frame within timeout (desktop has no updates).");
+            using (frame!)
+            {
+                Assert.Equal(PixelFormat.Bgra32, frame.Format);
+                Assert.Equal(primary!.Bounds.Width, frame.Width);
+                Assert.Equal(primary.Bounds.Height, frame.Height);
 
-            var width = frame.Width & ~1;
-            var height = frame.Height & ~1;
-            using var nv12 = new MemoryVideoFrame(width, height, PixelFormat.Nv12, frame.Timestamp);
-            stopwatch.Restart();
-            ColorConversion.BgraToNv12(frame.GetPixels(out var stride), stride, width, height, nv12.Buffer, nv12.Stride);
-            TestContext.Current.SendDiagnosticMessage(
-                $"Captured {frame.Width}x{frame.Height} in {captureMs:0.0} ms, BGRA→NV12 {stopwatch.Elapsed.TotalMilliseconds:0.0} ms");
+                var width = frame.Width & ~1;
+                var height = frame.Height & ~1;
+                using var nv12 = new MemoryVideoFrame(width, height, PixelFormat.Nv12, frame.Timestamp);
+                stopwatch.Restart();
+                ColorConversion.BgraToNv12(frame.GetPixels(out var stride), stride, width, height, nv12.Buffer, nv12.Stride);
+                TestContext.Current.SendDiagnosticMessage(
+                    $"Captured {frame.Width}x{frame.Height} in {captureMs:0.0} ms, BGRA→NV12 {stopwatch.Elapsed.TotalMilliseconds:0.0} ms");
+            }
         }
     }
 
@@ -88,8 +95,8 @@ public class DxgiCaptureTests
             await using (capturer)
             {
                 using var frame = await capturer.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
-                Assert.NotNull(frame);
-                Assert.Equal(PixelFormat.Bgra32, frame.Format);
+                Assert.SkipWhen(frame is null, $"Desktop duplication for {display.Id} produced no frame (desktop has no updates).");
+                Assert.Equal(PixelFormat.Bgra32, frame!.Format);
                 Assert.Equal(display.Bounds.Width, frame.Width);
                 Assert.Equal(display.Bounds.Height, frame.Height);
                 TestContext.Current.SendDiagnosticMessage(

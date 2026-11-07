@@ -213,7 +213,7 @@ C 函数读不到 `@property` 自动合成的实例变量（`instance variable i
 **编解码器设备要自己枚举，绝不假设 `renderD128` 就是编码器**（索引跨重启与 GPU 热插拔都不稳定）。
 做法是枚举 `/sys/class/drm/renderD*`，读 `device/vendor` 与 `device/driver`，对每个节点用
 `av_hwdevice_ctx_create` 建设备并试开 libavcodec 的 VA-API 编码器，能打开的才算可用。不直接问 libva
-支持什么——硬件与软件编码都只经 libavcodec 一把桥。
+支持什么——硬件与软件编码都只经 libavcodec 一把桥；若系统库不在标准搜索路径中，可通过环境变量 `RD_FFMPEG_PATH` 指定其目录。
 
 **MsQuic 在 Linux 上要自己弄到。** Windows 由运行时包提供 `msquic.dll`，**Linux 没有**，Ubuntu 仓库也没有。
 缺它时每个开 QUIC 连接的测试都失败并报 `QUIC is not supported on this system`——看着像平台不支持，

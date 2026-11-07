@@ -705,6 +705,29 @@ public sealed class ServerSetupTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName)));
     }
 
+    [Theory]
+    [InlineData("--database")]
+    [InlineData("--database-provider")]
+    public void The_database_provider_option_is_accepted_under_both_names(string option)
+    {
+        var output = new StringWriter();
+        var handled = SetupCommands.TryRun(
+            [
+                "--configure-system",
+                "--install-directory", _folder,
+                option, "none",
+            ],
+            defaultInstallDirectory: _folder,
+            output,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(SetupCommands.Success, exitCode);
+
+        var rendezvous = Read<RendezvousOptions>(ServerSetup.RendezvousFolder, RendezvousOptions.SectionName);
+        Assert.Equal("none", rendezvous.Database.Provider);
+    }
+
     [Fact]
     public void A_certificate_value_of_auto_is_the_same_as_none_and_says_so()
     {

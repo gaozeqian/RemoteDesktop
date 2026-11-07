@@ -1552,7 +1552,7 @@ function renderNodeToken(node) {
 
   el.nodeTokenState.textContent = node.hasOwnToken
     ? "该节点使用自己的令牌。"
-    : "该节点使用控制台的 Ops:NodeToken。";
+    : "该节点使用监控台的 Ops:NodeToken。";
   el.nodeTokenRotate.textContent = node.hasOwnToken ? "重置令牌" : "生成独立令牌";
   el.nodeTokenClear.hidden = !node.hasOwnToken;
 }
@@ -1594,7 +1594,7 @@ async function clearNodeToken() {
     return;
   }
 
-  if (!window.confirm(`清除「${node.name}」的独立令牌？它会改回使用控制台的 Ops:NodeToken。`)) {
+  if (!window.confirm(`清除「${node.name}」的独立令牌？它会改回使用监控台的 Ops:NodeToken。`)) {
     return;
   }
 

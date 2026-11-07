@@ -112,7 +112,7 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
         Add-Ok "$Where 的明文信令只监听回环（$Url），公网无法访问。"
     }
     elseif ($Url.StartsWith('http://')) {
-        Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的 TLS 一节。"
+        Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的“生产环境：信令必须走 TLS”一节。"
     }
     else {
         Add-Finding "$Where 的信令地址 $Url 既不是 http:// 也不是 https://。"
@@ -168,7 +168,7 @@ function Test-RendezvousUri([string]$Uri, [string]$Where) {
         Add-Finding "$Where 还在连本机（$Uri）：装到别的机器上谁都连不上。"
     }
     elseif ($Uri.StartsWith('ws://')) {
-        Add-Finding "$Where 信令是明文 ws://（$Uri）：见 docs/ops/README.md 的 TLS 一节。"
+        Add-Finding "$Where 信令是明文 ws://（$Uri）：见 docs/ops/README.md 的“生产环境：信令必须走 TLS”一节。"
     }
     else {
         Add-Finding "$Where 的服务器地址 $Uri 格式不对（应为 ws:// 或 wss://）。"
