@@ -3,7 +3,7 @@ using RemoteDesktop.Server.Ops.Storage;
 namespace RemoteDesktop.Server.Ops;
 
 /// <summary>
-/// Deletes history the console no longer needs: old metric samples, events, projected sessions and resolved alerts.
+/// Deletes history the console no longer needs: raw and downsampled metric samples, events, projected sessions and resolved alerts.
 /// </summary>
 /// <remarks>
 /// Without this the SQLite file grows for the life of the deployment — a scrape every ten seconds is millions of rows a
@@ -49,6 +49,11 @@ public sealed partial class RetentionService(
             cutoff => store.DeleteSamplesBeforeAsync(cutoff, BatchSize, cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
+        var rollups = await DeleteInBatchesAsync(
+            options.Retention.RollupDays,
+            cutoff => store.DeleteRollupsBeforeAsync(cutoff, BatchSize, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+
         var events = await DeleteInBatchesAsync(
             options.Retention.EventDays,
             cutoff => store.DeleteEventsBeforeAsync(cutoff, BatchSize, cancellationToken),
@@ -64,9 +69,9 @@ public sealed partial class RetentionService(
             cutoff => store.DeleteResolvedAlertsBeforeAsync(cutoff, BatchSize, cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
-        if (deletedSessions + samples + events + sessions + alerts > 0)
+        if (deletedSessions + samples + rollups + events + sessions + alerts > 0)
         {
-            RetentionCompleted(logger, deletedSessions, samples, events, sessions, alerts);
+            RetentionCompleted(logger, deletedSessions, samples, rollups, events, sessions, alerts);
         }
     }
 
@@ -104,11 +109,12 @@ public sealed partial class RetentionService(
     private static partial void RetentionSkipped(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Information,
-        Message = "Retention removed {Sessions} expired admin sessions, {Samples} samples, {Events} events, {ProjectedSessions} sessions and {Alerts} alerts.")]
+        Message = "Retention removed {Sessions} expired admin sessions, {Samples} raw samples, {Rollups} downsampled metric buckets, {Events} events, {ProjectedSessions} sessions and {Alerts} alerts.")]
     private static partial void RetentionCompleted(
         ILogger logger,
         int sessions,
         int samples,
+        int rollups,
         int events,
         int projectedSessions,
         int alerts);

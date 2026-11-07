@@ -6,7 +6,7 @@ namespace RemoteDesktop.Server.Ops;
 
 /// <summary>
 /// Liveness for the console itself, database included. Loopback only: a public health endpoint on an ops box is an
-/// inventory answer for anyone who asks, and the reverse proxy can expose it deliberately if a load balancer needs it.
+/// inventory answer for anyone who asks, so requests that arrived through any reverse proxy are refused as well.
 /// </summary>
 public static class HealthEndpoints
 {

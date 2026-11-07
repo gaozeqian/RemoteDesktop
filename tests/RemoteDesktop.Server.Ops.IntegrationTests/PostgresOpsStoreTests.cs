@@ -546,6 +546,30 @@ public sealed class PostgresOpsStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Rollups_keep_first_and_last_values_and_expire_independently()
+    {
+        var db = await NewDatabaseAsync();
+        const long baseTime = 1_700_000_000_000;
+        const int stepSeconds = 60;
+        var bucket = baseTime / (stepSeconds * 1000L);
+
+        await db.Store.WriteSamplesAsync("node", baseTime + 10_000, [new PrometheusSample("m", "m", 10)], Ct);
+        await db.Store.WriteSamplesAsync("node", baseTime + 20_000, [new PrometheusSample("m", "m", 30)], Ct);
+        await db.Store.WriteSamplesAsync("node", baseTime + 30_000, [new PrometheusSample("m", "m", 20)], Ct);
+        await db.Store.RollupSamplesAsync(baseTime + 60_000, stepSeconds, Ct);
+
+        var rollup = Assert.Single(await db.Store.GetMetricRollupsAsync("node", "m", stepSeconds, bucket, bucket, Ct));
+        Assert.Equal(10, rollup.FirstValue);
+        Assert.Equal(20, rollup.LastValue);
+        Assert.Equal(10, rollup.MinValue);
+        Assert.Equal(30, rollup.MaxValue);
+        Assert.Equal(20, rollup.AvgValue);
+
+        Assert.Equal(1, await db.Store.DeleteRollupsBeforeAsync(baseTime + (stepSeconds * 1000L), cancellationToken: Ct));
+        Assert.Empty(await db.Store.GetMetricRollupsAsync("node", "m", stepSeconds, bucket, bucket, Ct));
+    }
+
+    [Fact]
     public async Task Retention_deletes_only_the_history_it_was_asked_to_delete()
     {
         var db = await NewDatabaseAsync();

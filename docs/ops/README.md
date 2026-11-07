@@ -12,6 +12,20 @@
 这套软件是**自建服务器**的：两台机器互相连接，靠的是一台它们都能连上的**信令服务器（Rendezvous）**。
 没有它，被控端拿不到设备代码，控制端也无从发现对方——"设备代码是空的"几乎总是这个原因。
 
+## 目录
+
+- [先决条件](#一先决条件)
+- [部署服务器（原生包、Docker、TLS、防火墙、健康检查和 Ops）](#二部署服务器)
+- [自动化发布到 GitHub Releases](#三自动化发布到-github-releases)
+- [部署客户端 / 被控端（Windows MSI）](#四部署客户端--被控端msi)
+- [部署客户端 / 被控端（Linux Debian 包）](#五部署客户端--被控端debian-包linux)
+- [部署客户端 / 被控端（macOS `.pkg`）](#六部署客户端--被控端pkgmacos)
+- [运行期注意事项](#七运行期注意事项)
+- [安装包构建](#八安装包怎么构建三平台)
+- [客户端本机存储](#九客户端本机的存储设备列表)
+- [故障速查](#十故障速查)
+- [上线前真机验收](#十一上线前真机验收)
+
 ```text
         ┌──────────────┐   信令 WebSocket(TCP 5080)   ┌───────────────────┐
         │  控制端       │ ───────────────────────────► │  Rendezvous       │
@@ -307,7 +321,7 @@ curl http://127.0.0.1:5090/health      # 监控台
   它调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
   所以两者的行为不会分叉；做过什么会追加到 `%ProgramData%\Remote Desktop Server\server-setup.log`。
   拿不准就先加 `-WhatIf` 看一眼（不打印口令）。
-- **`how-to-configure.txt`** —— 同一件事的短说明，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。
+- **`how-to-configure.txt`** —— 随包的离线速查，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。三平台副本由 `build/tools/Export-ServerConfigurationGuides.ps1` 从统一源生成，不要直接编辑。
 - 四份 `appsettings.json`（`Rendezvous\`、`Relay\`、`Ops\`、`Gateway\`）在
   `%ProgramData%\Remote Desktop Server\` 下 —— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留；目录只有 SYSTEM 与 Administrators 能读。
@@ -906,7 +920,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:Notifications:Smtp:From` / `To` | 空 | 信封与头部的发件人；收件人可用逗号或分号分隔多个 |
 | `Ops:Notifications:Smtp:Username` / `Password` | 空 | 中继需要认证时填写；支持 AUTH PLAIN 与 AUTH LOGIN。**口令只写进 AUTH 交换**，不进日志、不进审计、不进投递记录 |
 | `Ops:TrustedProxies` | 空 | 可信反向代理的 IP 或 CIDR 列表；只有这里的代理写来的 `X-Forwarded-For` / `X-Forwarded-Proto` 会被采信。见“反向代理” |
-| `Ops:Retention:SampleDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `30` / `90` / `180` | 指标样本、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。审计日志不自动删除（见"数据保留"） |
+| `Ops:Retention:SampleDays` / `RollupDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `365` / `30` / `90` / `180` | 原始指标样本、1 分钟/1 小时降采样指标桶、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。`RollupDays` 默认比原始样本长，以较低粒度保留趋势；审计日志不自动删除（见"数据保留"） |
 | `Ops:Retention:IntervalMinutes` | `60` | 清理任务间隔 |
 | `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
 
@@ -1042,7 +1056,8 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 #### 数据保留
 
-监控台每小时清理一次过期历史（保留天数和关闭方式见上面配置表里的 `Ops:Retention:*`），并删除过期的管理员会话。
+监控台每小时清理一次过期历史（保留天数和关闭方式见上面配置表里的 `Ops:Retention:*`）：原始指标样本默认 30 天，
+1 分钟/1 小时降采样指标桶默认 365 天，事件、会话与已恢复告警按各自配置清理；并同时删除过期的管理员会话。
 打开中的告警永远不会被删除。
 **审计日志（`ops_audit_log`）是有哈希链的，不自动删除**——需要更长的保留期就备份数据库，或定期整库归档。
 
@@ -1828,7 +1843,7 @@ remotedesktop --self-check                                           # 装了客
 ## 十一、上线前真机验收
 
 这一节是发布前要**逐条跑过**的清单：每条给出可直接粘贴的命令、可以对照的判据、以及失败时先看哪个文件。
-V1–V3 为发布阻断项（P0）；V4–V8 按需抽查，结果填进文末的记录表。
+V1–V3 为发布阻断项（P0）；V4–V8 按需抽查，结果填进文末的记录表。**V2–V3 当前没有已归档的通过证据；下一次发布前必须重新执行并填写。**
 
 | 编号 | 平台 | 验证什么 | 优先级 |
 |---|---|---|---|
@@ -1874,7 +1889,7 @@ letterbox 的"等比缩放 + 居中"路径不依赖源宽高比，上面这一�
 切到"基础会话"（guest 落到 1024×768）即可。"多显示器不同 DPI"对 Windows **不适用**：单显示器抓屏走物理像素，
 DPI 缩放不影响鼠标映射（Hyper-V 里也无法构造这种环境）。
 
-已有的一次实测记在文末记录表 V1 一行。
+2026-11-07 已在管理员 PowerShell 完成实测：服务重启前后均为运行状态，SessionAgent 从 PID 3360 重建为 PID 22312，始终以登录用户运行在交互会话 1。证据见文末 V1 记录。
 
 ### V2 · macOS：服务端专用账户（P0）
 
@@ -2049,11 +2064,11 @@ Windows 上在终端里运行 `RemoteDesktop.Server.Ops.exe` 才有输出。
 
 ### 记录表
 
-复制这张表进发布记录，每条验收一行；"证据"写日志文件名与时间点，不要只写"已通过"。V1 一行是已有的一次实测，新一轮请覆盖。
+复制这张表进发布记录，每条验收一行；"证据"写日志文件名与时间点，不要只写"已通过"。V1 有一份已归档记录；每次发布仍应从空表重新填写。
 
 | 日期 | 版本 | 条目 | 结果 | 证据 / 备注 |
 |---|---|---|---|---|
-| 2026-10-30 |  | V1 | 通过 | Hyper-V 被控端 VM + 本机控制端：服务 `LocalSystem`、`RemoteDesktop.SessionAgent` 以登录用户运行（提权只读命令确认）；流尺寸 2048×1152 如实显示，保持比例，鼠标四角对齐 |
+| 2026-11-07 | 1.0.0 | V1 | 通过 | 管理员 PowerShell：`RemoteDesktopHost` = Running/Automatic、`StartName=LocalSystem`。重启前 `RemoteDesktop.SessionAgent.exe` PID 3360、重启后 PID 22312；两次均在 Session 1，以 `HTZVYL3\Arthur` 运行，路径为 `C:\Program Files\RemoteDesktop\RemoteDesktop.SessionAgent.exe`。 |
 |  |  | V2 |  |  |
 |  |  | V3 |  |  |
 |  |  | V4 |  |  |

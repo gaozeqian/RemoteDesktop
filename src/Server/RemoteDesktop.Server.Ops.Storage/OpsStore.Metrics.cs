@@ -213,6 +213,27 @@ public sealed partial class OpsStore
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Deletes downsampled metric buckets whose whole bucket is older than the retention cutoff.</summary>
+    public async Task<int> DeleteRollupsBeforeAsync(
+        long beforeUnixMilliseconds,
+        int limit = 5000,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM ops_metric_rollup
+            WHERE (node_id, metric, step_seconds, bucket) IN (
+                SELECT node_id, metric, step_seconds, bucket FROM ops_metric_rollup
+                WHERE (bucket + 1) * step_seconds * 1000 <= @before
+                LIMIT @limit
+            );
+            """;
+        Bind(command, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<IReadOnlyList<MetricPoint>> ReadPointsAsync(DbCommand command, CancellationToken cancellationToken)
     {
         var points = new List<MetricPoint>();
@@ -305,18 +326,38 @@ public sealed partial class OpsStore
         var stepMillis = (long)stepSeconds * 1000;
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
 
-        // Compute aggregates grouped by node, metric, and bucket
+        // A timestamp is unique within one node/metric series, so the ordered subqueries give the actual first and
+        // last values rather than guessing from min/max/average. Keep this provider-neutral: SQLite and PostgreSQL
+        // both support CTEs, correlated subqueries and LIMIT.
         await using var selectCommand = connection.CreateCommand();
         selectCommand.CommandText = """
-            SELECT node_id, metric, (ts / @stepMillis) AS bucket,
-                   MIN(value) AS min_val, MAX(value) AS max_val, AVG(value) AS avg_val, COUNT(*) AS cnt
-            FROM ops_metric_sample
-            WHERE ts <= @beforeTs
-            GROUP BY node_id, metric, (ts / @stepMillis);
+            WITH bucketed AS (
+                SELECT node_id, metric, ts, value, (ts / @stepMillis) AS bucket
+                FROM ops_metric_sample
+                WHERE ts <= @beforeTs
+            ), aggregates AS (
+                SELECT node_id, metric, bucket,
+                       MIN(value) AS min_val, MAX(value) AS max_val, AVG(value) AS avg_val, COUNT(*) AS cnt
+                FROM bucketed
+                GROUP BY node_id, metric, bucket
+            )
+            SELECT aggregates.node_id, aggregates.metric, aggregates.bucket,
+                   (SELECT value FROM bucketed first_sample
+                    WHERE first_sample.node_id = aggregates.node_id
+                      AND first_sample.metric = aggregates.metric
+                      AND first_sample.bucket = aggregates.bucket
+                    ORDER BY first_sample.ts ASC LIMIT 1) AS first_val,
+                   (SELECT value FROM bucketed last_sample
+                    WHERE last_sample.node_id = aggregates.node_id
+                      AND last_sample.metric = aggregates.metric
+                      AND last_sample.bucket = aggregates.bucket
+                    ORDER BY last_sample.ts DESC LIMIT 1) AS last_val,
+                   aggregates.min_val, aggregates.max_val, aggregates.avg_val, aggregates.cnt
+            FROM aggregates;
             """;
         Bind(selectCommand, ("@stepMillis", stepMillis), ("@beforeTs", beforeTimestamp));
 
-        var rows = new List<(string NodeId, string Metric, long Bucket, double MinVal, double MaxVal, double AvgVal, int Count)>();
+        var rows = new List<(string NodeId, string Metric, long Bucket, double FirstVal, double LastVal, double MinVal, double MaxVal, double AvgVal, int Count)>();
         await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -328,7 +369,9 @@ public sealed partial class OpsStore
                     reader.GetDouble(3),
                     reader.GetDouble(4),
                     reader.GetDouble(5),
-                    reader.GetInt32(6)));
+                    reader.GetDouble(6),
+                    reader.GetDouble(7),
+                    reader.GetInt32(8)));
             }
         }
 
@@ -344,8 +387,10 @@ public sealed partial class OpsStore
             upsertCommand.Transaction = transaction;
             upsertCommand.CommandText = """
                 INSERT INTO ops_metric_rollup (node_id, metric, step_seconds, bucket, first_value, last_value, min_value, max_value, avg_value, sample_count)
-                VALUES (@nodeId, @metric, @stepSeconds, @bucket, @avgVal, @avgVal, @minVal, @maxVal, @avgVal, @count)
+                VALUES (@nodeId, @metric, @stepSeconds, @bucket, @firstVal, @lastVal, @minVal, @maxVal, @avgVal, @count)
                 ON CONFLICT (node_id, metric, step_seconds, bucket) DO UPDATE SET
+                    first_value = excluded.first_value,
+                    last_value = excluded.last_value,
                     min_value = excluded.min_value,
                     max_value = excluded.max_value,
                     avg_value = excluded.avg_value,
@@ -357,6 +402,8 @@ public sealed partial class OpsStore
                 ("@metric", row.Metric),
                 ("@stepSeconds", stepSeconds),
                 ("@bucket", row.Bucket),
+                ("@firstVal", row.FirstVal),
+                ("@lastVal", row.LastVal),
                 ("@avgVal", row.AvgVal),
                 ("@minVal", row.MinVal),
                 ("@maxVal", row.MaxVal),

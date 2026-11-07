@@ -136,8 +136,7 @@ openssl pkcs12 -in codesign.pfx -nocerts -nodes -out codesign.key.pem    # 私�
 pwsh -File build/signing/windows/New-SigningCertificate.ps1 -Years 5
 #    → build/signing/windows/certificates/RemoteDesktop.pfx  .cer
 
-# 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1 -RendezvousUri wss://<服务器>:5080/ws
+# 2) 用签名构建（证书已在当前用户存储里，脚本会自动选用；命令见下方“命令速查”）
 
 # 3) 在**需要信任这些构建的机器**上装公开部分（管理员；-Scope CurrentUser 则只影响当前用户）
 #    用 MSI 安装时这一步是自动的，见下面的说明；手工装/直接跑程序时才需要

@@ -177,6 +177,12 @@ public sealed class RetentionSettings
     /// <summary>Raw metric samples. The overview reads minutes, not months.</summary>
     public int SampleDays { get; set; } = 30;
 
+    /// <summary>
+    /// Downsampled one-minute and one-hour metric buckets. This is intentionally longer than raw samples so future
+    /// trend views can retain useful history without retaining every ten-second scrape.
+    /// </summary>
+    public int RollupDays { get; set; } = 365;
+
     /// <summary>Ingested events. A session's timeline is useful while the session list still shows it.</summary>
     public int EventDays { get; set; } = 30;
 
@@ -192,7 +198,7 @@ public sealed class RetentionSettings
     /// <summary>Refuses negative windows and an interval that would spin.</summary>
     public void Validate()
     {
-        if (SampleDays < 0 || EventDays < 0 || SessionDays < 0 || AlertDays < 0)
+        if (SampleDays < 0 || RollupDays < 0 || EventDays < 0 || SessionDays < 0 || AlertDays < 0)
         {
             throw new InvalidOperationException("Ops:Retention:* values cannot be negative.");
         }

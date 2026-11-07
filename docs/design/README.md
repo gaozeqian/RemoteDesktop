@@ -613,7 +613,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 以那个文件为准。即使一列"感觉上属于 CREATE TABLE"，也写成迁移而不是改基线——改基线只帮得了新库，帮不了已有的库。
 时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL（个别迁移按方言分写）。
 
-核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；`ops_metric_rollup` 已建表，预留，当前未使用）、
+核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；后台任务每 10 分钟将原始样本聚合为 1 分钟与 1 小时桶，并按较长保留期保存长期趋势数据）、
 `ops_event` / `ops_session`（事实与投影）、`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_notification_channel`
 （预留，当前未使用：通道是代码里的常量 `webhook` / `smtp`，不是表）/ `ops_notification_attempt`（投递记录）、
 `ops_silence`（静默）、`ops_admin_user` / `_session`（账号）、
@@ -656,11 +656,12 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   `Ops:NodeTokenHosts` 仍决定令牌能发往哪些主机（见 [部署与运维](../ops/README.md) 的"关键配置"表）。
 * 抓取、告警求值、清理和动作恢复都通过 `ops_lease` 只让一个实例工作；多副本仍需要共享数据库和一致的时钟。抓取、告警与动作恢复的租期是其轮询间隔的三倍（至少 30 秒），清理的租期是清理间隔加 5 分钟；
   服务正常停止时会主动释放租约，所以单实例重启后新进程立刻接手，只有进程被强杀时才需要等租约过期。
-* **历史靠清理任务收敛，不是无限保留**：指标样本、事件、会话与已恢复告警按 `Ops:Retention:*` 每小时删除一次
-  （见 [部署与运维](../ops/README.md) 的"数据保留"），过期管理员会话每轮都删；**打开中的告警与审计哈希链不动**。
-  清理只覆盖上面这几类；`ops_admin_action`（管理动作记录）、已过期的 `ops_silence` 和 `ops_audit_log` 不在其中，
-  会随使用缓慢增长。备份、归档与磁盘容量仍是运维自己的事：样本是每次抓取（默认 10 秒）、每个指标各存一条，
-  默认只留 30 天（`SampleDays`），把它设为 `0` 会让样本一直累积。
+* **历史靠清理任务收敛，不是无限保留**：原始指标样本、降采样指标桶、事件、会话与已恢复告警按
+  `Ops:Retention:*` 每小时删除一次（见 [部署与运维](../ops/README.md) 的"数据保留"），过期管理员会话每轮都删；
+  **打开中的告警与审计哈希链不动**。原始样本默认只留 30 天（`SampleDays`），1 分钟/1 小时的
+  `ops_metric_rollup` 桶默认留 365 天（`RollupDays`），以较低粒度保留长期趋势；各自设为 `0` 会关闭对应清理。
+  清理不覆盖 `ops_admin_action`（管理动作记录）、已过期的 `ops_silence` 和 `ops_audit_log`，它们会随使用缓慢增长。
+  备份、归档与磁盘容量仍是运维自己的事。
 * Windows 侧监控台是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件
   手工 `sc.exe create` 仍然可行，但不是安装包的做法。
 

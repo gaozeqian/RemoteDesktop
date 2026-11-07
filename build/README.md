@@ -141,17 +141,22 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 ## `tools/`：仓库维护脚本
 
 `build/` 下其余文件夹各管一件事（`installer/`、`service/`、`signing/`、`docker/`），都属于**打包或部署某个平台**
-的流程。放不进这些抽屉的脚本在 `tools/`：它们维护的是**仓库本身**（第三方许可清单、部署配置自查），
+的流程。放不进这些抽屉的脚本在 `tools/`：它们维护的是**仓库本身**（第三方许可清单、部署配置自查、随包文档生成），
 和打哪个平台的包无关。
 
 | 脚本 | 做什么 | 平台 |
 |---|---|---|
 | `Export-ThirdPartyNotices.ps1` | 从 NuGet 元数据生成根目录的 `THIRD-PARTY-NOTICES.md` | **三平台**（`pwsh`） |
+| `Export-ServerConfigurationGuides.ps1` | 从统一源生成三个服务端包内的 `how-to-configure.txt`；`-Check` 验证副本未漂移 | **三平台**（`pwsh`） |
 | `Invoke-SecurityAudit.ps1` | 检查一份生产部署的配置是否还停在"开发默认"的不安全状态 | **三平台**（`pwsh`） |
 
 ```powershell
 # 依赖变化后重新生成第三方许可清单（写入仓库根，不要手改生成物）
 pwsh -File build/tools/Export-ThirdPartyNotices.ps1
+
+# 修改包内服务器速查说明后，重新生成三个平台副本；CI 可用 -Check 仅验证是否已生成
+pwsh -File build/tools/Export-ServerConfigurationGuides.ps1
+pwsh -File build/tools/Export-ServerConfigurationGuides.ps1 -Check
 
 # 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 路径或参数不可用
 # MSI 部署：Program Files 下的是随包出厂默认，实际生效的配置在 %ProgramData%\Remote Desktop Server\<角色>\

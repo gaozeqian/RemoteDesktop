@@ -88,6 +88,26 @@ public class StorageMaintenanceTests
     }
 
     [Fact]
+    public async Task Retention_keeps_downsampled_metrics_longer_than_raw_samples()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var rawExpired = DateTimeOffset.UtcNow.AddDays(-100);
+        var rollupExpired = DateTimeOffset.UtcNow.AddDays(-400);
+        await db.Store.WriteSamplesAsync("node", rawExpired.ToUnixTimeMilliseconds(), [new PrometheusSample("m", "m", 1)], Ct);
+        await db.Store.WriteSamplesAsync("node", rollupExpired.ToUnixTimeMilliseconds(), [new PrometheusSample("m", "m", 2)], Ct);
+        await db.Store.RollupSamplesAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), stepSeconds: 60, cancellationToken: Ct);
+
+        var service = RetentionFor(db, new RetentionSettings { SampleDays = 30, RollupDays = 365, EventDays = 0, SessionDays = 0, AlertDays = 0 });
+        await service.RunOnceAsync(Ct);
+
+        Assert.Empty(await db.Store.ReadSeriesAsync(["m"], 0, long.MaxValue, Ct));
+        var rawExpiredBucket = rawExpired.ToUnixTimeMilliseconds() / 60_000;
+        var rollupExpiredBucket = rollupExpired.ToUnixTimeMilliseconds() / 60_000;
+        Assert.Single(await db.Store.GetMetricRollupsAsync("node", "m", stepSeconds: 60, rawExpiredBucket, rawExpiredBucket, Ct));
+        Assert.Empty(await db.Store.GetMetricRollupsAsync("node", "m", stepSeconds: 60, rollupExpiredBucket, rollupExpiredBucket, Ct));
+    }
+
+    [Fact]
     public async Task Retention_cleans_only_the_tables_whose_window_is_set()
     {
         await using var db = await TempDatabase.CreateAsync();

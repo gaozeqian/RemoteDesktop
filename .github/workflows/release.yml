@@ -21,9 +21,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v7
 
-      - name: Check the tag, the product version and the changelog agree
+      - name: Check the tag, the product version, generated package guides and the changelog agree
         run: |
           set -euo pipefail
+
+          pwsh -NoProfile -File build/tools/Export-ServerConfigurationGuides.ps1 -Check
 
           # The same read and the same rules the packagers use: three numeric parts and within MSI's limits. Keeping
           # the rules in one place is why this job does not repeat the sed expression.

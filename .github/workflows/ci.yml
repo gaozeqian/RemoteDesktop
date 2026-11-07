@@ -45,6 +45,9 @@ jobs:
               git --no-pager diff -- THIRD-PARTY-NOTICES.md
               throw 'THIRD-PARTY-NOTICES.md is out of date. Run build/tools/Export-ThirdPartyNotices.ps1 and commit the result.'
           }
+      - name: Check the server-package quick guides are current
+        shell: pwsh
+        run: pwsh -NoProfile -File build/tools/Export-ServerConfigurationGuides.ps1 -Check
       # The build reports what is wrong with the packages a project references directly; this walks the whole graph,
       # including everything those packages drag in. A known-vulnerable dependency fails the build.
       - uses: ./.github/actions/audit-packages
