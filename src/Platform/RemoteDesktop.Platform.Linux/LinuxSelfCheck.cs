@@ -177,8 +177,16 @@ public static class LinuxSelfCheck
         }
 
         // A unix socket that has been removed from underneath us fails much later with a connection refused that
-        // reads like a portal problem, so it is worth saying now.
-        var path = address.StartsWith("unix:path=", StringComparison.Ordinal) ? address["unix:path=".Length..] : null;
+        // reads like a portal problem, so it is worth saying now. D-Bus addresses can contain key-value options
+        // separated by commas (such as ",guid=...").
+        string? path = null;
+        if (address.StartsWith("unix:path=", StringComparison.Ordinal))
+        {
+            var raw = address["unix:path=".Length..];
+            var comma = raw.IndexOf(',');
+            path = comma >= 0 ? raw[..comma] : raw;
+        }
+
         if (path is not null && !File.Exists(path))
         {
             return new Probe("Session bus", false, true, $"{address} — but {path} is not there");
