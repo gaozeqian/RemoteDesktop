@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 export LD_LIBRARY_PATH="$REPO_ROOT/artifacts/lib/linux:${LD_LIBRARY_PATH:-}"
 export ASPNETCORE_ENVIRONMENT=Development
+export DOTNET_CLI_UI_LANGUAGE=en-US
 
 COLOR_GREEN="\033[0;32m"
 COLOR_RED="\033[0;31m"
@@ -68,8 +69,8 @@ run_test_suite() {
     set -e
 
     if [ $exit_code -eq 0 ]; then
-        summary=$(echo "$output" | grep -A 5 "测试运行摘要" | tr '\n' ' ' || true)
-        log_pass "$suite_name succeeded."
+        summary=$(echo "$output" | grep -A 5 "Test run summary" | tr '\n' ' ' || true)
+        log_pass "$suite_name succeeded. $summary"
         TEST_RESULTS["$suite_name"]="PASS"
     else
         echo "$output" | tail -n 25
@@ -175,7 +176,7 @@ HOST_PID=$!
 # Wait for device registration in Rendezvous log
 REGISTERED_DEV_ID=""
 for i in {1..20}; do
-    REGISTERED_DEV_ID=$(grep -oE "Device [0-9]{9} registered" "$RENDEZVOUS_LOG" | awk '{print $2}' || true)
+    REGISTERED_DEV_ID=$(grep -oE "Device [0-9]{9} registered" "$RENDEZVOUS_LOG" | awk '{print $2}' | head -n 1 || true)
     if [ -n "$REGISTERED_DEV_ID" ]; then
         log_pass "Host registered successfully with Rendezvous Server! Allocated Device ID: $REGISTERED_DEV_ID"
         break
@@ -190,8 +191,8 @@ for i in {1..20}; do
 done
 
 # 3.4 Verify host identity persistence on disk
-if [ -f "$HOST_DATA/device-identity.json" ]; then
-    log_pass "Host identity persisted to disk: $HOST_DATA/device-identity.json"
+if [ -f "$HOST_DATA/secrets/device-identity.bin" ]; then
+    log_pass "Host identity persisted to disk: $HOST_DATA/secrets/device-identity.bin"
 else
     log_warn "Identity file not immediately visible on disk (in-memory or custom store)."
 fi
