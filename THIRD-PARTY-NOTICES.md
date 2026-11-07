@@ -90,7 +90,7 @@ pwsh -File build/tools/Export-ThirdPartyNotices.ps1
 | System.Diagnostics.EventLog | 10.0.14 | MIT | https://dot.net/ |
 | System.IO.Hashing | 8.0.0 | MIT | https://dot.net/ |
 | System.Numerics.Tensors | 9.0.0 | MIT | https://dot.net/ |
-| System.Security.Cryptography.ProtectedData | 10.0.13 | MIT | https://dot.net/ |
+| System.Security.Cryptography.ProtectedData | 10.0.14 | MIT | https://dot.net/ |
 | System.ServiceProcess.ServiceController | 10.0.14 | MIT | https://dot.net/ |
 | Tmds.DBus.Protocol | 0.95.1 | MIT | https://www.nuget.org/packages/Tmds.DBus.Protocol |
 | Vortice.Direct3D11 | 3.8.3 | MIT | https://www.nuget.org/packages/Vortice.Direct3D11 |
