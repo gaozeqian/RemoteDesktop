@@ -783,7 +783,7 @@ public sealed partial class PortalConnection : IDisposable
             return;
         }
 
-        var reason = notification.Exception?.Message ?? notification.Type.ToString();
+        var reason = notification.CompletionReason?.Message ?? notification.Type.ToString();
         LogSubscriptionFailed(_logger, notification.Type.ToString(), reason);
         pending.TrySetException(new PortalException($"The portal's answer could not be received: {reason}"));
     }

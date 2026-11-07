@@ -34,7 +34,7 @@
          Handing the portal's file descriptors around is why a package is needed at all: OpenPipeWireRemote and
          ConnectToEIS both return a descriptor (D-Bus type 'h'), and the command-line tools cannot carry one out.
          Still on 0.x upstream, so it is kept behind one file's worth of wrapper rather than used across the layer. -->
-    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.95.1" />
+    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.95.2" />
     <!-- Linux platform: libavcodec bindings, generated from the FFmpeg headers of the version named here (8.0, i.e.
          libavcodec 62 — the same major version the project binds by soname, and what Ubuntu 26.04 ships). Generated
          rather than hand-written on purpose: AVCodecContext is a large struct that grows every release, and getting
