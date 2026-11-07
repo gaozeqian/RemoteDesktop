@@ -65,7 +65,7 @@
     <!-- The server this installation talks to. The default is the address baked in when the installer was built
          (Build-ClientInstaller.ps1 -RendezvousUri); the connection page shows it and lets the operator change it, and
          a silent install can give it as:
-         msiexec /i <msi> RENDEZVOUSURI=ws://rd.example.com:5080/ws SERVERCERTIFICATEPATH=C:\certs\signaling.cer
+         msiexec /i <msi> RENDEZVOUSURI=wss://rd.example.com:5080/ws SERVERCERTIFICATEPATH=C:\certs\signaling.cer
          It has a value (rather than none) on purpose: a property without one is left out of the property table
          altogether, and the deferred custom action that writes it into appsettings.json would find nothing.
          Secure so that the deferred action receives it. -->

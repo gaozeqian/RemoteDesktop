@@ -390,6 +390,12 @@ public static class ClientInstallerActions
             return false;
         }
 
+        if (uri.Scheme == "ws" && !uri.IsLoopback)
+        {
+            error = "非回环服务器必须使用 wss://；明文 ws:// 只允许 127.0.0.1、localhost 或 ::1。";
+            return false;
+        }
+
         // Same host rule as RendezvousAddress: a DNS name or an IP literal. The brackets and colons of an IPv6 host
         // are the only exception; whether the host is an IPv6 literal is what Uri tells us, not whether it contains a
         // colon (a colon in a DNS name is the thing this refuses).

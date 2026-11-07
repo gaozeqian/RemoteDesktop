@@ -115,10 +115,10 @@ public sealed class SystemSetupTests : IDisposable
     [Fact]
     public void The_server_address_is_written_into_a_new_settings_file()
     {
-        SystemSetup.SetRendezvousUri(_folder, "ws://rd.example.com:5080/ws");
+        SystemSetup.SetRendezvousUri(_folder, "wss://rd.example.com:5080/ws");
 
         var transport = JsonNode.Parse(File.ReadAllText(Path.Combine(_folder, "appsettings.json")))!["Transport"]!;
-        Assert.Equal("ws://rd.example.com:5080/ws", transport["RendezvousUri"]!.GetValue<string>());
+        Assert.Equal("wss://rd.example.com:5080/ws", transport["RendezvousUri"]!.GetValue<string>());
     }
 
     [Fact]
@@ -147,6 +147,7 @@ public sealed class SystemSetupTests : IDisposable
     [InlineData("rd.example.com:5080")]
     [InlineData("http://rd.example.com")]
     [InlineData("ws://")]
+    [InlineData("ws://rd.example.com:5080/ws")]
     [InlineData("just some text")]
     public void An_address_that_is_not_a_websocket_url_is_refused(string uri) =>
         Assert.Throws<ArgumentException>(() => SystemSetup.SetRendezvousUri(_folder, uri));

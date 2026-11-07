@@ -369,25 +369,37 @@ public sealed class RecentDevicesStore : IRecentDevicesStore, IDisposable
     /// </summary>
     private async Task<List<RecentDeviceEntry>> MigrateLegacyAsync(JsonElement root, CancellationToken cancellationToken)
     {
-        var list = new List<RecentDeviceEntry>();
-        var movedSecrets = false;
-
+        // Validate the whole legacy file before moving any password. A bad entry must not make the valid entries look
+        // migrated while its own data is silently lost, and it must not leave a secret behind after the source file is
+        // quarantined.
+        var legacyEntries = new List<LegacyEntry>();
         foreach (var element in root.EnumerateArray())
         {
             if (element.Deserialize<LegacyEntry>(JsonOptions) is not { DeviceId.Length: > 0 } legacy)
             {
-                continue;
+                PreserveUnreadableFile();
+                return [];
             }
 
+            legacyEntries.Add(legacy);
+        }
+
+        var list = new List<RecentDeviceEntry>();
+        var movedSecrets = false;
+        foreach (var legacy in legacyEntries)
+        {
+            // The validation pass above established this; keep the value local so nullable flow analysis does not lose
+            // that fact across the list that separates validation from the side effects below.
+            var deviceId = legacy.DeviceId!;
             if (!string.IsNullOrEmpty(legacy.SavedPassword))
             {
-                _secrets.Save(SecretName(NormalizeId(legacy.DeviceId)), Encoding.UTF8.GetBytes(legacy.SavedPassword));
+                _secrets.Save(SecretName(NormalizeId(deviceId)), Encoding.UTF8.GetBytes(legacy.SavedPassword));
                 movedSecrets = true;
             }
 
             list.Add(new RecentDeviceEntry
             {
-                DeviceId = legacy.DeviceId,
+                DeviceId = deviceId,
                 Alias = legacy.Alias,
                 LastConnectedUtc = legacy.LastConnectedUtc,
                 // The old file had no edit stamp; the connection time is the best account of it we have.

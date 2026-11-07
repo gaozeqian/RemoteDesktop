@@ -16,6 +16,7 @@ public sealed class ConnectionLinkTests
     [InlineData("remotedesktop://connect?user=someone&code=902226105")]
     [InlineData("remotedesktop://902226105")]
     [InlineData("remotedesktop://902 226 105")]
+    [InlineData("remotedesktop://902%20226%20105")]
     [InlineData("remotedesktop://902-226-105")]
     [InlineData("remotedesktop:/902226105")]
     [InlineData("REMOTEDESKTOP://CONNECT?CODE=902226105")]

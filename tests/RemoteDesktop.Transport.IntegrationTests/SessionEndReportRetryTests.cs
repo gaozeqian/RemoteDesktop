@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Reflection;
 using Google.Protobuf;
@@ -19,6 +20,30 @@ namespace RemoteDesktop.Transport.IntegrationTests;
 public sealed class SessionEndReportRetryTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task Admin_commands_apply_backpressure_instead_of_being_dropped_or_growing_without_bound()
+    {
+        using var client = new RendezvousClient(
+            new TransportOptions(),
+            DeviceIdentity.CreateEphemeral(),
+            NullLogger<RendezvousClient>.Instance);
+        var queue = (System.Threading.Channels.Channel<AdminCommand>)typeof(RendezvousClient)
+            .GetField("_admin", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(client)!;
+
+        for (var index = 0; index < 32; index++)
+        {
+            Assert.True(queue.Writer.TryWrite(new AdminCommand { CommandId = index.ToString(CultureInfo.InvariantCulture) }));
+        }
+
+        Assert.False(queue.Writer.TryWrite(new AdminCommand { CommandId = "overflow" }));
+        var blocked = queue.Writer.WriteAsync(new AdminCommand { CommandId = "wait" }, Ct).AsTask();
+        Assert.False(blocked.IsCompleted);
+
+        Assert.True(queue.Reader.TryRead(out _));
+        await blocked.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+    }
 
     [Fact]
     public async Task A_report_that_could_not_be_sent_before_the_signaling_connection_died_is_delivered_after_the_reconnect()

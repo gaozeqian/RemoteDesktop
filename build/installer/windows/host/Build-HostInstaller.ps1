@@ -5,7 +5,8 @@
 .DESCRIPTION
   This package installs the two things that let this computer be connected to: the background service and the session
   agent. It deliberately does not install the client window — a machine that is only ever controlled should not carry a
-  way to control others, and an operator who wants both installs both packages.
+  way to control others. An operator who wants both roles installs the client package, which already contains this
+  service and agent.
 
   The work is done by ..\client\Build-ClientInstaller.ps1 -HostOnly: the service definition, its crash recovery, the
   inbound UDP rule, the Ctrl+Alt+Del policy and the machine cleanup step are the same code for both roles, and two
@@ -21,7 +22,7 @@
 
 .EXAMPLE
   # An installer for your own server, signed with the certificate already in the store
-  .\build\installer\windows\host\Build-HostInstaller.ps1 -RendezvousUri ws://rd.example.com:5080/ws `
+  .\build\installer\windows\host\Build-HostInstaller.ps1 -RendezvousUri wss://rd.example.com:5080/ws `
       -SignCertificate (Get-ChildItem Cert:\CurrentUser\My\ABCDEF...)
 
 .NOTES

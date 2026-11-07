@@ -18,6 +18,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     : IRendezvousClient, IDisposable
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
+    private const int MaxPendingAdminCommands = 32;
 
     /// <summary>
     /// Deliberately not <see cref="TransportOptions.SignalingTimeout"/>: that is a 25-second budget meant for a connect
@@ -28,10 +29,11 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     private readonly Channel<IncomingConnection> _incoming = Channel.CreateBounded<IncomingConnection>(
         new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest });
 
-    // Unbounded on purpose: an admin command is authoritative and rare, and dropping one is not a retryable loss the
-    // way dropping a presence answer is. The only writer is the receive loop, which the server can only feed through
-    // the console's own approval flow.
-    private readonly Channel<AdminCommand> _admin = Channel.CreateUnbounded<AdminCommand>();
+    // Management commands are authoritative, so they must not be dropped. A bounded queue with Wait stops the receive
+    // loop when the handler falls behind; that backpressure reaches the WebSocket/TCP connection instead of letting a
+    // faulty or compromised signaling server allocate unbounded memory in the controlled device.
+    private readonly Channel<AdminCommand> _admin = Channel.CreateBounded<AdminCommand>(
+        new BoundedChannelOptions(MaxPendingAdminCommands) { FullMode = BoundedChannelFullMode.Wait, SingleWriter = true });
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<ConnectReady>> _pending = new(StringComparer.Ordinal);
 
@@ -414,7 +416,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
                     break;
                 case ServerMessage.BodyOneofCase.AdminCommand:
-                    _admin.Writer.TryWrite(message.AdminCommand);
+                    await _admin.Writer.WriteAsync(message.AdminCommand, cancellationToken).ConfigureAwait(false);
                     break;
                 default:
                     break;

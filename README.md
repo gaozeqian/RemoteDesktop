@@ -48,28 +48,8 @@ dotnet test --solution RemoteDesktop.slnx
 由 `tests/RemoteDesktop.Architecture.UnitTests` 强制检查。环境要求、测试项目命名、架构规则与产物布局见
 [`CONTRIBUTING.md`](CONTRIBUTING.md)；系统架构见 [`docs/design/README.md`](docs/design/README.md)。
 
-安装包（自包含发布，目标机器不需要装 .NET）。三个平台各出三个角色——控制端、被控端、服务端——共九个：
-
-```bash
-# Windows MSI（需要 .NET SDK 与网络还原 WiX 包；用 pwsh 7 跑）
-pwsh -File build/installer/windows/client/Build-ClientInstaller.ps1
-pwsh -File build/installer/windows/host/Build-HostInstaller.ps1
-pwsh -File build/installer/windows/server/Build-ServerInstaller.ps1
-
-# macOS .app / .pkg（需要 Xcode Command Line Tools）
-build/installer/macos/client/make-app.sh --configuration Release   # 可选：先单独出 .app；make-pkg.sh 内部也会调用
-build/installer/macos/client/make-pkg.sh --configuration Release
-build/installer/macos/host/make-pkg.sh   --configuration Release
-build/installer/macos/server/make-pkg.sh --configuration Release
-
-# Linux .deb（在 Linux 上构建）
-build/installer/linux/client/build-deb.sh
-build/installer/linux/host/build-deb.sh
-build/installer/linux/server/build-deb.sh
-```
-
-各角色装什么、怎么安装与配置（服务端那一个包装的是信令、中继、监控台和监控台的 HTTPS 网关四个程序；macOS 的被控端是独立的
-无窗口后台组件，TCC 授权与客户端分开）见 [`docs/ops/README.md`](docs/ops/README.md)，三个角色的边界见
+安装包是自包含发布，三个平台各出控制端、被控端、服务端三个角色，共九个。构建命令、平台前置条件、签名与安装/配置方法统一见
+[部署与运维的“安装包怎么构建（三平台）”](docs/ops/README.md#八安装包怎么构建三平台)；三个角色的能力边界见
 [`docs/usage/README.md`](docs/usage/README.md)。
 
 ## 快速开始

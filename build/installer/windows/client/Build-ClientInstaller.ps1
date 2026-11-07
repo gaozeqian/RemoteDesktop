@@ -22,7 +22,7 @@
 
 .EXAMPLE
   # An installer for your own server, signed
-  .\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri ws://rd.example.com:5080/ws `
+  .\build\installer\windows\client\Build-ClientInstaller.ps1 -RendezvousUri wss://rd.example.com:5080/ws `
       -SignCertificate (Get-ChildItem Cert:\CurrentUser\My\ABCDEF...)
 
 .NOTES
@@ -387,7 +387,7 @@ if ($agentManifest -notmatch 'uiAccess="true"') {
 
 # The address this installation talks to. It is stored in the settings file the installer ships (which an upgrade never
 # overwrites) and is also the default of the RENDEZVOUSURI property, so the deferred custom action always writes a
-# consistent value. An installation can override it: msiexec /i <msi> RENDEZVOUSURI=ws://other.
+# consistent value. An installation can override it: msiexec /i <msi> RENDEZVOUSURI=wss://server:5080/ws.
 $settingsPath = Join-Path $PublishDirectory 'appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 if ($RendezvousUri) {
@@ -396,7 +396,10 @@ if ($RendezvousUri) {
     $parsed = $null
     $valid = [Uri]::TryCreate($RendezvousUri, [UriKind]::Absolute, [ref]$parsed)
     if (-not $valid -or $parsed.Scheme -notin @('ws', 'wss') -or $parsed.Host.Length -eq 0) {
-        throw "RendezvousUri must look like ws://host:port/ws (got '$RendezvousUri')."
+        throw "RendezvousUri must look like ws://host:port/ws or wss://host:port/ws (got '$RendezvousUri')."
+    }
+    if ($parsed.Scheme -eq 'ws' -and -not $parsed.IsLoopback) {
+        throw "RendezvousUri uses plain ws:// for non-loopback host '$($parsed.Host)'. Use wss://; a non-loopback plain-text server is rejected at runtime."
     }
 
     $settings.Transport.RendezvousUri = $RendezvousUri
@@ -414,7 +417,7 @@ if ($defaultRendezvousUri -match '^wss?://(127\.0\.0\.1|localhost|\[::1\])') {
     Write-Warning @"
 This installer points at $defaultRendezvousUri - the computer it runs on. Devices installed from it can only be
 connected to if the signaling server runs there. For anything else, build again with your server's address:
-  -RendezvousUri ws://<server>:5080/ws
+  -RendezvousUri wss://<server>:5080/ws
 "@
 }
 
@@ -651,4 +654,4 @@ if ($LASTEXITCODE -ne 0) { throw 'The installer package is missing something (se
 Remove-Item Env:\RD_INSTALLER_MSI
 Remove-Item Env:\RD_EXPECTED_CERTIFICATES
 
-Write-Host "Done ($role). Install with: msiexec /i <msi> (or RENDEZVOUSURI=ws://... to set the server now)."
+Write-Host "Done ($role). Install with: msiexec /i <msi> (or RENDEZVOUSURI=wss://... to set a non-loopback server now)."

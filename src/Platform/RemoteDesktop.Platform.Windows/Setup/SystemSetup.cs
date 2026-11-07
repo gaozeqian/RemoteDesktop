@@ -116,13 +116,18 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     /// upgrade removes the old product's files from Program Files, so a live settings file there would be deleted on
     /// every upgrade.
     /// </remarks>
-    /// <exception cref="ArgumentException">The address is not a ws:// or wss:// URI.</exception>
+    /// <exception cref="ArgumentException">The address is not a supported URI, or uses non-loopback plain-text signaling.</exception>
     public static void SetRendezvousUri(string settingsDirectory, string uri)
     {
         ArgumentException.ThrowIfNullOrEmpty(settingsDirectory);
         if (!TryParseRendezvousUri(uri, out var parsed))
         {
             throw new ArgumentException("The rendezvous server must be given as ws://host:port/ws or wss://host/ws.", nameof(uri));
+        }
+
+        if (parsed.Scheme == "ws" && !parsed.IsLoopback)
+        {
+            throw new ArgumentException("A non-loopback rendezvous server must use wss://; plain ws:// is only supported for loopback addresses.", nameof(uri));
         }
 
         UpdateSettings(settingsDirectory, transport => transport["RendezvousUri"] = parsed.AbsoluteUri);

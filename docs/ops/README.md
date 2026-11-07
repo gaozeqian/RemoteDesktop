@@ -46,7 +46,7 @@
 | 服务器 | Windows 11 / Windows Server 2022+（x64），或 Linux（x64，glibc；需要 ICU 与 OpenSSL，`.deb` 已声明），或 macOS（arm64）；.NET 10 运行时（或自包含发布，不需要装运行时）；按 [防火墙](#8-防火墙) 的端口表开放端口（信令、地址反射、中继；要从别的电脑访问运维监控台，再开放网关） |
 | 被控端（Windows） | Windows 11 / Windows Server 2022+（x64）；**管理员权限**装 MSI（服务以 LocalSystem 运行） |
 | 被控端（Linux） | **Ubuntu 26.04+**（x64，FFmpeg 8 的 soname 固定）或有 Wayland 会话与 portal 的同等发行版；装 `.deb` 后是一条 `systemd --user` 服务，**不需要 root 常驻** |
-| 控制端 | Windows 11 / Windows Server 2022+（x64），或 **Ubuntu 26.04+**（x64） |
+| 控制端 | Windows 11 / Windows Server 2022+（x64），**macOS 26+（Tahoe，Apple Silicon）**，或 **Ubuntu 26.04+**（x64） |
 
 > **服务器可以混着来。** 信令和中继跟两端跑什么系统无关，一台 Linux 服务器可以同时服务 Windows 和 Linux 的
 > 客户端与被控端。只有「被控端装什么包」是跟系统绑的。
@@ -1683,8 +1683,8 @@ $arg = 'FIXEDPASSWORD="' + ($p -replace '"','""') + '"'
 静默安装期间口令仍会出现在 `msiexec` 的命令行上（`Hidden` 只遮安装日志），对本机其他管理员可见；装完后用
 `--set-fixed-password` 换一次口令，可以缩短这个窗口。
 
-静默安装传入的地址不合法时（例如明文 `ws://` 指向非回环主机），MSI 不会在参数阶段拦下：服务启动失败会让
-整个安装回滚（日志里的错误 1920 / 1603）。静默部署前先确认地址是 `wss://`（或确实是回环地址）。
+静默安装传入的地址不合法时（例如明文 `ws://` 指向非回环主机），MSI 会在配置动作阶段拒绝并回滚。
+静默部署前先确认地址是 `wss://`（或确实是回环地址）。
 
 设备码在服务的日志里：`%ProgramData%\RemoteDesktop\logs\service-<日期>.log`，搜索
 `Registered with the rendezvous server as`。host 没有 UI 可以显示它。

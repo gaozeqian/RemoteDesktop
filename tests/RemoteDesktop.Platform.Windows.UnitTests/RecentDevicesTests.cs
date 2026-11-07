@@ -135,6 +135,34 @@ public class RecentDevicesTests
     }
 
     [Fact]
+    public async Task RecentDevicesStore_sets_aside_a_legacy_file_when_any_entry_is_invalid()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var file = Path.Combine(tempDir, "recent_devices.json");
+            await File.WriteAllTextAsync(file, """
+                [
+                  { "DeviceId": "111 222 333", "SavedPassword": "must-not-migrate", "LastConnectedUtc": "2026-01-01T00:00:00Z" },
+                  { "DeviceId": "", "LastConnectedUtc": "2026-01-01T00:00:00Z" }
+                ]
+                """, TestContext.Current.CancellationToken);
+
+            using var store = new RecentDevicesStore(tempDir, new MemorySecrets());
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await store.GetAllAsync(ct));
+            Assert.Single(Directory.GetFiles(tempDir, "recent_devices.json.corrupt-*"));
+            Assert.Null(await store.GetPasswordAsync("111 222 333", ct));
+        }
+        finally
+        {
+            DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public async Task RecentDevicesStore_sets_aside_a_file_it_cannot_read_instead_of_overwriting_it()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"rd_store_test_{Guid.NewGuid():N}");

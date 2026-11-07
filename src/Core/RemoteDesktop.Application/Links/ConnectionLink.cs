@@ -95,8 +95,9 @@ public readonly record struct ConnectionLink
         else
         {
             // The shorthand carries the code where the authority would be; a query alongside it is not something
-            // this parser wrote, so it has to be empty rather than silently ignored.
-            if (query.Length > 0 || !TryReadCode(head, out device))
+            // this parser wrote, so it has to be empty rather than silently ignored. Browsers percent-encode spaces
+            // in an authority, just as they do in the query form, so decode before applying the displayed-code rules.
+            if (query.Length > 0 || !TryReadCode(Uri.UnescapeDataString(head), out device))
             {
                 return false;
             }
