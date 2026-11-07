@@ -73,9 +73,7 @@ public class CandidateGathererTests
     [InlineData("192.168.1.5", 0u)]
     [InlineData("192.168.1.5", 65536u)]
     [InlineData("192.168.1.5", uint.MaxValue)]
-    [InlineData("::1", 50000u)]
-    [InlineData("2001:db8::1", 50000u)]
-    public void A_candidate_that_is_malformed_or_not_ipv4_is_skipped_and_the_rest_are_kept(string address, uint port)
+    public void A_candidate_that_is_malformed_is_skipped_and_the_rest_are_kept(string address, uint port)
     {
         var list = new[]
         {
@@ -86,6 +84,27 @@ public class CandidateGathererTests
         var candidates = CandidateGatherer.FromMessages(list);
 
         Assert.Equal([new IPEndPoint(IPAddress.Parse("192.168.1.5"), 50000)], candidates);
+    }
+
+    [Theory]
+    [InlineData("::1")]
+    [InlineData("2001:db8::1")]
+    public void An_ipv6_candidate_is_accepted_and_preserved(string address)
+    {
+        var list = new[]
+        {
+            new PeerEndpoint { Address = address, Port = 50000 },
+            new PeerEndpoint { Address = "192.168.1.5", Port = 50000 },
+        };
+
+        var candidates = CandidateGatherer.FromMessages(list);
+
+        Assert.Equal(
+            [
+                new IPEndPoint(IPAddress.Parse(address), 50000),
+                new IPEndPoint(IPAddress.Parse("192.168.1.5"), 50000),
+            ],
+            candidates);
     }
 
     [Fact]

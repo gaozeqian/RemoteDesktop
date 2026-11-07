@@ -286,4 +286,136 @@ public sealed partial class OpsStore
 
         return builder.ToString();
     }
+
+    /// <summary>
+    /// Aggregates raw samples up to <paramref name="beforeTimestamp"/> into <paramref name="stepSeconds"/> buckets
+    /// in <c>ops_metric_rollup</c>.
+    /// </summary>
+    /// <returns>Number of rollup buckets upserted.</returns>
+    public async Task<int> RollupSamplesAsync(
+        long beforeTimestamp,
+        int stepSeconds,
+        CancellationToken cancellationToken = default)
+    {
+        if (stepSeconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stepSeconds), "stepSeconds must be greater than zero.");
+        }
+
+        var stepMillis = (long)stepSeconds * 1000;
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+
+        // Compute aggregates grouped by node, metric, and bucket
+        await using var selectCommand = connection.CreateCommand();
+        selectCommand.CommandText = """
+            SELECT node_id, metric, (ts / @stepMillis) AS bucket,
+                   MIN(value) AS min_val, MAX(value) AS max_val, AVG(value) AS avg_val, COUNT(*) AS cnt
+            FROM ops_metric_sample
+            WHERE ts <= @beforeTs
+            GROUP BY node_id, metric, (ts / @stepMillis);
+            """;
+        Bind(selectCommand, ("@stepMillis", stepMillis), ("@beforeTs", beforeTimestamp));
+
+        var rows = new List<(string NodeId, string Metric, long Bucket, double MinVal, double MaxVal, double AvgVal, int Count)>();
+        await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rows.Add((
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt64(2),
+                    reader.GetDouble(3),
+                    reader.GetDouble(4),
+                    reader.GetDouble(5),
+                    reader.GetInt32(6)));
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var row in rows)
+        {
+            await using var upsertCommand = connection.CreateCommand();
+            upsertCommand.Transaction = transaction;
+            upsertCommand.CommandText = """
+                INSERT INTO ops_metric_rollup (node_id, metric, step_seconds, bucket, first_value, last_value, min_value, max_value, avg_value, sample_count)
+                VALUES (@nodeId, @metric, @stepSeconds, @bucket, @avgVal, @avgVal, @minVal, @maxVal, @avgVal, @count)
+                ON CONFLICT (node_id, metric, step_seconds, bucket) DO UPDATE SET
+                    min_value = excluded.min_value,
+                    max_value = excluded.max_value,
+                    avg_value = excluded.avg_value,
+                    sample_count = excluded.sample_count;
+                """;
+            Bind(
+                upsertCommand,
+                ("@nodeId", row.NodeId),
+                ("@metric", row.Metric),
+                ("@stepSeconds", stepSeconds),
+                ("@bucket", row.Bucket),
+                ("@avgVal", row.AvgVal),
+                ("@minVal", row.MinVal),
+                ("@maxVal", row.MaxVal),
+                ("@count", row.Count));
+
+            await upsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return rows.Count;
+    }
+
+    /// <summary>
+    /// Reads aggregated metric buckets for a time range.
+    /// </summary>
+    public async Task<IReadOnlyList<MetricRollup>> GetMetricRollupsAsync(
+        string nodeId,
+        string metric,
+        int stepSeconds,
+        long startBucket,
+        long endBucket,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(nodeId);
+        ArgumentException.ThrowIfNullOrEmpty(metric);
+
+        await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT node_id, metric, step_seconds, bucket, first_value, last_value, min_value, max_value, avg_value, sample_count
+            FROM ops_metric_rollup
+            WHERE node_id = @nodeId AND metric = @metric AND step_seconds = @stepSeconds AND bucket >= @startBucket AND bucket <= @endBucket
+            ORDER BY bucket ASC;
+            """;
+        Bind(
+            command,
+            ("@nodeId", nodeId),
+            ("@metric", metric),
+            ("@stepSeconds", stepSeconds),
+            ("@startBucket", startBucket),
+            ("@endBucket", endBucket));
+
+        var results = new List<MetricRollup>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(new MetricRollup(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetInt64(3),
+                reader.IsDBNull(4) ? 0 : reader.GetDouble(4),
+                reader.IsDBNull(5) ? 0 : reader.GetDouble(5),
+                reader.IsDBNull(6) ? 0 : reader.GetDouble(6),
+                reader.IsDBNull(7) ? 0 : reader.GetDouble(7),
+                reader.IsDBNull(8) ? 0 : reader.GetDouble(8),
+                reader.GetInt32(9)));
+        }
+
+        return results;
+    }
 }

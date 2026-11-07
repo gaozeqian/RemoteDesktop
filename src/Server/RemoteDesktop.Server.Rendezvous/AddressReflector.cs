@@ -27,6 +27,21 @@ public sealed partial class AddressReflector : BackgroundService
         ArgumentNullException.ThrowIfNull(logger);
 
         _logger = logger;
+        if (Socket.OSSupportsIPv6)
+        {
+            try
+            {
+                _socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Dgram, ProtocolType.Udp);
+                _socket.DualMode = true;
+                _socket.Bind(new IPEndPoint(IPAddress.IPv6Any, options.Value.ReflectorPort));
+                return;
+            }
+            catch (SocketException)
+            {
+                _socket?.Dispose();
+            }
+        }
+
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         _socket.Bind(new IPEndPoint(IPAddress.Any, options.Value.ReflectorPort));
     }
@@ -36,7 +51,9 @@ public sealed partial class AddressReflector : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var buffer = new byte[512];
-        EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+        EndPoint any = _socket.AddressFamily == AddressFamily.InterNetworkV6
+            ? new IPEndPoint(IPAddress.IPv6Any, 0)
+            : new IPEndPoint(IPAddress.Any, 0);
         while (!stoppingToken.IsCancellationRequested)
         {
             SocketReceiveFromResult received;
@@ -78,7 +95,10 @@ public sealed partial class AddressReflector : BackgroundService
                 type == UdpControlPacketType.ReflectRequest && body.Length == UdpControlPacket.TransactionIdSize)
             {
                 var from = (IPEndPoint)received.RemoteEndPoint;
-                var response = UdpControlPacket.CreateReflectResponse(body, from);
+                var reported = from.Address.IsIPv4MappedToIPv6
+                    ? new IPEndPoint(from.Address.MapToIPv4(), from.Port)
+                    : from;
+                var response = UdpControlPacket.CreateReflectResponse(body, reported);
                 try
                 {
                     await _socket.SendToAsync(response, SocketFlags.None, from, stoppingToken).ConfigureAwait(false);

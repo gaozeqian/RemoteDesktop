@@ -98,6 +98,7 @@ public static class OpsServer
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricScraper>());
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddHostedService<ActionRecoveryService>();
+        builder.Services.AddHostedService<RollupMaintenanceService>();
 
         builder.Services
             .AddAuthentication(OpsAuth.Scheme)
@@ -157,6 +158,7 @@ public static class OpsServer
         app.MapOpsAudit();
         app.MapOpsActions();
         app.MapOpsUsers();
+        app.MapChannelEndpoints();
         app.MapOpsIngest();
 
         // Anything else under /api is a 404, not the single-page shell: a JSON client that receives HTML has to parse

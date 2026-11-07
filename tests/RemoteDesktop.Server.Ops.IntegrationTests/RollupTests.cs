@@ -1,0 +1,58 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.Server.Ops.Storage;
+
+namespace RemoteDesktop.Server.Ops.IntegrationTests;
+
+[Collection("ops-console")]
+public class RollupTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task Rollup_aggregates_metric_samples_into_time_buckets()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var nodeId = "node-rollup-test";
+        var metric = "cpu_usage";
+        var baseTime = 1_700_000_000_000L; // aligned timestamp
+
+        List<PrometheusSample> samples1 = [new PrometheusSample(metric, metric, 10.0)];
+        List<PrometheusSample> samples2 = [new PrometheusSample(metric, metric, 20.0)];
+        List<PrometheusSample> samples3 = [new PrometheusSample(metric, metric, 30.0)];
+
+        await store.WriteSamplesAsync(nodeId, baseTime + 10_000, samples1, Ct);
+        await store.WriteSamplesAsync(nodeId, baseTime + 20_000, samples2, Ct);
+        await store.WriteSamplesAsync(nodeId, baseTime + 30_000, samples3, Ct);
+
+        // Rollup into 60-second bucket
+        var stepSeconds = 60;
+        var count = await store.RollupSamplesAsync(baseTime + 60_000, stepSeconds, Ct);
+        Assert.True(count >= 1);
+
+        var bucket = (baseTime + 10_000) / (stepSeconds * 1000);
+        var rollups = await store.GetMetricRollupsAsync(nodeId, metric, stepSeconds, bucket, bucket, Ct);
+
+        Assert.NotEmpty(rollups);
+        var rollup = rollups[0];
+        Assert.Equal(nodeId, rollup.NodeId);
+        Assert.Equal(metric, rollup.Metric);
+        Assert.Equal(stepSeconds, rollup.StepSeconds);
+        Assert.Equal(bucket, rollup.Bucket);
+        Assert.Equal(10.0, rollup.MinValue);
+        Assert.Equal(30.0, rollup.MaxValue);
+        Assert.Equal(20.0, rollup.AvgValue);
+        Assert.Equal(3, rollup.SampleCount);
+    }
+
+    [Fact]
+    public async Task Rollup_maintenance_service_runs_pass_cleanly()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var lease = fixture.Services.GetRequiredService<OpsLease>();
+        var service = new RollupMaintenanceService(store, lease, fixture.Time, NullLogger<RollupMaintenanceService>.Instance);
+
+        await service.RunOnceAsync(Ct);
+    }
+}

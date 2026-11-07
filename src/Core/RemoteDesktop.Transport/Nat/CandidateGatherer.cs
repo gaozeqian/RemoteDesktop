@@ -22,6 +22,15 @@ public static class CandidateGatherer
             candidates.Add(reflexive);
         }
 
+        if (Socket.OSSupportsIPv6)
+        {
+            var ipv6Loopback = new IPEndPoint(IPAddress.IPv6Loopback, port);
+            if (!candidates.Contains(ipv6Loopback))
+            {
+                candidates.Add(ipv6Loopback);
+            }
+        }
+
         // Loopback goes last, and unconditionally — never left out because the reflector did not answer.
         //
         // Two devices on one machine can only be reached by each other over loopback when the machine's own
@@ -60,7 +69,7 @@ public static class CandidateGatherer
             .Where(e => e.Port is > 0 and <= ushort.MaxValue)
             .Select(e => IPAddress.TryParse(e.Address, out var address) ? new IPEndPoint(address, (int)e.Port) : null)
             .OfType<IPEndPoint>()
-            .Where(e => e.AddressFamily == AddressFamily.InterNetwork)
+            .Where(e => e.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
             .Distinct()
             .Take(MaxPeerCandidates)];
 
@@ -87,6 +96,13 @@ public static class CandidateGatherer
             {
                 var address = unicast.Address;
                 if (address.AddressFamily == AddressFamily.InterNetwork && !IsLinkLocal(address))
+                {
+                    yield return address;
+                }
+                else if (address.AddressFamily == AddressFamily.InterNetworkV6
+                         && !address.IsIPv6LinkLocal
+                         && !address.IsIPv6Multicast
+                         && !address.IsIPv6SiteLocal)
                 {
                     yield return address;
                 }

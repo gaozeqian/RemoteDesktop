@@ -509,7 +509,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **URL 协议只在 Windows 与 Linux 上注册**：`remotedesktop://` 会打开客户端并填入设备代码，但**不自动连接**——
   链接来自本项目控制不了的地方，密码和"连接"必须由人给。macOS 还差一步：LaunchServices 用 Apple Event
   （`kAEGetURL`）投递 URL，原生辅助库没有导出这条通道，所以那边点链接不会有反应。
-* **P2P NAT 候选收集与打洞当前仅支持 IPv4**：`CandidateGatherer` 与 `PunchSocket` 目前硬编码过滤并绑定 IPv4（`InterNetwork` / `IPAddress.Any`），纯 IPv6 环境下的 P2P 候选会被丢弃并降级回退至中继转发（后续规划支持双栈打洞）。
+* **P2P NAT 穿透已支持 IPv4 与 IPv6 双栈**：`CandidateGatherer` 与 `PunchSocket` 支持双栈候选收集与打洞；IPv6 链路本地（link-local）地址在跨网段无路由意义，会被主动过滤，仅保留全球单播（GUA）与唯一本地（ULA）地址。
 * **没有做长时间对抗性测试**：握手洪泛上限、限流窗口这些数字是按常见情况选的，没有在真实攻击流量下压过。
 * **没有独立的第三方审计**：上面每一条都能在代码里对上，但都出自同一个实现者视角。
 

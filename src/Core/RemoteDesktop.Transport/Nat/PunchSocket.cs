@@ -22,16 +22,21 @@ public sealed class PunchSocket : IDisposable
 
     public static PunchSocket Bind(int port = 0)
     {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        var socket = Socket.OSSupportsIPv6
+            ? new Socket(AddressFamily.InterNetworkV6, SocketType.Dgram, ProtocolType.Udp) { DualMode = true }
+            : new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
         try
         {
+            socket.ExclusiveAddressUse = true;
             if (OperatingSystem.IsWindows())
             {
                 // SIO_UDP_CONNRESET off: an ICMP "port unreachable" must not fail the next receive.
                 socket.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
             }
 
-            socket.Bind(new IPEndPoint(IPAddress.Any, port));
+            var bindAddress = socket.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+            socket.Bind(new IPEndPoint(bindAddress, port));
             return new PunchSocket(socket);
         }
         catch
@@ -146,7 +151,9 @@ public sealed class PunchSocket : IDisposable
         deadline.CancelAfter(timeout);
 
         var buffer = new byte[1500];
-        EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+        EndPoint any = _socket.AddressFamily == AddressFamily.InterNetworkV6
+            ? new IPEndPoint(IPAddress.IPv6Any, 0)
+            : new IPEndPoint(IPAddress.Any, 0);
         try
         {
             while (true)
@@ -162,7 +169,10 @@ public sealed class PunchSocket : IDisposable
                         var received = await _socket.ReceiveFromAsync(buffer, SocketFlags.None, any, attempt.Token).ConfigureAwait(false);
                         // Everything that touches the span stays inside this one expression: a span cannot be held
                         // across the await that starts the next round of the loop.
-                        if (received.RemoteEndPoint.Equals(target) &&
+                        var from = (IPEndPoint)received.RemoteEndPoint;
+                        var isMatch = target.Equals(from)
+                            || (from.Address.IsIPv4MappedToIPv6 && target.Address.Equals(from.Address.MapToIPv4()) && target.Port == from.Port);
+                        if (isMatch &&
                             UdpControlPacket.TryParse(buffer.AsSpan(0, received.ReceivedBytes), out var type, out var body) &&
                             filter(type, body) is { } answer)
                         {

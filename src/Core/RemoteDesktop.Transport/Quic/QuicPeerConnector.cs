@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Quic;
+using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Security.Authentication;
 using Microsoft.Extensions.Logging;
@@ -139,7 +140,8 @@ public sealed partial class QuicPeerConnector(
         attempt.CancelAfter(timeout);
         try
         {
-            var connectionOptions = PeerTls.ClientOptions(identity, remote, new IPEndPoint(IPAddress.Any, localPort), expectedFingerprint);
+            var localAddress = remote.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+            var connectionOptions = PeerTls.ClientOptions(identity, remote, new IPEndPoint(localAddress, localPort), expectedFingerprint);
             return await QuicConnection.ConnectAsync(connectionOptions, attempt.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
