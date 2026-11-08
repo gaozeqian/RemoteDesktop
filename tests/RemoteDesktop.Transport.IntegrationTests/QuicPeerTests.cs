@@ -311,6 +311,38 @@ public sealed class QuicPeerTests
     // ------------------------------------------------------------------ what the connector reports when nothing works
 
     [Fact]
+    public async Task When_every_direct_candidate_fails_the_connector_still_falls_through_to_the_relay()
+    {
+        RequireQuic();
+        using var controllerIdentity = DeviceIdentity.CreateEphemeral();
+        using var deadDirect = new UdpPeers(1);
+        using var silentRelay = new Reflector();
+        var rendezvous = new ScriptedRendezvous
+        {
+            OnRequest = _ =>
+            {
+                var ready = ReadyWithRelay("127.0.0.1", (uint)silentRelay.EndPoint.Port);
+                ready.HostCandidates.AddRange(deadDirect.EndPoints.Select(Candidate));
+                return ready;
+            },
+        };
+        var connector = new QuicPeerConnector(
+            rendezvous,
+            controllerIdentity,
+            Options(directSeconds: 0.2, udpSeconds: 0.2),
+            NullLogger<QuicPeerConnector>.Instance);
+
+        var failure = await Assert.ThrowsAsync<PeerConnectException>(() => connector.ConnectAsync(Host, Ct));
+
+        // ForceRelay would skip the direct loop entirely. Together these facts prove the connector walked the
+        // failing direct candidates and then fell through to the relay attempt, instead of giving up on the direct
+        // path or treating "no relay forced" as "no relay allowed".
+        Assert.NotEmpty(rendezvous.RequestedCandidates!);
+        Assert.Contains($"direct {deadDirect.EndPoints[0]}", failure.Message, StringComparison.Ordinal);
+        Assert.Contains($"relay {silentRelay.EndPoint} did not acknowledge the bind", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task With_no_reflector_no_candidates_and_no_relay_the_failure_lists_each_missing_path()
     {
         RequireQuic();

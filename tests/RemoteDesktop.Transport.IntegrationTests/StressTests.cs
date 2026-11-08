@@ -19,7 +19,7 @@ namespace RemoteDesktop.Transport.IntegrationTests;
 /// sessions that come and go. This is the closest thing to the "does it hold up" check before an installer is shipped:
 /// it looks for sessions, channels, shells or processes that outlive their session.
 /// </summary>
-public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixture>
+public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixture>, IDisposable
 {
     private const int Controllers = 4;
     private const int Reconnects = 10;
@@ -29,6 +29,27 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly string _root = Directory.CreateTempSubdirectory("rd-stress-").FullName;
+
+    public void Dispose()
+    {
+        // _root is created per test instance, including when the Windows-only tests above are skipped.
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // A file still open after a failed session is cleaned up by the OS; teardown must not mask the failure.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        GC.SuppressFinalize(this);
+    }
 
     [Fact]
     public async Task Several_sessions_stream_video_run_commands_and_transfer_files_at_once()

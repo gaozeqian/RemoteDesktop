@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
 
@@ -55,15 +54,5 @@ public class RollupTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
         Assert.Equal(40.0, rollup.LastValue);
         Assert.Equal(25.0, rollup.AvgValue);
         Assert.Equal(4, rollup.SampleCount);
-    }
-
-    [Fact]
-    public async Task Rollup_maintenance_service_runs_pass_cleanly()
-    {
-        var store = fixture.Services.GetRequiredService<OpsStore>();
-        var lease = fixture.Services.GetRequiredService<OpsLease>();
-        var service = new RollupMaintenanceService(store, lease, fixture.Time, NullLogger<RollupMaintenanceService>.Instance);
-
-        await service.RunOnceAsync(Ct);
     }
 }

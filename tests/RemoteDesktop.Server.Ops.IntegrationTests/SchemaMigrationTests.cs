@@ -79,6 +79,7 @@ public class SchemaMigrationTests
     public async Task Starting_twice_does_not_run_the_migration_twice()
     {
         var path = Path.Combine(Path.GetTempPath(), $"ops-migration-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={path}";
         try
         {
             var settings = new OpsDatabaseSettings { Provider = OpsDatabaseSettings.Sqlite, Path = path };
@@ -88,11 +89,20 @@ public class SchemaMigrationTests
                 await first.EnsureSchemaAsync(Ct);
             }
 
-            // A second start would fail on ADD COLUMN if the version check were missing.
+            var ledgerBefore = ReadLedger(connectionString);
+
+            // A second start would fail on ADD COLUMN if the version check were missing, and would add or refresh
+            // ledger rows if the same migrations were applied again.
             using (var second = OpsStore.Open(settings))
             {
                 await second.EnsureSchemaAsync(Ct);
             }
+
+            var ledgerAfter = ReadLedger(connectionString);
+
+            Assert.NotEmpty(ledgerBefore);
+            Assert.Equal(ledgerBefore, ledgerAfter);
+            Assert.Equal((long)OpsSchema.Version, ledgerAfter.Max(row => row.Version));
         }
         finally
         {
@@ -103,5 +113,21 @@ public class SchemaMigrationTests
                 File.Delete(path + suffix);
             }
         }
+    }
+
+    private static List<(long Version, long AppliedAt)> ReadLedger(string connectionString)
+    {
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT version, applied_at FROM ops_schema_version ORDER BY version;";
+        using var reader = command.ExecuteReader();
+        var rows = new List<(long Version, long AppliedAt)>();
+        while (reader.Read())
+        {
+            rows.Add((reader.GetInt64(0), reader.GetInt64(1)));
+        }
+
+        return rows;
     }
 }

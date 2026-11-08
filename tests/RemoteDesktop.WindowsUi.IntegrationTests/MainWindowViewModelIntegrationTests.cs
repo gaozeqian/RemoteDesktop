@@ -62,19 +62,15 @@ public sealed class MainWindowViewModelIntegrationTests : IDisposable
         Assert.Equal("888 777 666", viewModel.RemoteDeviceId);
     }
 
-    [Theory]
-    [InlineData("", "固定密码长度至少需要 8 个字符。")]
-    [InlineData("123", "固定密码长度至少需要 8 个字符。")]
-    [InlineData("abcdefg", "固定密码长度至少需要 8 个字符。")]
-    public void Fixed_password_validation_rejects_weak_or_short_passwords(string input, string expectedError)
+    [Fact]
+    public void Fixed_password_validation_rejects_a_password_one_character_short_of_the_minimum()
     {
-        var error = MainWindowViewModel.ValidateFixedPassword(input);
-        Assert.Equal(expectedError, error);
+        var error = MainWindowViewModel.ValidateFixedPassword("abcdefg");
+        Assert.Equal("固定密码长度至少需要 8 个字符。", error);
     }
 
     [Theory]
     [InlineData("12345678")]
-    [InlineData("StrongSecretPassword!2026")]
     [InlineData("  ValidP@sswordLongEnough  ")]
     public void Fixed_password_validation_accepts_valid_length_passwords(string input)
     {

@@ -328,9 +328,19 @@ public sealed class FileTransferE2ETests(EndToEndClusterFixture cluster) : IClas
             SessionMode.View,
             Ct);
 
-        // Attempting to open remote file source should fail because FileTransfer channel is disallowed
+        // Watch mode closes the channel before any module sees it. The client therefore sees either the domain-level
+        // failure (clean EOF) or the raw QUIC abort; a timeout, cancellation or an unrelated error is not a refusal.
         await using var remote = new RemoteFileSource(session.Context.Connection);
-        await Assert.ThrowsAnyAsync<Exception>(() => remote.ListAsync(_testRoot, Ct));
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => remote.ListAsync(_testRoot, Ct));
+        Assert.True(
+            error is FileOperationException or System.Net.Quic.QuicException,
+            $"Expected the watch-mode channel refusal, got {error.GetType().FullName}: {error.Message}");
+        Assert.IsNotAssignableFrom<OperationCanceledException>(error);
+        if (error is FileOperationException fileError)
+        {
+            Assert.Equal(FileError.Io, fileError.Error);
+            Assert.Equal("The connection to the remote computer failed.", fileError.Message);
+        }
     }
 
     private static byte[] RandomBytes(int length)

@@ -41,7 +41,7 @@ public sealed class PeerSessionTests(ServerFixture server) : IClassFixture<Serve
     }
 
     [Fact]
-    public async Task Falls_back_to_relay_and_measures_round_trip_time()
+    public async Task A_forced_relay_session_reports_a_relayed_path_and_round_trip_time()
     {
         await using var host = await TestDevice.StartAsync(server);
         await using var controller = await TestDevice.StartAsync(server, forceRelay: true);

@@ -94,9 +94,10 @@ run_test_suite "WindowsUi-Integration" "tests/RemoteDesktop.WindowsUi.Integratio
 echo ""
 
 # ----------------------------------------------------------------------
-# 3. Live Multi-Process E2E Verification
+# 3. Live Multi-Process Startup Smoke (processes + registration only)
 # ----------------------------------------------------------------------
-log_info "Step 3: Executing Live Multi-Process Multi-Tier E2E Integration..."
+log_info "Step 3: Live multi-process startup smoke (Rendezvous, Relay and HostService come up and the host registers)."
+log_warn "This step does NOT establish a remote-control session; session behaviour is covered by the suites in Step 2."
 
 TMP_DIR="$(mktemp -d /tmp/rd-e2e-XXXXXX)"
 RENDEZVOUS_LOG="$TMP_DIR/rendezvous.log"
@@ -199,7 +200,9 @@ else
     log_warn "Identity file not immediately visible on disk (in-memory or custom store)."
 fi
 
-TEST_RESULTS["Live-Process-Multi-Tier-E2E"]="PASS"
+# No controller process was started and no ConnectAsync ran: the only grounds for a PASS here are the health
+# checks and the registration log entry checked above. Naming it an E2E result would overstate what was verified.
+TEST_RESULTS["Live-Process-Startup-Smoke"]="PASS"
 
 echo ""
 echo "======================================================================"
@@ -209,4 +212,4 @@ for suite in "${!TEST_RESULTS[@]}"; do
     printf "%-35s : ${COLOR_GREEN}%s${COLOR_RESET}\n" "$suite" "${TEST_RESULTS[$suite]}"
 done
 echo "======================================================================"
-log_pass "All automated End-to-End tests passed successfully!"
+log_pass "Automated checks completed: session behaviour comes from Step 2; the live step is a startup smoke only."

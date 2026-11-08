@@ -79,6 +79,13 @@ public sealed class NodeCertificatePinTests : IDisposable
     {
         NodeCertificatePin.Validate(null);
         NodeCertificatePin.Validate(string.Empty);
+
+        // No pin must leave the platform's own validation in place rather than installing a comparison callback.
+        foreach (var path in new string?[] { null, string.Empty })
+        {
+            using var handler = Assert.IsType<System.Net.Http.SocketsHttpHandler>(NodeCertificatePin.Handler(path));
+            Assert.Null(handler.SslOptions.RemoteCertificateValidationCallback);
+        }
     }
 
     [Fact]
@@ -105,8 +112,18 @@ public sealed class NodeCertificatePinTests : IDisposable
     public void A_readable_certificate_is_accepted_at_start_up()
     {
         using var certificate = SelfSigned();
+        var path = WritePublicHalf(certificate, "good.cer");
 
-        NodeCertificatePin.Validate(WritePublicHalf(certificate, "good.cer"));
+        NodeCertificatePin.Validate(path);
+
+        using var handler = Assert.IsType<System.Net.Http.SocketsHttpHandler>(NodeCertificatePin.Handler(path));
+        var callback = handler.SslOptions.RemoteCertificateValidationCallback;
+        Assert.NotNull(callback);
+
+        // The pin is an exact byte comparison, not "any self-signed certificate will do".
+        Assert.True(callback!(null!, certificate, null!, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors));
+        using var other = SelfSigned();
+        Assert.False(callback(null!, other, null!, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors));
     }
 
     private string WritePublicHalf(X509Certificate2 certificate, string name)

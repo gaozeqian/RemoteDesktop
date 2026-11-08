@@ -68,9 +68,27 @@ public class MainWindowPlatformNoteUiTests
     [Fact]
     public void Portal_unattended_warning_is_displayed_exclusively_on_linux()
     {
+        // The expectation is a platform constant, not a second copy of the product's IsLinux() expression.
         var onLinux = OperatingSystem.IsLinux();
-
         Assert.Equal(onLinux, MainWindowViewModel.ShowFixedPasswordPlatformNote);
-        Assert.Equal(onLinux, MainWindowViewModel.FixedPasswordPlatformNote is not null);
+
+        if (onLinux)
+        {
+            var note = Assert.IsType<string>(MainWindowViewModel.FixedPasswordPlatformNote);
+            Assert.Contains("portal", note);
+            Assert.Contains("无人值守", note);
+            Assert.Contains("重新授权", note);
+            Assert.Contains("Windows 的被控端", note);
+            Assert.DoesNotContain("macOS", note);
+        }
+        else
+        {
+            Assert.Null(MainWindowViewModel.FixedPasswordPlatformNote);
+        }
+
+        // The two product properties must agree with each other, not merely with the OS check.
+        Assert.Equal(
+            MainWindowViewModel.FixedPasswordPlatformNote is not null,
+            MainWindowViewModel.ShowFixedPasswordPlatformNote);
     }
 }

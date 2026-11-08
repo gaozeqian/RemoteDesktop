@@ -38,6 +38,9 @@ public abstract class ViewerRig : IAsyncDisposable
     /// <summary>The width of the stream the viewer currently shows, or zero before there is one.</summary>
     public abstract int StreamWidth { get; }
 
+    /// <summary>The host-side reader; an unexpected protocol error here must fail the owning test.</summary>
+    public Task PumpTask => _pump;
+
     protected Stream Host { get; }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -95,7 +98,10 @@ public abstract class ViewerRig : IAsyncDisposable
         await DisposeViewerAsync();
         await Host.DisposeAsync();
         await _stop.CancelAsync();
-        await _pump;
+
+        // The pump must finish; a bounded wait turns a stuck reader into a test failure instead of a hang, and
+        // awaiting it rethrows any protocol error the pump did not swallow.
+        await _pump.WaitAsync(TimeSpan.FromSeconds(5));
         _stop.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -122,7 +128,7 @@ public abstract class ViewerRig : IAsyncDisposable
     protected abstract ValueTask<bool?> ReadRequestAsync(Stream host, CancellationToken cancellationToken);
 
     /// <summary>Starts counting the viewer's key frame requests; until then they simply sit in the pipe.</summary>
-    protected void StartPump() => _pump = Task.Run(PumpAsync, CancellationToken.None);
+    protected void StartPump() => _pump = Task.Run(PumpAsync, _stop.Token);
 
     private async Task PumpAsync()
     {
@@ -136,9 +142,10 @@ public abstract class ViewerRig : IAsyncDisposable
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
-            // The pipe went away with the test (possibly in the middle of a message).
+            // The pipe went away with the test (possibly in the middle of a message). InvalidDataException is
+            // deliberately not caught: it means a malformed frame, which is a product error worth failing on.
         }
     }
 

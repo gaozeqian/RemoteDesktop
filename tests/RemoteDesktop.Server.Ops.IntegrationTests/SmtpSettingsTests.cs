@@ -15,6 +15,17 @@ public sealed class SmtpSettingsTests
         var options = Options(new SmtpSettings());
 
         options.Validate();
+
+        var smtp = options.Notifications.Smtp;
+        Assert.False(smtp.IsConfigured);
+        Assert.Equal(string.Empty, smtp.Host);
+        Assert.Equal(string.Empty, smtp.From);
+        Assert.Equal(string.Empty, smtp.To);
+        Assert.Equal(string.Empty, smtp.Username);
+        Assert.Equal(string.Empty, smtp.Password);
+        Assert.Equal(587, smtp.Port);
+        Assert.True(smtp.UseStartTls);
+        Assert.Empty(smtp.Recipients());
     }
 
     [Fact]

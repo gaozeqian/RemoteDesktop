@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Clipboard;
+using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Platform.Linux.Clipboard;
 using RemoteDesktop.Platform.Linux.XdgPortal;
 
@@ -10,14 +11,23 @@ public class WaylandClipboardTests
     private const string LinuxOnly = "Wayland clipboard is Linux only.";
 
     [Fact]
-    public void Get_returns_null_when_portal_control_session_is_not_ready()
+    public void Get_returns_nothing_unless_the_desktop_has_granted_control()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
         using var session = new PortalControlSession(NullLoggerFactory.Instance, NullLogger<PortalControlSession>.Instance);
         using var clipboard = new WaylandClipboard(session, NullLogger<WaylandClipboard>.Instance);
 
-        Assert.Null(clipboard.Get());
+        var content = clipboard.Get();
+
+        // Whether the portal grants control (and therefore whether Get reads the machine's real selection) depends
+        // on the desktop. Asserting "always null" made this test fail on any machine where the user had copied
+        // something and the portal answered yes. The invariant that must hold is stricter and environment independent:
+        // content may only come back after a grant, and the synchronous call must have settled the request state.
+        Assert.True(
+            content is null || session.AccessStatus.State == InputAccessState.Granted,
+            $"Get returned {content?.GetType().Name} while control was {session.AccessStatus.State}.");
+        Assert.NotEqual(InputAccessState.Requesting, session.AccessStatus.State);
     }
 
     [Fact]
@@ -63,7 +73,6 @@ public class WaylandClipboardTests
 
         using var session = new PortalControlSession(NullLoggerFactory.Instance, NullLogger<PortalControlSession>.Instance);
         var clipboard = new WaylandClipboard(session, NullLogger<WaylandClipboard>.Instance);
-
         clipboard.Dispose();
         clipboard.Dispose();
     }

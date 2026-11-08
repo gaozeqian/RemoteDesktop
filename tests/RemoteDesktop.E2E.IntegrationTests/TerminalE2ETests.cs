@@ -166,8 +166,20 @@ public sealed class TerminalE2ETests(EndToEndClusterFixture cluster) : IClassFix
             SessionMode.View,
             Ct);
 
-        await Assert.ThrowsAnyAsync<Exception>(() =>
+        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
             TerminalSession.StartAsync(session.Context.Connection, null, 80, 24, Ct));
+        Assert.True(
+            error is TerminalException or System.Net.Quic.QuicException,
+            $"Expected the watch-mode channel refusal, got {error.GetType().FullName}: {error.Message}");
+        Assert.IsNotAssignableFrom<OperationCanceledException>(error);
+        if (error is TerminalException terminalError)
+        {
+            // TerminalClient distinguishes a clean EOF (the dispatcher closed the refused channel) from an I/O
+            // failure on that channel. Both are the watch-mode refusal; nothing else is.
+            Assert.True(
+                terminalError.Message is "The host closed the channel." or "The connection to the host failed.",
+                $"Unexpected terminal failure: {terminalError.Message}");
+        }
     }
 
     private static async Task WaitForScreenAsync(TerminalSession session, string expectedText)

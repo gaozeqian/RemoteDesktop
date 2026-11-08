@@ -1,7 +1,8 @@
 name: Run the test suite
 description: >-
-  Runs the whole solution's tests, retries once when the first attempt fails, and appends a summary table to the job's
-  step summary. Shared by the per-platform jobs of ci.yml and release.yml so that they cannot drift apart.
+  Runs the whole solution's tests, retries once when the first attempt fails, keeps the first attempt's TRX, and appends
+  a summary table that names skipped tests. Shared by the per-platform jobs of ci.yml and release.yml so that they
+  cannot drift apart.
 
 inputs:
   artifact-name:
@@ -15,6 +16,9 @@ runs:
     # rejected here; the TRX files come from the MTP extension and still land in one file per test project. --nologo
     # must NOT be passed -- it is forwarded to the test program, which rejects the whole run with exit code 5.
     #
+    # The solution has to be named with --solution: passing it as a positional argument makes MTP reject the whole
+    # invocation ("specify the solution with --solution") on current SDKs, which would run zero tests.
+    #
     # The results go under the repository's single artifact root rather than to a second one at the repo root; see
     # CONTRIBUTING.md "构建产物布局". RUNNER_OS is "Linux"/"Windows"/"macOS" and the repository's platform tokens are
     # lowercase, hence the ToLower() -- the directory name has to match build/ and artifacts/ elsewhere.
@@ -22,8 +26,9 @@ runs:
     # A failure is retried once. The integration suite runs real processes, real PTYs, real UDP hole punching and, on
     # Windows, a real Media Foundation encoder, on a runner that is slow and contended: the same commit often fails
     # one test this time and a different one the next. The cost has to be stated -- a genuinely intermittent bug is
-    # masked by that one retry -- so the first failure is emitted as a GitHub warning naming the tests, and only the
-    # retry's result is what the summary table below uses. Failing twice still fails the job.
+    # masked by that one retry -- so the first failure is emitted as a GitHub warning naming the tests, written into
+    # the job summary, and its TRX is kept in a first-attempt subdirectory. Only the retry's result is what the
+    # summary table below uses. Failing twice still fails the job.
     - name: Test
       shell: pwsh
       run: |
@@ -50,7 +55,7 @@ runs:
             Write-Host "DYLD_LIBRARY_PATH=$env:DYLD_LIBRARY_PATH"
         }
 
-        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
+        dotnet test --solution RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
         if ($LASTEXITCODE -eq 0) { exit 0 }
 
         $failed = [System.Collections.Generic.List[string]]::new()
@@ -64,9 +69,18 @@ runs:
         $names = if ($failed.Count) { $failed -join '; ' } else { '(no TRX recorded a failure)' }
         Write-Host "::warning title=Tests failed on the first attempt (rerunning once)::$names"
         Write-Host "Failed on the first attempt: $names"
+        if ($env:GITHUB_STEP_SUMMARY) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### First test attempt failed (rerunning once)`n`n$names`n"
+        }
 
-        Remove-Item $resultsDir -Recurse -Force -ErrorAction SilentlyContinue
-        dotnet test RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
+        # Keep the first attempt instead of deleting it: a green retry must not erase which tests failed first. The
+        # summary glob below only reads the top-level TRX files, so the retry remains the one it reports on.
+        $firstAttemptDir = Join-Path $resultsDir 'first-attempt'
+        New-Item -ItemType Directory -Path $firstAttemptDir -Force | Out-Null
+        Get-ChildItem "$resultsDir/*.trx" -ErrorAction SilentlyContinue |
+            Move-Item -Destination $firstAttemptDir -Force
+
+        dotnet test --solution RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
         if ($LASTEXITCODE -ne 0) {
             Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
         }
@@ -77,8 +91,9 @@ runs:
       with:
         name: ${{ inputs.artifact-name }}
         # A glob rather than the ${{ runner.os }} token: that one is "Linux"/"macOS", and the results directory is
-        # lowercased to match the repository's platform tokens, so on a Linux runner the two would not meet.
-        path: artifacts/test-results/*/*.trx
+        # lowercased to match the repository's platform tokens, so on a Linux runner the two would not meet. The
+        # second star also picks up first-attempt/*.trx, which a plain */*.trx would silently drop.
+        path: artifacts/test-results/**/*.trx
 
     - name: Generate Test Summary
       if: always()
@@ -92,15 +107,34 @@ runs:
           $summary += "| Test Suite | Total | Passed | Failed | Skipped | Status |"
           $summary += "| :--- | :---: | :---: | :---: | :---: | :---: |"
           $hasFailures = $false
+          $skippedNames = [System.Collections.Generic.List[string]]::new()
           foreach ($file in $trxFiles) {
             [xml]$xml = Get-Content $file.FullName
             $storage = $xml.TestRun.TestDefinitions.UnitTest[0].storage
             $suite = if ($storage) { [System.IO.Path]::GetFileNameWithoutExtension($storage) } else { $file.BaseName }
             $counters = $xml.TestRun.ResultSummary.Counters
             $failed = [int]$counters.failed
+            $skipped = [int]$counters.notExecuted
             if ($failed -gt 0) { $hasFailures = $true }
-            $status = if ($failed -eq 0) { "✅ Passed" } else { "❌ Failed" }
+            $status = if ($failed -gt 0) { "❌ Failed" } elseif ($skipped -gt 0) { "Passed ($skipped skipped)" } else { "✅ Passed" }
             $summary += "| $($suite) | $($counters.total) | $($counters.passed) | $($counters.failed) | $($counters.notExecuted) | $($status) |"
+            if ($skipped -gt 0) {
+              $xml.TestRun.Results.UnitTestResult |
+                  Where-Object { $_.outcome -eq 'NotExecuted' } |
+                  ForEach-Object { $skippedNames.Add($_.testName) }
+            }
+          }
+          # "Skipped" is a number in the table above but a blind spot in a green build: capability-gated suites
+          # (PostgreSQL, QUIC, installers, portals, TCC, hardware) never ran. Name them and warn instead of letting a
+          # zero-failure summary imply that every implementation was exercised.
+          if ($skippedNames.Count -gt 0) {
+            $critical = @($skippedNames | Where-Object { $_ -match 'Postgres|Quic|Installer|Portal|Tcc|Hardware|Camera' })
+            $summary += ""
+            $summary += "> $($skippedNames.Count) test(s) were skipped, i.e. not executed by this run."
+            if ($critical.Count -gt 0) {
+              Write-Host "::warning title=Capability-gated tests did not run::$($critical.Count) PostgreSQL/QUIC/installer/portal/TCC/hardware tests were skipped; a green result does not cover them."
+              $summary += "> $($critical.Count) of them are capability-gated (PostgreSQL, QUIC, installer, portal, TCC or hardware) and were **not** verified."
+            }
           }
           if ($hasFailures) {
             $summary += ""

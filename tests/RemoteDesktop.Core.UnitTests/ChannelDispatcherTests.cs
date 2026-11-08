@@ -51,6 +51,28 @@ public class ChannelDispatcherTests
             new FakeModule(ChannelType.Video, Permissions.ViewScreen),
         ]));
 
+    [Fact]
+    public void Host_rejects_a_channel_whose_permission_the_grant_does_not_cover()
+    {
+        // An unknown high bit is not a real permission: the wire layer masks it off. A module demanding one can
+        // therefore never be served from a grant built out of the documented flags.
+        var dispatcher = new ChannelDispatcher([new FakeModule(ChannelType.Video, (Permissions)int.MinValue)]);
+        var session = CreateSession(SessionRole.Host, SessionMode.Control);
+
+        Assert.Equal(DispatchResult.Denied, dispatcher.Authorize(ChannelType.Video, session, out var module));
+        Assert.Null(module);
+    }
+
+    [Fact]
+    public void A_controller_role_session_is_not_grant_checked_by_the_host_dispatcher()
+    {
+        // The dispatcher is the host's enforcement point. Documenting the role gate here keeps a future change from
+        // silently turning controller-side channels into an authorization decision.
+        var session = CreateSession(SessionRole.Controller, SessionMode.View);
+
+        Assert.Equal(DispatchResult.Accepted, _dispatcher.Authorize(ChannelType.Input, session, out _));
+    }
+
     private static SessionContext CreateSession(SessionRole role, SessionMode mode) =>
         new(SessionId.New(), role, connection: null!, AccessGrant.Create(mode, Permissions.All, Permissions.All));
 
