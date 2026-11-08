@@ -33,8 +33,6 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
     [Fact]
     public async Task Folders_can_be_browsed_created_renamed_and_deleted_remotely()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsHostReason);
-
         await using var pair = await Pair.StartAsync(server, SessionMode.Control);
         await using var remote = new RemoteFileSource(pair.Session.Context.Connection);
         var folder = Path.Combine(_root, "host");
@@ -56,7 +54,8 @@ public sealed partial class FileTransferSessionTests(ServerFixture server) : ICl
 
         var missing = await Assert.ThrowsAsync<FileOperationException>(() => remote.ListAsync(Path.Combine(folder, "nope"), Ct));
         Assert.Equal(FileError.NotFound, missing.Error);
-        var relative = await Assert.ThrowsAsync<FileOperationException>(() => remote.ListAsync(@"..\..\windows", Ct));
+        var escapePath = OperatingSystem.IsWindows() ? @"..\..\windows" : "../../etc";
+        var relative = await Assert.ThrowsAsync<FileOperationException>(() => remote.ListAsync(escapePath, Ct));
         Assert.Equal(FileError.InvalidPath, relative.Error);
 
         Assert.NotEmpty((await remote.GetPlacesAsync(Ct)));

@@ -38,8 +38,6 @@ public sealed class FileTransferE2ETests(EndToEndClusterFixture cluster) : IClas
     [Fact]
     public async Task Folders_and_files_can_be_browsed_created_renamed_and_deleted()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "RemoteFileSource path joining uses Windows backslashes.");
-
         var module = new FileTransferModule(
             new PermissiveUserContextGuard(),
             FileAccessPolicy.Unrestricted,
@@ -79,8 +77,9 @@ public sealed class FileTransferE2ETests(EndToEndClusterFixture cluster) : IClas
             remote.ListAsync(Path.Combine(hostDir, "nonexistent"), Ct));
         Assert.Equal(FileError.NotFound, notFound.Error);
 
+        var escapePath = OperatingSystem.IsWindows() ? @"..\..\system" : "../../system";
         var traversal = await Assert.ThrowsAsync<FileOperationException>(() =>
-            remote.ListAsync(@"..\..\system", Ct));
+            remote.ListAsync(escapePath, Ct));
         Assert.Equal(FileError.InvalidPath, traversal.Error);
     }
 
