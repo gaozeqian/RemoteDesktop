@@ -21,6 +21,7 @@
   <ItemGroup>
     <!-- The client's own logic (recording file names, message wording) is worth testing where it lives. -->
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.UnitTests" />
+    <InternalsVisibleTo Include="RemoteDesktop.WindowsUi.IntegrationTests" />
   </ItemGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />

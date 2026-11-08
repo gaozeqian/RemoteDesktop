@@ -58,6 +58,8 @@ docker rm -f rd-pg-test
 |---|---|
 | `RemoteDesktop.Core.UnitTests` | Core **加 Features 与 Media**——它的 `ProjectReference` 是 `Application`、`Features.{Camera,Desktop,FileTransfer,Terminal}`、`Media`、`Server.Shared`。所以 `VideoCodecSelectorTests`、`TerminalEmulatorTests` 都在这里，而不在叫 `Features` 或 `Media` 的项目里 |
 | `RemoteDesktop.Transport.IntegrationTests` | 传输层的端到端用例（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别）。它的 `ProjectReference` 不止 Transport：`Application`、`Features.*`、`Platform.Windows` / `Platform.MacOS`、`Server.Rendezvous`、`Server.Relay` 都在里面，所以信令、中继与功能通道的联调用例放这里 |
+| `RemoteDesktop.E2E.IntegrationTests` | 跨系统角色完整闭环端到端集成测试（信令集群编排、中继与直连通道、双向 SRP-6a 鉴权、固定密码无人值守、访问授权协商与会话生命周期） |
+| `RemoteDesktop.WindowsUi.IntegrationTests` | 客户端图形界面与集成工作流测试（ViewModel 状态绑定、深度连接激活、最近设备持久化、固定密码安全表单校验与界面会话流转） |
 | `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表） |
 | `RemoteDesktop.Server.Ops.UnitTests` | 监控台核心 `Server.Ops.Core` 与 `Server.Shared` |
 | `RemoteDesktop.Server.Ops.IntegrationTests` | 监控台三层（`Server.Ops`、`Server.Ops.Core`、`Server.Ops.Storage`）合起来跑 |
@@ -162,7 +164,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 `TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 35 个：`src/` 下 26 个，`tests/` 下 9 个）
+所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 37 个：`src/` 下 26 个，`tests/` 下 11 个）
 不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
 **唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们

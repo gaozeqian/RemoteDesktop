@@ -88,6 +88,8 @@ run_test_suite "Server-Storage" "tests/RemoteDesktop.Server.Storage.UnitTests/Re
 run_test_suite "Server-Ops-Unit" "tests/RemoteDesktop.Server.Ops.UnitTests/RemoteDesktop.Server.Ops.UnitTests.csproj"
 run_test_suite "Server-Ops-Integration" "tests/RemoteDesktop.Server.Ops.IntegrationTests/RemoteDesktop.Server.Ops.IntegrationTests.csproj"
 run_test_suite "Transport-Network-Channels-E2E" "tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj"
+run_test_suite "E2E-Cluster-Sessions" "tests/RemoteDesktop.E2E.IntegrationTests/RemoteDesktop.E2E.IntegrationTests.csproj"
+run_test_suite "WindowsUi-Integration" "tests/RemoteDesktop.WindowsUi.IntegrationTests/RemoteDesktop.WindowsUi.IntegrationTests.csproj"
 
 echo ""
 

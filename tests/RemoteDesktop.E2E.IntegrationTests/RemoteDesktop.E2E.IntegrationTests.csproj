@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- QUIC and Media Foundation types are platform-annotated; tests that need them check the OS. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Domain\RemoteDesktop.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Protocol\RemoteDesktop.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Signaling\RemoteDesktop.Signaling.csproj" />
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Transport\RemoteDesktop.Transport.csproj" />
+    <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Rendezvous\RemoteDesktop.Server.Rendezvous.csproj" />
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Relay\RemoteDesktop.Server.Relay.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+</Project>
