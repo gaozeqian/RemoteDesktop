@@ -14,7 +14,10 @@ public abstract class ViewerRig : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private Task _pump = Task.CompletedTask;
     private int _keyFrameRequests;
-    private bool _disposed;
+
+    // Written on the disposing thread and read by the pump while it is still draining, so the pump can tell "the
+    // stream ended because this rig's own teardown closed it" from "a frame is malformed while the test is running".
+    private volatile bool _disposed;
 
     protected ViewerRig(Stream host, FakeDecoderFactory factory, SteppedTime time)
     {
@@ -146,6 +149,12 @@ public abstract class ViewerRig : IAsyncDisposable
         {
             // The pipe went away with the test (possibly in the middle of a message). InvalidDataException is
             // deliberately not caught: it means a malformed frame, which is a product error worth failing on.
+        }
+        catch (InvalidDataException) when (_disposed)
+        {
+            // The one case where that exception is not the product's fault: teardown closed the viewer's end while a
+            // request was half written, so the reader finds a truncated frame. The filter is what keeps the guard
+            // above intact — a frame that is malformed while the test is still running still fails it.
         }
     }
 

@@ -79,5 +79,21 @@ public class MainWindowPlatformNoteTests
 
         Assert.Equal(onLinux, MainWindowViewModel.ShowFixedPasswordPlatformNote);
         Assert.Equal(onLinux, MainWindowViewModel.FixedPasswordPlatformNote is not null);
+
+        // The sentence has to say what goes wrong and where the operator finds the difference. These are the words
+        // the Linux pane is built from, so a rewrite that drops one of them is a change of meaning, not of style.
+        if (onLinux)
+        {
+            var note = Assert.IsType<string>(MainWindowViewModel.FixedPasswordPlatformNote);
+            Assert.Contains("portal", note, StringComparison.Ordinal);
+            Assert.Contains("无人值守", note, StringComparison.Ordinal);
+            Assert.Contains("重新授权", note, StringComparison.Ordinal);
+            Assert.Contains("Windows 的被控端", note, StringComparison.Ordinal);
+            Assert.DoesNotContain("macOS", note, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(MainWindowViewModel.FixedPasswordPlatformNote);
+        }
     }
 }

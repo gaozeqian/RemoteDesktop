@@ -15,6 +15,13 @@ namespace RemoteDesktop.Core.UnitTests;
 /// </remarks>
 public sealed class SymbolicLinkEscapeTests : IDisposable
 {
+    /// <summary>
+    /// Said instead of passing quietly when the account cannot make a link. A returned-early test is reported as
+    /// passed, which is indistinguishable from "the sandbox held" in every TRX and in the CI summary; a skip is not.
+    /// </summary>
+    private const string NoLinkPrivilege =
+        "This account cannot create a directory link (Windows needs elevation or Developer Mode), so the escape path was not exercised.";
+
     private readonly string _root = Directory.CreateTempSubdirectory("rd-link-root-").FullName;
     private readonly string _outside = Directory.CreateTempSubdirectory("rd-link-outside-").FullName;
 
@@ -29,10 +36,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     public void A_symlink_inside_the_root_cannot_escape_it()
     {
         var link = CreateDirectoryLink(Path.Combine(_root, "link"), _outside);
-        if (link is null)
-        {
-            return; // no privilege to make a symlink; nothing to test here
-        }
+        Assert.SkipWhen(link is null, NoLinkPrivilege);
 
         var policy = new FileAccessPolicy([_root]);
         var secret = Path.Combine(_outside, "secret.txt");
@@ -47,12 +51,9 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     public void A_link_swapped_in_after_the_check_leaves_no_file_behind_outside_the_root()
     {
         var probe = CreateDirectoryLinkOrJunction(Path.Combine(_root, "probe"), _outside);
-        if (probe is null)
-        {
-            return; // no privilege to make a symlink; nothing to test here
-        }
+        Assert.SkipWhen(probe is null, NoLinkPrivilege);
 
-        Directory.Delete(probe); // removes the link, not its target
+        Directory.Delete(probe!); // removes the link, not its target
 
         var folder = Path.Combine(_root, "folder");
         Directory.CreateDirectory(folder);
@@ -79,10 +80,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     public void Listing_through_a_link_is_refused()
     {
         var link = CreateDirectoryLink(Path.Combine(_root, "link"), _outside);
-        if (link is null)
-        {
-            return;
-        }
+        Assert.SkipWhen(link is null, NoLinkPrivilege);
 
         File.WriteAllText(Path.Combine(_outside, "outside.txt"), "x");
 
@@ -97,10 +95,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     public void Writing_through_a_link_is_refused()
     {
         var link = CreateDirectoryLink(Path.Combine(_root, "link"), _outside);
-        if (link is null)
-        {
-            return;
-        }
+        Assert.SkipWhen(link is null, NoLinkPrivilege);
 
         var policy = new FileAccessPolicy([_root]);
         var operations = new LocalFileOperations(policy);
@@ -119,10 +114,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     {
         var inside = Directory.CreateDirectory(Path.Combine(_root, "inside")).FullName;
         var link = CreateDirectoryLink(Path.Combine(_root, "link"), inside);
-        if (link is null)
-        {
-            return;
-        }
+        Assert.SkipWhen(link is null, NoLinkPrivilege);
 
         var policy = new FileAccessPolicy([_root]);
         Assert.Equal(Path.Combine(_root, "link"), policy.Normalize(Path.Combine(_root, "link")));
@@ -139,10 +131,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     {
         var first = CreateDirectoryLink(Path.Combine(_root, "first"), Path.Combine(_root, "second"));
         var second = CreateDirectoryLink(Path.Combine(_root, "second"), Path.Combine(_root, "first"));
-        if (first is null || second is null)
-        {
-            return;
-        }
+        Assert.SkipWhen(first is null || second is null, NoLinkPrivilege);
 
         var policy = new FileAccessPolicy([_root]);
 

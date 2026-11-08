@@ -70,18 +70,7 @@ public sealed class ClientAppLifecycleTests : IDisposable
         Assert.Equal(_tempDataDir, environment.DataDirectory);
     }
 
-    [Fact]
-    public void Crash_log_records_unhandled_fatal_exceptions()
-    {
-        Directory.CreateDirectory(_tempDataDir);
-        var crashLogPath = Path.Combine(_tempDataDir, "crash.log");
-
-        var testException = new InvalidOperationException("E2E simulated client crash failure");
-        CrashLog.Write(crashLogPath, "test-source", testException);
-
-        Assert.True(File.Exists(crashLogPath));
-        var logContent = File.ReadAllText(crashLogPath);
-        Assert.Contains("E2E simulated client crash failure", logContent);
-        Assert.Contains("test-source", logContent);
-    }
+    // The crash log is covered where it lives: Platform.Windows.UnitTests/CrashLogTests writes the same record,
+    // asserts the same two fields and additionally covers the file roll-over. A copy here called itself
+    // "unhandled_fatal_exceptions" without ever raising one, which overstated what the suite verified.
 }

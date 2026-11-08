@@ -39,12 +39,26 @@ public sealed class SharingSessionTests(ServerFixture server) : IClassFixture<Se
         await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
         Assert.False(session.Context.Grant.Allows(Permissions.Clipboard));
 
-        // A modified controller opens the channel anyway; the host refuses it.
-        var controllerClipboard = new FakeClipboard();
-        await using var running = await StartClipboardAsync(session, controllerClipboard);
-        controllerClipboard.Copy(new TextClipboardContent("secret from the controller"));
-        await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
+        // A modified controller opens the channel anyway. The host answers by closing it, which the controller sees
+        // as the end of the stream: that is proof the refusal was processed, where a fixed pause only proves that
+        // nothing had happened yet.
+        await using var channel = await session.Context.Connection.OpenChannelAsync(ChannelType.Clipboard, bidirectional: true, Ct);
 
+        // Pushing the secret is allowed to be refused outright, because the host may close the stream before the
+        // write lands. What must never happen is the payload being applied, which the assertion below covers.
+        try
+        {
+            await channel.Stream.WriteAsync("secret from the controller"u8.ToArray(), Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Refused before the write; the read that follows is what shows the refusal.
+        }
+
+        var probe = new byte[1];
+        var read = await channel.Stream.ReadAsync(probe, Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal(0, read);
         Assert.Equal(0, hostClipboard.SetCalls);
     }
 
@@ -69,6 +83,11 @@ public sealed class SharingSessionTests(ServerFixture server) : IClassFixture<Se
         var muted = players.Player.SampleCount;
         await Task.Delay(500, Ct);
         Assert.Equal(muted, players.Player.SampleCount);
+
+        // Silence on its own is also what a dead stream looks like — the whole session, the channel or the decoder
+        // could have stopped and the assertion above would still hold. Audio coming back is what tells the two apart.
+        playback.Muted = false;
+        await WaitForAsync(() => players.Player.SampleCount > muted, "the audio to resume after unmuting");
     }
 
     [Fact]

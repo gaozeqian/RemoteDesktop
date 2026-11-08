@@ -193,7 +193,14 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
         }
 
         TestContext.Current.SendDiagnosticMessage($"{Reconnects} sessions came and went");
-        await WaitForAsync(() => Process.GetProcessesByName("cmd").Length <= shellsBefore, "the shells of finished sessions to be gone");
+
+        // A leftover shell is already running when the last round ends, so the long session budget above would only
+        // delay the report. The count is machine-wide: another program starting a cmd.exe of its own inflates it,
+        // which is why the message says so rather than leaving the failure pointing at the terminal code.
+        await WaitForAsync(
+            () => Process.GetProcessesByName("cmd").Length <= shellsBefore,
+            "the shells of finished sessions to be gone (the count is machine-wide, so an unrelated cmd.exe also trips this)",
+            TimeSpan.FromSeconds(20));
     }
 
     private async Task<TestDevice> StartHostAsync(VideoCodecSelector codecs)
@@ -220,9 +227,9 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
         return bytes;
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
+    private static async Task WaitForAsync(Func<bool> condition, string what, TimeSpan? budget = null)
     {
-        var deadline = DateTime.UtcNow + Timeout;
+        var deadline = DateTime.UtcNow + (budget ?? Timeout);
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");

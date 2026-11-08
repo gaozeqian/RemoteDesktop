@@ -175,6 +175,10 @@ public sealed class SessionE2ETests(EndToEndClusterFixture cluster) : IClassFixt
 
         Assert.True(session.Context.Grant.Allows(Permissions.ControlInput));
 
+        // The controller learns the id from AuthResult, but the host's own table is filled after that answer is
+        // written: DowngradeToViewAsync looks the id up, so calling it the moment ConnectAsync returns is a race.
+        await WaitForHostRegistrationAsync(host, controller, Ct);
+
         var grantChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         session.GrantChanged += (_, _) =>
         {
@@ -206,6 +210,10 @@ public sealed class SessionE2ETests(EndToEndClusterFixture cluster) : IClassFixt
 
         var closedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         session.Closed += (_, _) => closedTcs.TrySetResult();
+
+        // Same registration window as the downgrade above: Disconnect reports false for a session it has not been
+        // told about yet, which says nothing about whether the host can end it.
+        await WaitForHostRegistrationAsync(host, controller, Ct);
 
         var disconnected = host.HostSessions.Disconnect(session.Context.Id);
         Assert.True(disconnected);
@@ -254,6 +262,20 @@ public sealed class SessionE2ETests(EndToEndClusterFixture cluster) : IClassFixt
             "all active sessions cleaned up",
             Ct);
     }
+
+    /// <summary>
+    /// Waits until the host has a row for this controller. The host adds the session to its own table after it has
+    /// written AuthResult, so anything that looks the session up by id (Disconnect, DowngradeToViewAsync) can run
+    /// before the row exists and report "no such session" — a false negative, not a product fault.
+    /// </summary>
+    private static Task WaitForHostRegistrationAsync(
+        EndToEndNode host,
+        EndToEndNode controller,
+        CancellationToken cancellationToken) =>
+        WaitForAsync(
+            () => host.HostSessions.ActiveSessions.Any(s => s.Connection.RemoteDevice == controller.Id),
+            "the host to register the controller's session",
+            cancellationToken);
 
     private static async Task WaitForAsync(Func<bool> condition, string what, CancellationToken cancellationToken)
     {

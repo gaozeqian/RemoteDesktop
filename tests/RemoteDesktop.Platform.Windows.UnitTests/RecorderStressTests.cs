@@ -28,7 +28,13 @@ public class RecorderStressTests
                         recorder.RecordFrame(frame, 128 * 4, 128, 96);
                     }
 
-                    await recorder.StopAsync();
+                    var saved = await recorder.StopAsync();
+
+                    // Not throwing is not the same as having recorded: a take that dropped every frame or wrote an
+                    // empty file would still come back without an exception, which is the failure this loop is for.
+                    Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+                    Assert.True(recorder.WrittenFrames > 0, $"take {i}: no frame reached the encoder");
+                    Assert.True(new FileInfo(saved).Length > 0, $"take {i}: {saved} is empty");
                 }
                 catch (Exception ex)
                 {

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
+using RemoteDesktop.Protocol;
 
 namespace RemoteDesktop.E2E.IntegrationTests;
 
@@ -122,8 +123,14 @@ public sealed class DesktopE2ETests(EndToEndClusterFixture cluster) : IClassFixt
         sender.Send(new KeyEvent(0x1E, IsExtended: false, IsDown: true));
         sender.Send(new PointerButtonEvent("disp-1", 0.5, 0.5, PointerButton.Left, IsDown: true));
 
-        await Task.Delay(500, Ct);
+        // A pause would only show that nothing had happened yet. The host answers a channel its grant does not cover
+        // by closing it, so the controller's own read reaching the end of the stream is the proof the refusal was
+        // processed — after that, an event that never arrived is a fact rather than a sampling window.
+        await using var refused = await session.Context.Connection.OpenChannelAsync(ChannelType.Input, bidirectional: true, Ct);
+        var probe = new byte[1];
+        var read = await refused.Stream.ReadAsync(probe, Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
+        Assert.Equal(0, read);
         Assert.Empty(injector.Events);
     }
 

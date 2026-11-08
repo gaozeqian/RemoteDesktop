@@ -49,26 +49,10 @@ public sealed class RecentDevicesAtomicStorageTests : IDisposable
         }
     }
 
-    [Fact]
-    public async Task RecentDevicesStore_backs_up_corrupted_file_and_recovers_cleanly()
-    {
-        var file = Path.Combine(_tempDir, "recent_devices.json");
-        await File.WriteAllTextAsync(file, "{ unparseable invalid json bytes content ...", TestContext.Current.CancellationToken);
-
-        using var store = new RecentDevicesStore(_tempDir, new MemorySecrets());
-        var ct = TestContext.Current.CancellationToken;
-
-        await store.SaveOrUpdateAsync("999 888 777", alias: "RecoveryDev", cancellationToken: ct);
-
-        // The corrupt file was moved out of the way to a .corrupt- timestamp file
-        var backups = Directory.GetFiles(_tempDir, "recent_devices.json.corrupt-*");
-        Assert.NotEmpty(backups);
-
-        var list = await store.GetAllAsync(ct);
-        var entry = Assert.Single(list);
-        Assert.Equal("999 888 777", entry.DeviceId);
-        Assert.Equal("RecoveryDev", entry.Alias);
-    }
+    // The corrupt-file recovery is covered in Platform.Windows.UnitTests/RecentDevicesTests, which injects the same
+    // unreadable file and asserts a superset: exactly one .corrupt- copy, the original bytes left untouched, and the
+    // store usable afterwards — alongside four other malformed shapes. A second, weaker copy lived here until it was
+    // removed; what is unique to this file is the concurrent-write case above.
 
     private sealed class MemorySecrets : ISecretStore
     {

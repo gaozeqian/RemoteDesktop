@@ -239,11 +239,23 @@ public sealed class PunchSocketTests
         Assert.True(bound);
         lock (binds)
         {
-            Assert.Equal(2, binds.Count);
+            // A bind is retransmitted until it is answered, so the same step can legitimately appear twice: under a
+            // fully parallel solution run the timer fired while the answer was still in flight, which is how this
+            // assertion was found to be testing the scheduler rather than the protocol. What the two steps have to
+            // be is asserted below; how many datagrams carried them is not something the product promises.
+            Assert.True(binds.Count >= 2, $"expected both binds, saw {binds.Count}");
 
-            // Step one carries no token; step two carries the one that came back. Both name the role and the ticket.
+            // The very first packet is the one with no token: it is what asks for the challenge.
             Assert.All(binds[0].Cookie, b => Assert.Equal(0, b));
-            Assert.Equal(cookie, binds[1].Cookie);
+
+            // After that, every packet is one of exactly two shapes — a repeated step one or a step two carrying the
+            // cookie that came back. Nothing else may be sent.
+            var tokenless = binds.Where(bind => bind.Cookie.All(b => b == 0)).ToList();
+            var withToken = binds.Where(bind => bind.Cookie.SequenceEqual(cookie)).ToList();
+            Assert.NotEmpty(tokenless);
+            Assert.NotEmpty(withToken);
+            Assert.Equal(binds.Count, tokenless.Count + withToken.Count);
+
             Assert.All(binds, bind => Assert.Equal((byte)RelayRole.Controller, bind.Role));
             Assert.All(binds, bind => Assert.Equal(ticket, bind.Ticket));
         }

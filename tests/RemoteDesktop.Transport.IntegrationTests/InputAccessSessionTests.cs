@@ -63,10 +63,26 @@ public sealed class InputAccessSessionTests(ServerFixture server) : IClassFixtur
         await using var session = await controller.Controller.ConnectAsync(
             host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
 
-        // Watching has no input to authorize. Give the host long enough to have sent a status if it were going to.
-        await Task.Delay(300, Ct);
+        // Watching has no input to authorize. A pause would only say that nothing had arrived yet: the host writes
+        // its start-up status on the same control channel that carries ping/pong, so a completed round trip proves
+        // anything it sent when the session started has already been delivered.
+        var rtt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (session.RoundTripTime is not null)
+        {
+            rtt.TrySetResult();
+        }
+        else
+        {
+            session.RoundTripTimeChanged += (_, _) => rtt.TrySetResult();
+        }
+
+        await rtt.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
         Assert.Null(session.InputAccess);
         Assert.Equal(0, access.Requests);
+
+        // Stronger than the absence of a message: the host did not even ask this machine how input stands.
+        Assert.Equal(0, access.StatusReads);
     }
 
     private static async Task WaitForAsync(Func<bool> condition)
@@ -87,10 +103,21 @@ public sealed class InputAccessSessionTests(ServerFixture server) : IClassFixtur
     {
         private InputAccessStatus _status = initial;
         private int _requests;
+        private int _statusReads;
 
         public int Requests => Volatile.Read(ref _requests);
 
-        public InputAccessStatus Status => Volatile.Read(ref _status);
+        /// <summary>How often the host asked what state this machine is in, as opposed to waiting to be told.</summary>
+        public int StatusReads => Volatile.Read(ref _statusReads);
+
+        public InputAccessStatus Status
+        {
+            get
+            {
+                Interlocked.Increment(ref _statusReads);
+                return Volatile.Read(ref _status);
+            }
+        }
 
         public event EventHandler<InputAccessStatus>? StatusChanged;
 

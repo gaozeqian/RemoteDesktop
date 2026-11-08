@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <!--
+      For FeatureModuleCompositionTests: the four Add…Feature calls a host composes itself from are extension methods
+      on IServiceCollection, and "which modules did they register" is only answerable by building the provider. No
+      other test here needs a container, so this is the one reason the package is referenced.
+    -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Camera\RemoteDesktop.Features.Camera.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />

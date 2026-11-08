@@ -87,6 +87,25 @@ jobs:
     # which migrates on GitHub's own schedule rather than this repository's. release.yml's Linux job is pinned to the
     # same image, so the packages that ship come off the machine the package scripts were validated on.
     runs-on: ubuntu-26.04
+    # The PostgreSQL halves of both stores are opt-in in the test code: with no server they skip, and the green result
+    # then covers only the InMemory and SQLite implementations. Two of the three storage backends are not the product's
+    # only deployment — the Docker path in build/docker runs PostgreSQL — so the suite that proves the contract holds
+    # on it has to run somewhere on every push, and this is the one job with a container runtime next to a test run.
+    # The tests make their own throw-away schema per case, so the two projects can run at the same time against it.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RD_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Username=postgres;Password=test;Database=postgres
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
