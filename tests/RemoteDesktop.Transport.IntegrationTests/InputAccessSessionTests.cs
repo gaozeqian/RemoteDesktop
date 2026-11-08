@@ -37,6 +37,23 @@ public sealed class InputAccessSessionTests(ServerFixture server) : IClassFixtur
     }
 
     [Fact]
+    public async Task The_host_reports_input_unavailable_when_service_is_missing()
+    {
+        var access = new FakeInputAccess(new InputAccessStatus(InputAccessState.NotRequested));
+
+        await using var host = await TestDevice.StartAsync(server, forceRelay: false, access);
+        await using var controller = await TestDevice.StartAsync(server);
+        await using var session = await controller.Controller.ConnectAsync(
+            host.Id, host.Credentials.TemporaryPassword, SessionMode.Control, Ct);
+
+        await WaitForAsync(() => session.InputAccess?.State == InputAccessState.NotRequested);
+
+        access.Set(new InputAccessStatus(InputAccessState.Unavailable, "libei socket not found"));
+        await WaitForAsync(() => session.InputAccess?.State == InputAccessState.Unavailable);
+        Assert.Equal("libei socket not found", session.InputAccess?.Reason);
+    }
+
+    [Fact]
     public async Task A_watch_only_session_is_not_told_about_input_authorization()
     {
         var access = new FakeInputAccess(new InputAccessStatus(InputAccessState.Denied, "no"));
