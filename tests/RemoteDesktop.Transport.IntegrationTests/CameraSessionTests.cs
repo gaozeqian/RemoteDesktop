@@ -10,6 +10,7 @@ using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.Linux.Video;
 using RemoteDesktop.Platform.MacOS.Video;
 using RemoteDesktop.Platform.Windows.Camera;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
@@ -178,7 +179,7 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         // that was not NV12, so on macOS the camera opened, reported a picture size, and then never produced a
         // frame — the host log said "camera opened" and nothing else. This test would have timed out there.
         Assert.SkipUnless(
-            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS(),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux(),
             "This test needs the H.264 codecs of one of these platforms.");
         var codecs = CreateCodecs();
         await using var pair = await Pair.StartAsync(server, allowCamera: true);
@@ -335,10 +336,20 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     /// Foundation sources, installer details); the synthetic-camera path is not, and macOS is the platform whose
     /// camera source delivers BGRA, so it has to be able to run there.
     /// </summary>
-    private static VideoCodecSelector CreateCodecs() =>
-        OperatingSystem.IsMacOS()
-            ? new([new VideoToolboxH264EncoderFactory(hardware: false)], [new VideoToolboxH264DecoderFactory()])
-            : new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+    private static VideoCodecSelector CreateCodecs()
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return new([new VideoToolboxH264EncoderFactory(hardware: false)], [new VideoToolboxH264DecoderFactory()]);
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return new([new SoftwareH264EncoderFactory()], [new FfmpegVideoDecoderFactory()]);
+        }
+
+        return new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+    }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {

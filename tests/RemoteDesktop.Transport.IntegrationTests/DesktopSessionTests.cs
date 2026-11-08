@@ -6,6 +6,8 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.Linux.Video;
+using RemoteDesktop.Platform.MacOS.Video;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
@@ -21,9 +23,8 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     [Fact]
     public async Task Controller_receives_decoded_frames_of_the_host_display()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         var codecs = CreateCodecs();
-        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder on this platform.");
 
         await using var host = await TestDevice.StartAsync(server, forceRelay: false, CreateVideoModule(codecs));
         await using var controller = await TestDevice.StartAsync(server);
@@ -57,9 +58,8 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     [Fact]
     public async Task The_hosts_pointer_shape_and_movement_reach_the_controller()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         var codecs = CreateCodecs();
-        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder on this platform.");
         await using var host = await TestDevice.StartAsync(server, forceRelay: false, CreateVideoModule(codecs));
         await using var controller = await TestDevice.StartAsync(server);
         await using var session = await controller.Controller.ConnectAsync(host.Id, host.Credentials.TemporaryPassword, SessionMode.View, Ct);
@@ -82,9 +82,8 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     [Fact]
     public async Task The_controller_can_switch_displays_and_sees_the_list_change()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         var codecs = CreateCodecs();
-        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder on this platform.");
         var displays = new FakeDisplays(FakeDisplays.Display, FakeDisplays.Second);
         await using var host = await TestDevice.StartAsync(server, forceRelay: false, CreateVideoModule(codecs, displays));
         await using var controller = await TestDevice.StartAsync(server);
@@ -117,9 +116,8 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     [Fact]
     public async Task Static_screen_still_answers_key_frame_requests()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation codecs are Windows only.");
         var codecs = CreateCodecs();
-        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder.");
+        Assert.SkipUnless(codecs.GetDecoderCandidates(VideoCodec.H264).Any(), "No H.264 decoder on this platform.");
 
         // One image, then nothing ever changes again.
         var module = new VideoChannelModule(new FakeDisplays(), new FakeCapturerFactory(maxFrames: 1), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
@@ -172,8 +170,25 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
         Assert.Empty(injector.Events);
     }
 
-    private static VideoCodecSelector CreateCodecs() =>
-        new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+    private static VideoCodecSelector CreateCodecs()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return new([new VideoToolboxH264EncoderFactory(hardware: false)], [new VideoToolboxH264DecoderFactory()]);
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return new([new SoftwareH264EncoderFactory()], [new FfmpegVideoDecoderFactory()]);
+        }
+
+        return new([], []);
+    }
 
     private static VideoChannelModule CreateVideoModule(VideoCodecSelector codecs, FakeDisplays? displays = null) =>
         new(displays ?? new FakeDisplays(), new FakeCapturerFactory(), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
