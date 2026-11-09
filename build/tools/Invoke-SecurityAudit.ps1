@@ -13,7 +13,7 @@
 
 .EXAMPLE
   # MSI 部署：Program Files 下的 appsettings.json 只是随包出厂的默认，实际生效的配置在 ProgramData 下。
-  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\Remote Desktop Server"
+  pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\RemoteDesktopServer"
 
 .EXAMPLE
   # 单个文件（手工部署，或检查构建产物里的默认值）。
@@ -30,7 +30,7 @@
 param(
     # 服务端配置所在的目录（Rendezvous\appsettings.json 与 Relay\appsettings.json 都在它下面）。
     # MSI 部署不要指向 Program Files 下的安装目录：那里的文件是随包出厂的默认，升级时会被覆盖，服务读的是
-    # %ProgramData%\Remote Desktop Server\<角色>\appsettings.json，所以应指向 %ProgramData%\Remote Desktop Server。
+    # %ProgramData%\RemoteDesktopServer\<角色>\appsettings.json，所以应指向 %ProgramData%\RemoteDesktopServer。
     [string]$InstallDirectory = '',
 
     # 单个 appsettings.json 文件（手工部署时用；给了它就只查这一份）。

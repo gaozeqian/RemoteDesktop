@@ -8,6 +8,12 @@ namespace RemoteDesktop.Application.Hosting;
 /// </summary>
 public static class DataDirectory
 {
+    /// <summary>
+    /// The folder name every data directory of this product uses, spelled without spaces like the install folders
+    /// (<c>RemoteDesktop</c> next to the server's <c>RemoteDesktopServer</c>). That makes
+    /// <c>%APPDATA%\RemoteDesktop</c>, <c>%ProgramData%\RemoteDesktop</c>,
+    /// <c>~/Library/Application Support/RemoteDesktop</c> and <c>$XDG_DATA_HOME/RemoteDesktop</c> one name.
+    /// </summary>
     private const string ProductName = "RemoteDesktop";
 
     /// <summary>

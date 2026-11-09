@@ -55,6 +55,26 @@
 
 ### Added
 
+**Windows 服务端安装包：向导拆成三页，第一页能填监听地址**
+
+- **原来的单页「服务器设置」拆成三页**，按"回答的是哪个问题"分：**服务器地址**（信令监听地址、中继公网地址、
+  TLS 三选一，370×330）、**证书**（证书域名、`.pfx` 路径与浏览、口令，370×270）、**数据库**（PostgreSQL 连接串，
+  370×250）。原来那一页已经长到 496 高、十来个字段挤在一起。`Back` 逐页回退，确认页的 `Back` 回到最后一页；
+  证书确认框与"还没选证书"框回到证书页，地址错误框回到第一页。
+- **第一页第一行是信令监听地址**（`RENDEZVOUSURL`，带出构建时烤进去的值），与客户端连接页的地址框对齐：改别的机器
+  能连的地址不必再回到命令行。地址在离开这一页时校验——必须是以 `http://` / `https://` 开头的绝对地址、不能带用户名
+  密码，**且填 `https://` 就必须在同一页启用 TLS**（自动生成或指定证书）；不满足时弹一个说明原因的对话框，留在本页
+  而不是装出一个起不来的服务。检查是自定义动作 `ValidateServerUrl`（immediate，`PageActions`），跳转以
+  `SERVERURLERROR` 为条件。
+- **数据库页的"留空"不再自相矛盾**：属性表里的默认值是 `auto`（没指定，由 `DATABASEPROVIDER=auto` 决定：以前配过
+  PostgreSQL 就沿用，否则建本机 SQLite；空的 `""` 是"不用数据库"，设备码只存内存，两者不能混）。拆页后
+  `NormalizeSettings` 每页都跑，会把 `POSTGRESCONNECTIONSTRING` 提前写成 `auto`，于是数据库页的输入框一打开就显示
+  `auto`，而标签写着"留空 = 本机 SQLite"。现在整理动作拆成两份：前两页用 `RestoreEmptyBoxes`（只补空格、裁口令，
+  不动数据库框），最后一页才用 `NormalizeSettings` 把空值写成 `auto`。回退会重建页面，被清空的属性仍由前者补回。
+  页面说明与运维文档也写清了 `auto` 的含义。
+- 包内容测试跟着拆：三个页面各自的可输入属性、页面流向与回退、校验动作的时机与门控，`RestoreEmptyBoxes` /
+  `NormalizeSettings` 各在哪一页跑，布局检查（控件越界/重叠）也扩到六张对话框。
+
 **每节点令牌**
 
 - **控制台可以给单个节点配自己的令牌**：`POST /api/nodes/{id}/token`（管理员，写审计）生成或接受一个令牌并
@@ -186,6 +206,28 @@
 
 ### Changed
 
+**Windows 安装包：目录名与卸载清理**
+
+- **产品建的所有目录都不带空格**：client/host 的安装目录与机器级数据仍是 `RemoteDesktop`（`%ProgramFiles%`、
+  `%ProgramData%`），每用户数据 `%APPDATA%\RemoteDesktop`，macOS 的 `Application Support/RemoteDesktop` 与
+  Linux 的 `$XDG_DATA_HOME/RemoteDesktop` 不变，录屏与摄像头录制仍是「视频」下的 `RemoteDesktop`；
+  **服务端改了名**：`%ProgramFiles%\RemoteDesktopServer` / `%ProgramData%\RemoteDesktopServer` 统一成
+  `RemoteDesktopServer`（安装目录、配置目录、`Set-ServerConfiguration.ps1` 的默认配置目录、`ServerSetup` 的默认
+  数据库路径、包内速查说明与运维文档）。带空格的只剩**给人看的名字**：产品名 `Remote Desktop Server`、
+  开始菜单目录、macOS 的 `.app` 与 bundle 名。安装/卸载服务脚本、macOS 的 `.pkg` / launchd plist / 安装器面板同步。
+  系统包管理器拥有的路径与标识符（`/usr/lib/remotedesktop-server`、`/etc/remotedesktop-server`、
+  `/var/lib/remotedesktop-server`、`/usr/local/remotedesktop-server`、systemd 单元名、launchd 标签、dpkg/bundle id）
+  保持原样。
+- **旧布局迁移代码已删除**：`MigrateClientSettings`（升级时把 Program Files 里的 `appsettings.json` 抄到 ProgramData）、
+  它的 `CLIENTINSTALLFOLDER` 属性与 `SetClientInstallDir`，以及连接页读取安装目录那份文件的回退分支，全部移除——旧版安装
+  都已卸载，这段代码只会把包内的默认值（回环地址）当成"旧设置"抄过去。`RemoveExistingProducts` 仍固定在
+  `InstallInitialize` 之后 1501，包内容测试继续核对这一条。
+- **三个包卸载时默认删除数据**：`REMOVEDATA` 的默认值从 `0` 改为 `1`。client/host 卸载会删掉
+  `%ProgramData%\RemoteDesktop`（设备身份、日志、地址与证书固定），server 卸载会删掉
+  `%ProgramData%\RemoteDesktopServer`（数据库、设置、生成的证书，并移除它自己生成的证书）。
+  `msiexec /x ... REMOVEDATA=0` 保留这些数据，供重装后沿用同一设备代码；大版本升级两条路都不走，
+  升级不会动数据（条件里的 `NOT UPGRADINGPRODUCTCODE` 不变）。`%AppData%\RemoteDesktop` 是每用户数据，MSI 仍然不管。
+
 **客户端界面的遗留观察项收尾**
 
 - **固定密码区块的"关闭"改为"删除"**（评审 R6）：它本来就是删除已保存的固定密码，现在按钮名、ToolTip 与
@@ -203,6 +245,19 @@
   发布说明改在 `release` 里读同一批 Secret 与 `DEFAULT_RENDEZVOUS_URI` 生成，不靠 job 之间的环境变量传递。
 
 ### Fixed
+
+**Windows 客户端装好后打不开（本机实测）**
+
+- **装完客户端双击没反应，进程在启动路径上崩掉**：界面探测后台服务时校验管道服务端身份（管道名字是全局的，服务没占住时别的进程可以先抢注），校验用 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 读服务端进程的映像路径；而服务以 LocalSystem 运行，该访问权对服务进程只发给 SYSTEM 与管理员，普通用户拿到的是错误 5，抛出的 `Win32Exception` 又不在探测函数的捕获列表里，于是整个进程以 `0xe0434352` 在 `KERNELBASE.dll` 里终止（应用日志里只有一条 APPCRASH）。现在被拒时改问服务控制管理器同样两件事：管道服务端的进程号是不是 `RemoteDesktopHost` 服务的进程、该服务登记的可执行文件是不是预期的那一个——两项交互用户都读得到，能改它们的只有管理员，校验强度不变。探测本身也不再让 `Win32Exception` 逃出去：问不出来就按“没有可用的服务”处理，不再让窗口起不来。客户端与被控端 MSI 已重新构建（含签名）。
+
+**测试与评审收尾**
+
+- **输入合并用例不再偶发失败**：`InputSenderTests` 的 `BlockingWriteStream` 把 `WriteAsync` 调用次数当成了帧数，而
+  `FrameCodec` 每帧写两次（长度头 + 载荷），于是"写完了"在最后一帧还没落盘时就发出，测试随即 `DisposeAsync` 取消
+  后续写入，偶发读到少一帧。改为按**完成的帧**计数后，完整 Core 套件连跑三次全绿；产品代码未改。
+- **管道服务端身份校验的 SCM 分支有了自动化用例**：决策逻辑（进程号比对、服务命令行去掉引号/参数/展开环境变量、
+  路径规范化与不匹配时的原因）拆成 `DescribeMismatch` / `ServiceExecutable` 并配 10 条单测；另有一条连接真实
+  `RemoteDesktopHost` 控制管道的端到端断言（机器没装服务时明确跳过），结束前只能靠临时探针手工验证的状态。
 
 **Windows 安装包（在 Windows Sandbox 中实测）**
 
@@ -513,7 +568,7 @@
 **Windows 安装包评审**
 
 - **server MSI 升级会丢掉 live settings，Relay 起不来**：三份 `appsettings.json` 从 `Program Files` 移到
-  `%ProgramData%\Remote Desktop Server\`，不再在 MSI 的文件表里；第一次从旧布局升级时，迁移动作在
+  `%ProgramData%\RemoteDesktopServer\`，不再在 MSI 的文件表里；第一次从旧布局升级时，迁移动作在
   `RemoveExistingProducts` 之前把旧文件复制到新位置。升级不再把空密钥/空数据库模板写回，Relay 不会再因
   `Relay:SharedKey` 为空而启动失败，Rendezvous 也不会退回内存数据库。
 - **真实 major upgrade 会以 MSI error 2613 失败**：`RemoveExistingProducts` 必须是 `InstallInitialize` 之后的
@@ -526,7 +581,7 @@
   `PrepareServerData`，把值以 base64 的 `name=value` 放进 `SERVERCONFIGDATA`，再由三个 `Set...Data` 动作
   交给 deferred 动作；`HideTarget` 与 `Hidden` 保证密钥不进 MSI 日志。
 - **server 安装的自定义动作把带空格的安装目录拼成非法参数**：`ProcessStartInfo.Arguments` 里
-  `"C:\Program Files\Remote Desktop Server\"` 的尾部反斜杠转义了闭合引号，子进程把后面的命令当成路径的
+  `"C:\Program Files\RemoteDesktopServer\"` 的尾部反斜杠转义了闭合引号，子进程把后面的命令当成路径的
   一部分，`--configure-system` 因此失败并回滚。现在 `Quote` 按 CommandLineToArgvW 规则加倍尾部反斜杠，
   `SERVERINSTALLDIR`/`SERVERCONFIGDIR` 去掉尾分隔符后再传给子进程。
 - **client/host MSI 升级会把服务器地址恢复成构建默认值**：live 地址改到
@@ -544,11 +599,11 @@
   `RemoteDesktop.HostService.exe` 的命令行里。
 - **自动生成的自签证书没有部署用的 DNS/NAT 名**：新增 `TLSCERTIFICATEHOSTNAME` 属性与安装页字段，
   `Set-ServerConfiguration.cmd -TlsHostName` 同样支持；名字写进证书 SAN，Ops 的本地节点 URL 也用它。
-- **server 卸载残留数据库/证书/日志**：新增 `REMOVEDATA=1`，删除 `%ProgramData%\Remote Desktop Server`
+- **server 卸载残留数据库/证书/日志**：新增 `REMOVEDATA=1`，删除 `%ProgramData%\RemoteDesktopServer`
   与证书存储里生成的证书；默认保留（重装后设备码不变）。文档列全三类残留。
 - **`Set-ServerConfiguration.ps1` 改数据库不重启 Ops**：现在重启三个服务，并在写完后登记/同步本机节点；
   `-WhatIf` 不再打印口令。
-- **server 配置目录对本机用户可读**：`%ProgramData%\Remote Desktop Server` 在写入前由自定义动作收紧为
+- **server 配置目录对本机用户可读**：`%ProgramData%\RemoteDesktopServer` 在写入前由自定义动作收紧为
   SYSTEM/Administrators 完全控制，relay key、PostgreSQL 口令、TLS 口令与 Ops 库不再对普通用户可读。
 - **server 包在图形界面安装时提前失败**：立即自定义动作以安装用户身份运行；把配置目录的 ACL 收紧到
   SYSTEM/Administrators 后，同一进程紧接着的枚举（以及首次升级的迁移）失去访问，安装回滚，只留下一个空目录。
@@ -568,7 +623,7 @@
 - **证书确认页显示 `auto` 而不是刚选的文件**：确认页改显示 `TLSCERTIFICATEFILE`；选择“已有证书文件”却没选
   文件时会弹出提示，不再静默安装成明文 http。
 - **Ops CLI 不展开 `%ProgramData%`**：`--create-admin` / `--seed-local-nodes` 现在展开环境变量，并按
-  `%ProgramData%\Remote Desktop Server\Ops` 读取与安装版相同的配置。
+  `%ProgramData%\RemoteDesktopServer\Ops` 读取与安装版相同的配置。
 - **WebSocket 地址不带 `/ws` 时连到 `/`**：`RendezvousAddress` 把空路径补成 `/ws`，反向代理使用的
   `wss://host/rd/ws` 之类路径原样保留；构包、安装期与启动期使用同一条规则。
 - **Windows 安装包在默认 PowerShell 5.1 下构建失败**：PDB 删除改为按路径删除（5.1 的管道 `Remove-Item`

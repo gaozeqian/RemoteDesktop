@@ -563,7 +563,7 @@ public static class ServerConfigurationActions
             : DefaultConfigDirectory();
 
     private static string DefaultConfigDirectory() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Remote Desktop Server");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktopServer");
 
     /// <summary>Drops the trailing separator directory properties carry, keeping a bare root such as <c>C:\</c>.</summary>
     private static string TrimDirectory(string value)

@@ -174,10 +174,10 @@ public sealed class HostInstallerPackageTests
             "SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = 'SetFixedPassword'", 2));
         Assert.Contains("FIXEDPASSWORDFILE", setSequence[1], StringComparison.Ordinal);
 
-        // The first upgrade from the old layout copies the address to ProgramData before the old product is removed.
-        Assert.Contains("MigrateClientSettings", actions);
-        Assert.Single(package.Rows(
-            "SELECT `Action` FROM `InstallExecuteSequence` WHERE `Action` = 'MigrateClientSettings'", 1));
+        // The connection page is the host's only interface (it has no window after installation), so its prefill and
+        // validation actions have to be in this package too, not only in the client's.
+        Assert.Contains("PrefillConnectionSettings", actions);
+        Assert.Contains("ValidateConnectionSettings", actions);
 
         // --- the machine setup actions ---------------------------------------------------------------------------
         foreach (var action in new[] { "ConfigureSystem", "CleanupKeepData", "CleanupRemoveData" })

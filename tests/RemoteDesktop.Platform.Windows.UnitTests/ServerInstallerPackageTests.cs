@@ -122,6 +122,7 @@ public sealed class ServerInstallerPackageTests
 
         Assert.Equal("auto", properties["RELAYSHAREDKEY"]);
         Assert.Contains("5080", properties["RENDEZVOUSURL"], StringComparison.Ordinal);
+        Assert.Equal("1", properties["REMOVEDATA"]); // an uninstall removes the data unless REMOVEDATA=0
 
         // --- the page that makes this package answerable without a command line --------------------------------
         // Without it a double-click install takes every default, and the defaults are "no database" and "plain http":
@@ -150,9 +151,22 @@ public sealed class ServerInstallerPackageTests
         Assert.True(int.Parse(fill[0][2], CultureInfo.InvariantCulture) < int.Parse(last[3], CultureInfo.InvariantCulture),
             "the addresses have to be filled in before the page that shows them is entered");
 
-        // And back returns to it from the confirmation, so the page is not a one-way trip.
+        // The three pages are walked in order and Back undoes one step at a time, so the confirmation returns to the
+        // last of them, and each page's Back returns to the one before.
         var back = package.Rows("SELECT `Control_`, `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'VerifyReadyDlg'", 3);
-        Assert.Contains(back, row => row[0] == "Back" && row[1] == "NewDialog" && row[2] == "ServerSettingsDlg");
+        Assert.Contains(back, row => row[0] == "Back" && row[1] == "NewDialog" && row[2] == "ServerDatabaseDlg");
+        var certificateBack = package.Rows("SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'ServerCertificateDlg' AND `Control_` = 'Back'", 2);
+        Assert.Contains(certificateBack, row => row[0] == "NewDialog" && row[1] == "ServerSettingsDlg");
+        var databaseBack = package.Rows("SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'ServerDatabaseDlg' AND `Control_` = 'Back'", 2);
+        Assert.Contains(databaseBack, row => row[0] == "NewDialog" && row[1] == "ServerCertificateDlg");
+
+        // And each page hands on to the next one; a page whose Next goes nowhere would strand the settings it collects.
+        var addressNext = package.Rows("SELECT `Event`, `Argument`, `Condition`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'Next'", 4);
+        Assert.Contains(addressNext, row => row[0] == "NewDialog" && row[1] == "ServerCertificateDlg");
+        var certificateNext = package.Rows("SELECT `Event`, `Argument`, `Condition`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = 'ServerCertificateDlg' AND `Control_` = 'Next'", 4);
+        Assert.Contains(certificateNext, row => row[0] == "NewDialog" && row[1] == "ServerDatabaseDlg");
+        var databaseNext = package.Rows("SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'ServerDatabaseDlg' AND `Control_` = 'Next'", 2);
+        Assert.Contains(databaseNext, row => row[0] == "NewDialog" && row[1] == "VerifyReadyDlg");
 
         // No control event may be called SetProperty. It reads like the way to set a property from a dialog and is not:
         // a property is set by naming it in the event column in brackets, and any other unrecognised name makes the
@@ -163,47 +177,79 @@ public sealed class ServerInstallerPackageTests
         Assert.DoesNotContain(everyEvent, row => row[2] == "SetProperty");
 
         // And the mapping itself, since the radio group's property and the file box's property are neither of them the
-        // one the install acts on.
-        var mapping = package.Rows("SELECT `Event`, `Argument`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'Next'", 3);
-        Assert.Contains(mapping, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "auto" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
-        Assert.Contains(mapping, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "generate" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
-        Assert.Contains(mapping, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "[TLSCERTIFICATEFILE]" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
+        // one the install acts on. It sits on the certificate page's Next — the page that owns the file box.
+        Assert.Contains(certificateNext, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "auto" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
+        Assert.Contains(certificateNext, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "generate" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
+        Assert.Contains(certificateNext, row => row[0] == "[TLSCERTIFICATEPATH]" && row[1] == "[TLSCERTIFICATEFILE]" && row[2].Contains("TLSCHOICE", StringComparison.Ordinal));
 
-        // Tidying runs on the way out, before any of that. It is what makes the space these boxes start with harmless:
-        // without it, a password typed after that space would be sent on with the space in front of it and the
-        // certificate would not open.
-        var nextEvents = package.Rows("SELECT `Event`, `Argument`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'Next'", 3);
-        var tidy = nextEvents.Where(row => row[0] == "DoAction" && row[1] == "NormalizeSettings").ToList();
+        // Tidying runs on the way out of every page, before any of that. It is what makes the space these boxes start
+        // with harmless: without it, a password typed after that space would be sent on with the space in front of it
+        // and the certificate would not open. It runs on all three pages because going back rebuilds a page from these
+        // properties, and one the user emptied is gone unless something puts a value back.
+        var tidy = certificateNext.Where(row => row[0] == "DoAction" && row[1] == "RestoreEmptyBoxes").ToList();
         Assert.Single(tidy);
-        var tidyOrder = int.Parse(tidy[0][2], CultureInfo.InvariantCulture);
-        foreach (var row in nextEvents.Where(row => row[0] == "[TLSCERTIFICATEPATH]"))
+        var tidyOrder = int.Parse(tidy[0][3], CultureInfo.InvariantCulture);
+        foreach (var row in certificateNext.Where(row => row[0] == "[TLSCERTIFICATEPATH]"))
         {
-            Assert.True(tidyOrder < int.Parse(row[2], CultureInfo.InvariantCulture), "tidying has to happen before the value is mapped onward");
+            Assert.True(tidyOrder < int.Parse(row[3], CultureInfo.InvariantCulture), "tidying has to happen before the value is mapped onward");
         }
 
-        // Every control on the page writes a property the deferred action already reads, which is what makes the page
-        // work without touching the install logic.
-        var pageControls = package.Rows("SELECT `Control`, `Property` FROM `Control` WHERE `Dialog_` = 'ServerSettingsDlg'", 2);
+        // The first two pages only put spaces back; the database box is left alone there, because the word its default
+        // holds would otherwise appear in a box labelled "leave it empty for SQLite". The last page is where that box
+        // gets the word the configuration step reads.
+        foreach (var page in new[] { "ServerSettingsDlg", "ServerCertificateDlg" })
+        {
+            var pageNext = package.Rows($"SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = '{page}' AND `Control_` = 'Next'", 2);
+            Assert.Contains(pageNext, row => row[0] == "DoAction" && row[1] == "RestoreEmptyBoxes");
+            Assert.DoesNotContain(pageNext, row => row[0] == "DoAction" && row[1] == "NormalizeSettings");
+        }
+
+        Assert.Contains(databaseNext, row => row[0] == "DoAction" && row[1] == "NormalizeSettings");
+        Assert.Equal("auto", properties["POSTGRESCONNECTIONSTRING"]);
+
+        // Every control on the three pages writes a property the deferred action already reads, which is what makes
+        // them work without touching the install logic.
+        var pageControls = package.Rows(
+            "SELECT `Dialog_`, `Control`, `Property` FROM `Control` WHERE `Dialog_` = 'ServerSettingsDlg' OR `Dialog_` = 'ServerCertificateDlg' OR `Dialog_` = 'ServerDatabaseDlg'", 3);
         foreach (var property in new[]
                  {
-                     "POSTGRESCONNECTIONSTRING", "RELAYPUBLICENDPOINT", "TLSCERTIFICATEFILE",
-                     "TLSCERTIFICATEPASSWORD", "TLSCERTIFICATEHOSTNAME",
+                     "RENDEZVOUSURL", "RELAYPUBLICENDPOINT", "TLSCHOICE", "POSTGRESCONNECTIONSTRING",
+                     "TLSCERTIFICATEFILE", "TLSCERTIFICATEPASSWORD", "TLSCERTIFICATEHOSTNAME",
                  })
         {
-            Assert.True(pageControls.Any(row => row[1] == property), $"The settings page has no control for {property}.");
+            Assert.True(pageControls.Any(row => row[2] == property), $"The settings pages have no control for {property}.");
         }
 
         // The certificate box writes its own property, never the one the install reads: that one holds a word rather
         // than a path whenever TLS is off or the certificate is generated, and the box used to show it — choosing
         // "generate" and pressing Next left the word sitting in a field labelled "path".
-        Assert.DoesNotContain(pageControls, row => row[1] == "TLSCERTIFICATEPATH");
+        Assert.DoesNotContain(pageControls, row => row[2] == "TLSCERTIFICATEPATH");
 
         // And the box that can be left empty arrives with a space in it rather than nothing. A property with no value
         // never reaches the property table, and a control bound to a missing property comes out greyed and untypable —
         // the state the certificate path box was in before it was given a value.
         Assert.Equal(" ", properties["TLSCERTIFICATEFILE"]);
 
-        Assert.True(pageControls.Any(row => row[1] == "TLSCHOICE"), "The settings page has no TLS choice.");
+        // The address is checked on the way out of the first page, the same way the client's connection page checks
+        // its own: the action runs before the transition, the transition only fires while it left no error behind, and
+        // the error is shown in a dialog of its own. Without this an https:// address with TLS off installs a service
+        // that cannot start, which the install would still report as a success.
+        Assert.Equal(" ", properties["SERVERURLERROR"]);
+        var validate = addressNext.Where(row => row[0] == "DoAction" && row[1] == "ValidateServerUrl").ToList();
+        Assert.Single(validate);
+        var validateOrder = int.Parse(validate[0][3], CultureInfo.InvariantCulture);
+        var leaveAddressPage = Assert.Single(addressNext, row => row[0] == "NewDialog" && row[1] == "ServerCertificateDlg");
+        Assert.True(validateOrder < int.Parse(leaveAddressPage[3], CultureInfo.InvariantCulture),
+            "the address has to be checked before the wizard moves on");
+        Assert.Contains(addressNext, row => row[0] == "SpawnDialog" && row[1] == "ServerUrlErrorDlg");
+        Assert.Contains("SERVERURLERROR", leaveAddressPage[2], StringComparison.Ordinal);
+
+        // And the check itself is something this package's msiexec can load and run.
+        var pageActions = package.Rows("SELECT `Action`, `Type`, `Source` FROM `CustomAction`", 3);
+        var validateAction = Assert.Single(pageActions, row => row[0] == "ValidateServerUrl");
+        Assert.Equal("PageActions", validateAction[2]);
+        Assert.Equal(1, int.Parse(validateAction[1], CultureInfo.InvariantCulture) & 0x3F);  // DLL from the Binary table
+        Assert.Equal(0, int.Parse(validateAction[1], CultureInfo.InvariantCulture) & 0x400); // immediate, not deferred
 
         // Picking a certificate file has to end by navigating to another dialog, and must not end with a Reset. Reset
         // reads like "make the control show the property again" and is the opposite: it restores the control's original
@@ -211,13 +257,13 @@ public sealed class ServerInstallerPackageTests
         // showed the path being set and then replaced by "auto" twenty-seven milliseconds later. It has to be a
         // transition rather than SpawnDialog (the same log showed the page below a spawned dialog never being built
         // again when it closed), and the target cannot be this page itself: that was tried, and the installer refuses
-        // with "Error 2856: Creating a second copy of the dialog ServerSettingsDlg" and stops the wizard.
-        var browseEvents = package.Rows("SELECT `Event`, `Argument`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'TlsBrowseButton'", 3);
+        // with "Error 2856: Creating a second copy of the dialog ServerCertificateDlg" and stops the wizard.
+        var browseEvents = package.Rows("SELECT `Event`, `Argument`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'ServerCertificateDlg' AND `Control_` = 'TlsBrowseButton'", 3);
         Assert.Contains(browseEvents, row => row[0] == "DoAction" && row[1] == "BrowseForCertificate");
         Assert.Contains(browseEvents, row => row[0] == "NewDialog" && row[1] == "CertificateChosenDlg" && row[2].Contains("TLSCERTIFICATECHOSEN", StringComparison.Ordinal));
         Assert.DoesNotContain(browseEvents, row => row[0] == "Reset");
         Assert.DoesNotContain(browseEvents, row => row[0] == "SpawnDialog");
-        Assert.DoesNotContain(browseEvents, row => row[1] == "ServerSettingsDlg");
+        Assert.DoesNotContain(browseEvents, row => row[1] == "ServerCertificateDlg");
 
         // The dialog that confirms the choice, and shows it: the page behind cannot while it is on screen. Its one
         // button has to lead back, or the choice would be shown and then stranded.
@@ -228,19 +274,18 @@ public sealed class ServerInstallerPackageTests
         Assert.Contains(chosen, row => row[1] == "[TLSCERTIFICATEFILE]");
         Assert.Contains(chosen, row => row[0] == "OK");
         var backFromChosen = package.Rows("SELECT `Control_`, `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = 'CertificateChosenDlg'", 3);
-        Assert.Contains(backFromChosen, row => row[0] == "OK" && row[1] == "NewDialog" && row[2] == "ServerSettingsDlg");
+        Assert.Contains(backFromChosen, row => row[0] == "OK" && row[1] == "NewDialog" && row[2] == "ServerCertificateDlg");
 
         // Choosing "existing certificate file" with no file spawns a dialog instead of quietly installing plain http.
         Assert.Contains("CertificateMissingDlg", dialogs);
-        var certificateNextEvents = package.Rows("SELECT `Event`, `Argument`, `Condition` FROM `ControlEvent` WHERE `Dialog_` = 'ServerSettingsDlg' AND `Control_` = 'Next'", 3);
-        Assert.Contains(certificateNextEvents, row => row[0] == "SpawnDialog" && row[1] == "CertificateMissingDlg" && row[2].Contains("TLSCERTIFICATEFILE", StringComparison.Ordinal));
-        Assert.Contains(certificateNextEvents, row => row[0] == "NewDialog" && row[1] == "VerifyReadyDlg" && row[2].Contains("TLSCERTIFICATEFILE <>", StringComparison.Ordinal));
+        Assert.Contains(certificateNext, row => row[0] == "SpawnDialog" && row[1] == "CertificateMissingDlg" && row[2].Contains("TLSCERTIFICATEFILE", StringComparison.Ordinal));
+        Assert.Contains(certificateNext, row => row[0] == "NewDialog" && row[1] == "ServerDatabaseDlg" && row[2].Contains("TLSCERTIFICATEFILE <>", StringComparison.Ordinal));
 
-        // Nothing on either page may sit outside it, and nothing may sit on top of anything else. The coordinates are
+        // Nothing on any page may sit outside it, and nothing may sit on top of anything else. The coordinates are
         // all written by hand, and both mistakes are invisible rather than broken: a control off the page simply is not
         // there, and one lying over another is drawn underneath it. The first was already checked here; the second was
         // not, and a checkbox added to the page duly landed on the relay address field directly below it.
-        foreach (var dialog in new[] { "ServerSettingsDlg", "CertificateChosenDlg", "CertificateMissingDlg" })
+        foreach (var dialog in new[] { "ServerSettingsDlg", "ServerCertificateDlg", "ServerDatabaseDlg", "CertificateChosenDlg", "CertificateMissingDlg", "ServerUrlErrorDlg" })
         {
             var bounds = package.Rows($"SELECT `Width`, `Height` FROM `Dialog` WHERE `Dialog` = '{dialog}'", 2);
             var (pageWidth, pageHeight) = (int.Parse(bounds[0][0], CultureInfo.InvariantCulture), int.Parse(bounds[0][1], CultureInfo.InvariantCulture));

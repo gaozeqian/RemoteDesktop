@@ -39,7 +39,7 @@
                             ResetPeriodInDays="1" />
       </Component>
 
-      <!-- The shipped defaults. The live file is %ProgramData%\Remote Desktop Server\Rendezvous\appsettings.json,
+      <!-- The shipped defaults. The live file is %ProgramData%\RemoteDesktopServer\Rendezvous\appsettings.json,
            which the MSI does not own and therefore a major upgrade does not delete. This one is a normal component:
            an upgrade replaces it with the new defaults, which is exactly what it is for. -->
       <Component Id="RendezvousSettings" Guid="be5f6a7b-8c9d-4e0f-9a1b-4c5d6e7f8091">
@@ -278,7 +278,7 @@
       <!-- Before validation, because that is when Windows decides whether a restart will be needed. -->
       <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
       <!--
-        The live settings are kept in %ProgramData%\Remote Desktop Server, outside the MSI's file table. The first
+        The live settings are kept in %ProgramData%\RemoteDesktopServer, outside the MSI's file table. The first
         upgrade from a package that kept them under Program Files copies them across *before* RemoveExistingProducts
         deletes the old product's files; every later upgrade finds the destination there and leaves it alone.
         SecureConfigDirectory runs first so the migrated files land in a directory only SYSTEM, Administrators and the
@@ -378,35 +378,51 @@
     <Binary Id="PageActions" SourceFile="$(var.CustomActionsPath)" />
     <CustomAction Id="BrowseForCertificate" BinaryRef="PageActions" DllEntry="BrowseForCertificate" Execute="immediate" Return="check" />
     <CustomAction Id="PrefillSettings" BinaryRef="PageActions" DllEntry="PrefillSettings" Execute="immediate" Return="check" />
+    <!-- Pages one and two only put spaces back; the database box is left alone so that it stays empty until the last
+         page, where NormalizeSettings also turns it into the word the configuration step reads. -->
+    <CustomAction Id="RestoreEmptyBoxes" BinaryRef="PageActions" DllEntry="RestoreEmptyBoxes" Execute="immediate" Return="check" />
     <CustomAction Id="NormalizeSettings" BinaryRef="PageActions" DllEntry="NormalizeSettings" Execute="immediate" Return="check" />
+    <!-- Immediate, because it reads the page's own properties (RENDEZVOUSURL, TLSCHOICE) while the wizard is on the
+         page, and writes SERVERURLERROR back into it. See the Next button below. -->
+    <CustomAction Id="ValidateServerUrl" BinaryRef="PageActions" DllEntry="ValidateServerUrl" Execute="immediate" Return="check" />
 
     <UI>
 
-    <Dialog Id="ServerSettingsDlg" Width="370" Height="400" Title="[ProductName] 安装向导">
-      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器设置" />
-      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="以下都可以留空，装完也能改（见安装目录下的 Set-ServerConfiguration.cmd）。" />
-      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
-      <Control Id="BottomLine" Type="Line" X="0" Y="368" Width="370" Height="0" />
+    <!--
+      Three pages, because one page with all of this on it was a wall of boxes: what this server is reached at, the
+      certificate that https needs, and the database behind the device codes. The split is by question, not by size —
+      everything on a page is answered together, and the last page is where the settings page's tidying runs before
+      the confirmation page.
+    -->
 
-      <!-- The database. This box is for the advanced case — a PostgreSQL server that already exists — and it arrives
-           empty on purpose: an empty box means "decide for this machine", which now starts a SQLite database in
-           %ProgramData% and keeps every device code across restarts. It used to arrive holding a template pointing at
-           a PostgreSQL on this machine, which only made sense while the alternative was no database at all. -->
-      <Control Id="PostgresLabel" Type="Text" X="20" Y="52" Width="330" Height="12" NoPrefix="yes" Text="PostgreSQL 连接串（留空 = 用本机 SQLite，自动创建）" />
-      <Control Id="PostgresEdit" Type="Edit" X="20" Y="64" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" />
-      <Control Id="PostgresNote" Type="Text" X="20" Y="82" Width="330" Height="12" NoPrefix="yes" Text="填了就用 PostgreSQL（库要先建好，只建表）。留空则用 SQLite：文件在本机数据目录，重启后设备码不变。" />
+    <!-- Page one: how this server is reached, and whether the signaling connection is encrypted. -->
+    <Dialog Id="ServerSettingsDlg" Width="370" Height="330" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器地址" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="28" Transparent="yes" NoPrefix="yes" Text="地址决定这台服务器监听哪里、客户端到哪里找中继；装完也能改（见安装目录下的 Set-ServerConfiguration.cmd）。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="294" Width="370" Height="0" />
+
+      <!-- Where the signaling server listens. The box arrives holding the address the package was built with (the
+           client's connection page works the same way), which is the one thing a deployment usually has to change: a
+           package built for the default binds loopback, and only this machine can reach that.
+           An https:// address needs TLS enabled on this same page - the check that says so is ValidateServerUrl. -->
+      <Control Id="UrlLabel" Type="Text" X="20" Y="64" Width="330" Height="12" NoPrefix="yes" Text="信令监听地址（http:// 或 https://）" />
+      <Control Id="UrlEdit" Type="Edit" X="20" Y="78" Width="330" Height="18" Property="RENDEZVOUSURL" Text="[RENDEZVOUSURL]" />
+      <Control Id="UrlNote" Type="Text" X="20" Y="100" Width="330" Height="24" NoPrefix="yes" Text="别的机器要连就用 https://0.0.0.0:5080；只给本机用留 http://127.0.0.1:5080。非回环的明文 http 客户端会拒绝连接。" />
 
       <!-- Where clients are told to reach the relay. "auto" picks this machine's first non-loopback address, which on
            a machine with a VPN is the VPN's. -->
-      <Control Id="RelayLabel" Type="Text" X="20" Y="104" Width="330" Height="12" NoPrefix="yes" Text="中继公网地址（客户端用它找中继）" />
-      <Control Id="RelayEdit" Type="Edit" X="20" Y="116" Width="330" Height="16" Property="RELAYPUBLICENDPOINT" Text="[RELAYPUBLICENDPOINT]" />
-      <Control Id="RelayNote" Type="Text" X="20" Y="134" Width="330" Height="24" NoPrefix="yes" Text="auto = 自动选本机地址，装了 VPN 或有虚拟网卡时会选错。也可以填域名，但安装时会解析成 IP 写死。" />
+      <Control Id="RelayLabel" Type="Text" X="20" Y="132" Width="330" Height="12" NoPrefix="yes" Text="中继公网地址（客户端用它找中继）" />
+      <Control Id="RelayEdit" Type="Edit" X="20" Y="146" Width="330" Height="16" Property="RELAYPUBLICENDPOINT" Text="[RELAYPUBLICENDPOINT]" />
+      <Control Id="RelayNote" Type="Text" X="20" Y="164" Width="330" Height="24" NoPrefix="yes" Text="auto = 自动选本机地址，装了 VPN 或有虚拟网卡时会选错。也可以填域名，但安装时会解析成 IP 写死。" />
 
-      <!-- TLS: three choices, and the middle one is why this page is worth having. -->
-      <Control Id="TlsLabel" Type="Text" X="20" Y="166" Width="330" Height="12" NoPrefix="yes" Text="信令是否走 TLS" />
+      <!-- TLS: three choices, and the middle one is why this is on the page at all. It lives next to the address
+           because the two decide together whether the server can be reached: https without a certificate is a
+           service that dies on its first start, and the address check refuses that combination. -->
+      <Control Id="TlsLabel" Type="Text" X="20" Y="196" Width="330" Height="12" NoPrefix="yes" Text="信令是否走 TLS" />
       <!-- Flat, not nested: in this schema the group is a control of its own and each button is a sibling that names
            the group's property. -->
-      <Control Id="TlsChoice" Type="RadioButtonGroup" X="20" Y="178" Width="330" Height="46" Property="TLSCHOICE">
+      <Control Id="TlsChoice" Type="RadioButtonGroup" X="20" Y="210" Width="330" Height="46" Property="TLSCHOICE">
         <RadioButtonGroup Property="TLSCHOICE">
           <RadioButton Value="none" X="4" Y="2" Width="322" Height="13" Text="不启用：明文 http，设备代码与中继票据在途中可被读取" />
           <RadioButton Value="generate" X="4" Y="17" Width="322" Height="13" Text="自动生成一张自签名证书并启用 https（推荐）" />
@@ -414,14 +430,45 @@
         </RadioButtonGroup>
       </Control>
 
+      <Control Id="Back" Type="PushButton" X="180" Y="303" Width="56" Height="17" Text="!(loc.WixUIBack)">
+        <Publish Event="NewDialog" Value="InstallDirDlg" />
+      </Control>
+      <Control Id="Next" Type="PushButton" X="236" Y="303" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+        <!-- What is in the boxes is tidied up on the way out — the password trimmed, and any box left empty put back
+             to the space the page needs in order to be able to show it. See RestoreEmptyBoxes. It runs on every page's
+             Next because going back to a page rebuilds it from these properties. The database box is not touched here:
+             it belongs to the last page, and until then it should keep looking empty. -->
+        <Publish Event="DoAction" Value="RestoreEmptyBoxes" Order="1" Condition="1" />
+
+        <!-- The address box is checked here, the way the client's connection page checks its own: an address that is
+             not an absolute http(s) URL, or an https address with TLS switched off, would otherwise only show up as a
+             service that fails to start. SERVERURLERROR then gates the transition below. -->
+        <Publish Event="DoAction" Value="ValidateServerUrl" Order="2" Condition="1" />
+        <Publish Event="SpawnDialog" Value="ServerUrlErrorDlg" Order="3"
+                 Condition="SERVERURLERROR &lt;&gt; &quot; &quot;" />
+        <Publish Event="NewDialog" Value="ServerCertificateDlg" Order="4"
+                 Condition="SERVERURLERROR = &quot; &quot;" />
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="304" Y="303" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg" />
+      </Control>
+    </Dialog>
+
+    <!-- Page two: what https is served with, when it is not generated here. -->
+    <Dialog Id="ServerCertificateDlg" Width="370" Height="270" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}证书" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="28" Transparent="yes" NoPrefix="yes" Text="上一页选了自动生成就不用管这一页；选了使用已有证书文件，就在这里指明它。全部留空也可以。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
       <!-- The names the certificate has to answer. It only matters when the certificate is generated; a file the
            operator supplies already has its own SANs. Empty means the machine name. -->
-      <Control Id="TlsHostLabel" Type="Text" X="34" Y="230" Width="312" Height="12" NoPrefix="yes" Text="证书域名（客户端拨的 DNS 名或 IP，逗号分隔；留空用本机名）" />
-      <Control Id="TlsHostEdit" Type="Edit" X="34" Y="242" Width="316" Height="16" Property="TLSCERTIFICATEHOSTNAME" Text="[TLSCERTIFICATEHOSTNAME]" />
+      <Control Id="TlsHostLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="证书域名（客户端拨的 DNS 名或 IP，逗号分隔；留空用本机名）" />
+      <Control Id="TlsHostEdit" Type="Edit" X="20" Y="80" Width="330" Height="16" Property="TLSCERTIFICATEHOSTNAME" Text="[TLSCERTIFICATEHOSTNAME]" />
 
       <!-- Two lines, one field each: on one line the password box came out about thirty pixels wide, which is not a
            field anybody can type a password into. -->
-      <Control Id="TlsPathLabel" Type="Text" X="34" Y="264" Width="312" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
+      <Control Id="TlsPathLabel" Type="Text" X="20" Y="108" Width="330" Height="12" NoPrefix="yes" Text="证书文件路径（.pfx）" />
       <!-- Bound to its own property, and not to the one the install reads, so that nothing the install needs can show
            up in a box labelled "path". TLSCERTIFICATEPATH holds a word rather than a path whenever TLS is off or the
            certificate is to be generated, and this box used to display it: choosing "generate" and pressing Next left
@@ -431,7 +478,7 @@
            is bound to is defined, and a property with no value never reaches the property table, so an empty one
            would leave this box greyed. A space is invisible in a text box, and the server reads a value of nothing but
            spaces as "no certificate" - it already did, for the properties it reads. -->
-      <Control Id="TlsPathEdit" Type="Edit" X="34" Y="276" Width="240" Height="16" Property="TLSCERTIFICATEFILE" />
+      <Control Id="TlsPathEdit" Type="Edit" X="20" Y="122" Width="246" Height="16" Property="TLSCERTIFICATEFILE" />
       <!-- Windows Installer's own browse dialog picks folders, not files, so this button runs our own action, which
            puts the chosen path into the property the page shows.
 
@@ -447,33 +494,32 @@
            how the first attempt at this failed. So choosing a file moves forward to a page that shows it, and coming
            back from there is what makes this page correct.
 
-           That page cannot be this one. Pointing the transition at ServerSettingsDlg would save the extra step, and
-           was tried: the installer refuses with "Error 2856: Creating a second copy of the dialog ServerSettingsDlg"
-           and the wizard dies on the spot, so the step is not a shortcoming of this button but the shortest way round
-           a rule. It is also why none of the dialogs in WiX's own interface ever names itself. -->
-      <Control Id="TlsBrowseButton" Type="PushButton" X="278" Y="276" Width="72" Height="16" Text="浏览…">
+           That page cannot be this one. Pointing the transition at ServerCertificateDlg would save the extra step,
+           and was tried: the installer refuses with "Error 2856: Creating a second copy of the dialog
+           ServerCertificateDlg" and the wizard dies on the spot, so the step is not a shortcoming of this button but
+           the shortest way round a rule. It is also why none of the dialogs in WiX's own interface ever names
+           itself. -->
+      <Control Id="TlsBrowseButton" Type="PushButton" X="274" Y="122" Width="76" Height="16" Text="浏览…">
         <Publish Event="DoAction" Value="BrowseForCertificate" Order="1" />
         <!-- Only when a file was actually chosen: nothing changed if the file dialog was cancelled, so there is nothing
              to show and no reason to interrupt. -->
         <Publish Event="NewDialog" Value="CertificateChosenDlg" Order="2" Condition="TLSCERTIFICATECHOSEN = &quot;1&quot;" />
       </Control>
-      <Control Id="TlsPasswordLabel" Type="Text" X="34" Y="298" Width="312" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
+      <Control Id="TlsPasswordLabel" Type="Text" X="20" Y="148" Width="330" Height="12" NoPrefix="yes" Text="证书口令（没有口令就留空）" />
       <!-- A plain box, showing what is typed. It was a password box, which draws a dot per character, and that made the
            field impossible to leave looking empty: the property has to hold something for the box to be usable at all,
            so it held a word, so it showed four dots, and the page appeared to have been filled in already. Now it holds
            a space, which reads as nothing, and the value is trimmed on the way out so that typing a real password after
            it still works. The cost is that the password is on screen, and in the installer's log like any other
            command-line value — which is why a certificate protected by where the file lives is still the better one. -->
-      <Control Id="TlsPasswordEdit" Type="Edit" X="34" Y="310" Width="316" Height="16" Property="TLSCERTIFICATEPASSWORD" />
-      <Control Id="TlsNote" Type="Text" X="20" Y="332" Width="330" Height="24" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接；证书里的域名要覆盖客户端拨的名字。" />
+      <Control Id="TlsPasswordEdit" Type="Edit" X="20" Y="162" Width="330" Height="16" Property="TLSCERTIFICATEPASSWORD" />
+      <Control Id="TlsNote" Type="Text" X="20" Y="186" Width="330" Height="30" NoPrefix="yes" Text="自动生成的证书放在本机证书存储，公钥导出到安装目录 tls\signaling.cer —— 客户端要信任它，否则会拒绝连接；证书里的域名要覆盖客户端拨的名字。" />
 
-      <Control Id="Back" Type="PushButton" X="180" Y="377" Width="56" Height="17" Text="!(loc.WixUIBack)">
-        <Publish Event="NewDialog" Value="InstallDirDlg" />
+      <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+        <Publish Event="NewDialog" Value="ServerSettingsDlg" />
       </Control>
-      <Control Id="Next" Type="PushButton" X="236" Y="377" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
-        <!-- What is in the boxes is tidied up on the way out — the password trimmed, and any box left empty put back
-             to the space the page needs in order to be able to show it. See NormalizeSettings. -->
-        <Publish Event="DoAction" Value="NormalizeSettings" Order="1" Condition="1" />
+      <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+        <Publish Event="DoAction" Value="RestoreEmptyBoxes" Order="1" Condition="1" />
 
         <!-- "Use an existing certificate file" with no file must not silently fall through to plain http. The dialog
              is shown instead of the mapping/transition below, whose conditions then stay false and keep the wizard on
@@ -492,10 +538,39 @@
         <Publish Event="[TLSCERTIFICATEPATH]" Value="generate" Order="4" Condition="TLSCHOICE = &quot;generate&quot;" />
         <Publish Event="[TLSCERTIFICATEPATH]" Value="[TLSCERTIFICATEFILE]" Order="5"
                  Condition="TLSCHOICE = &quot;file&quot; AND TLSCERTIFICATEFILE &lt;&gt; &quot; &quot;" />
-        <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="6"
+        <Publish Event="NewDialog" Value="ServerDatabaseDlg" Order="6"
                  Condition="TLSCHOICE &lt;&gt; &quot;file&quot; OR TLSCERTIFICATEFILE &lt;&gt; &quot; &quot;" />
       </Control>
-      <Control Id="Cancel" Type="PushButton" X="304" Y="377" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+      <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+        <Publish Event="SpawnDialog" Value="CancelDlg" />
+      </Control>
+    </Dialog>
+
+    <!-- Page three: where the device codes live. The box is for the advanced case — a PostgreSQL server that already
+         exists — and it arrives empty on purpose: an empty box means "decide for this machine", which starts a SQLite
+         database in ProgramData and keeps every device code across restarts. It used to arrive holding a template
+         pointing at a PostgreSQL on this machine, which only made sense while the alternative was no database at all. -->
+    <Dialog Id="ServerDatabaseDlg" Width="370" Height="250" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}数据库" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="28" Transparent="yes" NoPrefix="yes" Text="设备代码存在哪里。留空就用本机 SQLite，装完即可用；只有已经有 PostgreSQL 时才需要填下面的连接串。" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="54" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="214" Width="370" Height="0" />
+
+      <Control Id="PostgresLabel" Type="Text" X="20" Y="66" Width="330" Height="12" NoPrefix="yes" Text="PostgreSQL 连接串（留空 = 用本机 SQLite，自动创建）" />
+      <Control Id="PostgresEdit" Type="Edit" X="20" Y="80" Width="330" Height="16" Property="POSTGRESCONNECTIONSTRING" />
+      <Control Id="PostgresNote" Type="Text" X="20" Y="104" Width="330" Height="48" NoPrefix="yes" Text="填了就用 PostgreSQL（库要先建好，只建表）：多台服务器共用同一份设备表时用它。留空或填 auto 都由安装程序决定——以前配过 PostgreSQL 就沿用，否则建本机 SQLite（文件在数据目录，重启、升级后设备码不变；要备份，删掉等于所有设备码重发）。" />
+
+      <Control Id="Back" Type="PushButton" X="180" Y="223" Width="56" Height="17" Text="!(loc.WixUIBack)">
+        <Publish Event="NewDialog" Value="ServerCertificateDlg" />
+      </Control>
+      <Control Id="Next" Type="PushButton" X="236" Y="223" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+        <!-- The last page before the confirmation, so this is where the boxes are tidied for good: the password
+             trimmed, the database box turned into the word the configuration step reads, and any box left empty put
+             back to the space the page needs in order to be able to show it. -->
+        <Publish Event="DoAction" Value="NormalizeSettings" Order="1" Condition="1" />
+        <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="2" Condition="1" />
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="304" Y="223" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
         <Publish Event="SpawnDialog" Value="CancelDlg" />
       </Control>
     </Dialog>
@@ -520,6 +595,19 @@
            has just set; TLSCERTIFICATEPATH is only mapped from it when Next is pressed. -->
       <Control Id="ChosenPath" Type="Text" X="25" Y="52" Width="330" Height="26" Transparent="yes" NoPrefix="yes" Text="[TLSCERTIFICATEFILE]" />
       <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+        <Publish Event="NewDialog" Value="ServerCertificateDlg" />
+      </Control>
+    </Dialog>
+
+    <!-- Shown when the address box cannot be used: not an absolute http(s) URL, or https with TLS switched off. The
+         text comes from ValidateServerUrl, which runs on the way out of the page; OK returns to it, which rebuilds the
+         page and shows the address as it will be read. -->
+    <Dialog Id="ServerUrlErrorDlg" Width="370" Height="160" Title="[ProductName] 安装向导">
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="250" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}地址不能用" />
+      <Control Id="ErrorText" Type="Text" X="25" Y="30" Width="320" Height="80" Transparent="yes" NoPrefix="yes" Text="[SERVERURLERROR]" />
+      <Control Id="BannerLine" Type="Line" X="0" Y="118" Width="370" Height="0" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="124" Width="370" Height="0" />
+      <Control Id="OK" Type="PushButton" X="294" Y="132" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
         <Publish Event="NewDialog" Value="ServerSettingsDlg" />
       </Control>
     </Dialog>
@@ -533,7 +621,7 @@
       <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
       <Control Id="BottomLine" Type="Line" X="0" Y="84" Width="370" Height="0" />
       <Control Id="OK" Type="PushButton" X="294" Y="92" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
-        <Publish Event="NewDialog" Value="ServerSettingsDlg" />
+        <Publish Event="NewDialog" Value="ServerCertificateDlg" />
       </Control>
     </Dialog>
 
@@ -545,7 +633,9 @@
            immediately before the transition, in the same batch of events. -->
       <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="PrefillSettings" Order="5" Condition="1" />
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ServerSettingsDlg" Order="6" Condition="1" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ServerSettingsDlg" Order="5" Condition="1" />
+      <!-- Back from the confirmation returns to the last of the three pages, not to the first: the wizard walks them
+           in order, so Back has to undo one step at a time. -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ServerDatabaseDlg" Order="5" Condition="1" />
     </UI>
   </Fragment>
 

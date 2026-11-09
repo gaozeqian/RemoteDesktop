@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace RemoteDesktop.Application.Hosting;
 
 /// <summary>UI side of the background service's control pipe.</summary>
@@ -28,7 +30,11 @@ public sealed class PipeHostControl(
             await new PipeHostControl(pipeName, windowsServicePath).GetStatusAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException)
+        // A probe answers a question and must not take the caller down with it: the identity check needs the
+        // service's configuration, and a service that was uninstalled, reconfigured or replaced while the probe ran
+        // is not one this client may delegate to. Win32Exception covers those "could not ask" answers; without it a
+        // window started before the service was ready died with an unhandled exception.
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException or Win32Exception)
         {
             return false;
         }

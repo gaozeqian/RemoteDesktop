@@ -512,8 +512,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 * **许可文本里的主体信息要换成你自己的**：仓库根的 `LICENSE` 是专有 EULA，方括号里的公司名称、联系方式和
   司法管辖区是留给"换个人/换主体来发布"的闸门——**只要里面还有全角方括号占位符（【…】），三个 Windows MSI 打包脚本就拒绝出包**
   （可用 `-AllowDraftLicense` 跳过；macOS 与 Linux 的打包脚本不做这个检查；当前内容是完整的，见 [部署与运维](../ops/README.md) 的"安装包怎么构建（三平台）"）。改这个文件就够了，构建会把它转成安装向导的许可页。
-* **卸载不清理用户数据**：MSI 卸载默认保留 `%ProgramData%\RemoteDesktop`（设备身份 + 日志），
-  `msiexec /x ... REMOVEDATA=1` 才会删；客户端在 `%AppData%` 下的身份文件 MSI 不管。
+* **卸载默认清理机器数据**：MSI 卸载默认删除 `%ProgramData%\RemoteDesktop`（设备身份 + 日志）与服务器包的
+  `%ProgramData%\RemoteDesktopServer`（数据库、设置、生成的证书）；`msiexec /x ... REMOVEDATA=0` 保留它们，
+  供重装后沿用同一设备代码。客户端在 `%AppData%` 下的身份文件 MSI 不管：那是每用户的位置，卸载时无法枚举其他用户。
 
 ### 怎么验证这些说法
 

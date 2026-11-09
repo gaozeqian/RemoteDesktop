@@ -19,6 +19,15 @@ public sealed class DataDirectoryTests
     }
 
     [Fact]
+    public void Every_data_folder_uses_the_same_name()
+    {
+        // Program Files, ProgramData, %APPDATA%, ~/Library/Application Support, $XDG_DATA_HOME: one spelling for every
+        // folder this product creates, without spaces like the install folders and the server's.
+        Assert.Equal("RemoteDesktop", Path.GetFileName(DataDirectory.ForUser()));
+        Assert.Equal("RemoteDesktop", Path.GetFileName(DataDirectory.ForMachine()));
+    }
+
+    [Fact]
     public void The_client_and_the_controlled_end_share_one_folder_off_windows()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), "Posix layout.");

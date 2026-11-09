@@ -166,23 +166,6 @@
                   ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c &quot;&quot;[INSTALLFOLDER]RemoteDesktop.HostService.exe&quot; --configure-system --rendezvous &quot;[RENDEZVOUSURI]&quot; --rendezvous-certificate &quot;[RENDEZVOUSCERTIFICATEPATH]&quot;&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
 
-    <!--
-      The live address is %ProgramData%\RemoteDesktop\appsettings.json, outside the MSI's file table. An upgrade keeps
-      it; the install-directory appsettings.json is only the shipped defaults and is replaced with the new package's.
-      On the first upgrade from a package that kept the address under Program Files, this action copies the old file
-      across before RemoveExistingProducts deletes it. Later upgrades find the destination and do nothing.
-
-      Immediate, and sequenced before InstallInitialize: RemoveExistingProducts has to be the very first action after
-      InstallInitialize, or Windows Installer fails the upgrade with error 2613. A deferred action cannot run before
-      InstallInitialize at all, so the copy would be too late. The install is per-machine and elevated, so the
-      immediate pass can write ProgramData.
-    -->
-    <CustomAction Id="SetClientInstallDir"
-                  Property="CLIENTINSTALLFOLDER" Value="[INSTALLFOLDER]" Execute="immediate" />
-    <CustomAction Id="MigrateClientSettings"
-                  BinaryRef="ClientActions" DllEntry="MigrateClientSettings"
-                  Execute="immediate" Return="check" />
-
     <!-- The connection page and its certificate. The three page actions are immediate and invoked by the dialog itself
          (DoAction), so they run in msiexec's own process and can read/write the properties the page shows. The fourth
          runs in the execute sequence, so it also covers a silent installation. -->
@@ -256,12 +239,11 @@
       <Custom Action="StopLeftoverProcesses" Before="InstallValidate" />
       <!--
         The live address is %ProgramData%\RemoteDesktop\appsettings.json; this action writes it there on a fresh
-        install through the service's own configure-system step. On an upgrade the file is left alone (the migration
-        below has already preserved the first one from the old layout), so an operator's address is not replaced by
-        the package default. "Not a removal" and "not an upgrade" are different questions: UPGRADINGPRODUCTCODE is
-        set while the *old* product is being removed, which is why an earlier condition using it ran the action after
-        the old files were gone and every upgrade rolled back with 1603. WIX_UPGRADE_DETECTED is set on the new
-        product's install, which is the side this action runs on.
+        install through the service's own configure-system step. On an upgrade the file is left alone, so an
+        operator's address is not replaced by the package default. "Not a removal" and "not an upgrade" are different
+        questions: UPGRADINGPRODUCTCODE is set while the *old* product is being removed, which is why an earlier
+        condition using it ran the action after the old files were gone and every upgrade rolled back with 1603.
+        WIX_UPGRADE_DETECTED is set on the new product's install, which is the side this action runs on.
       -->
       <!-- The page is shown on upgrades too, prefilled with the live values. A silent upgrade has CONNECTIONEDITED=0
            and leaves those values alone; an interactive upgrade sets it when the page is left with Next. -->
@@ -271,18 +253,6 @@
       <Custom Action="ConfigureSystem"
               After="InstallFiles"
               Condition="NOT REMOVE AND ((NOT Installed AND NOT WIX_UPGRADE_DETECTED) OR CONNECTIONEDITED = &quot;1&quot;)" />
-
-      <!-- Before InstallInitialize (and therefore before RemoveExistingProducts) deletes the old product's
-           appsettings.json, copy it to ProgramData. The destination check makes this a one-time migration: later
-           upgrades keep the file it produced. The immediate sequence is the only place early enough: a deferred action
-           cannot run before InstallInitialize, and anything between InstallInitialize and RemoveExistingProducts
-           makes the package fail with MSI error 2613. -->
-      <Custom Action="SetClientInstallDir"
-              Before="MigrateClientSettings"
-              Condition="WIX_UPGRADE_DETECTED" />
-      <Custom Action="MigrateClientSettings"
-              Before="InstallInitialize"
-              Condition="WIX_UPGRADE_DETECTED" />
 
       <?ifdef var.HostOnly ?>
       <!-- Before ConfigureSystem, and before the service is started: the service reads the fixed password once, at

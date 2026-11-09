@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
@@ -37,8 +38,7 @@ if (string.IsNullOrEmpty(pipeName))
     return 2;
 }
 
-var dataDirectory = builder.Configuration["data-directory"]
-    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktop");
+var dataDirectory = builder.Configuration["data-directory"] ?? DataDirectory.ForMachine();
 var desktop = builder.Configuration["desktop"] ?? "user";
 
 var logger = new LoggerConfiguration()

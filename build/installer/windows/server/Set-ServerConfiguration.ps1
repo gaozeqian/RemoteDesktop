@@ -8,7 +8,7 @@
 
   It runs the same configuration step the installer does (Rendezvous\RemoteDesktop.Server.Rendezvous.exe
   --configure-system), so the two cannot drift apart, and what it did is appended to server-setup.log in
-  the settings folder (%ProgramData%\Remote Desktop Server), not the install folder.
+  the settings folder (%ProgramData%\RemoteDesktopServer), not the install folder.
 
 .EXAMPLE
   # Keep device codes across restarts, which is the one setting whose default has the worst consequence: without it
@@ -40,7 +40,7 @@ param(
     # has and otherwise starts a SQLite database of its own. Omit to leave it as it is.
     [string]$DatabaseProvider,
 
-    # The SQLite file, when the provider is sqlite. Omit for the default under %ProgramData%\Remote Desktop Server.
+    # The SQLite file, when the provider is sqlite. Omit for the default under %ProgramData%\RemoteDesktopServer.
     [string]$DatabasePath,
 
     # PostgreSQL connection string. Pass an empty string to stop using PostgreSQL; a value here means PostgreSQL
@@ -82,7 +82,7 @@ Set-StrictMode -Version Latest
 $installDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 # The programs live under Program Files; the live settings live in ProgramData, where an MSI major upgrade does not
 # remove them. This is the same split the server programs themselves use.
-$configDirectory = Join-Path $env:ProgramData 'Remote Desktop Server'
+$configDirectory = Join-Path $env:ProgramData 'RemoteDesktopServer'
 $rendezvous = Join-Path $installDirectory 'Rendezvous\RemoteDesktop.Server.Rendezvous.exe'
 $ops = Join-Path $installDirectory 'Ops\RemoteDesktop.Server.Ops.exe'
 $services = @('RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway')

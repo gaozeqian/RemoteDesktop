@@ -163,16 +163,16 @@ pwsh -File build/tools/Export-ServerConfigurationGuides.ps1
 pwsh -File build/tools/Export-ServerConfigurationGuides.ps1 -Check
 
 # 上线前自查一份服务端配置；退出码 0 正常 / 2 有不安全默认值 / 3 路径或参数不可用
-# MSI 部署：Program Files 下的是随包出厂默认，实际生效的配置在 %ProgramData%\Remote Desktop Server\<角色>\
-pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\Remote Desktop Server"
+# MSI 部署：Program Files 下的是随包出厂默认，实际生效的配置在 %ProgramData%\RemoteDesktopServer\<角色>\
+pwsh -File build/tools/Invoke-SecurityAudit.ps1 -InstallDirectory "$env:ProgramData\RemoteDesktopServer"
 
 # 开发时查发布产物（服务端的发布目录按程序分子目录）
 pwsh -File build/tools/Invoke-SecurityAudit.ps1 -SettingsPath artifacts/app/windows/server/Rendezvous/appsettings.json
 ```
 
 `-InstallDirectory <目录>` 会读 `<目录>\Rendezvous\appsettings.json` 与 `<目录>\Relay\appsettings.json` 两份，
-适合手工解压或拷贝出来的部署。对 MSI 装出来的 `C:\Program Files\Remote Desktop Server` 它读到的是**随包出厂的默认值**，
-不是实际生效的配置（后者在 `%ProgramData%\Remote Desktop Server\`，升级不会覆盖），所以审 MSI 部署请把 `-InstallDirectory` 指向 `%ProgramData%\Remote Desktop Server`（上面第一条），或用 `-SettingsPath` 指向其中某一份。
+适合手工解压或拷贝出来的部署。对 MSI 装出来的 `C:\Program Files\RemoteDesktopServer` 它读到的是**随包出厂的默认值**，
+不是实际生效的配置（后者在 `%ProgramData%\RemoteDesktopServer\`，升级不会覆盖），所以审 MSI 部署请把 `-InstallDirectory` 指向 `%ProgramData%\RemoteDesktopServer`（上面第一条），或用 `-SettingsPath` 指向其中某一份。
 
 `Export-ThirdPartyNotices.ps1` 把清单写在**仓库根**（由脚本自身的 `$PSScriptRoot` 往上找）；
 `Invoke-SecurityAudit.ps1` 只读不写，它的路径参数同样以仓库根为基准解析，所以在哪个目录下敲命令都一样。

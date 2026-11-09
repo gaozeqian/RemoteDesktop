@@ -225,7 +225,9 @@ public sealed class SystemSetupTests : IDisposable
         Assert.False(Directory.Exists(data));
         Assert.False(SystemSetup.RemoveData(data)); // already gone, nothing to do
 
-        // Anything else is refused, however the path looks.
+        // Anything else is refused, however the path looks - including the same name with a space in it.
+        var spacedName = Directory.CreateDirectory(Path.Combine(_folder, "Remote Desktop")).FullName;
+        Assert.Throws<ArgumentException>(() => SystemSetup.RemoveData(spacedName));
         var other = Directory.CreateDirectory(Path.Combine(_folder, "Documents")).FullName;
         Assert.Throws<ArgumentException>(() => SystemSetup.RemoveData(other));
         Assert.Throws<ArgumentException>(() => SystemSetup.RemoveData(_folder));

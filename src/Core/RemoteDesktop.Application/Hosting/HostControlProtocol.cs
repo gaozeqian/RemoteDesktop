@@ -16,6 +16,13 @@ public static class HostControlProtocol
     public const string PipeName = "RemoteDesktop.HostControl";
 
     /// <summary>
+    /// The Windows service that serves the pipe. The installer registers it and <c>SetupCommands</c> restarts it
+    /// under this name; the client needs it to identify the server process, because the service runs as LocalSystem
+    /// and its process object cannot be opened by the signed-in user (see <c>WindowsPipeServerIdentity</c>).
+    /// </summary>
+    public const string WindowsHostServiceName = "RemoteDesktopHost";
+
+    /// <summary>
     /// The unit the Linux host package installs. A live control socket without this file is a process whose package
     /// has been removed; treating it as the background service leaves the client delegating to a controlled end the
     /// person can no longer see or remove from the package manager.

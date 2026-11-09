@@ -32,6 +32,13 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     private const int ServicesMaySendSas = 1;
 
     /// <summary>
+    /// The folder <see cref="RemoveData"/> is allowed to delete. It is the name
+    /// <c>RemoteDesktop.Application.Hosting.DataDirectory.ForMachine</c> uses on Windows; this project cannot
+    /// reference that one (the platform layer sits below the application layer), so the two spell it out.
+    /// </summary>
+    private const string DataDirectoryName = "RemoteDesktop";
+
+    /// <summary>
     /// Windows ignores SendSAS from services unless policy bit 0 of <c>SoftwareSASGeneration</c> is set (bit 1 is
     /// another feature's). Only that bit is added, and only if missing; whether it was us is remembered so that
     /// <see cref="RevertSasPolicy"/> never removes a setting somebody else made.
@@ -191,7 +198,7 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     }
 
     /// <summary>
-    /// Deletes the machine's data folder (device identity, logs). Refuses any folder that is not named RemoteDesktop,
+    /// Deletes the machine's data folder (device identity, logs). Refuses any folder that is not the product's own,
     /// so a wrong path on a command line can never wipe something else.
     /// </summary>
     /// <returns><c>true</c> when a folder was removed.</returns>
@@ -199,9 +206,9 @@ public sealed class SystemSetup(SystemSetupLocations locations)
     {
         ArgumentException.ThrowIfNullOrEmpty(dataDirectory);
         var full = Path.GetFullPath(dataDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!string.Equals(Path.GetFileName(full), "RemoteDesktop", StringComparison.OrdinalIgnoreCase) || Path.GetPathRoot(full) == full)
+        if (!string.Equals(Path.GetFileName(full), DataDirectoryName, StringComparison.OrdinalIgnoreCase) || Path.GetPathRoot(full) == full)
         {
-            throw new ArgumentException("Not a RemoteDesktop data folder.", nameof(dataDirectory));
+            throw new ArgumentException($"Not a {DataDirectoryName} data folder.", nameof(dataDirectory));
         }
 
         if (!Directory.Exists(full))

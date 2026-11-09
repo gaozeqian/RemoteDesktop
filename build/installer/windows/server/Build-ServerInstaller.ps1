@@ -9,7 +9,7 @@
      anyway).
   3. Builds the MSI with the WiX v5 SDK and, when a signing certificate is given, signs it.
 
-  The MSI installs all four into Program Files\Remote Desktop Server, registers each as a Windows service
+  The MSI installs all four into Program Files\RemoteDesktopServer, registers each as a Windows service
   (RemoteDesktopRendezvous, RemoteDesktopRelay, RemoteDesktopOps, RemoteDesktopGateway), adds the inbound firewall
   rules the public listeners need, and configures them - the addresses signaling and the console gateway listen on,
   the relay endpoint clients are told, the shared key, and optionally a certificate for signaling TLS. The console
@@ -395,7 +395,7 @@ $version = Get-ProductVersion
 # OpsServer.AddOps), which keeps the location right on a machine whose ProgramData is not on C:.
 $opsSettingsPath = Join-Path $PublishDirectory 'Ops\appsettings.json'
 $opsSettings = Get-Content $opsSettingsPath -Raw | ConvertFrom-Json
-$opsSettings.Ops.Database.Path = '%ProgramData%\Remote Desktop Server\ops.db'
+$opsSettings.Ops.Database.Path = '%ProgramData%\RemoteDesktopServer\ops.db'
 $opsSettings | ConvertTo-Json -Depth 10 | Set-Content $opsSettingsPath -Encoding utf8
 
 # The license page needs RTF, the text lives in a file anybody can edit; one is generated from the other every build.

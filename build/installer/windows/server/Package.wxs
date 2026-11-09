@@ -50,11 +50,17 @@
 
     <!-- The address the signaling server listens on, e.g. http://0.0.0.0:5080, or https://0.0.0.0:5080 together with a
          certificate below. The default is the address baked in when the installer was built
-         (Build-ServerInstaller.ps1 -RendezvousUrl); it can be given at install time instead:
+         (Build-ServerInstaller.ps1 -RendezvousUrl); the settings page shows it in a box of its own and lets the person
+         installing correct it, and a silent install can give it instead:
          msiexec /i <msi> RENDEZVOUSURL=https://0.0.0.0:5080
          This is what the server binds to, not what clients are told to use - that is the relay endpoint just below,
          and clients reach this address through whatever name and port the deployment puts in front of it. -->
     <Property Id="RENDEZVOUSURL" Value="$(var.DefaultRendezvousUrl)" Secure="yes" />
+
+    <!-- What the settings page says when the address box cannot be used. A space means "no error": the page shows
+         this text in a dialog instead of moving on (see ValidateServerUrl). Not secure: nothing reads it outside the
+         user interface, and the address it describes is already a property of its own. -->
+    <Property Id="SERVERURLERROR" Value=" " />
 
     <!-- Where clients are told to reach the relay: "auto" (the default) means the configuration step picks this
          machine's first address that is not loopback, says in its notes which one it picked, and takes the relay's
@@ -81,7 +87,7 @@
          msiexec /i <msi> DATABASEPROVIDER=postgres POSTGRESCONNECTIONSTRING="Host=db;Database=remotedesktop;Username=...;Password=..." -->
     <Property Id="DATABASEPROVIDER" Value="auto" Secure="yes" />
 
-    <!-- The SQLite file. Empty means the platform default, %ProgramData%\Remote Desktop Server\rendezvous.db, which
+    <!-- The SQLite file. Empty means the platform default, %ProgramData%\RemoteDesktopServer\rendezvous.db, which
          is what almost every installation wants; set it to put the file somewhere with more room, or on a disk that
          is backed up. It has to be a local disk: SQLite corrupts on a network share. -->
     <Property Id="DATABASEPATH" Value=" " Secure="yes" />
@@ -152,10 +158,11 @@
          means the four inbound rules in Components.wxs are installed. -->
     <Property Id="NOFIREWALL" Value="0" Secure="yes" />
 
-    <!-- Uninstalling keeps the databases, settings and the generated certificate unless the operator asks for them to
-         go: msiexec /x ... REMOVEDATA=1. Keeping them is the default because a reinstall then keeps every device code
-         and the console's history; removing them is what a decommissioned machine needs. -->
-    <Property Id="REMOVEDATA" Value="0" Secure="yes" />
+    <!-- Uninstalling removes the databases, settings and the generated certificate: an uninstalled server should not
+         leave device codes and console history on the disk. msiexec /x ... REMOVEDATA=0 keeps them, for a reinstall
+         that must come back with the same records. A major upgrade never takes either path (see CleanupServer), so
+         the data survives an upgrade with the default. -->
+    <Property Id="REMOVEDATA" Value="1" Secure="yes" />
 
     <!-- The immediate pass copies the install/config directories into these properties. The immediate actions
          (SecureConfigDirectory, MigrateLiveSettings) read them directly; the deferred ones get them through
@@ -176,7 +183,7 @@
     <Property Id="TLSCHOICE" Value="none" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="Remote Desktop Server" />
+      <Directory Id="INSTALLFOLDER" Name="RemoteDesktopServer" />
     </StandardDirectory>
 
     <!-- The live settings, databases, TLS public certificate and server-setup.log. ProgramData rather than Program
@@ -184,7 +191,7 @@
          this directory can be restricted to SYSTEM and Administrators (SecureConfigDirectory) while Program Files
          carries inherited Users read access on every machine. -->
     <StandardDirectory Id="CommonAppDataFolder">
-      <Directory Id="CONFIGFOLDER" Name="Remote Desktop Server" />
+      <Directory Id="CONFIGFOLDER" Name="RemoteDesktopServer" />
     </StandardDirectory>
 
     <!-- Somewhere to point "where do I change this" at. The shortcut goes to the page in the installation folder rather

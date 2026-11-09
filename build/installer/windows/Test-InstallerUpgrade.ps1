@@ -8,10 +8,9 @@
   exercises that path on a disposable machine or CI runner:
 
     * install with a non-default address/password;
-    * move the live settings into the old Program Files layout, delete the ProgramData copy, and upgrade - the
-      migration action must copy the old settings forward;
-    * change the live settings and upgrade again - the upgrade must not overwrite them;
-    * uninstall with REMOVEDATA=1 and check the data and generated certificate are gone.
+    * change the live settings and upgrade - the upgrade must not overwrite them;
+    * uninstall (no properties) and check the data and generated certificate are gone, which is the default;
+    * uninstall with REMOVEDATA=0 and check the same data is kept.
 
   It changes services, the firewall (unless the package's NOFIREWALL is used) and ProgramData. Run it on a machine you
   can throw away, and never on a workstation whose services matter.
@@ -71,8 +70,8 @@ $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:Program
 $clientConfig = Join-Path $env:ProgramData 'RemoteDesktop\appsettings.json'
 $clientCertificatePin = Join-Path $env:ProgramData 'RemoteDesktop\certificates\signaling.cer'
 $clientInstall = Join-Path $programFiles 'RemoteDesktop'
-$serverConfig = Join-Path $env:ProgramData 'Remote Desktop Server'
-$serverInstall = Join-Path $programFiles 'Remote Desktop Server'
+$serverConfig = Join-Path $env:ProgramData 'RemoteDesktopServer'
+$serverInstall = Join-Path $programFiles 'RemoteDesktopServer'
 
 $workDirectory = Join-Path $env:TEMP ("rd-installer-upgrade-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $workDirectory | Out-Null
@@ -341,9 +340,10 @@ $createdPackages += $ClientMsi
 Install-Msi $ClientMsi @("RENDEZVOUSURI=$tlsClientAddress", "SERVERCERTIFICATEPATH=$testCertificate") 'client-tls'
 Assert-RendezvousUri $clientConfig $tlsClientAddress
 Assert-RendezvousCertificate $clientConfig $testCertificate $clientCertificatePin
-Uninstall-Msi $ClientMsi @('REMOVEDATA=1') 'client-tls'
+# No REMOVEDATA on the command line: removing the data is the package's default.
+Uninstall-Msi $ClientMsi @() 'client-tls'
 if (Test-Path -LiteralPath (Join-Path $env:ProgramData 'RemoteDesktop')) {
-    throw 'REMOVEDATA=1 left %ProgramData%\RemoteDesktop behind after the client TLS install.'
+    throw 'Uninstalling the client left %ProgramData%\RemoteDesktop behind; removing the data is the default.'
 }
 
 $tlsHostAddress = 'wss://127.0.0.1:5499/ws'
@@ -351,12 +351,12 @@ $createdPackages += $HostMsi
 Install-Msi $HostMsi @("RENDEZVOUSURI=$tlsHostAddress", "SERVERCERTIFICATEPATH=$testCertificate") 'host-tls'
 Assert-RendezvousUri $clientConfig $tlsHostAddress
 Assert-RendezvousCertificate $clientConfig $testCertificate $clientCertificatePin
-Uninstall-Msi $HostMsi @('REMOVEDATA=1') 'host-tls'
+Uninstall-Msi $HostMsi @() 'host-tls'
 if (Test-Path -LiteralPath (Join-Path $env:ProgramData 'RemoteDesktop')) {
-    throw 'REMOVEDATA=1 left %ProgramData%\RemoteDesktop behind after the host TLS install.'
+    throw 'Uninstalling the host left %ProgramData%\RemoteDesktop behind; removing the data is the default.'
 }
 
-Write-Host '--- client: install, migrate the old layout, upgrade preserves the address, uninstall'
+Write-Host '--- client: install, upgrade preserves the address, uninstall'
 
 $clientVariants = New-PackageVariants $ClientMsi 'client'
 $clientOld = $clientVariants[0]
@@ -366,18 +366,8 @@ $createdPackages += @($clientOld, $ClientMsi, $clientLater)
 $clientAddress = 'ws://127.0.0.1:5199/ws'
 Install-Msi $clientOld @("RENDEZVOUSURI=$clientAddress") 'client-old'
 Assert-RendezvousUri $clientConfig $clientAddress
-
-# The pre-fix layout kept the live file under Program Files. Simulate an upgrade from it: put the live file there,
-# remove the ProgramData copy, change the address, and install the real package. The migration action runs before
-# RemoveExistingProducts copies the new package's files and removes the old product.
-$oldAddress = 'ws://127.0.0.1:5299/ws'
-Set-RendezvousUri (Join-Path $clientInstall 'appsettings.json') $oldAddress
-# The host service watches its settings file; stop it before removing the ProgramData copy so it cannot recreate the
-# file (and so the upgrade has to use the migration action, which is what this step verifies).
-Stop-RdServices
-Remove-Path $clientConfig
 Install-Msi $ClientMsi @() 'client-real'
-Assert-RendezvousUri $clientConfig $oldAddress
+Assert-RendezvousUri $clientConfig $clientAddress
 
 # A normal upgrade must not replace what the operator changed.
 $newAddress = 'ws://127.0.0.1:5399/ws'
@@ -385,10 +375,12 @@ Set-RendezvousUri $clientConfig $newAddress
 Install-Msi $clientLater @() 'client-later'
 Assert-RendezvousUri $clientConfig $newAddress
 
-Uninstall-Msi $clientLater @('REMOVEDATA=1') 'client'
-if (Test-Path -LiteralPath (Join-Path $env:ProgramData 'RemoteDesktop')) {
-    throw 'REMOVEDATA=1 left %ProgramData%\RemoteDesktop behind.'
+# The escape hatch: REMOVEDATA=0 keeps the device identity and the live settings for a reinstall.
+Uninstall-Msi $clientLater @('REMOVEDATA=0') 'client'
+if (-not (Test-Path -LiteralPath $clientConfig)) {
+    throw 'REMOVEDATA=0 removed %ProgramData%\RemoteDesktop, but it asked for the data to be kept.'
 }
+Remove-Path (Join-Path $env:ProgramData 'RemoteDesktop')
 
 Write-Host '--- host: unattended password file, upgrade preserves the address, uninstall'
 
@@ -414,9 +406,9 @@ Assert-RendezvousUri $clientConfig $hostAddress2
 Install-Msi $hostLater @() 'host-later'
 Assert-RendezvousUri $clientConfig $hostAddress2
 
-Uninstall-Msi $hostLater @('REMOVEDATA=1') 'host'
+Uninstall-Msi $hostLater @() 'host'
 if (Test-Path -LiteralPath (Join-Path $env:ProgramData 'RemoteDesktop')) {
-    throw 'REMOVEDATA=1 left %ProgramData%\RemoteDesktop behind after the host uninstall.'
+    throw 'Uninstalling the host left %ProgramData%\RemoteDesktop behind; removing the data is the default.'
 }
 
 Write-Host '--- server: configured live files, migration, upgrade, data removal'
@@ -500,9 +492,9 @@ if ($relayAfterUpgrade.Relay.SharedKey -ne $afterUpgrade.Rendezvous.RelaySharedK
 }
 Assert-RdServerHealth
 
-Uninstall-Msi $serverLater @('REMOVEDATA=1') 'server'
+Uninstall-Msi $serverLater @() 'server'
 if (Test-Path -LiteralPath $serverConfig) {
-    throw 'REMOVEDATA=1 left %ProgramData%\Remote Desktop Server behind.'
+    throw 'Uninstalling the server left %ProgramData%\RemoteDesktopServer behind; removing the data is the default.'
 }
 foreach ($role in 'Rendezvous', 'Relay', 'Ops', 'Gateway') {
     if (Get-Service -Name "RemoteDesktop$role" -ErrorAction SilentlyContinue) {

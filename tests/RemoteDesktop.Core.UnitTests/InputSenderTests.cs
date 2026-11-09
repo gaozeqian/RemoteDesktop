@@ -15,7 +15,7 @@ public sealed class InputSenderTests
     [Fact]
     public async Task A_full_queue_applies_backpressure_without_losing_key_releases()
     {
-        var stream = new BlockingWriteStream(expectedWrites: 3);
+        var stream = new BlockingWriteStream(expectedFrames: 3);
         var connection = new FakeConnection(new TestChannel(stream));
         var sender = await InputSender.OpenAsync(connection, Ct, queueCapacity: 1);
 
@@ -45,7 +45,7 @@ public sealed class InputSenderTests
     [Fact]
     public async Task Congestion_replaces_an_older_pointer_move_with_the_latest_position()
     {
-        var stream = new BlockingWriteStream(expectedWrites: 2);
+        var stream = new BlockingWriteStream(expectedFrames: 2);
         var sender = await InputSender.OpenAsync(new FakeConnection(new TestChannel(stream)), Ct, queueCapacity: 1);
         sender.Send(new PointerMoveEvent("display", 0.1, 0.1));
         await stream.FirstWrite.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
@@ -96,7 +96,7 @@ public sealed class InputSenderTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class BlockingWriteStream(int expectedWrites) : Stream
+    private sealed class BlockingWriteStream(int expectedFrames) : Stream
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _writes;
@@ -117,7 +117,12 @@ public sealed class InputSenderTests
             }
 
             await Bytes.WriteAsync(buffer, cancellationToken);
-            if (write == expectedWrites)
+
+            // FrameCodec writes every frame in two calls: a header and then the payload. Counting calls used to
+            // announce "all writes" in the middle of the last frame, so a test that disposed the sender as soon as
+            // that happened cancelled the frame being written and read back one message fewer. Only a finished
+            // payload means a finished frame; all the messages in these tests have a payload.
+            if (write % 2 == 0 && write / 2 >= expectedFrames)
             {
                 AllWrites.TrySetResult();
             }

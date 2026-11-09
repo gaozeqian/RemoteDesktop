@@ -11,50 +11,25 @@ using System.Text.RegularExpressions;
 namespace RemoteDesktop.Client.Installer.CustomActions;
 
 /// <summary>
-/// The parts of the client/host installation that a command line or a WiX control cannot do: move the live settings out
-/// of the MSI-managed folder on the first upgrade to the new layout, validate/prefill the server connection page, ask
-/// for a certificate file, pin the server certificate, and hand the fixed password to the service without putting it in
-/// the host's command line.
+/// The parts of the client/host installation that a command line or a WiX control cannot do: validate/prefill the server
+/// connection page, ask for a certificate file, pin the server certificate, and hand the fixed password to the service
+/// without putting it in the host's command line.
 /// </summary>
 public static class ClientInstallerActions
 {
+    /// <summary>
+    /// The machine's data folder, spelled like the install folder (<c>RemoteDesktop</c>) and the server's data folder
+    /// (<c>RemoteDesktopServer</c>). The controlled end's own folder name comes from
+    /// <c>RemoteDesktop.Application.Hosting.DataDirectory.ForMachine</c>, which this net48 action cannot reference.
+    /// </summary>
     private const string DataDirectoryName = "RemoteDesktop";
+
+    private const string SettingsFileName = "appsettings.json";
     private const string CertificateDirectoryName = "certificates";
     private const string CertificateFileName = "signaling.cer";
     private const string PasswordFileName = ".fixed-password";
     private const string Space = " ";
     private const string ServiceRegistryPath = @"SYSTEM\CurrentControlSet\Services\RemoteDesktopHost";
-
-    /// <summary>
-    /// Before RemoveExistingProducts removes the old product's files, copy the settings it kept under Program Files to
-    /// %ProgramData%\RemoteDesktop if the destination is not there yet. Every later upgrade finds it and does nothing.
-    /// </summary>
-    [CustomAction]
-    public static ActionResult MigrateClientSettings(Session session) => Run(session, "MigrateClientSettings", () =>
-    {
-        // INSTALLFOLDER is a directory property and is not visible to a deferred action; SetClientInstallDir copies it
-        // into this secure property in the immediate pass.
-        var installDirectory = session["CLIENTINSTALLFOLDER"];
-        if (string.IsNullOrWhiteSpace(installDirectory))
-        {
-            throw new InvalidOperationException("CLIENTINSTALLFOLDER is not set.");
-        }
-
-        var source = Path.Combine(installDirectory, "appsettings.json");
-        var destinationDirectory = DataDirectory();
-        var destination = Path.Combine(destinationDirectory, "appsettings.json");
-        if (!File.Exists(source) || File.Exists(destination))
-        {
-            session.Log($"Client settings migration skipped: source '{source}' exists={File.Exists(source)}; " +
-                        $"destination '{destination}' exists={File.Exists(destination)}.");
-            return ActionResult.Success;
-        }
-
-        Directory.CreateDirectory(destinationDirectory);
-        File.Copy(source, destination);
-        session.Log($"Migrated {source} to {destination}.");
-        return ActionResult.Success;
-    });
 
     /// <summary>
     /// Brings the connection page up with the values this machine is already using when this is an upgrade. A fresh
@@ -75,20 +50,9 @@ public static class ClientInstallerActions
             return ActionResult.Success;
         }
 
-        // ProgramData is the current layout. The first upgrade from the layout that kept the file under Program Files
-        // finds nothing there yet (the migration in the execute sequence has not run while the UI is up), so read the
-        // old file too; otherwise the page would show the build default and an operator pressing Next would overwrite
-        // the address the migration is about to preserve.
-        var settings = Path.Combine(DataDirectory(), "appsettings.json");
-        if (!File.Exists(settings))
-        {
-            var installDirectory = session["INSTALLFOLDER"];
-            if (!string.IsNullOrWhiteSpace(installDirectory))
-            {
-                settings = Path.Combine(installDirectory, "appsettings.json");
-            }
-        }
-
+        // The live file is the one under ProgramData; the copy in the install folder is the package's defaults, and
+        // showing those would replace an address the operator had already chosen.
+        var settings = Path.Combine(DataDirectory(), SettingsFileName);
         if (!File.Exists(settings))
         {
             return ActionResult.Success;

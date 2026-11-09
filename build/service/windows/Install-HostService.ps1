@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   Installs the RemoteDesktop host service (development / manual deployment; the MSI installer under build/installer/windows is the normal route).

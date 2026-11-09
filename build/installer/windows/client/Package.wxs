@@ -89,9 +89,11 @@
     <Property Id="CONNECTIONERROR" Value=" " />
     <Property Id="SERVERCERTIFICATECHOSEN" Value="0" />
 
-    <!-- Uninstalling keeps the device identity and logs (a reinstall then keeps the same device code) unless the person
-         asks for them to go: msiexec /x ... REMOVEDATA=1 -->
-    <Property Id="REMOVEDATA" Value="0" Secure="yes" />
+    <!-- Uninstalling removes the device identity and logs, the way an uninstall is expected to leave nothing behind:
+         msiexec /x ... REMOVEDATA=0 keeps them, for a machine that is about to be reinstalled and should keep its
+         device code. A major upgrade never takes either path (see the Cleanup actions), so the identity survives an
+         upgrade with the default. -->
+    <Property Id="REMOVEDATA" Value="1" Secure="yes" />
 
     <?ifdef var.HostOnly ?>
     <!--
@@ -113,12 +115,10 @@
     <Property Id="FIXEDPASSWORDFILE" Value=" " Secure="yes" />
     <?endif?>
 
-    <!-- A deferred action cannot read a directory property unless it is secure or carried in CustomActionData; the
-         migration needs the install folder after the elevation boundary. SetClientInstallDir copies it in the
-         immediate pass. It is outside the HostOnly block because the client package migrates too. -->
-    <Property Id="CLIENTINSTALLFOLDER" Value=" " Secure="yes" />
-
     <StandardDirectory Id="ProgramFiles64Folder">
+      <!-- No spaces, like the server package's "RemoteDesktopServer" and every other path this product creates; the
+           spaces stay in the names a person reads (the product name, the Start menu folder). Both roles use this one
+           folder because they share the service and cannot be installed side by side. -->
       <Directory Id="INSTALLFOLDER" Name="RemoteDesktop" />
     </StandardDirectory>
     <?ifndef var.HostOnly ?>

@@ -174,8 +174,8 @@ public static class SettingsPageActions
         {
             // A space, not "auto": the box is meant to look empty (the label says "leave it empty for SQLite"), and
             // the property only has to exist for the control to be editable. NormalizeSettings turns the space into
-            // "auto" on the way out, so the configuration step still reads "decide for this machine" rather than an
-            // empty string, which would mean "no database at all".
+            // "auto" on the way out of the last page, so the configuration step still reads "decide for this machine"
+            // rather than an empty string, which would mean "no database at all".
             session["POSTGRESCONNECTIONSTRING"] = Space;
         }
 
@@ -183,30 +183,83 @@ public static class SettingsPageActions
     }
 
     /// <summary>
-    /// Tidies what the boxes on the settings page were left holding, on the way out of it.
+    /// Checks the listening-address box before the wizard leaves the page, the way the client's connection page checks
+    /// the address it is given.
     /// </summary>
     /// <remarks>
-    /// Two jobs, both about the space that the boxes start with.
+    /// Two answers are refused here rather than by a service that dies on its first start: an address that is not an
+    /// absolute http(s) URL (a typo), and an https address with TLS switched off — Kestrel cannot listen on https
+    /// without a certificate, and the failure would otherwise appear only in the service log after the install said
+    /// it succeeded. The text lands in SERVERURLERROR, which the page shows in a dialog of its own.
+    /// </remarks>
+    [CustomAction]
+    public static ActionResult ValidateServerUrl(Session session) => Run(session, () => ValidateUrl(session));
+
+    private static ActionResult ValidateUrl(Session session)
+    {
+        var address = (session["RENDEZVOUSURL"] ?? string.Empty).Trim();
+        // Written back trimmed: the configuration step reads this property, and a trailing space in a URL is the kind
+        // of thing that only shows up as a binding failure later.
+        session["RENDEZVOUSURL"] = address;
+
+        var error = Space;
+        if (address.Length == 0)
+        {
+            error = "请填写信令监听地址，例如 https://0.0.0.0:5080（只给本机用可以填 http://127.0.0.1:5080）。";
+        }
+        else if (!Uri.TryCreate(address, UriKind.Absolute, out var uri)
+                 || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                 || uri.Host.Length == 0)
+        {
+            error = "信令监听地址必须是 http:// 或 https:// 开头的绝对地址，例如 https://0.0.0.0:5080。";
+        }
+        else if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            error = "信令监听地址不能包含用户名或密码。";
+        }
+        else if (uri.Scheme == Uri.UriSchemeHttps
+                 && string.Equals(session["TLSCHOICE"], "none", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "地址是 https://，但上面没有启用 TLS：请选择「自动生成一张自签名证书」或「使用已有的证书文件」，"
+                    + "或者把地址改成 http://（非回环的明文地址，客户端会拒绝连接）。";
+        }
+
+        session["SERVERURLERROR"] = error;
+        return ActionResult.Success;
+    }
+
+    /// <summary>
+    /// Puts the space back into boxes that were left empty, on the way out of a page.
+    /// </summary>
+    /// <remarks>
+    /// Not cosmetic: a box the user clears has its property removed, and going back a page and returning rebuilds the
+    /// control against a property that is no longer there — it comes out greyed, with no way left to type the value
+    /// back in. The password is trimmed here too: that box arrives holding a single space (a property with no value
+    /// never reaches the property table, and a control bound to one cannot be typed into), so anybody who clicks in and
+    /// types without clearing it first ends up with a space in front of the password, and a .pfx opened with
+    /// " secret" instead of "secret" simply fails to open. The cost is that a password that genuinely begins or ends
+    /// with a space cannot be given here.
     ///
-    /// The password is trimmed. That box arrives holding a single space rather than nothing, because a property with no
-    /// value never reaches the property table and a control bound to it comes out greyed and untypable — so anybody who
-    /// clicks into the box and types their password without clearing it first ends up with a space in front of it, and
-    /// a .pfx opened with " secret" instead of "secret" simply fails to open. Trimming is the only sane reading of a
-    /// box whose way of saying "no password" is a space; the cost is that a password that genuinely begins or ends with
-    /// one cannot be given here.
-    ///
-    /// The other boxes are put back to a value when they are left empty. Not cosmetic: a box the user clears has its
-    /// property removed, and if they then go back a page and return, the control is built again against a property
-    /// that is no longer there and comes out greyed — with no way left to type the value back in.
-    ///
+    /// This runs on the first two pages, and it deliberately leaves the database box alone: its default is the word
+    /// "auto", which the page would then show in a box labelled "leave it empty for SQLite". <see
+    /// cref="NormalizeSettings"/> handles that one where it belongs.
+    /// </remarks>
+    [CustomAction]
+    public static ActionResult RestoreEmptyBoxes(Session session) => Run(session, () => Restore(session));
+
+    /// <summary>
+    /// The same tidy-up, plus the database box, on the way out of the last page.
+    /// </summary>
+    /// <remarks>
     /// The database box gets the word the package ships rather than a space, because empty has a meaning of its own
-    /// there: "decide for this machine", which is a SQLite database. A space would reach the configuration step as an
-    /// empty string, and an empty connection string means "no database at all" — every device code lost on restart.
+    /// there: "decide for this machine", which is a SQLite database. An empty connection string would reach the
+    /// configuration step as "no database at all" — every device code lost on restart — so the word is what the step
+    /// has to see, and the page says as much next to the box.
     /// </remarks>
     [CustomAction]
     public static ActionResult NormalizeSettings(Session session) => Run(session, () => Normalize(session));
 
-    private static ActionResult Normalize(Session session)
+    private static ActionResult Restore(Session session)
     {
         var password = (session["TLSCERTIFICATEPASSWORD"] ?? string.Empty).Trim();
         session["TLSCERTIFICATEPASSWORD"] = password.Length == 0 ? Space : password;
@@ -218,6 +271,13 @@ public static class SettingsPageActions
                 session[name] = Space;
             }
         }
+
+        return ActionResult.Success;
+    }
+
+    private static ActionResult Normalize(Session session)
+    {
+        _ = Restore(session);
 
         if (string.IsNullOrWhiteSpace(session["POSTGRESCONNECTIONSTRING"]))
         {

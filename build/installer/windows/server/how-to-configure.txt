@@ -6,7 +6,7 @@ Remote Desktop Server (Windows) — post-install quick guide
 The MSI installs Rendezvous, Relay, Ops and Gateway under Program Files. Live settings,
 databases, certificate public keys and server-setup.log are under:
 
-    %ProgramData%\Remote Desktop Server\{Rendezvous,Relay,Ops,Gateway}\appsettings.json
+    %ProgramData%\RemoteDesktopServer\{Rendezvous,Relay,Ops,Gateway}\appsettings.json
 
 This directory is readable only by SYSTEM and Administrators because it can contain the relay
 key and PostgreSQL password. Complete deployment, TLS, database, backup and troubleshooting
@@ -18,7 +18,7 @@ instructions:
 
 In an elevated PowerShell or Command Prompt:
 
-    cd "C:\Program Files\Remote Desktop Server"
+    cd "C:\Program Files\RemoteDesktopServer"
     .\Set-ServerConfiguration.cmd -DatabaseProvider sqlite
     .\Set-ServerConfiguration.cmd -WhatIf -GatewayHostName ops.example.com
 
@@ -26,7 +26,7 @@ Ops listens only on http://127.0.0.1:5090. Gateway is the remote entry point:
 
     https://<server-ip>:5443
 
-Trust %ProgramData%\Remote Desktop Server\tls\signaling.cer on every administration computer
+Trust %ProgramData%\RemoteDesktopServer\tls\signaling.cer on every administration computer
 before opening Gateway. Do not expose Ops port 5090.
 
 2. Create and recover administrators
@@ -34,13 +34,13 @@ before opening Gateway. Do not expose Ops port 5090.
 
 There is no default account or web bootstrap page. In an elevated PowerShell:
 
-    & "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
+    & "C:\Program Files\RemoteDesktopServer\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
     Restart-Service RemoteDesktopOps
 
 The command asks for a password and prints a TOTP secret once. If the TOTP secret is lost,
 reset the existing account; this revokes its active sessions and prints a new enrolment URI:
 
-    & "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --reset-totp admin
+    & "C:\Program Files\RemoteDesktopServer\Ops\RemoteDesktop.Server.Ops.exe" --reset-totp admin
     Restart-Service RemoteDesktopOps
 
 3. Health, logs and removal
@@ -49,7 +49,7 @@ reset the existing account; this revokes its active sessions and prints a new en
     curl http://127.0.0.1:5090/health
     sc.exe query RemoteDesktopOps
     Get-WinEvent -LogName Application -MaxEvents 50
-    msiexec /x RemoteDesktop-Server-Windows-x64-<version>.msi /qn REMOVEDATA=1
+    msiexec /x RemoteDesktop-Server-Windows-x64-<version>.msi /qn
 
-Gateway intentionally returns 404 for /health. Uninstall without REMOVEDATA preserves the
-ProgramData settings, databases and generated certificate; use REMOVEDATA=1 to remove them.
+Gateway intentionally returns 404 for /health. Uninstalling removes the ProgramData settings,
+databases and generated certificate; use REMOVEDATA=0 to keep them for a reinstall.

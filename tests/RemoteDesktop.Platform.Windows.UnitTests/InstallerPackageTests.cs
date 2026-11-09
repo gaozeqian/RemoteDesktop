@@ -287,24 +287,9 @@ public sealed class InstallerPackageTests
         Assert.True(int.Parse(prepareSequence[2], CultureInfo.InvariantCulture) < int.Parse(configure[2], CultureInfo.InvariantCulture),
             "PrepareRendezvousCertificate must run before ConfigureSystem.");
 
-        // The first upgrade from the layout that kept appsettings.json under Program Files copies it to ProgramData
-        // before RemoveExistingProducts deletes the old product's files. That forces the action into the immediate
-        // sequence before InstallInitialize: Windows Installer rejects an upgrade when RemoveExistingProducts is not
-        // the first action after InstallInitialize (error 2613), and a deferred action cannot run early enough.
-        var migrate = Assert.Single(actions, row => row[0] == "MigrateClientSettings");
-        Assert.Equal("ClientActions", migrate[2]);
-        var migrateType = int.Parse(migrate[1], CultureInfo.InvariantCulture);
-        Assert.Equal(1, migrateType & 0x3F);   // DLL from the Binary table
-        Assert.Equal(0, migrateType & 0x400);  // immediate, not deferred
-        var migrated = Assert.Single(sequence, row => row[0] == "MigrateClientSettings");
-        Assert.Contains("WIX_UPGRADE_DETECTED", migrated[1], StringComparison.Ordinal);
-        var installInitialize = int.Parse(
-            Assert.Single(sequence, row => row[0] == "InstallInitialize")[2], CultureInfo.InvariantCulture);
-        Assert.True(int.Parse(migrated[2], CultureInfo.InvariantCulture) < installInitialize,
-            "MigrateClientSettings must run before InstallInitialize.");
-        var setClientInstallDir = Assert.Single(sequence, row => row[0] == "SetClientInstallDir");
-        Assert.True(int.Parse(setClientInstallDir[2], CultureInfo.InvariantCulture) < int.Parse(migrated[2], CultureInfo.InvariantCulture),
-            "SetClientInstallDir must run before the migration that reads CLIENTINSTALLFOLDER.");
+        // Nothing may be sequenced between InstallInitialize and RemoveExistingProducts: Windows Installer rejects the
+        // upgrade with error 2613 when the removal is not the first action after InstallInitialize, which is why the
+        // live settings are not migrated out of Program Files by an action in that gap.
         Assert.Equal("1501", Assert.Single(sequence, row => row[0] == "RemoveExistingProducts")[2]);
 
         // The two uninstall paths only differ in what they do with the machine's data, and neither runs while a major
@@ -325,7 +310,7 @@ public sealed class InstallerPackageTests
         Assert.True(properties.ContainsKey("SERVERCERTIFICATEPATH"), "The server certificate cannot be given at install time.");
         Assert.True(properties.ContainsKey("RENDEZVOUSCERTIFICATEPATH"), "The pinned certificate path is missing.");
         Assert.True(properties.ContainsKey("DEFAULT_RENDEZVOUSURI"), "The package default address is not recorded.");
-        Assert.Equal("0", properties["REMOVEDATA"]); // keeping the device identity is the default
+        Assert.Equal("1", properties["REMOVEDATA"]); // an uninstall removes the device identity unless REMOVEDATA=0
         Assert.Equal("0", properties["CONNECTIONEDITED"]);
         foreach (var name in new[] { "RENDEZVOUSURI", "REMOVEDATA", "SERVERCERTIFICATEPATH", "RENDEZVOUSCERTIFICATEPATH" })
         {
@@ -380,9 +365,9 @@ public sealed class InstallerPackageTests
     }
 
     /// <summary>
-    /// The client/host package's migration and fixed-password actions have to be something this package's msiexec can
-    /// load. Getting the bitness or the runtime wrong is silent: the action fails in two milliseconds with no managed
-    /// line in the log, which is why the server package checks the same two things.
+    /// The client/host package's connection-page and fixed-password actions have to be something this package's msiexec
+    /// can load. Getting the bitness or the runtime wrong is silent: the action fails in two milliseconds with no
+    /// managed line in the log, which is why the server package checks the same two things.
     /// </summary>
     [Fact]
     public void The_client_custom_action_is_packed_for_the_installer_that_runs_it()
@@ -394,7 +379,7 @@ public sealed class InstallerPackageTests
 
         Assert.StartsWith("x64", database.SummaryInfo.Template, StringComparison.Ordinal);
 
-        using var view = database.OpenView("SELECT `Source` FROM `CustomAction` WHERE `Action` = 'MigrateClientSettings'");
+        using var view = database.OpenView("SELECT `Source` FROM `CustomAction` WHERE `Action` = 'PrefillConnectionSettings'");
         view.Execute();
         using var action = view.Fetch();
         Assert.NotNull(action);

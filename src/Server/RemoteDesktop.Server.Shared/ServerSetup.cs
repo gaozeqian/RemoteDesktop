@@ -120,7 +120,7 @@ public sealed record ServerSetupOptions
 /// </remarks>
 public static class ServerSetup
 {
-    /// <summary>Where the Windows installer keeps the live settings: <c>%ProgramData%\Remote Desktop Server</c>.</summary>
+    /// <summary>Where the Windows installer keeps the live settings: <c>%ProgramData%\RemoteDesktopServer</c>.</summary>
     /// <remarks>
     /// The program folders stay under Program Files; the settings do not. A major upgrade removes the old product's
     /// files before installing the new ones, so anything the MSI owns under Program Files is deleted on every upgrade.
@@ -130,7 +130,7 @@ public static class ServerSetup
     /// </remarks>
     public static string WindowsConfigDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Remote Desktop Server");
+        "RemoteDesktopServer");
 
     /// <summary>The folder each server keeps its settings in, under the configuration directory.</summary>
     public const string RendezvousFolder = "Rendezvous";
@@ -1125,7 +1125,7 @@ public static class ServerSetup
     /// </summary>
     private static string DefaultSqlitePath() =>
         OperatingSystem.IsWindows()
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Remote Desktop Server", "rendezvous.db")
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktopServer", "rendezvous.db")
             : OperatingSystem.IsMacOS()
                 ? "/usr/local/remotedesktop-server/var/rendezvous.db"
                 : "/var/lib/remotedesktop-server/rendezvous.db";
@@ -1133,7 +1133,7 @@ public static class ServerSetup
     /// <summary>Where the console's SQLite file goes when the console was not given one.</summary>
     private static string DefaultOpsSqlitePath() =>
         OperatingSystem.IsWindows()
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Remote Desktop Server", "ops.db")
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RemoteDesktopServer", "ops.db")
             : OperatingSystem.IsMacOS()
                 ? "/usr/local/remotedesktop-server/var/ops.db"
                 : "/var/lib/remotedesktop-server/ops.db";

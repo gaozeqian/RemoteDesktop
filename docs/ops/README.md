@@ -83,7 +83,7 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 
 包把四个程序装到 `/usr/lib/remotedesktop-server/{Rendezvous,Relay,Ops,Gateway}`，四个 **system** 单元装到
 `/lib/systemd/system`，装完即启用并启动。**Linux 的配置在 `/etc/remotedesktop-server/`**，不在安装目录里——
-升级不会覆盖运维改过的东西。Windows 也把生效中的设置放在 `%ProgramData%\Remote Desktop Server`。
+升级不会覆盖运维改过的东西。Windows 也把生效中的设置放在 `%ProgramData%\RemoteDesktopServer`。
 **macOS 是例外**：它的设置就在安装根 `/usr/local/remotedesktop-server/<角色>/appsettings.json`，`.pkg`
 不删除自己没装过的文件，所以升级同样不会覆盖，但位置与 Linux/Windows 不同。
 
@@ -168,18 +168,33 @@ msiexec /i RemoteDesktop-Server-Windows-x64-<版本>.msi /qn `
   TLSCERTIFICATEPATH="C:\rd\signaling.pfx" TLSCERTIFICATEPASSWORD="..."
 ```
 
+图形界面安装时，这些值分在三页上（`选目录 → 服务器地址 → 证书 → 数据库 → 确认`）：
+
+- **服务器地址**：信令监听地址（默认是构建时烤进去的那个，通常是 `http://127.0.0.1:5080`）、中继公网地址、TLS 三选一。
+- **证书**：https 用哪张证书——证书域名、`.pfx` 路径（带「浏览…」）、口令。上一页选了"自动生成"就不用管这一页。
+- **数据库**：PostgreSQL 连接串。留空就用本机 SQLite；填 `auto` 与留空等价。
+
+`auto` 是"没指定，由安装程序按这台机器决定"的意思：这台机器以前配过 PostgreSQL 连接串就沿用（否则升级会把所有设备码
+重发），否则在本机数据目录建一份 SQLite 库。它是属性表里的默认值（静默安装直接带它），向导里不该由人去填：进入数据库页时
+输入框是空的，`NormalizeSettings` 只在离开最后一页时才把空值写成 `auto` 交给配置步骤——真正传给服务的空字符串是
+"不用数据库、设备码只存内存"，两者不能混。
+
+地址在离开第一页时校验：必须是 `http://` / `https://` 开头的绝对地址，且**填了 `https://` 就必须在同一页启用 TLS**
+（自动生成或指定证书），否则向导弹框说明原因并留在本页——这正是"服务装完了却起不来"最常见的一种。只监听本机时留
+`127.0.0.1` 即可。
+
 它做的事：把四个服务器（信令、中继、监控台和 Ops HTTPS 网关，各自自包含）装进
-`%ProgramFiles%\Remote Desktop Server`，注册四个自动启动、崩溃后自动重启的服务
+`%ProgramFiles%\RemoteDesktopServer`，注册四个自动启动、崩溃后自动重启的服务
 （`RemoteDesktopRendezvous`、`RemoteDesktopRelay`、`RemoteDesktopOps`、`RemoteDesktopGateway`），
 加四条入站规则（端口见 [防火墙](#8-防火墙)），并按下面的属性写好信令与中继的设置。
-**真正生效的设置、数据库、TLS 公钥和 `server-setup.log` 在 `%ProgramData%\Remote Desktop Server\`**，
+**真正生效的设置、数据库、TLS 公钥和 `server-setup.log` 在 `%ProgramData%\RemoteDesktopServer\`**，
 不在 Program Files：MSI 的大版本升级会先删除旧产品在 Program Files 里的文件，放在那里的
 `appsettings.json` 会在每次升级时丢失。ProgramData 下的目录只有 SYSTEM 和 Administrators 能读。
 设置由信令服务器自己写入（`--configure-system`），它把做过什么记在
-`%ProgramData%\Remote Desktop Server\server-setup.log` 里——安装程序不会给任何人看这一步的输出。
+`%ProgramData%\RemoteDesktopServer\server-setup.log` 里——安装程序不会给任何人看这一步的输出。
 
 监控台（Ops）没有需要填写的安装属性：它默认只监听 `127.0.0.1:5090`，数据库在
-`%ProgramData%\Remote Desktop Server\ops.db`。同一安装包还会安装 Gateway，默认以
+`%ProgramData%\RemoteDesktopServer\ops.db`。同一安装包还会安装 Gateway，默认以
 `https://0.0.0.0:5443` 对外提供 HTTPS；指定 `GATEWAYLISTEN` 可改监听地址。安装时会自动把本机信令/中继登记为
 两个节点并打开信令的 `/metrics`，新装环境不需要手工添加节点。本机节点固定使用回环地址（`https://127.0.0.1:5080` /
 `http://127.0.0.1:5083`）；没有配置 `Ops:NodeToken` 时，服务端的 `/metrics` 和 `/internal/*` 只接受回环调用，
@@ -188,18 +203,18 @@ PowerShell 里执行）。
 
 | 属性 | 默认 | 说明 |
 |---|---|---|
-| `RENDEZVOUSURL` | `http://127.0.0.1:5080` | 信令监听的地址；默认只监听回环。给了证书会自动变成 `https://`。公网明文监听需要 `Rendezvous:AllowInsecureSignaling=true`：用安装包或 `--configure-system` 配置时会按生效的地址自动写入，只有手工编辑 `appsettings.json` 才要自己设 |
+| `RENDEZVOUSURL` | `http://127.0.0.1:5080` | 信令监听的地址；默认只监听回环，**安装向导「服务器地址」页第一行就能改**，静默安装用这个属性。填 `https://` 必须在同一页启用 TLS，否则向导拦住并说明原因。给了证书会自动变成 `https://`。公网明文监听需要 `Rendezvous:AllowInsecureSignaling=true`：用安装包或 `--configure-system` 配置时会按生效的地址自动写入，只有手工编辑 `appsettings.json` 才要自己设 |
 | `RELAYPUBLICENDPOINT` | `auto` | 客户端被要求使用的中继**地址**。`auto` 取本机第一个非回环地址；也可以写 `IP:端口`，或写域名（安装时解析一次，地址就此固定） |
 | `RELAYSHAREDKEY` | `auto` | 中继票据的签名密钥。`auto`：没有就生成一个，**已经有就保持不动**——升级换掉它会让另一台机器上的中继被悄悄切断 |
 | `DATABASEPROVIDER` | `auto` | 设备代码存在哪：`auto` / `none` / `postgres` / `sqlite`。`auto` = 本机已有 PostgreSQL 就继续用它，否则建一个 SQLite 库 |
-| `DATABASEPATH` | 空 | SQLite 文件。空 = `%ProgramData%\Remote Desktop Server\rendezvous.db` |
-| `POSTGRESCONNECTIONSTRING` | `auto` | PostgreSQL 连接串。`auto` 或空 = 不用 PostgreSQL，由 `DATABASEPROVIDER` 决定 |
-| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到 `%ProgramData%\Remote Desktop Server\tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.cmd -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
+| `DATABASEPATH` | 空 | SQLite 文件。空 = `%ProgramData%\RemoteDesktopServer\rendezvous.db` |
+| `POSTGRESCONNECTIONSTRING` | `auto` | PostgreSQL 连接串。`auto`（默认值）= 没指定，由 `DATABASEPROVIDER=auto` 按这台机器决定：已有 PostgreSQL 连接串就沿用，否则建本机 SQLite；空的 `""` 不是同一个意思，那是"不用数据库、设备码只存内存"，别在向导里清空后手工传空串 |
+| `TLSCERTIFICATEPATH` / `TLSCERTIFICATEPASSWORD` | `auto` / 空 | 给了就写进 Kestrel 配置并切到 https。填 `generate` 则由这台机器生成一张自签名证书、放进本机证书存储，公钥导出到 `%ProgramData%\RemoteDesktopServer\tls\signaling.cer`（装完还能改：`Set-ServerConfiguration.cmd -TlsGenerate`）。**证书文件不存在时不切**（服务器还能起得来），只在 `server-setup.log` 里说明 |
 | `TLSCERTIFICATEHOSTNAME` | 机器名 | 生成证书时写进 SAN 的 DNS 名/IP，逗号分隔。客户端用域名或 NAT 地址访问时必须填，否则即使信任了证书也会名称不匹配 |
 | `GATEWAYLISTEN` | `https://0.0.0.0:5443` | Ops HTTPS 网关的监听地址，必须是不带路径的 `https://` 地址 |
 | `GATEWAYHOSTNAME` | 空 | 给网关证书追加的 IP/DNS 名，逗号分隔；本机 IPv4 已自动包含 |
 | `NOFIREWALL` | `0` | 设成 `1` 就不加防火墙规则（信令、反射、中继三条，外加网关的 TCP 5443 那一条） |
-| `REMOVEDATA` | `0` | 卸载时设成 `1` 才删除 `%ProgramData%\Remote Desktop Server` 下的数据库、设置与生成的证书 |
+| `REMOVEDATA` | `1` | 卸载时默认删除 `%ProgramData%\RemoteDesktopServer` 下的数据库、设置与生成的证书；设成 `0` 保留（重装后设备码与监控台历史不变） |
 
 **这些属性只在第一次安装时生效。** 升级/同版本重装会保留 ProgramData 下的现有设置（与 Linux/macOS 的
 “升级不重新询问”一致）；要改请用 `Set-ServerConfiguration.cmd`（见“装完之后改配置”）。
@@ -207,7 +222,7 @@ PowerShell 里执行）。
 三件必须知道的事：
 
 - **安装包默认用 SQLite，装完就能用。** 不填连接串时设备代码存在本机的
-  `%ProgramData%\Remote Desktop Server\rendezvous.db`，重启、升级都不变。**这个文件要备份**：删掉它等于
+  `%ProgramData%\RemoteDesktopServer\rendezvous.db`，重启、升级都不变。**这个文件要备份**：删掉它等于
   所有设备码重发，无人值守的机器会因此失联；它也**只能放本地磁盘**，放网络共享上会损坏。
   要回到内存模式（每次重启换码）用 `DATABASEPROVIDER=none`。
 - **中继装在另一台机器上时**，那把自动生成的密钥要抄过去：两边都传 `RELAYSHAREDKEY=<同一个值>`，
@@ -215,10 +230,10 @@ PowerShell 里执行）。
 - **改了端口就要自己改防火墙规则**：四条规则是按 [防火墙](#8-防火墙) 里的默认端口开的，
   `RENDEZVOUSURL`、中继端口或 `GATEWAYLISTEN` 改了它们就对不上。
 
-升级：同版本号重装即可，**`%ProgramData%\Remote Desktop Server` 下的设置、数据库和证书都保留**，
+升级：同版本号重装即可，**`%ProgramData%\RemoteDesktopServer` 下的设置、数据库和证书都保留**，
 手改过的值和已经生成的密钥不会被包内默认值覆盖。
-卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除；默认保留 ProgramData 下的数据与生成的证书
-（重装后设备码不变）。要连同数据与证书一起删除：`msiexec /x ... /qn REMOVEDATA=1`。
+卸载用「应用和功能」或 `msiexec /x`，服务和防火墙规则一并移除，**默认连同 ProgramData 下的数据与生成的证书一起删除**。
+要保留它们（重装后设备码与监控台历史不变）：`msiexec /x ... /qn REMOVEDATA=0`。
 
 #### macOS：.pkg
 
@@ -303,13 +318,13 @@ curl http://127.0.0.1:5090/health      # 监控台
 
 #### 装完之后改配置（Windows）
 
-安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\Remote Desktop Server`）里有：
+安装向导里填的那些，装完还能改。安装目录（`%ProgramFiles%\RemoteDesktopServer`）里有：
 
 - **`Set-ServerConfiguration.cmd`** —— 推荐的路子。在**管理员**命令提示符或 PowerShell 里给它想改的项即可，
   没给的保持不动；它写完之后会登记/更新监控台的本机节点，然后重启四个服务（信令、中继、监控台、网关）让设置生效：
 
   ```powershell
-  cd "C:\Program Files\Remote Desktop Server"
+  cd "C:\Program Files\RemoteDesktopServer"
   .\Set-ServerConfiguration.cmd -DatabaseProvider sqlite
   .\Set-ServerConfiguration.cmd -PostgresConnectionString 'Host=db;Port=5432;Database=remotedesktop;Username=rd;Password=...'
   .\Set-ServerConfiguration.cmd -TlsGenerate -TlsHostName rd.example.com   # 生成自签证书并切 https
@@ -320,11 +335,11 @@ curl http://127.0.0.1:5090/health      # 监控台
   `.cmd` 只是用 `-ExecutionPolicy Bypass` 启动旁边的 `.ps1`，所以 Windows 11 客户端默认的 Restricted 策略
   不会挡住它；也可以直接 `powershell -ExecutionPolicy Bypass -File .\Set-ServerConfiguration.ps1 ...`。
   它调用与安装程序**同一个**配置步骤（`Rendezvous\RemoteDesktop.Server.Rendezvous.exe --configure-system`），
-  所以两者的行为不会分叉；做过什么会追加到 `%ProgramData%\Remote Desktop Server\server-setup.log`。
+  所以两者的行为不会分叉；做过什么会追加到 `%ProgramData%\RemoteDesktopServer\server-setup.log`。
   拿不准就先加 `-WhatIf` 看一眼（不打印口令）。
 - **`how-to-configure.txt`** —— 随包的离线速查，面向拿到机器的人（开始菜单里的入口叫「服务器配置说明」）。三平台副本由 `build/tools/Export-ServerConfigurationGuides.ps1` 从统一源生成，不要直接编辑。
 - 四份 `appsettings.json`（`Rendezvous\`、`Relay\`、`Ops\`、`Gateway\`）在
-  `%ProgramData%\Remote Desktop Server\` 下 —— 也可以直接改，改完重启对应服务。
+  `%ProgramData%\RemoteDesktopServer\` 下 —— 也可以直接改，改完重启对应服务。
   它们在升级时不会被覆盖，所以手改的值会保留；目录只有 SYSTEM 与 Administrators 能读。
 
 #### 数据库怎么选
@@ -339,7 +354,7 @@ curl http://127.0.0.1:5090/health      # 监控台
 | 备份 | 停服务后拷文件，或 `sqlite3 <db> ".backup out.db"` | `pg_dump` |
 | 换到另一种 | 设备码全部重发（除非按下面搬数据） | — |
 
-SQLite 文件的位置：Windows `%ProgramData%\Remote Desktop Server\rendezvous.db`、
+SQLite 文件的位置：Windows `%ProgramData%\RemoteDesktopServer\rendezvous.db`、
 macOS `/usr/local/remotedesktop-server/var/rendezvous.db`、Linux `/var/lib/remotedesktop-server/rendezvous.db`。
 三件事要记住：
 
@@ -383,7 +398,7 @@ dotnet publish src/Server/RemoteDesktop.Server.Gateway    -c Release -r win-x64 
 
 ### 3. 配置
 
-`appsettings.json` 与各自的可执行文件放在一起。Windows 上，如果 `%ProgramData%\Remote Desktop Server\<角色>\appsettings.json`
+`appsettings.json` 与各自的可执行文件放在一起。Windows 上，如果 `%ProgramData%\RemoteDesktopServer\<角色>\appsettings.json`
 已经存在（服务端安装包写的就是这一份），它会叠加在可执行文件旁那份之上；环境变量和命令行仍然优先。
 
 `RemoteDesktop.Server.Rendezvous/appsettings.json`：
@@ -846,7 +861,7 @@ dotnet run --project src/Server/RemoteDesktop.Server.Ops                        
 `/var/lib/remotedesktop-server/ops.db`），macOS 的 `.pkg` 带 `com.remotedesktop.ops` 与
 `com.remotedesktop.gateway` LaunchDaemon（库在 `/usr/local/remotedesktop-server/var/ops.db`），Windows 的
 MSI 带 `RemoteDesktopOps` 和 `RemoteDesktopGateway` 服务（库在
-`%ProgramData%\Remote Desktop Server\ops.db`）。它不需要单独安装，也没有必须填写的安装属性。
+`%ProgramData%\RemoteDesktopServer\ops.db`）。它不需要单独安装，也没有必须填写的安装属性。
 
 ```bash
 # Linux — the console keeps its settings in /etc, not next to the program
@@ -861,14 +876,14 @@ sudo launchctl kickstart -k system/com.remotedesktop.ops
 
 ```powershell
 # Windows（管理员 PowerShell）
-& "C:\Program Files\Remote Desktop Server\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
+& "C:\Program Files\RemoteDesktopServer\Ops\RemoteDesktop.Server.Ops.exe" --create-admin admin
 Restart-Service RemoteDesktopOps
 ```
 
 Windows 这两条命令都要在“管理员 PowerShell”里执行：管理员命令要读写 `%ProgramData%` 下只有
 SYSTEM/Administrators 能访问的配置和数据库，`Restart-Service` 也需要管理员令牌；普通窗口会报
 “无法打开计算机“.”上的 RemoteDesktopOps 服务”。命令默认读写
-`%ProgramData%\Remote Desktop Server\Ops\appsettings.json`，和服务是同一份配置；需要指到别处时加
+`%ProgramData%\RemoteDesktopServer\Ops\appsettings.json`，和服务是同一份配置；需要指到别处时加
 `--config-directory`。
 
 Docker 用可选的 ops overlay，建管理员的命令见 “用 Docker 部署（Linux 服务器首选）”一节 的"监控台（可选）"。
@@ -893,7 +908,7 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 ```
 
 两条命令都会撤销该账号的现有会话。`--create-admin`、`--reset-password`、`--reset-totp` 默认读服务的那份
-`appsettings.json`（Windows `%ProgramData%\Remote Desktop Server\Ops`，Linux
+`appsettings.json`（Windows `%ProgramData%\RemoteDesktopServer\Ops`，Linux
 `/etc/remotedesktop-server/Ops`，macOS 安装根下的 `Ops`）；显式传入的 `--config-directory` 不存在时会直接
 说明，而不是落到另一个数据库。容器没有 `/etc` 副本时回退到程序目录（compose 的数据库配置来自环境变量）。
 
@@ -953,7 +968,7 @@ Linux 的 `/etc/default/remotedesktop-server` 用 `RD_GATEWAY_LISTEN`、`RD_GATE
 
 自签名证书公钥的位置：
 
-- Windows：`%ProgramData%\Remote Desktop Server\tls\signaling.cer`
+- Windows：`%ProgramData%\RemoteDesktopServer\tls\signaling.cer`
 - Linux：`/etc/remotedesktop-server/tls/signaling.crt`
 - macOS：`/usr/local/share/doc/remotedesktop-server/ops-gateway.crt`
 
@@ -984,7 +999,7 @@ scp <管理员>@<服务器IP>:/usr/local/share/doc/remotedesktop-server/ops-gate
 Windows 服务器可在有管理员权限的 PowerShell 中从管理共享复制：
 
 ```powershell
-Copy-Item '\\<服务器>\C$\ProgramData\Remote Desktop Server\tls\signaling.cer' .\ops-gateway.cer
+Copy-Item '\\<服务器>\C$\ProgramData\RemoteDesktopServer\tls\signaling.cer' .\ops-gateway.cer
 ```
 
 导入前应通过可信渠道核对服务器上证书的 SHA-256 指纹。例如 Linux/macOS 服务器执行：
@@ -1286,18 +1301,19 @@ msiexec /i RemoteDesktop-Host-Windows-x64-<版本>.msi /qn RENDEZVOUSURI="wss://
 # 升级（保留设备身份、日志和 ProgramData 下的服务器地址）
 msiexec /i RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 
-# 卸载（保留设备身份和日志，重装后设备代码不变）
+# 卸载（默认连同设备身份、日志和 ProgramData 下的地址一起删除）
 msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn
 
-# 卸载并删除设备身份与日志（这台机器下次安装会得到新的设备代码）
-msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn REMOVEDATA=1
+# 卸载但保留设备身份与日志（重装后设备代码不变）
+msiexec /x RemoteDesktop-Client-Windows-x64-<版本>.msi /qn REMOVEDATA=0
 ```
 
 - **图形界面升级**：连接页会带出当前地址和已固定的证书，可以改；离开这一页后安装程序才会应用新值。
 - **静默升级**：不运行界面，现有地址、证书和设备身份都保留；`RENDEZVOUSURI`/`SERVERCERTIFICATEPATH` 只在全新安装时
   或图形界面升级时生效。要换自签名证书（例如服务器证书续期后），用**新的安装包**（新版本或至少一次新的构建，具有新的
   ProductCode）的图形界面重新运行，在连接页选择新的公钥；同一个 MSI 的修复安装不会重新走连接页。也可以先卸载再用新参数安装。
-- 卸载默认保留 `%ProgramData%\RemoteDesktop`（地址、证书固定和设备身份）；`REMOVEDATA=1` 会一并删除。
+- 卸载默认删除 `%ProgramData%\RemoteDesktop`（地址、证书固定和设备身份）；要保留它用 `REMOVEDATA=0`。
+  客户端在 `%AppData%\RemoteDesktop` 下的身份与最近设备列表不归 MSI 管，卸载不会删。
 
 **升级前最好先退出客户端**。安装包会在 `InstallValidate` 之前把残留的 `RemoteDesktop.Client.exe` 和
 `RemoteDesktop.SessionAgent.exe` 关掉，所以正常升级是普通的文件替换；但客户端正在运行时，个别文件仍可能
@@ -1707,7 +1723,7 @@ $arg = 'FIXEDPASSWORD="' + ($p -replace '"','""') + '"'
 
 - **包内容检查不是可选的。** 见下面那条 WiX 陷阱——它就是为了在包"看着正常但什么都没做"时喊出来。
 - **许可页**：界面用 `WixUI_InstallDir`（欢迎、许可、选目录、进度、完成），client / host 包在选目录之后多一页「服务器连接」
-  （host 再多一页「无人值守设置」），server 包多一页「服务器设置」；许可页显示仓库根 `LICENSE` 里的专有 EULA，
+  （host 再多一页「无人值守设置」），server 包在选目录之后多三页「服务器地址」「证书」「数据库」；许可页显示仓库根 `LICENSE` 里的专有 EULA，
   构建时由 `build/installer/New-LicenseRtf.ps1` 转成 RTF（非 ASCII 写成 `\uN?` 转义，任何代码页下都不会乱码）。
   该文件里若还有**【方括号】占位符**，打包脚本会拒绝出包——那是留给"换个人/换主体来发布"时的闸门，
   不是待办事项（当前内容是完整的）。
