@@ -9,9 +9,9 @@ namespace RemoteDesktop.Server.Rendezvous;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the only path where an end-user device writes into the console's database, so nothing here trusts the
-/// message beyond its shape: <see cref="SessionTelemetry.TryCreate"/> closes the field sets, the per-device buckets cap
-/// how much one device can write, and the reported device id comes from the connection rather than from the report.
+/// This is the only path where an end-user device writes into the console's database. Field validation is paired with
+/// the server-issued session membership in <see cref="SessionDirectory"/>; the authenticated device and its assigned
+/// role, rather than a caller-supplied device id, decide whether a report is accepted.
 /// </para>
 /// <para>
 /// The event's correlation id is the relay's session id when there is one, because the relay has already sent events
@@ -22,6 +22,7 @@ namespace RemoteDesktop.Server.Rendezvous;
 public sealed partial class TelemetryReceiver(
     NodeEventPublisher events,
     ServerMetrics metrics,
+    SessionDirectory sessions,
     TimeProvider time,
     ILogger<TelemetryReceiver> logger)
 {
@@ -85,15 +86,24 @@ public sealed partial class TelemetryReceiver(
         }
 
         var correlation = Guid.Parse(telemetry.RelaySessionId ?? telemetry.SessionId);
+        if (!sessions.IsParticipant(correlation, session.DeviceId, telemetry.Role))
+        {
+            metrics.TelemetryRefused();
+            LogRefused(logger, session.DeviceId, "not a session participant");
+            return;
+        }
+
         events.Publish(OpsEventKinds.SessionTelemetry, correlation, new
         {
-            sessionId = telemetry.SessionId,
+            // Only the host knows the session id accepted by its local admin command and the platform it runs on.
+            // A controller's session id is still used above for direct-session correlation, but cannot overwrite host state.
+            sessionId = telemetry.Role == "host" ? telemetry.SessionId : null,
             relaySessionId = telemetry.RelaySessionId,
             role = telemetry.Role,
             mode = telemetry.Mode,
             transport = telemetry.Transport,
             rttMilliseconds = telemetry.RttMilliseconds,
-            platform = telemetry.Platform,
+            platform = telemetry.Role == "host" ? telemetry.Platform : null,
             version = telemetry.Version,
             deviceId = session.DeviceId,
         });
@@ -126,7 +136,14 @@ public sealed partial class TelemetryReceiver(
             return;
         }
 
-        events.Publish(OpsEventKinds.SessionEnded, relaySessionId ?? sessionId, new
+        var correlation = relaySessionId ?? sessionId;
+        if (!sessions.IsParticipant(correlation, session.DeviceId, role))
+        {
+            LogRefusedEnd(logger, session.DeviceId);
+            return;
+        }
+
+        events.Publish(OpsEventKinds.SessionEnded, correlation, new
         {
             sessionId = sessionId.ToString("D"),
             relaySessionId = relaySessionId?.ToString("D"),

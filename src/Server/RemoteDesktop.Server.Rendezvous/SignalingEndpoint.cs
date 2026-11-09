@@ -218,6 +218,9 @@ public sealed partial class SignalingEndpoint(
                 // The only end fact a direct session has; same fire-and-forget contract as a heartbeat.
                 telemetry.HandleSessionEnded(session, message.SessionEnded);
                 break;
+            case ClientMessage.BodyOneofCase.AdminResult:
+                session.HandleAdminResult(message.AdminResult);
+                break;
             default:
                 // Unknown or out-of-order message: ignore so newer clients keep working.
                 break;

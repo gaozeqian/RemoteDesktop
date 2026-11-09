@@ -1,7 +1,9 @@
 namespace RemoteDesktop.Application.Hosting;
 
 /// <summary>UI side of the background service's control pipe.</summary>
-public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeName) : IHostControl
+public sealed class PipeHostControl(
+    string pipeName = HostControlProtocol.PipeName,
+    string? windowsServicePath = null) : IHostControl
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(800);
 
@@ -9,20 +11,21 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     /// How long the service has to answer once connected. The pipe name is global on Windows, so another local
     /// process can own an instance and simply never reply; without this the client waited before its window appeared,
     /// with no way to tell a wedged service from a slow one.
-    /// The service now creates the first instance of the name with <c>FirstPipeInstance</c>, so a process that is
-    /// already holding the name stops the service from serving it (it logs an error and retries) rather than sharing
-    /// it, and this client connects with the Identification impersonation level, so whatever owns the name cannot act
-    /// as the caller. What is still not checked is who the server is: a process that creates the name while the
-    /// service is down (at boot, or in the pause after a crash) can still answer, and this client will talk to it.
+    /// The service creates the first instance of the name with <c>FirstPipeInstance</c>, and this client connects with
+    /// the Identification impersonation level. Before sending a command it also verifies the server PID and executable
+    /// path, so a process that claims the name while the service is down cannot receive a new fixed password.
     /// </summary>
     private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>True when a host service answers on its control pipe.</summary>
-    public static async Task<bool> IsAvailableAsync(string pipeName, CancellationToken cancellationToken)
+    public static async Task<bool> IsAvailableAsync(
+        string pipeName,
+        CancellationToken cancellationToken,
+        string? windowsServicePath = null)
     {
         try
         {
-            await new PipeHostControl(pipeName).GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            await new PipeHostControl(pipeName, windowsServicePath).GetStatusAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or UnauthorizedAccessException)
@@ -39,6 +42,7 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
     public static async Task<bool> WaitUntilAvailableAsync(
         string pipeName,
         TimeSpan timeout,
+        string? windowsServicePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
@@ -58,7 +62,7 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
             attempt.CancelAfter(TimeSpan.FromSeconds(1));
             try
             {
-                if (await IsAvailableAsync(pipeName, attempt.Token).ConfigureAwait(false))
+                if (await IsAvailableAsync(pipeName, attempt.Token, windowsServicePath).ConfigureAwait(false))
                 {
                     return true;
                 }
@@ -144,6 +148,13 @@ public sealed class PipeHostControl(string pipeName = HostControlProtocol.PipeNa
 
         await using (stream.ConfigureAwait(false))
         {
+            if (OperatingSystem.IsWindows() && stream is System.IO.Pipes.NamedPipeClientStream pipe)
+            {
+                WindowsPipeServerIdentity.EnsureExpected(
+                    pipe,
+                    windowsServicePath ?? Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe"));
+            }
+
             await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);
             using var responseTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             responseTimeout.CancelAfter(ResponseTimeout);

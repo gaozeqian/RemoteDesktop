@@ -1,6 +1,6 @@
 # The relay: forwards encrypted QUIC datagrams between two peers that cannot reach each other directly.
 # Build from the repository root:  docker build -f build/docker/Dockerfile.relay .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /src
 
 COPY global.json Directory.Build.props Directory.Packages.props ./
@@ -9,11 +9,12 @@ COPY src/Server/ src/Server/
 # The cache mount keeps NuGet downloads out of the layer; see Dockerfile.rendezvous. This needs BuildKit (the default
 # in Docker 23+).
 RUN --mount=type=cache,id=nuget-rd,target=/root/.nuget/packages,sharing=locked \
-    dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained -o /app
+    dotnet restore src/Server/RemoteDesktop.Server.Relay --locked-mode \
+    && dotnet publish src/Server/RemoteDesktop.Server.Relay -c Release --no-self-contained --no-restore -o /app
 
 # The relay is an ASP.NET Core host: /health, /metrics and /internal/v1/info are Kestrel endpoints even though the
 # forwarding itself is plain UDP. It therefore needs the ASP.NET shared framework, not just the .NET runtime.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="$VERSION"
 WORKDIR /app

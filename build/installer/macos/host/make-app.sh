@@ -65,6 +65,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
         --configuration "$CONFIGURATION" \
         --runtime osx-arm64 \
         --self-contained true \
+        -p:RestoreLockedMode=true \
         --output "$PUBLISH_DIR" \
         --nologo -v quiet
 fi

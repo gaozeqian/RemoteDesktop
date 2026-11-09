@@ -20,10 +20,10 @@ namespace RemoteDesktop.Application.Features;
 /// notices more than a short freeze. Frames are relayed whole, in both directions, so a dying agent can never leave a
 /// half-written frame in the controller's stream.
 /// <para>
-/// A <c>lossless</c> channel (file transfer) carries data that must arrive complete and in order, so it behaves
-/// differently: the queue holds the controller back instead of dropping frames, nothing is discarded as stale, and when
-/// the agent goes away the channel ends (the controller retries the operation) rather than continuing on a new agent
-/// that knows nothing about the transfer in progress.
+/// A <c>lossless</c> channel (file transfer, terminal, camera or input) carries data that must arrive complete and in
+/// order, so the queue holds the controller back instead of dropping frames and nothing is discarded as stale. Input is
+/// always lossless while an agent is available. At an agent replacement boundary, the old agent releases its pressed
+/// state and only frames never delivered to it are cleared, so they cannot be replayed into a different desktop.
 /// </para>
 /// </remarks>
 public sealed partial class AgentForwardingModule(
@@ -54,6 +54,10 @@ public sealed partial class AgentForwardingModule(
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MinGenerationTime = TimeSpan.FromMilliseconds(250);
 
+    private bool Lossless { get; } = lossless || channelType == ChannelType.Input;
+
+    private bool EndsWithAgent => Lossless && channelType != ChannelType.Input;
+
     public ChannelType ChannelType => channelType;
 
     public Permissions RequiredPermission => requiredPermission;
@@ -63,9 +67,9 @@ public sealed partial class AgentForwardingModule(
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(session);
 
-        var queue = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(lossless ? LosslessQueueCapacity : QueueCapacity)
+        var queue = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(Lossless ? LosslessQueueCapacity : QueueCapacity)
         {
-            FullMode = lossless ? BoundedChannelFullMode.Wait : BoundedChannelFullMode.DropOldest,
+            FullMode = Lossless ? BoundedChannelFullMode.Wait : BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = true,
         });
@@ -85,7 +89,7 @@ public sealed partial class AgentForwardingModule(
                 catch (AgentUnavailableException ex)
                 {
                     LogAgentUnavailable(logger, agentKind, ex.Message);
-                    if (lossless)
+                    if (EndsWithAgent)
                     {
                         break;
                     }
@@ -96,9 +100,18 @@ public sealed partial class AgentForwardingModule(
 
                 var started = DateTime.UtcNow;
                 var controllerGone = await RunGenerationAsync(agentStream, channel.Stream, queue.Reader, state, cancellationToken).ConfigureAwait(false);
-                if (controllerGone || lossless)
+                if (controllerGone || EndsWithAgent)
                 {
                     break;
+                }
+
+                if (channelType == ChannelType.Input)
+                {
+                    // The agent's InputChannelModule finally released everything it had actually injected. Frames still
+                    // queued here belong to the dead desktop and must not be replayed; new input remains backpressured.
+                    while (queue.Reader.TryRead(out _))
+                    {
+                    }
                 }
 
                 if (!state.InboundEnded)
@@ -151,7 +164,7 @@ public sealed partial class AgentForwardingModule(
                 return false;
             }
 
-            toAgent = PumpToAgentAsync(queue, agentStream, replayFirstFrame ? state.First?.Sequence : null, lossless, generation.Token);
+            toAgent = PumpToAgentAsync(queue, agentStream, replayFirstFrame ? state.First?.Sequence : null, Lossless, generation.Token);
             fromAgent = PumpFromAgentAsync(agentStream, controllerStream, generation.Token, sessionToken);
             await Task.WhenAny(toAgent, fromAgent).ConfigureAwait(false);
             await generation.CancelAsync().ConfigureAwait(false);
@@ -225,7 +238,7 @@ public sealed partial class AgentForwardingModule(
             {
                 var queued = new QueuedFrame(frame, ++sequence, Stopwatch.GetTimestamp());
                 state.First ??= queued;
-                if (lossless)
+                if (Lossless)
                 {
                     await queue.WriteAsync(queued, cancellationToken).ConfigureAwait(false);
                 }

@@ -8,6 +8,7 @@ public enum SessionFailure
     TooManyAttempts,
     IncompatibleVersion,
     TooManySessions,
+    Timeout,
     ProtocolError,
 }
 
@@ -30,6 +31,12 @@ public sealed class SessionException : Exception
 
     public SessionException(SessionFailure failure, string message)
         : base(message)
+    {
+        Failure = failure;
+    }
+
+    public SessionException(SessionFailure failure, string message, Exception innerException)
+        : base(message, innerException)
     {
         Failure = failure;
     }

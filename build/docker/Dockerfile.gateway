@@ -1,14 +1,15 @@
 # The HTTPS reverse proxy for the Ops console. Optional, used by docker-compose.ops.yml.
 # Build from the repository root:  docker build -f build/docker/Dockerfile.gateway .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /src
 
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/ src/
 RUN --mount=type=cache,id=nuget-rd,target=/root/.nuget/packages,sharing=locked \
-    dotnet publish src/Server/RemoteDesktop.Server.Gateway -c Release --no-self-contained -o /app
+    dotnet restore src/Server/RemoteDesktop.Server.Gateway --locked-mode \
+    && dotnet publish src/Server/RemoteDesktop.Server.Gateway -c Release --no-self-contained --no-restore -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c AS runtime
 
 # The entrypoint creates the IP SAN self-signed certificate on first start. Installing openssl explicitly keeps that
 # independent of what a future base image happens to include.

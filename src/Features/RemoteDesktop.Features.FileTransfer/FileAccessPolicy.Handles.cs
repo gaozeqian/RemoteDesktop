@@ -96,42 +96,10 @@ public sealed partial class FileAccessPolicy
         }
         catch
         {
-            // CreateNew and OpenOrCreate can both make a brand-new empty file. If the handle turned out to lead
-            // outside the policy (a link was swapped in after Normalize), the empty file it made out there is ours to
-            // take back. OpenOrCreate on an existing non-empty file answers null and is left alone.
-            var stray = mode is FileMode.CreateNew or FileMode.OpenOrCreate ? EmptyFileLocation(handle) : null;
+            // A second path swap after closing the handle could delete an unrelated file. Leave a stray empty file
+            // rather than using an unverified pathname as proof of ownership.
             handle.Dispose();
-            if (stray is not null)
-            {
-                TryDelete(stray);
-            }
-
             throw;
-        }
-    }
-
-    /// <summary>Where the file behind <paramref name="handle"/> really is, if it is still empty; <c>null</c> when that cannot be told.</summary>
-    private static string? EmptyFileLocation(SafeFileHandle handle)
-    {
-        try
-        {
-            return !handle.IsInvalid && !handle.IsClosed && RandomAccess.GetLength(handle) == 0 ? FinalPathOf(handle) : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
-        {
-            return null;
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Best effort: an empty stray file is untidy, not a reason to hide the refusal that led here.
         }
     }
 

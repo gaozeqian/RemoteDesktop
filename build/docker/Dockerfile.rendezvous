@@ -1,6 +1,6 @@
 # The signaling server: device codes, presence, hole-punch coordination and relay tickets.
 # Build from the repository root:  docker build -f build/docker/Dockerfile.rendezvous .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /src
 
 COPY global.json Directory.Build.props Directory.Packages.props ./
@@ -10,9 +10,10 @@ COPY src/Server/ src/Server/
 # cache rather than the network. Full project-file splitting would add a second copy of every path for a marginal
 # gain; the downloads are the expensive part. This needs BuildKit, which is the default in Docker 23+.
 RUN --mount=type=cache,id=nuget-rd,target=/root/.nuget/packages,sharing=locked \
-    dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained -o /app
+    dotnet restore src/Server/RemoteDesktop.Server.Rendezvous --locked-mode \
+    && dotnet publish src/Server/RemoteDesktop.Server.Rendezvous -c Release --no-self-contained --no-restore -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c AS runtime
 
 # Npgsql probes for GSSAPI when it initializes its authentication mechanisms. Without the library the probe prints
 # "Cannot load library libgssapi_krb5.so.2" on every start; password authentication still works, but an error line in

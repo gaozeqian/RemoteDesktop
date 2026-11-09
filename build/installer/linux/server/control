@@ -5,7 +5,7 @@ Priority: optional
 Architecture: @ARCHITECTURE@
 Maintainer: Zeqian GAO <zeqian_gao@outlook.com>
 Homepage: https://github.com/gaozeqian/RemoteDesktop
-Depends: adduser, ca-certificates, debconf (>= 0.5) | debconf-2.0, libc6, libgcc-s1, libicu78 | libicu77 | libicu76 | libicu74 | libicu72, libssl3t64 | libssl3, libstdc++6, zlib1g
+Depends: adduser, ca-certificates, curl, debconf (>= 0.5) | debconf-2.0, libc6, libgcc-s1, libicu78 | libicu77 | libicu76 | libicu74 | libicu72, libssl3t64 | libssl3, libstdc++6, zlib1g
 Description: Remote Desktop server (signaling, relay, ops console and HTTPS gateway)
  Lets devices find each other and, when they cannot connect directly, forwards
  their traffic between them.

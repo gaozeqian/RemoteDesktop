@@ -48,7 +48,7 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     }
 
     [Fact]
-    public void A_link_swapped_in_after_the_check_leaves_no_file_behind_outside_the_root()
+    public void A_link_swapped_in_after_the_check_never_deletes_an_unverified_path()
     {
         var probe = CreateDirectoryLinkOrJunction(Path.Combine(_root, "probe"), _outside);
         Assert.SkipWhen(probe is null, NoLinkPrivilege);
@@ -60,8 +60,8 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
         var policy = new FileAccessPolicy([_root])
         {
             // The path has been judged inside the root; now the folder becomes a link to the outside, which is the
-            // window a local process needs. The handle check refuses the file, and the empty file the open made out
-            // there must not stay behind.
+            // window a local process needs. The handle check refuses the file; cleanup deliberately does not trust
+            // the mutable path again, even if that leaves an empty stray after this adversarial race.
             AfterNormalizeForTests = () =>
             {
                 Directory.Delete(folder);
@@ -73,7 +73,34 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
             policy.OpenWrite(Path.Combine(folder, "new.txt"), FileMode.CreateNew, FileAccess.Write, FileShare.None));
 
         Assert.Equal(FileError.NotAllowed, ex.Error);
-        Assert.False(File.Exists(Path.Combine(_outside, "new.txt")), "The file created outside the root was left behind.");
+        Assert.True(File.Exists(Path.Combine(_outside, "new.txt")), "The refusal must not turn into a pathname-based delete.");
+    }
+
+    [Fact]
+    public void A_link_swap_does_not_delete_an_existing_empty_file_outside_the_root()
+    {
+        var probe = CreateDirectoryLinkOrJunction(Path.Combine(_root, "probe"), _outside);
+        Assert.SkipWhen(probe is null, NoLinkPrivilege);
+        Directory.Delete(probe!);
+
+        var folder = Path.Combine(_root, "folder");
+        Directory.CreateDirectory(folder);
+        var existing = Path.Combine(_outside, "existing.txt");
+        File.WriteAllBytes(existing, []);
+        var policy = new FileAccessPolicy([_root])
+        {
+            AfterNormalizeForTests = () =>
+            {
+                Directory.Delete(folder);
+                _ = CreateDirectoryLinkOrJunction(folder, _outside);
+            },
+        };
+
+        var ex = Assert.Throws<FileOperationException>(() =>
+            policy.OpenWrite(Path.Combine(folder, "existing.txt"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read));
+
+        Assert.Equal(FileError.NotAllowed, ex.Error);
+        Assert.True(File.Exists(existing), "The refusal path deleted a file that this open did not create.");
     }
 
     [Fact]

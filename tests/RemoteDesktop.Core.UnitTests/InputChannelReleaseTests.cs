@@ -46,6 +46,62 @@ public sealed class InputChannelReleaseTests
         Assert.Contains(injector.Releases, release => release is PointerButtonEvent);
     }
 
+    [Fact]
+    public async Task Secure_attention_is_refused_without_its_separate_permission()
+    {
+        var injector = new RecordingInjector();
+        var module = new InputChannelModule(injector, NullLogger<InputChannelModule>.Instance);
+        var input = new MemoryStream();
+        await ProtobufFrames.WriteAsync(input, InputMessages.ToMessage(new SecureAttentionEvent()), Ct);
+        input.Position = 0;
+        var grant = AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All & ~Permissions.SecureAttention);
+        var session = new SessionContext(SessionId.New(), SessionRole.Host, null!, grant);
+
+        await module.HandleAsync(new TestChannel(input), session, Ct);
+
+        Assert.Empty(injector.Events);
+    }
+
+    [Fact]
+    public async Task Revoking_secure_attention_takes_effect_before_the_next_message()
+    {
+        var grant = AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All);
+        var session = new SessionContext(SessionId.New(), SessionRole.Host, null!, grant);
+        var injector = new RecordingInjector
+        {
+            OnSecureAttention = () => session.UpdateGrant(current => current.Revoke(Permissions.SecureAttention)),
+        };
+        var module = new InputChannelModule(injector, NullLogger<InputChannelModule>.Instance);
+        var input = new MemoryStream();
+        await ProtobufFrames.WriteAsync(input, InputMessages.ToMessage(new SecureAttentionEvent()), Ct);
+        await ProtobufFrames.WriteAsync(input, InputMessages.ToMessage(new SecureAttentionEvent()), Ct);
+        input.Position = 0;
+
+        await module.HandleAsync(new TestChannel(input), session, Ct);
+
+        Assert.Single(injector.Events);
+    }
+
+    private sealed class RecordingInjector : IInputInjector
+    {
+        public List<InputEvent> Events { get; } = [];
+
+        public Action? OnSecureAttention { get; init; }
+
+        public bool SupportsSecureAttention => true;
+
+        public void Inject(InputEvent inputEvent)
+        {
+            Events.Add(inputEvent);
+            if (inputEvent is SecureAttentionEvent)
+            {
+                OnSecureAttention?.Invoke();
+            }
+        }
+
+        public void SendSecureAttentionSequence() => Inject(new SecureAttentionEvent());
+    }
+
     private sealed class ThrowingOnFirstReleaseInjector : IInputInjector
     {
         public List<InputEvent> Releases { get; } = [];

@@ -154,6 +154,9 @@ case "$1" in
                     rm -f "$certificate_copy"
                 fi
                 ;;
+            *)
+                rm -f "$CERTIFICATE"
+                ;;
         esac
 
         if command -v update-desktop-database >/dev/null 2>&1; then

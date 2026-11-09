@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check the tag, the product version, generated package guides and the changelog agree
         run: |
@@ -56,12 +56,26 @@ jobs:
     # 与 ci.yml 的 build-linux 用同一个镜像，而不是 ubuntu-latest：发出去的包应该出自包脚本被验证过的那台
     # 机器，而不是出自 ubuntu-latest 这个月恰好指代的某个版本。
     runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RD_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Username=postgres;Password=test;Database=postgres
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -71,7 +85,7 @@ jobs:
 
       - name: Restore and build
         run: |
-          dotnet restore RemoteDesktop.slnx
+          dotnet restore RemoteDesktop.slnx --locked-mode
           dotnet build RemoteDesktop.slnx --no-restore -c Release
 
       - uses: ./.github/actions/audit-packages
@@ -104,7 +118,7 @@ jobs:
           ls -la artifacts/installer/linux/*.deb
 
       - name: Upload the packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-packages
           path: artifacts/installer/linux/*.deb
@@ -118,8 +132,7 @@ jobs:
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
     # dyld 拒绝在更老的系统上加载（docs/ports/README.md"最低系统版本是 macOS 26"）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
-    # 证书与公证凭据都是可选的：没配就出一个**未签名**的 .pkg（Gatekeeper 会提示"身份不明的开发者"，
-    # 右键 → 打开即可），配了就签名 + 公证（下载即开）。四个证书 Secret 与三个公证 Secret 见下面的注释。
+    # 正式发布必须具备证书与公证凭据：缺一项就停止，不发布未签名或未经公证的 .pkg。
     #
     # job 级 env 只放布尔值，不放 Secret 本身：job 级 env 对每一步都可见，包括 restore、build 与测试进程（测试代码
     # 读得到环境变量）。Secret 只出现在确实要用它的那几步自己的 env 里（导入证书、打包 + 公证）。布尔值放在
@@ -130,8 +143,8 @@ jobs:
       # 三个公证 Secret 都配了才公证；只在已签名时才有意义。
       MACOS_NOTARIZED: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' && secrets.MACOS_NOTARY_KEY_ID != '' && secrets.MACOS_NOTARY_ISSUER_ID != '' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
       # macOS 不从 .NET 运行时包拿到 MsQuic，任何碰传输层的东西没有它连加载都做不到。
@@ -139,7 +152,7 @@ jobs:
         run: ./native/macos/fetch-libmsquic.sh
       - name: Restore and build
         run: |
-          dotnet restore RemoteDesktop.slnx
+          dotnet restore RemoteDesktop.slnx --locked-mode
           dotnet build RemoteDesktop.slnx --no-restore -c Release
       # 与 ci.yml 逐字同源：release 是唯一一个发出去之前没人再检查一遍的构建，依赖漏洞必须在这里也拦住。
       # 此前这一步只在 Windows 那个 job 里有——三个平台里只有一个在发版时审过依赖。
@@ -202,8 +215,7 @@ jobs:
       # 三个 .pkg：客户端（Remote Desktop.app）、被控端（独立的 Remote Desktop Host.app，无窗口）与服务端
       # （信令、中继、监控台与 HTTPS 网关 + 四个 launchd 守护进程）。客户端与被控端各自发布自己的 app；它们 bundle id 不同，
       # TCC 授权也分开，不能互相复用。
-      # 有证书就 --distribution（签名 + 硬化运行时/安全时间戳）；再配了公证凭据就 --notarize
-      # （提交给 Apple + staple 票据，下载即开）。两者缺一就降级并给出 GitHub 警告，绝不静默出个半成品。
+      # 正式发布固定使用 --distribution --notarize；缺证书或公证凭据时本步直接失败。
       - name: Build the macOS installers (.pkg)
         # 公证凭据只在这一步的环境里：make-pkg.sh 自己读 NOTARY_KEY_ID / NOTARY_ISSUER_ID / NOTARY_KEY_PATH。
         # 证书不在这里——签名用的是上一步导入钥匙串的身份。
@@ -222,10 +234,12 @@ jobs:
               export NOTARY_KEY_PATH="$RUNNER_TEMP/notary_key.p8"
               args+=(--notarize)
             else
-              echo "::warning title=Signed but not notarized::The Developer ID certificates are configured but the notary credentials (MACOS_NOTARY_*) are not, so the .pkg files will be signed but not notarized — Gatekeeper still warns on a first run."
+              echo "::error::A formal release requires MACOS_NOTARY_KEY_BASE64, MACOS_NOTARY_KEY_ID and MACOS_NOTARY_ISSUER_ID."
+              exit 1
             fi
           else
-            echo "::warning title=Unsigned .pkg::No Developer ID certificates configured (MACOS_APP_CERT_BASE64 / MACOS_INSTALLER_CERT_BASE64). The .pkg files will be unsigned and Gatekeeper will report 'unidentified developer' on other machines."
+            echo "::error::A formal release requires the Developer ID application and installer certificates."
+            exit 1
           fi
 
           ./build/installer/macos/client/make-pkg.sh "${args[@]}"
@@ -254,7 +268,7 @@ jobs:
           ls -la
 
       - name: Upload the macOS installers
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-installer
           path: artifacts/installer/macos/*.pkg
@@ -276,10 +290,10 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -287,7 +301,7 @@ jobs:
       # than trusting that CI passed on some earlier commit.
       - name: Restore and build
         run: |
-          dotnet restore RemoteDesktop.slnx
+          dotnet restore RemoteDesktop.slnx --locked-mode
           dotnet build RemoteDesktop.slnx --no-restore -c Release
 
       # A release is the one build nobody re-checks before it is public, so a known-vulnerable dependency must stop it
@@ -326,8 +340,7 @@ jobs:
               Write-Warning 'No DEFAULT_RENDEZVOUS_URI: the client installer gets no built-in address.'
           }
 
-      # 可选：如果你需要使用真正的代码签名，而不是自签/跳过，
-      # 可以将 PKCS#12 (.pfx) 证书作为 Base64 存在 GitHub Secrets 中，然后在这里解码为文件。
+      # 正式发布的 PKCS#12 证书以 Base64 存在 GitHub Secrets 中；缺失时后续构建步骤直接失败。
       # 下面演示了如何从 Secrets 获取 PFX 证书并解码：
       - name: Decode Code Signing Certificate (Optional)
         if: env.HAS_PFX_CERT == 'true'
@@ -355,7 +368,7 @@ jobs:
               $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
               $arguments.CertificatePassword = $env:PFX_PASSWORD
           } else {
-              $arguments.SkipSigning = $true
+              throw 'A formal release requires CODE_SIGN_CERT_BASE64 and CODE_SIGN_CERT_PASSWORD.'
           }
 
           .\build\installer\windows\client\Build-ClientInstaller.ps1 @arguments
@@ -373,7 +386,7 @@ jobs:
               $arguments.CertificateFile = "$env:GITHUB_WORKSPACE\sign.pfx"
               $arguments.CertificatePassword = $env:PFX_PASSWORD
           } else {
-              $arguments.SkipSigning = $true
+              throw 'A formal release requires CODE_SIGN_CERT_BASE64 and CODE_SIGN_CERT_PASSWORD.'
           }
 
           .\build\installer\windows\host\Build-HostInstaller.ps1 @arguments
@@ -388,7 +401,7 @@ jobs:
           if ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true') {
               .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -CertificateFile "$env:GITHUB_WORKSPACE\sign.pfx" -CertificatePassword $env:PFX_PASSWORD
           } else {
-              .\build\installer\windows\server\Build-ServerInstaller.ps1 -Configuration Release -SkipSigning
+              throw 'A formal release requires CODE_SIGN_CERT_BASE64 and CODE_SIGN_CERT_PASSWORD.'
           }
 
       # 打开三个 MSI 的数据库看里面有什么（payload、服务与崩溃重启、防火墙规则、快捷方式、向导页与许可文本），
@@ -435,7 +448,7 @@ jobs:
 
       # 名字里已经带 Tag，就是发布资产名；release job 下载下来直接上传，中间不再改。
       - name: Upload the MSIs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-packages
           path: artifacts/installer/windows/*.msi
@@ -466,10 +479,9 @@ jobs:
 
     steps:
       # 只为 .git：gh 靠仓库推断往哪个 repo 发版。这个 job 不构建任何东西。
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # 发布说明描述的是下载者拿到的那些包，而三个平台的包是上面三个 job 出的。这里不做判断，只把"为什么这样"
-      # 摆在资产最上面：地址有没有内置、哪些包没签名、Windows 本机用户的边界在哪里。
+      # 发布说明描述下载者拿到的包：地址是否内置，以及正式签名/公证和 Windows 本机授权边界。
       - name: Decide the release note
         shell: pwsh
         # The variable is read from the environment, not interpolated into the script text: a value containing a quote
@@ -486,7 +498,7 @@ jobs:
               $note = @(
                   '> [!IMPORTANT]'
                   '> **本安装包没有内置服务器地址**，客户端默认连的是本机。装完后请在客户端里用「修改服务器地址」'
-                  '> 填入你自己的服务器（`ws://主机:5080/ws` 或 `wss://域名/ws`）——它会同时写给客户端和被控端服务。'
+                  '> 填入你自己的服务器（生产用 `wss://域名:5080/ws`；`ws://127.0.0.1:5080/ws` 仅限回环联调）。'
                   '> 部署步骤见 [docs/ops/README.md](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/ops/README.md)。'
               ) -join "`n"
           }
@@ -495,32 +507,17 @@ jobs:
           # the generated notes, which describe commits and not what the package will or will not protect.
           $boundaries = [System.Collections.Generic.List[string]]::new()
           $boundaries.Add('> [!WARNING]')
-          $boundaries.Add('> **Windows 本机用户边界**：控制管道对本机任何已登录用户开放，可读取设备码与临时密码、')
-          $boundaries.Add('> 设置固定密码。单用户机器上这没有问题；多人共用且彼此不信任的机器上，应把本机用户都视为可信。')
+          $boundaries.Add('> **Windows 本机用户边界**：只有管理员或当前 Agent 所服务的用户会话可以读取设备码与密码、')
+          $boundaries.Add('> 修改固定密码；其他本机账户与其他 Windows 会话会被控制管道拒绝。')
           $boundaries.Add('> 见 [安全边界](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/design/README.md#3-安全边界)。')
 
-          if ($env:MACOS_SIGNED -ne 'true') {
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **macOS 包未签名、未公证**：Gatekeeper 会提示“身份不明的开发者”。右键点击 `.pkg` 选择')
-              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
-          } elseif ($env:MACOS_NOTARIZED -ne 'true') {
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **macOS 包已签名但未公证**：Gatekeeper 在首次打开时仍会提示。右键点击 `.pkg` 选择')
-              $boundaries.Add('> “打开”，或先在“系统设置 → 隐私与安全性”里允许。')
+          if ($env:MACOS_SIGNED -ne 'true' -or $env:MACOS_NOTARIZED -ne 'true') {
+              throw 'The signed and notarized macOS build did not complete; refusing to publish it.'
           }
 
-          # build-windows 只在证书与口令都存在时才签名、否则退回 -SkipSigning，所以这里必须用同一个条件：
-          # 只看证书会在包其实未签名的发布上说成"已签名"。
+          # The build jobs have already enforced these credentials. Repeat the assertion before the write-only job.
           if (-not ($env:HAS_PFX_CERT -eq 'true' -and $env:HAS_PFX_PASSWORD -eq 'true')) {
-              $missing = @()
-              if ($env:HAS_PFX_CERT -ne 'true') { $missing += 'CODE_SIGN_CERT_BASE64' }
-              if ($env:HAS_PFX_PASSWORD -ne 'true') { $missing += 'CODE_SIGN_CERT_PASSWORD' }
-              Write-Host "::warning title=Unsigned Windows packages::Missing secret(s): $($missing -join ', '). The MSI files will be unsigned: SmartScreen will warn, and the UIAccess session agent cannot start."
-              $boundaries.Add('')
-              $boundaries.Add('> [!WARNING]')
-              $boundaries.Add('> **Windows 包未签名**：SmartScreen 会拦截，且 UIAccess 会话 Agent 在未签名时无法启动。')
+              throw 'The signed Windows build did not complete; refusing to publish unsigned MSIs.'
           }
 
           $note = $note + "`n`n" + ($boundaries -join "`n")
@@ -531,7 +528,7 @@ jobs:
 
       # 三个 MSI 在 build-windows 里打好并按 Tag 改过名，这里原样取回。
       - name: Download the Windows packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: windows-packages
           path: windows-packages
@@ -539,7 +536,7 @@ jobs:
       # 三个 Linux 包在 build-linux 里打好，这里取回来。少了就什么都不发——和上面 MSI 一样的理由：只发出其中
       # 一部分，是发完才会被发现的那种错。
       - name: Download the Linux packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: linux-packages
           path: linux-packages
@@ -547,7 +544,7 @@ jobs:
       # 取回 build-macos 打好的 .pkg。用 artifact 而不是让 macOS job 自己上传 Release，是为了让"发版"只发生
       # 在这一处——否则 Windows 和 macOS 会各自尝试创建同一个 Release，谁先谁后不定。
       - name: Download the macOS installer
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: macos-installer
           path: macos-installer
@@ -579,8 +576,15 @@ jobs:
           $windows = @(Get-ChildItem -Path windows-packages/*.msi -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
           if ($windows.Count -ne 3) { throw "Expected the Windows client, host and server installers from build-windows, got $($windows.Count)." }
 
+          $assets = @($windows.FullName) + @($linux.FullName) + @($packages)
+          $hashes = $assets | Sort-Object | ForEach-Object {
+              $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
+              "$($hash.Hash.ToLowerInvariant())  $(Split-Path -Leaf $_)"
+          }
+          [System.IO.File]::WriteAllLines("$PWD/SHA256SUMS", [string[]]$hashes, [System.Text.UTF8Encoding]::new($false))
+
           gh release create "$env:GITHUB_REF_NAME" `
-            $windows @($linux.FullName) $packages `
+            $assets "SHA256SUMS" `
             --title "$env:GITHUB_REF_NAME" `
             --notes-file release-body.md `
             --generate-notes

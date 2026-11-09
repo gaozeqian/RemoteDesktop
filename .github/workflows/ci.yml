@@ -18,11 +18,11 @@ jobs:
     # same reason, and so is everything a Linux runner needs before its tests can run at all.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
-      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       # THIRD-PARTY-NOTICES.md is generated from the dependency graph and then committed, because it ships inside the
       # installers. Nothing regenerates it when a package is bumped, and it had already drifted once in this
@@ -94,7 +94,7 @@ jobs:
     # The tests make their own throw-away schema per case, so the two projects can run at the same time against it.
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
         env:
           POSTGRES_PASSWORD: test
         ports:
@@ -107,14 +107,14 @@ jobs:
     env:
       RD_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Username=postgres;Password=test;Database=postgres
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
       # libmsquic, the FFmpeg and PulseAudio libraries the platform bindings load by soname, and a sound server with
       # a sink for the audio tests to talk to. Shared with release.yml's Linux job; the action says why each is there.
       - uses: ./.github/actions/prepare-linux-tests
-      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       - uses: ./.github/actions/audit-packages
       - uses: ./.github/actions/run-test-suite
@@ -146,8 +146,8 @@ jobs:
     # MsQuic library version '2'", which says nothing about this repository. macos-26 is the arm64 image.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
       # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
@@ -156,7 +156,7 @@ jobs:
       # an MSBuild glob over a directory that would otherwise not exist yet.
       - name: Stage the native MsQuic library
         run: ./native/macos/fetch-libmsquic.sh
-      - run: dotnet restore RemoteDesktop.slnx
+      - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       - uses: ./.github/actions/audit-packages
       - uses: ./.github/actions/run-test-suite
@@ -199,7 +199,11 @@ jobs:
       TLS_CERT_PATH: ./rd.example.pfx
       TLS_CERT_PASSWORD: ci-not-a-secret
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: global.json
+      - uses: ./.github/actions/audit-packages
       - name: Check the compose files parse
         run: |
           docker compose -f build/docker/docker-compose.yml config >/dev/null
@@ -264,7 +268,7 @@ jobs:
           docker run --rm \
             -e RENDEZVOUS_DOMAIN="$RENDEZVOUS_DOMAIN" \
             -v "$PWD/build/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+            caddy:2@sha256:ce773ec7a742ce15ee6bf2bb5f65882b9e2a4487b10733e6f1484f86e6b5d8bc caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build the server images
         run: |
           docker build -f build/docker/Dockerfile.rendezvous -t remotedesktop/rendezvous:ci .
@@ -358,7 +362,7 @@ jobs:
     # longer there, and the test has no opinion about whitespace. Each checks what it is good at.
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Node comes from the runner image. It is not pinned to a setup-node action on purpose: the tool itself is
       # pinned below, which is the version that actually matters here.
       - name: Lint the Markdown

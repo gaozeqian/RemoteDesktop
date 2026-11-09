@@ -1,13 +1,17 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
+using RemoteDesktop.Abstractions.Agent;
 
 namespace RemoteDesktop.Platform.Windows;
 
 /// <summary>Named pipe servers with explicit access control; the default ACL would let any local user connect.</summary>
 [SupportedOSPlatform("windows")]
-public static class WindowsPipes
+public static partial class WindowsPipes
 {
     public static SecurityIdentifier AuthenticatedUsers { get; } = new(WellKnownSidType.AuthenticatedUserSid, null);
 
@@ -65,4 +69,40 @@ public static class WindowsPipes
             outBufferSize: 64 * 1024,
             security);
     }
+
+    /// <summary>
+    /// Authorizes a host-control caller. The pipe ACL is only a transport filter: the final decision also requires an
+    /// administrator/SYSTEM identity or the exact user and Windows session currently served by the agent.
+    /// </summary>
+    public static bool IsAuthorizedHostControlClient(NamedPipeServerStream server, AgentSessionIdentity? currentSession)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        if (!GetNamedPipeClientProcessId(server.SafePipeHandle, out var processId))
+        {
+            return false;
+        }
+
+        using var process = Process.GetProcessById((int)processId);
+        var privileged = false;
+        SecurityIdentifier? user = null;
+        server.RunAsClient(() =>
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            privileged = identity.IsSystem || new WindowsPrincipal(identity).IsInRole(WindowsPipes.Administrators);
+            user = identity.User;
+        });
+
+        if (privileged)
+        {
+            return true;
+        }
+
+        return currentSession?.UserSid is { } expectedUser
+            && user?.Value == expectedUser
+            && (uint)process.SessionId == currentSession.SessionId;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint processId);
 }

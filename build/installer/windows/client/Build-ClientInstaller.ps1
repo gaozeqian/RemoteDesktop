@@ -358,7 +358,7 @@ try {
         # of the others, and a build without it is an agent that cannot drive elevated windows - whichever copy lands
         # last in the shared output folder would decide. This is the build that ends up signed in Program Files, which
         # is what UIAccess requires; a development build keeps the manifest without it (see the project file).
-        dotnet publish "src\Hosts\$project" -c $Configuration -r win-x64 --self-contained true -p:PublishReadyToRun=true `
+        dotnet publish "src\Hosts\$project" -c $Configuration -r win-x64 --self-contained true -p:PublishReadyToRun=true -p:RestoreLockedMode=true `
             -p:UiAccessAgent=true -o $PublishDirectory -nologo -v quiet
         if ($LASTEXITCODE -ne 0) { throw "Publishing $project failed." }
     }

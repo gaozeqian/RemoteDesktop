@@ -327,7 +327,7 @@ try {
         # No -p:PublishReadyToRun, unlike the client: the servers do not need the start-up time it buys (they start
         # once, as services), and precompiling the whole runtime is what makes a package of this size - the
         # self-contained output alone is already most of it.
-        dotnet publish "src\Server\$($server.Project)" -c $Configuration -r win-x64 --self-contained true `
+        dotnet publish "src\Server\$($server.Project)" -c $Configuration -r win-x64 --self-contained true -p:RestoreLockedMode=true `
             -o (Join-Path $PublishDirectory $server.Folder) -nologo -v quiet
         if ($LASTEXITCODE -ne 0) { throw "Publishing $($server.Project) failed." }
     }

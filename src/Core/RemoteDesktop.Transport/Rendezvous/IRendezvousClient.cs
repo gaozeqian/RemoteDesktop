@@ -33,6 +33,9 @@ public interface IRendezvousClient
     /// <summary>Operator commands addressed to this device, once a console exists and this device declared the capability.</summary>
     IAsyncEnumerable<AdminCommand> ReadAdminCommandsAsync(CancellationToken cancellationToken);
 
+    /// <summary>Reports whether an operator command was applied; the console waits for this acknowledgment.</summary>
+    Task ReportAdminResultAsync(AdminResult result, CancellationToken cancellationToken) => Task.CompletedTask;
+
     /// <exception cref="PeerConnectException">Offline, target offline, rejected or timed out.</exception>
     Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken);
 
@@ -66,8 +69,8 @@ public interface IRendezvousClient
     /// no relay to report its close, so this is the only end fact the console can get for it.
     /// </summary>
     /// <remarks>
-    /// Never blocks and never retries, like a heartbeat. Two ends may both report the same session; the console folds
-    /// the second report into the same row.
+    /// Never blocks the session. Reports are deduplicated and retained across reconnects until sent; two ends may both
+    /// report the same session, and the console folds the second report into the same row.
     /// </remarks>
     void ReportSessionEnded(SessionEndedReport report);
 }

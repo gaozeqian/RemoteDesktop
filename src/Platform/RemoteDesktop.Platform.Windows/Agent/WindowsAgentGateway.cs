@@ -37,8 +37,11 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
 
     private AgentState _state = new(AgentStatus.Stopped, DesktopKind.User);
     private volatile AgentConnection? _current;
+    private volatile AgentSessionIdentity? _currentSession;
 
     public AgentState State => _state;
+
+    public AgentSessionIdentity? CurrentSession => _currentSession;
 
     public event EventHandler? StateChanged;
 
@@ -172,6 +175,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
                     : "The agent did not connect in time.");
             }
 
+            _currentSession = new AgentSessionIdentity(sessionId, prepared.User?.Value);
             _current = connection;
             SetState(AgentStatus.Running, desktop, null);
 
@@ -186,6 +190,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
         finally
         {
             _current = null;
+            _currentSession = null;
             await run.CancelAsync().ConfigureAwait(false);
             KillAgent(agent);
             SetState(AgentStatus.Stopped, desktop, null);

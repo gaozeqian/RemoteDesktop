@@ -25,7 +25,7 @@ public class HostControlWaitTests
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = ServeAfterAsync(pipeName, TimeSpan.FromMilliseconds(300), stop.Token);
 
-        Assert.True(await PipeHostControl.WaitUntilAvailableAsync(pipeName, TimeSpan.FromSeconds(3), Ct));
+        Assert.True(await PipeHostControl.WaitUntilAvailableAsync(pipeName, TimeSpan.FromSeconds(3), Environment.ProcessPath, Ct));
 
         await stop.CancelAsync();
         await server;
@@ -37,7 +37,7 @@ public class HostControlWaitTests
         var pipeName = ShortUniqueName();
         var elapsed = Stopwatch.StartNew();
 
-        Assert.False(await PipeHostControl.WaitUntilAvailableAsync(pipeName, TimeSpan.FromMilliseconds(500), Ct));
+        Assert.False(await PipeHostControl.WaitUntilAvailableAsync(pipeName, TimeSpan.FromMilliseconds(500), Environment.ProcessPath, Ct));
 
         Assert.InRange(elapsed.Elapsed, TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(5));
     }

@@ -12,8 +12,11 @@ public sealed class ControllerSessionService(
     IPeerConnector connector,
     SessionTelemetry telemetry,
     SessionLifecycle lifecycle,
-    TimeProvider time)
+    TimeProvider time,
+    TimeSpan? handshakeTimeout = null)
 {
+    private static readonly TimeSpan DefaultHandshakeTimeout = TimeSpan.FromSeconds(15);
+
     /// <exception cref="PeerConnectException">No connection could be established.</exception>
     /// <exception cref="SessionException">The host refused the session.</exception>
     public async Task<RemoteSession> ConnectAsync(DeviceId target, string password, SessionMode mode, CancellationToken cancellationToken)
@@ -25,10 +28,13 @@ public sealed class ControllerSessionService(
         var sessionId = SessionId.New();
 
         var connection = await connector.ConnectAsync(target, cancellationToken).ConfigureAwait(false);
+        using var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        handshake.CancelAfter(handshakeTimeout ?? DefaultHandshakeTimeout);
+        var token = handshake.Token;
         IChannel? control = null;
         try
         {
-            control = await connection.OpenChannelAsync(ChannelType.Control, bidirectional: true, cancellationToken).ConfigureAwait(false);
+            control = await connection.OpenChannelAsync(ChannelType.Control, bidirectional: true, token).ConfigureAwait(false);
 
             var requested = mode == SessionMode.View ? Permissions.ViewOnly : Permissions.All;
             await ControlMessages.WriteAsync(control, new ControlMessage
@@ -41,9 +47,9 @@ public sealed class ControllerSessionService(
                     RequestedPermissions = (uint)requested,
                     SessionId = sessionId.ToString(),
                 },
-            }, cancellationToken).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
 
-            var challenge = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthChallenge, cancellationToken)
+            var challenge = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthChallenge, token)
                 .ConfigureAwait(false)).AuthChallenge;
             var hostVersion = ProtocolVersion.FromWire(challenge.ProtocolMajor, challenge.ProtocolMinor);
             if (!ProtocolVersion.Current.IsCompatibleWith(hostVersion))
@@ -92,9 +98,9 @@ public sealed class ControllerSessionService(
                 });
             }
 
-            await ControlMessages.WriteAsync(control, new ControlMessage { AuthResponse = response }, cancellationToken).ConfigureAwait(false);
+            await ControlMessages.WriteAsync(control, new ControlMessage { AuthResponse = response }, token).ConfigureAwait(false);
 
-            var result = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthResult, cancellationToken)
+            var result = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.AuthResult, token)
                 .ConfigureAwait(false)).AuthResult;
             if (!result.Accepted)
             {
@@ -118,6 +124,16 @@ public sealed class ControllerSessionService(
             telemetry.Track(session);
             lifecycle.Track(session);
             return session;
+        }
+        catch (OperationCanceledException ex) when (handshake.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            if (control is not null)
+            {
+                await control.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw new SessionException(SessionFailure.Timeout, "The remote device did not complete the session handshake in time.", ex);
         }
         catch
         {

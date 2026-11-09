@@ -44,6 +44,9 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
         Assert.Contains("cmd-1", line.Text, StringComparison.Ordinal);
         Assert.Contains(id.ToString(), line.Text, StringComparison.Ordinal);
         Assert.Contains("True", line.Text, StringComparison.Ordinal);
+        await WaitForAsync(() => commands.Results.Count == 1, "the command acknowledgment");
+        Assert.True(commands.Results.Single().Succeeded);
+        Assert.Equal("cmd-1", commands.Results.Single().CommandId);
 
         await service.StopAsync(Ct);
     }
@@ -155,6 +158,8 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
     {
         private readonly Channel<AdminCommand> _commands = Channel.CreateUnbounded<AdminCommand>();
 
+        public ConcurrentQueue<AdminResult> Results { get; } = new();
+
         public RendezvousState State => RendezvousState.Online;
 
         public DeviceId? DeviceId => null;
@@ -176,6 +181,12 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
 
         public IAsyncEnumerable<AdminCommand> ReadAdminCommandsAsync(CancellationToken cancellationToken) =>
             _commands.Reader.ReadAllAsync(cancellationToken);
+
+        public Task ReportAdminResultAsync(AdminResult result, CancellationToken cancellationToken)
+        {
+            Results.Enqueue(result);
+            return Task.CompletedTask;
+        }
 
         public Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

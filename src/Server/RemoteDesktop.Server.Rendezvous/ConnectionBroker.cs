@@ -24,6 +24,7 @@ public sealed partial class ConnectionBroker
     private readonly RendezvousOptions _options;
     private readonly ServerMetrics _metrics;
     private readonly NodeEventPublisher _events;
+    private readonly SessionDirectory _sessions;
     private readonly TimeProvider _time;
     private readonly ILogger<ConnectionBroker> _logger;
     private readonly byte[]? _relayKey;
@@ -35,6 +36,7 @@ public sealed partial class ConnectionBroker
         IOptions<RendezvousOptions> options,
         ServerMetrics metrics,
         NodeEventPublisher events,
+        SessionDirectory sessions,
         TimeProvider time,
         ILogger<ConnectionBroker> logger)
     {
@@ -45,6 +47,7 @@ public sealed partial class ConnectionBroker
         _options = options.Value;
         _metrics = metrics;
         _events = events;
+        _sessions = sessions;
         _time = time;
         _logger = logger;
         if (!string.IsNullOrEmpty(_options.RelayEndpoint))
@@ -133,6 +136,7 @@ public sealed partial class ConnectionBroker
         };
         ready.HostCandidates.Add(accept.Candidates);
         await pending.Controller.TrySendAsync(new ServerMessage { ConnectReady = ready }, cancellationToken).ConfigureAwait(false);
+        _sessions.Register(pending.CorrelationId, pending.Controller.DeviceId, host.DeviceId);
         Publish(OpsEventKinds.SessionAccepted, pending.CorrelationId, new { hostDeviceId = host.DeviceId });
     }
 

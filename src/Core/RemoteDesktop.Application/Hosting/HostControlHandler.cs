@@ -13,7 +13,16 @@ public static partial class HostControlHandler
     /// answer for (for example a camera state query that throws) are not swallowed here: they propagate, and the
     /// caller is responsible for logging them.
     /// </summary>
-    public static async Task HandleAsync(Stream stream, IHostControl control, ILogger logger, CancellationToken cancellationToken)
+    public static Task HandleAsync(Stream stream, IHostControl control, ILogger logger, CancellationToken cancellationToken) =>
+        HandleAsync(stream, control, logger, authorize: null, cancellationToken);
+
+    /// <summary>Reads one request, authenticates the local caller, then dispatches it.</summary>
+    public static async Task HandleAsync(
+        Stream stream,
+        IHostControl control,
+        ILogger logger,
+        Action? authorize,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(control);
@@ -25,6 +34,13 @@ public static partial class HostControlHandler
             timeout.CancelAfter(RequestTimeout);
 
             var request = await HostControlProtocol.ReadLineAsync<HostControlRequest>(stream, timeout.Token).ConfigureAwait(false);
+            if (request is not null)
+            {
+                // Windows only permits impersonation after the client has written. The complete request is now available,
+                // but no command or secret-bearing operation has been dispatched yet.
+                authorize?.Invoke();
+            }
+
             switch (request?.Command)
             {
                 case HostControlProtocol.StatusCommand:

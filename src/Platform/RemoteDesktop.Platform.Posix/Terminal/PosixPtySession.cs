@@ -300,12 +300,16 @@ public sealed class PosixPtySession : IPtySession
         byte* workingDirectory = null;
         try
         {
-            if (LibC.SpawnFileActionsInit(actions) != 0 || LibC.SpawnAttributesInit(attributes) != 0)
+            if (LibC.SpawnFileActionsInit(actions) != 0)
             {
-                throw new IOException($"Could not prepare to start '{shellPath}' (errno {Marshal.GetLastPInvokeError()}).");
+                throw new IOException($"Could not prepare shell file actions for '{shellPath}' (errno {Marshal.GetLastPInvokeError()}).");
             }
-
             actionsInitialised = true;
+
+            if (LibC.SpawnAttributesInit(attributes) != 0)
+            {
+                throw new IOException($"Could not prepare shell attributes for '{shellPath}' (errno {Marshal.GetLastPInvokeError()}).");
+            }
             attributesInitialised = true;
 
             // The slave becomes the child's standard streams, and the descriptor it came in on is closed again so the

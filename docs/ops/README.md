@@ -92,7 +92,7 @@ sudo apt install ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-<�
 | 问题 | 取值 | 说明 |
 |---|---|---|
 | 数据库 | `sqlite` / `postgres` / `none` | 前两个是正式选择；`none` 只把设备码放内存，重启即失效。Ops 用同一个 provider，`none` 时仍保留自己的 SQLite 库 |
-| SQLite 文件 | 绝对路径 | 默认 `/var/lib/remotedesktop-server/rendezvous.db`；同目录下放 `ops.db`。目录会创建并交给服务账户 |
+| SQLite 文件 | 绝对路径 | 默认 `/var/lib/remotedesktop-server/rendezvous.db`；同目录下放 `ops.db`。自定义路径必须使用名为 `remotedesktop`/`remotedesktop-*`（或对应 `remote-desktop` 形式）的专用目录；安装器解析真实路径、拒绝 `/etc` 等系统/共享根目录，只设置该目录本身的属主与 0700，不递归处理已有文件 |
 | PostgreSQL 连接串 | Npgsql 连接串 | 选 postgres 时必填；数据库本身要先存在，表由服务创建。升级或重配时，只有现有设置本来就用 PostgreSQL（`Rendezvous:Database:Provider` 为 `postgres`，或没有 Provider 的旧布局里留着连接串）才可留空沿用已有连接串；现有设置是 sqlite / none、只是手工留了一个旧连接串时，不会被当作答案，仍会再问一次，仍留空则安装失败 |
 | 信令 TLS | `generate` / `existing` / `none` | 自签证书 / 已有证书（PKCS#12 或 PEM + 同名 `.key`）/ 明文 HTTP |
 | 证书文件与口令 | 路径 / 口令 | `existing` 时询问；文件会被复制到 `/etc/remotedesktop-server/tls/custom/`，服务账户可读 |
@@ -234,9 +234,9 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 四个守护进程以专用账号 **`_remotedesktop`** 运行（与 Linux 的 `remotedesktop` 对应）：plist 里写
 `UserName`/`GroupName`，postinstall 创建隐藏账号（UID/GID 从 300 起找空位，`/usr/bin/false`、无自己的家目录），
 把 `var/`（数据库、DataProtection 密钥环）与 `logs/`（`launchd` 的 stdout）交给它，并让 `appsettings.json`
-与 `tls/` 变成 `root:_remotedesktop`、0640/0750 —— 服务读得到、其他本机用户读不到。postinstall 结束前会以该
-账号实测读设置、读私钥、写 `var` 与 `logs`；任何一项不通过就把 `UserName`/`GroupName` 从四个 plist 里删掉并
-**退回 root 运行**，安装照常完成（日志里有警告）。`configure-server.sh` 改写设置后会重新应用同一组权限。
+与 `tls/` 变成 `root:_remotedesktop`、0640/0750 —— 服务读得到、其他本机用户读不到。postinstall 会按实际数据库路径
+准备父目录，并以该账号实测读设置、读私钥、写数据库目录与 `logs`；任何一项不通过都会使安装失败，**不会回退为 root
+运行**。四个服务 bootstrap、active 检查和信令 `/health` 检查也同样是安装成功的条件。`configure-server.sh` 改写设置后会重新应用同一组权限。
 
 ```bash
 sudo installer -pkg <文件>.pkg -target /
@@ -257,8 +257,9 @@ curl http://127.0.0.1:5090/health      # 监控台
 - **监听地址**：面板不问。TLS 选「不使用」时信令绑 `http://0.0.0.0:5080` 并开启
   `Rendezvous:AllowInsecureSignaling`（明文、所有网卡），选生成或已有证书时绑 `https://0.0.0.0:5080`；升级且 TLS 模式
   没变则沿用上次的地址。只有完全没有答案（`--urls auto`）时才是只监听回环的 `http://127.0.0.1:5080`。
-- 证书口令与连接串写进 `appsettings.json`（`root:_remotedesktop`，0640 —— 只有服务账号读得到；回退成 root
-  运行时仍是 `root:wheel`）。安装器面板的答案在 `/var/tmp` 里只存在到 postinstall 读取为止。
+- 证书口令与连接串写进 `appsettings.json`（`root:_remotedesktop`，0640，只有服务账号读得到）。面板暂存的
+  `/var/tmp` 答案必须是 root 或当前 console user 所有的普通单链接文件；其他账户预置的文件、符号链接和硬链接会被忽略。
+  root 暂存副本由唯一临时文件原子重命名产生，并在 postinstall 读取后删除。
 - 升级时同一页默认勾选 **保留现有设置**，不会把运维改过的数据库、TLS 或地址覆盖掉。
 
 **无人值守安装**（`sudo installer`、MDM）把同样的答案写到
@@ -269,7 +270,7 @@ curl http://127.0.0.1:5090/health      # 监控台
 | 键 | 值 |
 |---|---|
 | `DatabaseProvider` | `sqlite` / `postgres` / `none` |
-| `DatabasePath` | SQLite 文件（绝对路径） |
+| `DatabasePath` | SQLite 文件（绝对路径；自定义父目录须为 `remotedesktop`/`remotedesktop-*` 专用目录） |
 | `PostgresConnectionString` | PostgreSQL 连接串 |
 | `TlsMode` | `none` / `generate` / `existing` |
 | `TlsCertificatePath` / `TlsPassword` | 已有证书的绝对路径与口令 |
@@ -634,9 +635,9 @@ export OPS_GATEWAY_IP=192.168.1.10                        # 同时启用监控�
 docker compose -f docker-compose.yml -f docker-compose.selfsigned.yml -f docker-compose.ops.yml up -d --build
 ```
 
-`.pfx` 以只读方式挂进容器，而容器以 UID 1654 运行。**仓库脚本不设置文件权限**（Linux 上按 umask，通常是 0644），
-所以私钥默认可能对所有人可读：先 `chmod 600 <.pfx>`，再给容器用户读权限、又不能让所有人可读：
-`setfacl -m u:1654:r-- <.pfx>`（证书重新生成后再来一次）。监听地址可用 `RENDEZVOUS_URLS` 覆盖，默认
+`.pfx` 以只读方式挂进容器，而容器以 UID 1654 运行。仓库脚本在 Unix 上把 PFX 固定为 0600（Windows 使用受限 ACL），
+再给容器用户读权限、又不能让所有人可读：`setfacl -m u:1654:r-- <.pfx>`（证书重新生成后再来一次）。
+监听地址可用 `RENDEZVOUS_URLS` 覆盖，默认
 `https://0.0.0.0:5080;http://0.0.0.0:5082`。启用监控台时把 `OPS_RENDEZVOUS_NODE_URL` 设为 `http://rendezvous:5082`。
 
 #### 端口与防火墙
@@ -1111,18 +1112,18 @@ sudo security add-trusted-cert -d -r trustRoot \
 九个资产的完整名单、命名约定（角色词一律写全，架构词各平台用自己的说法，Linux 那个与包内 `Architecture`
 字段同源）见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的“构建产物布局”一节；这里只写每个角色装什么，不再重列。
 
+Release 还包含 `SHA256SUMS`，覆盖九个安装包；下载后可用 `sha256sum -c SHA256SUMS` 或 PowerShell `Get-FileHash` 复核。
 同一个平台上的包版本号相同。三个角色各自装在不同的机器上是常态；Windows 的客户端包与被控端包不能同机共存
 （见 [安装](#2-安装)），而服务端包和它们互不影响。
 
-发布前要准备好下面这些。**没有哪一件是必填的**，但流水线会根据你配了什么调整产物，并把结果写在 Release 说明
-最前面：
+发布前要准备好下面这些。服务器地址可选；**正式 tag 的签名与公证凭据是必填项**，缺失会使流水线失败而不是降级：
 
 - **服务器地址**（可选）：配了 `DEFAULT_RENDEZVOUS_URI`，客户端安装包就内置这个地址，下载的人装完直接可用；
   不配就是"不内置"，见"配置默认服务器地址"那一节。
-- **代码签名证书**（可选，但强烈建议）：不配置也能出包（流水线跳过签名），但没签名的包在目标机器上过不了
+- **代码签名证书**（必填）：`CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD` 缺一不可；未签名的 Agent 无法获得
   UIAccess，见"准备代码签名证书"那一节。
-- **macOS 证书与公证**（可选）：`release.yml` 读取七个 `MACOS_*` Secrets（两张证书与公证凭据）；不配就出未签名的
-  `.pkg`，配了就签名并公证。具体是哪几个、怎么准备，见
+- **macOS 证书与公证**（必填）：`release.yml` 要求两张 `MACOS_*` 证书及三个公证 Secrets 全部配置，并验证签名、
+  Gatekeeper 与 staple 票据。具体是哪几个、怎么准备，见
   [build/signing/README.md](../../build/signing/README.md#github-secrets-与变量) 的「GitHub Secrets 与变量」。
 - **许可文本**：仓库根的 `LICENSE` 已经是填好的正式文本，不需要动。只有里面重新出现【方括号】占位符时
   打包脚本才会拒绝出包——那道闸门是留给"换个人/换主体来发布"的，构建日志会列出是哪几处。
@@ -1144,7 +1145,7 @@ sudo security add-trusted-cert -d -r trustRoot \
    - `CODE_SIGN_CERT_BASE64` = 刚刚复制的 Base64 字符串
    - `CODE_SIGN_CERT_PASSWORD` = 您的证书密码
 
-*(如果不配置这些 Secrets，流水线会自动跳过签名步骤并正常打包)*
+*正式 Release 缺少其中任何一项都会失败；本地测试包仍可用打包脚本的显式 `-SkipSigning` 选项。*
 
 配置好之后，流水线用这个 `.pfx` 给客户端的 exe/dll 和 MSI 签名。自签名证书还会随 MSI 装进目标机器的受信任根
 （UIAccess 要求签名链能被本机信任），机制见
@@ -1907,10 +1908,11 @@ grep -c UserName /Library/LaunchDaemons/com.remotedesktop.rendezvous.plist
 `UserShell` 是 `/usr/bin/false`；`ps` 的 user 是 `_remotedesktop`；`var` 是 `drwx------ _remotedesktop _remotedesktop`；
 `appsettings.json` 是 `-rw-r----- root _remotedesktop`；最后一条输出 `1`。
 
-最后一条输出 `0` 说明交接没有通过、按 root 回退了（安装仍然会成功）。原因写在安装日志里：
+最后一条输出 `0` 说明交接没有通过；当前版本会使安装失败且不以 root 启动服务，不会形成可接受的降级状态。
+修复目录、设置或证书权限后重新安装。原因写在安装日志里：
 
 ```bash
-grep -n "could not hand the servers" /var/log/install.log | tail -3
+grep -n "could not prepare the unprivileged" /var/log/install.log | tail -3
 ```
 
 **再验证运维入口**：第一个管理员必须用服务账号创建——用 root 创建会让 SQLite 的 `-wal`/`-shm` 归 root，

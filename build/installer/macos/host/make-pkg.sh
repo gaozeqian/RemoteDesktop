@@ -371,9 +371,14 @@ fi
 # --- 8. Verify -------------------------------------------------------------------------------------------------
 
 echo "==> Verifying"
-pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
 if [[ "$DISTRIBUTION" == "1" ]]; then
-    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+else
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+fi
+if [[ "$NOTARIZE" == "1" ]]; then
+    xcrun stapler validate "$FINAL_PKG"
 fi
 
 # What has to be right is both parts of the payload: the app (which is what TCC grants permissions to) and the login

@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using Google.Protobuf;
 using RemoteDesktop.Signaling;
+using RemoteDesktop.Signaling.Messages;
 
 namespace RemoteDesktop.Server.Rendezvous;
 
@@ -8,6 +10,7 @@ namespace RemoteDesktop.Server.Rendezvous;
 public sealed class DeviceSession(uint deviceId, string fingerprint, uint capabilities, WebSocket socket) : IDisposable
 {
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<AdminResult>> _adminResults = new(StringComparer.Ordinal);
 
     public uint DeviceId { get; } = deviceId;
 
@@ -44,9 +47,58 @@ public sealed class DeviceSession(uint deviceId, string fingerprint, uint capabi
         }
     }
 
-    public void Abort() => socket.Abort();
+    public async Task ExecuteAdminCommandAsync(AdminCommand command, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var completion = new TaskCompletionSource<AdminResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_adminResults.TryAdd(command.CommandId, completion))
+        {
+            throw new InvalidOperationException("The admin command id is already pending.");
+        }
 
-    public void Dispose() => _sendLock.Dispose();
+        try
+        {
+            await SendAsync(new ServerMessage { AdminCommand = command }, cancellationToken).ConfigureAwait(false);
+            var result = await completion.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(result.Error) ? "The host refused the command." : result.Error);
+            }
+        }
+        finally
+        {
+            _adminResults.TryRemove(command.CommandId, out _);
+        }
+    }
+
+    public void HandleAdminResult(AdminResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (_adminResults.TryGetValue(result.CommandId, out var completion))
+        {
+            completion.TrySetResult(result);
+        }
+    }
+
+    public void Abort()
+    {
+        socket.Abort();
+        FailAdminCommands();
+    }
+
+    public void Dispose()
+    {
+        FailAdminCommands();
+        _sendLock.Dispose();
+    }
+
+    private void FailAdminCommands()
+    {
+        foreach (var pending in _adminResults.Values)
+        {
+            pending.TrySetException(new IOException("The device signaling connection closed before acknowledging the command."));
+        }
+    }
 }
 
 /// <summary>Online devices by id.</summary>

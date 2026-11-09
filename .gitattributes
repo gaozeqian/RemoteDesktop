@@ -20,6 +20,7 @@
 # bind-mount and copy-to-a-Linux-box workflows, where the checkout is read
 # directly by the other OS.
 *.sh                text eol=lf
+native/macos/native-dependencies.lock text eol=lf
 *.bash              text eol=lf
 Dockerfile*         text eol=lf
 
@@ -38,8 +39,8 @@ build/installer/linux/**/config                              text eol=lf
 build/installer/linux/**/templates                           text eol=lf
 build/installer/linux/**/*.txt                               text eol=lf
 build/installer/macos/**/*.txt                               text eol=lf
-build/installer/macos/server/scripts/postinstall             text eol=lf
-build/installer/macos/server/scripts/preinstall              text eol=lf
+build/installer/macos/**/scripts/postinstall                 text eol=lf
+build/installer/macos/**/scripts/preinstall                  text eol=lf
 *.default                                                    text eol=lf
 
 *.plist             text eol=lf
@@ -49,6 +50,7 @@ build/installer/macos/server/scripts/preinstall              text eol=lf
 # Workflow files: their run: blocks are shell, and keeping them LF means the
 # file reads the same whichever OS a maintainer opens it on.
 *.yml               text eol=lf
+THIRD-PARTY-NOTICES.md text eol=lf
 build/docker/.env.example                              text eol=lf
 
 # --- Windows tooling and project files ------------------------------------

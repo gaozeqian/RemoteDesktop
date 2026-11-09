@@ -15,6 +15,7 @@ message ClientMessage {
     PresenceQuery presence_query = 5;
     TelemetryReport telemetry = 6;
     SessionEndedReport session_ended = 7;
+    AdminResult admin_result = 8;
   }
 }
 
@@ -134,7 +135,7 @@ message PresenceResult {
 }
 
 // Server -> host. An operator approved an action in the ops console; the console asked the signaling server, which
-// forwards it here. Only a device that declared the capability in Register receives one, and it never answers.
+// forwards it here. Only a device that declared the capability in Register receives one.
 message AdminCommand {
   // UUID the console generated, so the host's log line can be matched to the console's audit entry.
   string command_id = 1;
@@ -142,6 +143,13 @@ message AdminCommand {
   string command = 2;
   // Which session to act on, in the 32-hex form both ends of a session share.
   string session_id = 3;
+}
+
+// Host -> server after it has applied an operator command. The console must not report execution before this arrives.
+message AdminResult {
+  string command_id = 1;
+  bool succeeded = 2;
+  string error = 3;
 }
 
 enum TelemetryRole {

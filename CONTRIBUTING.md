@@ -14,12 +14,17 @@
 在根目录执行以下命令，确保所有代码编译通过并且没有破坏架构规则：
 
 ```bash
-# 1. 还原与编译
-dotnet build RemoteDesktop.slnx
+# 1. 按提交的锁文件还原与编译
+dotnet restore RemoteDesktop.slnx --locked-mode
+dotnet build RemoteDesktop.slnx --no-restore
 
 # 2. 运行单元测试与架构校验（非常重要！）
-dotnet test --solution RemoteDesktop.slnx
+dotnet test --solution RemoteDesktop.slnx --no-build
 ```
+
+所有项目提交 `packages.lock.json`；生产项目另提交 `packages.win-x64.lock.json`、`packages.linux-x64.lock.json` 与
+`packages.osx-arm64.lock.json`。CI、Release、Docker 和打包脚本均使用 locked mode。变更依赖时按对应 RID 用
+`dotnet restore ... --force-evaluate` 更新锁文件，并重新生成 `THIRD-PARTY-NOTICES.md`。
 
 > `dotnet test` 不带 `--results-directory` 时会在当前目录建一个**空的** `TestResults/`，这是
 > Microsoft.Testing.Platform（`global.json` 指定的测试运行器）的默认值，不是本仓库的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
@@ -44,7 +49,7 @@ dotnet test --solution RemoteDesktop.slnx
 需要真实 PostgreSQL 的用例（设备注册表与监控台存储各一组）同样随时可跑：不设环境变量时跳过。本机跑法：
 
 ```bash
-docker run -d --name rd-pg-test -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:18
+docker run -d --name rd-pg-test -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
 RD_TEST_POSTGRES='Host=127.0.0.1;Port=55432;Username=postgres;Password=test;Database=postgres' \
   dotnet test --project tests/RemoteDesktop.Server.Storage.UnitTests
 docker rm -f rd-pg-test
@@ -88,6 +93,7 @@ docker rm -f rd-pg-test
 ```bash
 # 客户端 .app 不会自己出现：先构建一次（也可以用 make-pkg.sh，它内部会调用这个脚本）
 build/installer/macos/client/make-app.sh --configuration Release
+build/installer/macos/server/make-pkg.sh --configuration Release
 
 sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
 curl http://127.0.0.1:5080/health        # Healthy 就可以开始了

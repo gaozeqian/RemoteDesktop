@@ -8,6 +8,7 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.Linux.Display;
 using RemoteDesktop.Platform.Linux.Interop;
 using RemoteDesktop.Platform.Linux.Video;
+using RemoteDesktop.Platform.Posix.Interop;
 
 namespace RemoteDesktop.Platform.Linux.Camera;
 
@@ -57,6 +58,8 @@ public sealed partial class WaylandCameraSource : ICameraSource
     private nint _context;
     private nint _core;
     private nint _stream;
+    private int _fileDescriptor = -1;
+    private bool _descriptorOwned;
     private nint _hook;
     private nint _events;
     private GCHandle _self;
@@ -113,7 +116,15 @@ public sealed partial class WaylandCameraSource : ICameraSource
         _paramChanged = OnParamChanged;
         _process = OnProcess;
 
-        Open(fileDescriptor, serial);
+        try
+        {
+            Open(fileDescriptor, serial);
+        }
+        catch
+        {
+            DisposeAsync().AsTask().GetAwaiter().GetResult();
+            throw;
+        }
     }
 
     public CameraInfo Camera { get; }
@@ -188,18 +199,26 @@ public sealed partial class WaylandCameraSource : ICameraSource
             }
         }
 
-        PipeWire.ThreadLoopStop(_loop);
+        if (_loop != 0)
+        {
+            PipeWire.ThreadLoopStop(_loop);
+        }
 
         _decoder?.Dispose();
         _decoder = null;
 
-        if (_core != 0)
+        if (_context != 0)
         {
             PipeWire.ContextDestroy(_context);
+            _context = 0;
             _core = 0;
         }
 
-        PipeWire.ThreadLoopDestroy(_loop);
+        if (_loop != 0)
+        {
+            PipeWire.ThreadLoopDestroy(_loop);
+            _loop = 0;
+        }
 
         Free(_events);
         Free(_hook);
@@ -210,6 +229,15 @@ public sealed partial class WaylandCameraSource : ICameraSource
         {
             _self.Free();
         }
+
+        // Open records ownership before its first failure point; PipeWire owns the descriptor only after connect succeeds.
+        // The constructor's failure path reaches here without a separately captured fd, so retain it until cleanup.
+        if (_descriptorOwned)
+        {
+            _ = LibC.Close(_fileDescriptor);
+        }
+        _fileDescriptor = -1;
+        _descriptorOwned = false;
 
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
@@ -225,6 +253,8 @@ public sealed partial class WaylandCameraSource : ICameraSource
     /// <summary>Brings up the loop, the connection and the stream. Not the format — that waits for a mode.</summary>
     private unsafe void Open(int fileDescriptor, uint serial)
     {
+        _fileDescriptor = fileDescriptor;
+        _descriptorOwned = true;
         PipeWire.Init(0, 0);
 
         _loop = PipeWire.ThreadLoopNew("remotedesktop-camera", 0);
@@ -233,7 +263,10 @@ public sealed partial class WaylandCameraSource : ICameraSource
             throw new InvalidOperationException("PipeWire would not create a thread loop.");
         }
 
-        _ = PipeWire.ThreadLoopStart(_loop);
+        if (PipeWire.ThreadLoopStart(_loop) != 0)
+        {
+            throw new InvalidOperationException("PipeWire would not start the camera thread loop.");
+        }
 
         PipeWire.ThreadLoopLock(_loop);
         try
@@ -251,6 +284,8 @@ public sealed partial class WaylandCameraSource : ICameraSource
                 throw new InvalidOperationException(
                     $"PipeWire would not connect to the portal's descriptor (errno {Marshal.GetLastPInvokeError()}).");
             }
+
+            _descriptorOwned = false;
 
             // Named by serial, in the properties rather than in pw_stream_connect — the same shape the screen path
             // uses, for the same reason: the target_id argument is deprecated and refused on PipeWire 1.6.
@@ -473,9 +508,14 @@ public sealed partial class WaylandCameraSource : ICameraSource
                 return;
             }
 
+            if (chunk.Size > 64 * 1024 * 1024 || (long)chunk.Offset + chunk.Size > plane.MaxSize)
+            {
+                return;
+            }
+
             var bytes = new byte[chunk.Size];
             Marshal.Copy(plane.Data + (nint)chunk.Offset, bytes, 0, (int)chunk.Size);
-            _raw.Writer.TryWrite(new RawFrame(bytes, (int)chunk.Size));
+            _raw.Writer.TryWrite(new RawFrame(bytes, (int)chunk.Size, chunk.Stride));
         }
         finally
         {
@@ -514,10 +554,11 @@ public sealed partial class WaylandCameraSource : ICameraSource
         }
 
         // 4:2:2: two bytes a pixel, and every row present.
-        var stride = width * 2;
-        if (raw.Length < stride * height)
+        var stride = raw.Stride > 0 ? raw.Stride : width * 2;
+        var required = ((long)stride * (height - 1)) + (width * 2L);
+        if (stride < width * 2 || raw.Length < required)
         {
-            LogTooShort(_logger, raw.Length, stride * height);
+            LogTooShort(_logger, raw.Length, required);
             return null;
         }
 
@@ -544,7 +585,7 @@ public sealed partial class WaylandCameraSource : ICameraSource
     }
 
     /// <summary>One frame's bytes, as they arrived.</summary>
-    private readonly record struct RawFrame(byte[] Bytes, int Length);
+    private readonly record struct RawFrame(byte[] Bytes, int Length, int Stride);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void StateChangedCallback(nint data, int oldState, int state, nint error);
@@ -574,5 +615,5 @@ public sealed partial class WaylandCameraSource : ICameraSource
     private static partial void LogNoFormat(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A camera frame was {Actual} bytes where {Needed} were needed; it was dropped.")]
-    private static partial void LogTooShort(ILogger logger, int actual, int needed);
+    private static partial void LogTooShort(ILogger logger, int actual, long needed);
 }

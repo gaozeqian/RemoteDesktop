@@ -15,18 +15,29 @@ runs:
         # The vulnerability check below reads the English wording of the report, so the CLI must not localise it.
         DOTNET_CLI_UI_LANGUAGE: en
       run: |
-        $report = dotnet list RemoteDesktop.slnx package --vulnerable --include-transitive
-        $exitCode = $LASTEXITCODE
-        $report
-        if ($exitCode -ne 0) {
-          throw "dotnet list package exited with code $exitCode; the audit did not complete. The output is above."
-        }
-        $text = $report -join "`n"
-        # NU1900: the vulnerability data could not be fetched. The command still exits 0 and prints no vulnerable
-        # package, so without this check an unreachable feed would pass the gate as if nothing was wrong.
-        if ($text -match 'NU1900') {
-          throw "NuGet could not retrieve vulnerability data (NU1900), so the packages were not audited; the report is above."
-        }
-        if ($text -match 'has the following vulnerable packages') {
-          throw "Vulnerable packages found; the report is above."
+        $targets = @(
+          'RemoteDesktop.slnx',
+          'build/installer/windows/client/RemoteDesktop.Installer.wixproj',
+          'build/installer/windows/server/RemoteDesktop.Server.Installer.wixproj',
+          'build/installer/windows/client/CustomActions/RemoteDesktop.Client.Installer.CustomActions.csproj',
+          'build/installer/windows/server/CustomActions/RemoteDesktop.Server.Installer.CustomActions.csproj'
+        )
+        foreach ($target in $targets) {
+          Write-Host "Restoring and auditing $target"
+          dotnet restore $target --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw "Locked restore failed for $target." }
+          $report = dotnet list $target package --vulnerable --include-transitive --no-restore
+          $exitCode = $LASTEXITCODE
+          $report
+          if ($exitCode -ne 0) {
+            throw "dotnet list package exited with code $exitCode for $target; the audit did not complete."
+          }
+          $text = $report -join "`n"
+          # NU1900 means vulnerability data could not be fetched even though the CLI itself exits zero.
+          if ($text -match 'NU1900') {
+            throw "NuGet could not retrieve vulnerability data for $target (NU1900)."
+          }
+          if ($text -match 'has the following vulnerable packages') {
+            throw "Vulnerable packages found in $target; the report is above."
+          }
         }

@@ -70,17 +70,32 @@ public class AgentForwardingModuleTests
     }
 
     [Fact]
-    public async Task Input_sent_while_no_agent_was_there_is_not_replayed_to_the_next_one()
+    public async Task Input_waiting_for_an_agent_is_not_silently_discarded()
     {
         await using var rig = await Rig.StartAsync(replayFirstFrame: false);
 
-        await rig.ControllerSendsAsync(1, 0xAA); // a click typed into the void
-        await Task.Delay(1300, Ct); // longer than the staleness limit
+        await rig.ControllerSendsAsync(1, 0xAA);
+        await Task.Delay(1300, Ct); // input no longer has a stale-frame dropping path
         var agent = await rig.OfferAgentAsync();
-        await Task.Delay(300, Ct);
+        Assert.Equal([0xAA], await ReadPayloadAsync(agent));
+
+        await rig.ControllerSendsAsync(1, 0xBB);
+        Assert.Equal([0xBB], await ReadPayloadAsync(agent));
+    }
+
+    [Fact]
+    public async Task A_replacement_input_agent_accepts_new_input_without_replaying_the_old_generation()
+    {
+        await using var rig = await Rig.StartAsync(replayFirstFrame: false);
+        var agent = await rig.OfferAgentAsync();
+        await rig.ControllerSendsAsync(1, 0xAA);
+        Assert.Equal([0xAA], await ReadPayloadAsync(agent));
+
+        await agent.DisposeAsync();
+        var replacement = await rig.OfferAgentAsync();
         await rig.ControllerSendsAsync(1, 0xBB);
 
-        Assert.Equal([0xBB], await ReadPayloadAsync(agent));
+        Assert.Equal([0xBB], await ReadPayloadAsync(replacement));
     }
 
     [Fact]

@@ -81,12 +81,14 @@ runs:
             Move-Item -Destination $firstAttemptDir -Force
 
         dotnet test --solution RemoteDesktop.slnx --no-build -c Release --report-trx --results-directory $resultsDir
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
+        $retryExitCode = $LASTEXITCODE
+        if ($retryExitCode -ne 0) {
+          Write-Host "::error title=Tests failed twice::the rerun failed as well, so this is not the runner being flaky."
+          exit $retryExitCode
         }
 
     - name: Upload Test Results
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       if: always()
       with:
         name: ${{ inputs.artifact-name }}

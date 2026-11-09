@@ -139,7 +139,7 @@ function Set-RendezvousUri([string]$Path, [string]$Value) {
 
 function Stop-RdServices {
     $processIds = @()
-    foreach ($name in 'RemoteDesktopHost', 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps') {
+    foreach ($name in 'RemoteDesktopHost', 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway', 'RemoteDesktopGateway') {
         $service = Get-Service -Name $name -ErrorAction SilentlyContinue
         if (-not $service) { continue }
 
@@ -432,7 +432,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $serverConfig 'server-setup.log'))) 
 if (-not (Test-Path -LiteralPath (Join-Path $serverConfig 'ops.db'))) {
     throw 'The Ops database was not created under ProgramData.'
 }
-foreach ($service in 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps') {
+foreach ($service in 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway') {
     if (-not (Get-Service -Name $service -ErrorAction SilentlyContinue)) {
         throw "The server package did not install the $service service."
     }
@@ -441,7 +441,7 @@ foreach ($service in 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDes
 # Simulate the old layout: live files under Program Files, no ProgramData copy. The migration must bring them back.
 # Stop the services first: Ops keeps its SQLite database open, and deleting the directory under a running service can
 # fail with a sharing violation (or let it recreate the database before the upgrade).
-foreach ($role in 'Rendezvous', 'Relay', 'Ops') {
+foreach ($role in 'Rendezvous', 'Relay', 'Ops', 'Gateway') {
     Copy-Item -LiteralPath (Join-Path $serverConfig "$role\appsettings.json") -Destination (Join-Path $serverInstall "$role\appsettings.json") -Force
 }
 $markerKey = $rendezvous.Rendezvous.RelaySharedKey
@@ -487,7 +487,7 @@ Uninstall-Msi $serverLater @('REMOVEDATA=1') 'server'
 if (Test-Path -LiteralPath $serverConfig) {
     throw 'REMOVEDATA=1 left %ProgramData%\Remote Desktop Server behind.'
 }
-foreach ($role in 'Rendezvous', 'Relay', 'Ops') {
+foreach ($role in 'Rendezvous', 'Relay', 'Ops', 'Gateway') {
     if (Get-Service -Name "RemoteDesktop$role" -ErrorAction SilentlyContinue) {
         throw "The $role service was left installed."
     }

@@ -77,6 +77,53 @@ New-Item -ItemType Directory -Force -Path $OutDirectory | Out-Null
 $pfxPath = Join-Path $OutDirectory "$name.pfx"
 $cerPath = Join-Path $OutDirectory "$name.cer"
 
+function Set-PrivateFilePermission([string]$Path) {
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleAll($rule) }
+        $sids = @(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+            [System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null),
+            [System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+        )
+        foreach ($sid in $sids) {
+            $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                $sid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.AccessControlType]::Allow))
+        }
+        [System.IO.FileSystemAclExtensions]::SetAccessControl($Path, $acl)
+    }
+    else {
+        [System.IO.File]::SetUnixFileMode($Path, [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
+    }
+}
+
+function Write-PrivateKeyFile([string]$Path, [byte[]]$Content) {
+    $temporary = Join-Path (Split-Path -Parent $Path) ([System.IO.Path]::GetRandomFileName())
+    try {
+        if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+            [System.IO.File]::WriteAllBytes($temporary, $Content)
+        }
+        else {
+            $options = [System.IO.FileStreamOptions]::new()
+            $options.Mode = [System.IO.FileMode]::CreateNew
+            $options.Access = [System.IO.FileAccess]::Write
+            $options.Share = [System.IO.FileShare]::None
+            $options.UnixCreateMode = [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite
+            $stream = [System.IO.FileStream]::new($temporary, $options)
+            try { $stream.Write($Content, 0, $Content.Length) } finally { $stream.Dispose() }
+        }
+        Set-PrivateFilePermission $temporary
+        [System.IO.File]::Move($temporary, $Path, $true)
+        Set-PrivateFilePermission $Path
+    }
+    finally {
+        if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) }
+    }
+}
+
 # Built through CertificateRequest rather than New-SelfSignedCertificate: the addresses a local deployment is dialed
 # by have to be *address* entries in the subject alternative names, and the text form New-SelfSignedCertificate takes
 # refuses an IP= entry outright.
@@ -110,8 +157,7 @@ try {
     try {
         # Written with the certificate's own Export: it never went into a store, so there is nothing for
         # Export-PfxCertificate to read it back from.
-        [System.IO.File]::WriteAllBytes(
-            $pfxPath,
+        Write-PrivateKeyFile -Path $pfxPath -Content (
             $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $plain))
         [System.IO.File]::WriteAllBytes(
             $cerPath,

@@ -39,6 +39,7 @@ echo "Publishing the servers for $runtime (version $version)..."
 for server in Rendezvous Relay Ops Gateway; do
     dotnet publish "$root/src/Server/RemoteDesktop.Server.$server" \
         -c Release -r "$runtime" --self-contained true \
+        -p:RestoreLockedMode=true \
         -p:RemoteDesktopCrossTargeting=true \
         -o "$work/usr/lib/remotedesktop-server/$server" \
         --nologo -v quiet

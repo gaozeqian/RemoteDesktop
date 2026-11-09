@@ -109,11 +109,9 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
     <string>$VERSION</string>
-    <!-- 12.0 rather than the client/host floor of 26: the server package is allowed down to the .NET runtime's 12.0,
-         and the plugin uses only AppKit APIs that exist there. The client/host products carry their own 26.0
-         volume-check, so this is not a promise that the apps run older. -->
+    <!-- The server also ships the locked Tahoe MsQuic/OpenSSL bottles, so every role shares the 26.0 floor. -->
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>26.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>

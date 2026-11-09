@@ -10,6 +10,8 @@
     <!-- CA1716 guards against VB keywords (Get, Set, Shared); this is a C#-only code base. -->
     <NoWarn>$(NoWarn);CA1716</NoWarn>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)/packages.$(RuntimeIdentifier).lock.json</NuGetLockFilePath>
     <Company>RemoteDesktop</Company>
     <Product>Remote Desktop</Product>
     <!--

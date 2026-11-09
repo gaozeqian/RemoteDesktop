@@ -51,6 +51,7 @@ internal sealed partial class ConPtySession : IPtySession
         SafeFileHandle? inputRead = null, inputWrite = null, outputRead = null, outputWrite = null;
         nint console = 0;
         SafeFileHandle? job = null;
+        SafeFileHandle? process = null;
         nint attributes = 0;
         nint environment = 0;
         try
@@ -92,7 +93,7 @@ internal sealed partial class ConPtySession : IPtySession
             }
 
             using var thread = new SafeFileHandle(info.Thread, ownsHandle: true);
-            var process = new SafeFileHandle(info.Process, ownsHandle: true);
+            process = new SafeFileHandle(info.Process, ownsHandle: true);
             if (!AssignProcessToJobObject(job, process))
             {
                 // Still usable; the pseudoconsole closing ends the shell. Only the extra guarantee for stray children is lost.
@@ -110,6 +111,7 @@ internal sealed partial class ConPtySession : IPtySession
                 new FileStream(outputRead, FileAccess.Read, 1, isAsync: false));
             console = 0;
             job = null;
+            process = null;
             inputWrite = null;
             outputRead = null;
             return session;
@@ -130,6 +132,12 @@ internal sealed partial class ConPtySession : IPtySession
             if (console != 0)
             {
                 ClosePseudoConsole(console);
+            }
+
+            if (process is not null)
+            {
+                _ = TerminateProcess(process, 1);
+                process.Dispose();
             }
 
             job?.Dispose();
@@ -345,4 +353,8 @@ internal sealed partial class ConPtySession : IPtySession
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetExitCodeProcess(SafeFileHandle process, out uint exitCode);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool TerminateProcess(SafeFileHandle process, uint exitCode);
 }

@@ -108,7 +108,22 @@ case "$1" in
                         exit 1
                         ;;
                 esac
-                database_directory=$(dirname "$database_path")
+                database_directory=$(realpath -m "$(dirname "$database_path")")
+                case "$database_directory" in
+                    /|/bin|/sbin|/lib|/lib64|/etc|/usr|/var|/var/lib|/opt|/home|/root|/boot|/dev|/proc|/sys|/run|/tmp|/var/tmp)
+                        echo "remotedesktop-server: the SQLite database must use a dedicated directory, not '$database_directory'." >&2
+                        exit 1
+                        ;;
+                esac
+                if [ "$database_directory" != "$DEFAULT_DATABASE_DIRECTORY" ]; then
+                    case "$(basename "$database_directory")" in
+                        remotedesktop|remotedesktop-*|remote-desktop|remote-desktop-*) ;;
+                        *)
+                            echo "remotedesktop-server: the SQLite parent must be a dedicated 'remotedesktop' directory." >&2
+                            exit 1
+                            ;;
+                    esac
+                fi
                 ops_database_path=$database_directory/ops.db
                 ;;
             postgres)
@@ -132,7 +147,7 @@ case "$1" in
             # secrets. The unit's StateDirectoryMode= keeps this mode on every start; this creates it for the first
             # one, and for a directory the unit does not know about.
             mkdir -p "$database_directory"
-            chown -R "$SERVICE_USER:$SERVICE_USER" "$database_directory"
+            chown "$SERVICE_USER:$SERVICE_USER" "$database_directory"
             chmod 0700 "$database_directory"
         fi
 
@@ -299,8 +314,8 @@ case "$1" in
         if [ -d "$INSTALL_DIRECTORY/tls" ]; then
             chown -R root:"$SERVICE_USER" "$INSTALL_DIRECTORY/tls"
             find "$INSTALL_DIRECTORY/tls" -type d -exec chmod 0750 {} +
-            find "$INSTALL_DIRECTORY/tls" -type f -name '*.key' -exec chmod 0640 {} +
-            find "$INSTALL_DIRECTORY/tls" -type f ! -name '*.key' -exec chmod 0644 {} +
+            find "$INSTALL_DIRECTORY/tls" -type f -exec chmod 0640 {} +
+            find "$INSTALL_DIRECTORY/tls" -type f \( -name '*.crt' -o -name '*.cer' -o -name '*.pem' \) -exec chmod 0644 {} +
         fi
 
         if [ -f "$DEFAULTS" ]; then
@@ -436,10 +451,47 @@ case "$1" in
         fi
 
         if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
+            deb-systemd-invoke restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service
         else
-            systemctl --system daemon-reload >/dev/null 2>&1 || true
-            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service >/dev/null 2>&1 || true
+            systemctl --system daemon-reload
+            systemctl restart remotedesktop-rendezvous.service remotedesktop-relay.service remotedesktop-ops.service remotedesktop-gateway.service
+        fi
+
+        for unit in rendezvous relay ops gateway; do
+            if ! systemctl is-active --quiet "remotedesktop-$unit.service"; then
+                echo "remotedesktop-server: remotedesktop-$unit.service is not active after installation." >&2
+                exit 1
+            fi
+        done
+
+        urls=$(sed -n 's/.*"Urls"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$INSTALL_DIRECTORY/Rendezvous/appsettings.json" | head -n 1)
+        listen=${urls%%;*}
+        scheme=${listen%%:*}
+        authority=${listen#*://}
+        authority=${authority%%/*}
+        port=${authority##*:}
+        case "$port" in
+            ''|*[!0-9]*) if [ "$scheme" = https ]; then port=443; else port=80; fi ;;
+        esac
+        health_url="$scheme://127.0.0.1:$port/health"
+
+        healthy=false
+        attempt=0
+        while [ "$attempt" -lt 20 ]; do
+            if [ "$scheme" = https ]; then
+                curl -kfsS --max-time 2 "$health_url" >/dev/null 2>&1 && healthy=true
+            else
+                curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1 && healthy=true
+            fi
+            if [ "$healthy" = true ]; then
+                break
+            fi
+            attempt=$((attempt + 1))
+            sleep 0.25
+        done
+        if [ "$healthy" != true ]; then
+            echo "remotedesktop-server: the signaling health endpoint did not answer after installation." >&2
+            exit 1
         fi
         ;;
 

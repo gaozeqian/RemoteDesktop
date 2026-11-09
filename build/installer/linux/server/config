@@ -82,6 +82,9 @@ if [ -r "$settings" ]; then
             if grep -q '"ConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings" ||
                 grep -q '"PostgresConnectionString"[[:space:]]*:[[:space:]]*"[^"]' "$settings"; then
                 have_postgres=true
+                if [ -z "$existing_provider" ]; then
+                    provider=postgres
+                fi
             fi
             ;;
     esac
@@ -119,7 +122,7 @@ if [ -r "$DEFAULTS" ]; then
 
     case "${RD_POSTGRES:-}" in
         ""|auto) ;;
-        *) postgres=$RD_POSTGRES; have_postgres=true ;;
+        *) postgres=$RD_POSTGRES; have_postgres=true; provider=postgres ;;
     esac
 
     case "${RD_TLS:-}" in

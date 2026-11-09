@@ -18,6 +18,11 @@
   句柄最终路径，确认仍在共享根目录内，并复用同一个句柄读写，关闭链接替换的检查/使用竞态。上传完成后的落盘也
   通过已校验的目标句柄复制，不再用可被链接重定向的路径重命名。
 - **中继无效票据日志限流**：公网 UDP 上每个无效票据不再写一条 Warning；改为每分钟汇总一次并记录被抑制的数量。
+- **Windows 本机控制管道完成双向端点与调用者授权**：UI 验证真实服务进程；服务只接受管理员或当前 Agent 用户会话，
+  其他本机账户不能读取密码或修改固定密码。
+- **安装输入与凭据文件收紧**：macOS 面板答案校验属主/链接并原子暂存，PFX 在 Unix 固定 0600，OpenSSL 密码不再进入 argv。
+- **管理断开需要主机确认**：Rendezvous/Ops 不再把 WebSocket 发送尝试当作已执行；遥测与结束报告校验会话参与方。
+- **依赖与发布可复现**：NuGet 使用锁文件和 locked restore，Actions/容器/原生库按内容固定，正式 Release 强制签名与公证。
 
 **macOS 服务端不再以 root 运行**
 
@@ -25,7 +30,7 @@
   （UID/GID 从 300 起找空位、`/usr/bin/false`、无自己的家目录），把 `var/`（数据库与 DataProtection 密钥环）
   与 `logs/` 交给它，并把 `appsettings.json`、`tls/` 收紧为 `root:_remotedesktop` 的 0640/0750——此前私钥是
   0600 root，除了 root 谁也读不到，降权也无从谈起。启动前会以该账号实测读设置、读私钥、写两个状态目录；
-  任何一项不通过就从四个 plist 删掉 `UserName`/`GroupName`、退回 root 运行，安装照常完成并在日志里说明。
+  任何一项不通过都会使安装失败并停止服务启动，不会退回 root 运行。自定义数据库目录也必须通过实际写入检查。
 - **`configure-server.sh` 重配后重新应用同一组权限**：`--configure-system` 以 root 写出的 0640 `root:wheel`
   会让服务读不到刚写的设置并进入重启循环。
 - **控制台的 DataProtection 密钥环有了可写的 HOME**：LaunchDaemon 的环境里没有 HOME，密钥环无处落地会让每次

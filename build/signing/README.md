@@ -15,6 +15,9 @@ macOS 的签名（`codesign` + `productbuild` + `notarytool`）不在这里，�
 "macOS"一节。Linux（gpg / dpkg-sig）将来再建文件夹。
 签名脚本的默认输出目录是"脚本自己旁边"，所以跨平台脚本的证书落在 `certificates/`，Windows 那两个的落在 `windows/certificates/`。
 
+`New-ServerCertificate.ps1` 会先在同目录写随机临时文件、限制权限后再替换目标：Unix 的 PFX 固定为 0600，Windows 只允许当前用户、
+SYSTEM 与 Administrators。需要让容器 UID 或其他服务账号读取时，再单独授予该账号只读权限，不要把私钥改成全局可读。
+
 安装包和程序都需要**代码签名**：没有签名时 Windows SmartScreen 会提示"未知发布者"，企业策略和杀毒软件也更可能拦截。
 
 这套构建脚本的签名是**自动**的：`Build-ClientInstaller.ps1` 会在本机和当前用户的证书存储里找可用的代码签名证书
@@ -269,8 +272,8 @@ Apple DTS 的原话见
 ### GitHub Secrets 与变量
 
 Windows 包由 `release.yml` 用同一把 `.pfx` 签名（解码后以 `-CertificateFile` / `-CertificatePassword` 传给三个打包脚本）。
-两个 Secret 缺任何一个，都会退回 `-SkipSigning`；此时构建日志里有 `::warning`（写明缺的是哪一个），Release 说明里也会写明
-"Windows 包未签名"（判断条件与构建步骤一致：`CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD` 同时存在才算已签名）：
+正式 Release 必须同时配置 `CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD`；缺任何一个都会使构建失败。显式
+`-SkipSigning` 只用于本地测试包，不用于正式发布：
 
 | Secret / 变量 | 内容 |
 |---|---|
@@ -293,10 +296,9 @@ base64 -i app.p12 | tr -d '\n'                    # 粘进 Secret
 base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'      # 公证 API Key
 ```
 
-**两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`，即 Application 与 Installer 的 `.p12`）
-都在** → 签名（`release.yml` 只判断这两个，口令不参与判断）；**再配齐三个公证 Secret** → 签名 + 公证。任何一组缺失都只**降级并给出 GitHub
-警告**（`::warning`），绝不静默出一个半成品。Release 说明也会如实写出：证书缺失时写"macOS 包未签名、未公证"；
-证书齐全但公证 Secret 缺任何一个时写"macOS 包已签名但未公证"（Gatekeeper 首次打开同样会提示）。`release.yml` 里 macOS job 与发布 job 的
+**两个证书 Secret（`MACOS_APP_CERT_BASE64` 与 `MACOS_INSTALLER_CERT_BASE64`）和三个公证 Secret 都是正式 Release 的必填项**；
+缺任何一项都会停止发布。打包脚本还会把 `pkgutil --check-signature`、`spctl` 与 `stapler validate` 的失败作为构建失败。
+`release.yml` 里 macOS job 与发布 job 的
 `MACOS_SIGNED` / `MACOS_NOTARIZED`（以及 Windows 的 `HAS_PFX_CERT` / `HAS_PFX_PASSWORD`）只是由 Secret 是否为空算出的布尔值，
 放在 job 级 env 里供各步骤的 `if:` 读取；证书、口令与公证 Key 这些 Secret 本身**不在 job 级 env 里**（否则 restore、build 与测试进程
 都读得到），只出现在确实要用它的几步自己的 `env:` 里：macOS 的"导入证书"与"打包 + 公证"，Windows 的"解码证书"与三个 MSI 构建步骤。

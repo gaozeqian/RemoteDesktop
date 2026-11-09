@@ -117,6 +117,9 @@ case "$1" in
                     rm -f "$certificate_copy"
                 fi
                 ;;
+            *)
+                rm -f "$CERTIFICATE"
+                ;;
         esac
 
         # Both of these only update caches; a desktop that is not running, or one that cannot update them, is not a

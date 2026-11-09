@@ -22,7 +22,7 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = Serve(pipeName, control, stop.Token);
-        var client = new PipeHostControl(pipeName);
+        var client = new PipeHostControl(pipeName, Environment.ProcessPath);
 
         var status = await client.GetStatusAsync(Ct);
         Assert.Equal(123456789, status.DeviceId);
@@ -46,7 +46,7 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = Serve(pipeName, control, stop.Token);
-        var client = new PipeHostControl(pipeName);
+        var client = new PipeHostControl(pipeName, Environment.ProcessPath);
 
         await client.DowngradeSessionAsync("session-1", Ct);
         await client.DisconnectSessionAsync("session-2", Ct);
@@ -65,7 +65,7 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = Serve(pipeName, control, stop.Token);
-        var client = new PipeHostControl(pipeName);
+        var client = new PipeHostControl(pipeName, Environment.ProcessPath);
 
         Assert.False((await client.GetStatusAsync(Ct)).HasFixedPassword);
 
@@ -90,7 +90,7 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = Serve(pipeName, control, stop.Token);
-        var client = new PipeHostControl(pipeName);
+        var client = new PipeHostControl(pipeName, Environment.ProcessPath);
 
         var refusal = await Assert.ThrowsAsync<ArgumentException>(() => client.SetFixedPasswordAsync("short", Ct));
         Assert.Contains("at least", refusal.Message, StringComparison.OrdinalIgnoreCase);
@@ -107,7 +107,7 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var server = Serve(pipeName, control, stop.Token);
-        var client = new PipeHostControl(pipeName);
+        var client = new PipeHostControl(pipeName, Environment.ProcessPath);
 
         await client.StopCameraAsync("session-3", Ct);
 
@@ -123,10 +123,26 @@ public class HostControlTests
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
-        Assert.False(await PipeHostControl.IsAvailableAsync(pipeName, Ct));
+        Assert.False(await PipeHostControl.IsAvailableAsync(pipeName, Ct, Environment.ProcessPath));
 
         var server = Serve(pipeName, new FakeHostControl(), stop.Token);
-        Assert.True(await PipeHostControl.IsAvailableAsync(pipeName, Ct));
+        Assert.True(await PipeHostControl.IsAvailableAsync(pipeName, Ct, Environment.ProcessPath));
+
+        await stop.CancelAsync();
+        await server;
+    }
+
+    [Fact]
+    public async Task An_unexpected_pipe_server_receives_no_fixed_password()
+    {
+        var control = new FakeHostControl();
+        var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var server = Serve(pipeName, control, stop.Token);
+        var client = new PipeHostControl(pipeName, Path.Combine(Path.GetTempPath(), "not-the-service.exe"));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.SetFixedPasswordAsync("my-unattended-pass", Ct));
+        Assert.Null(control.FixedPassword);
 
         await stop.CancelAsync();
         await server;
@@ -146,7 +162,7 @@ public class HostControlTests
         // A command nobody defined: no answer either.
         Assert.False(await GetsAnswerAsync(pipeName, "{\"command\":\"format-disk\"}\n"u8.ToArray()));
 
-        Assert.Equal(123456789, (await new PipeHostControl(pipeName).GetStatusAsync(Ct)).DeviceId); // still serving
+        Assert.Equal(123456789, (await new PipeHostControl(pipeName, Environment.ProcessPath).GetStatusAsync(Ct)).DeviceId); // still serving
         Assert.Equal(0, control.Rotations);
 
         await stop.CancelAsync();

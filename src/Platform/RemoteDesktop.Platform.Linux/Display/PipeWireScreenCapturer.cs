@@ -55,6 +55,8 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
     private nint _context;
     private nint _core;
     private nint _stream;
+    private int _descriptor = -1;
+    private bool _descriptorOwned;
     private nint _hook;
     private nint _events;
     private nint _format;
@@ -62,6 +64,18 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
     private int _stride;
     private int _framesWithoutCursor;
     private int _disposed;
+
+    internal PipeWireScreenCapturer(DisplayInfo display)
+    {
+        _logger = Microsoft.Extensions.Logging.Abstractions.NullLogger<PipeWireScreenCapturer>.Instance;
+        Display = display;
+        _frames = Channel.CreateBounded<Captured>(new BoundedChannelOptions(QueueLength) { FullMode = BoundedChannelFullMode.DropWrite });
+        _stateChanged = OnStateChanged;
+        _paramChanged = OnParamChanged;
+        _process = OnProcess;
+    }
+
+    internal void CompleteForTests() => _frames.Writer.TryComplete();
 
     /// <param name="fileDescriptor">
     /// The descriptor from the portal's <c>OpenPipeWireRemote</c>. It is the connection to the compositor's own
@@ -101,6 +115,8 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
 
     public DisplayInfo Display { get; }
 
+    public bool IsFaulted { get; private set; }
+
     public event EventHandler<CursorShape>? CursorChanged;
 
     public event EventHandler<CursorPosition>? CursorMoved;
@@ -117,13 +133,15 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         {
             captured = await _frames.Reader.ReadAsync(wait.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            // Only the per-wait timeout is an ordinary static-screen result.
             return null;
         }
-        catch (ChannelClosedException)
+        catch (ChannelClosedException ex)
         {
-            return null;
+            IsFaulted = true;
+            throw new InvalidOperationException("The PipeWire screen stream has closed.", ex);
         }
 
         // Raised here rather than from the callback, because the interface promises both cursor events arrive from
@@ -224,24 +242,32 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         {
             _self.Free();
         }
+
+        if (_descriptorOwned && _descriptor >= 0)
+        {
+            _ = LibC.Close(_descriptor);
+        }
+        _descriptorOwned = false;
+        _descriptor = -1;
     }
 
     /// <summary>Starts the loop, then brings up the connection and the stream, releasing everything on failure.</summary>
     private unsafe void Open(int fileDescriptor, uint nodeId, int width, int height)
     {
-        // Idempotent, and has to happen before anything else. The arguments are only used for logging.
-        PipeWire.Init(0, 0);
-
-        _loop = PipeWire.ThreadLoopNew("remotedesktop-capture", 0);
-        if (_loop == 0)
-        {
-            throw new InvalidOperationException("PipeWire would not create a thread loop.");
-        }
-
-        _ = PipeWire.ThreadLoopStart(_loop);
-
+        _descriptor = fileDescriptor;
+        _descriptorOwned = true;
         try
         {
+            // Idempotent, and has to happen before anything else. The arguments are only used for logging.
+            PipeWire.Init(0, 0);
+
+            _loop = PipeWire.ThreadLoopNew("remotedesktop-capture", 0);
+            if (_loop == 0)
+            {
+                throw new InvalidOperationException("PipeWire would not create a thread loop.");
+            }
+
+            _ = PipeWire.ThreadLoopStart(_loop);
             OpenCore(fileDescriptor, nodeId, width, height);
         }
         catch
@@ -272,6 +298,8 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
                 throw new InvalidOperationException(
                     $"PipeWire would not connect to the portal's descriptor (errno {Marshal.GetLastPInvokeError()}).");
             }
+
+            _descriptorOwned = false;
 
             // The node to read is named here rather than in the connect call. pw_stream_connect's target_id is
             // documented as "should have the value PW_ID_ANY", naming a target by id there is deprecated, and on
@@ -395,6 +423,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         {
             var message = error == 0 ? "no reason given" : Marshal.PtrToStringUTF8(error) ?? "unreadable reason";
             LogStreamError(_logger, message);
+            IsFaulted = true;
             _frames.Writer.TryComplete();
             DrainFrames();
         }
@@ -495,7 +524,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             {
                 Interlocked.Exchange(ref _framesWithoutCursor, 0);
             }
-            var frame = Copy(plane.Data, chunk);
+            var frame = Copy(plane.Data, chunk, plane.MaxSize);
             if (frame is null)
             {
                 return;
@@ -526,7 +555,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
     }
 
     /// <summary>Copies one frame out of mapped memory into a pooled frame the caller owns.</summary>
-    private unsafe MemoryVideoFrame? Copy(nint pixels, in PipeWire.SpaChunk chunk)
+    private unsafe MemoryVideoFrame? Copy(nint pixels, in PipeWire.SpaChunk chunk, uint maximumSize)
     {
         var stride = chunk.Stride > 0 ? chunk.Stride : _stride;
         var height = Display.Bounds.Height;
@@ -536,6 +565,12 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
         {
             LogStrideTooSmall(_logger, stride, width * 4);
             return null;
+        }
+
+        var required = ((long)stride * (height - 1)) + (width * 4L);
+        if (chunk.Size < required || (long)chunk.Offset + required > maximumSize)
+        {
+            throw new InvalidDataException("The PipeWire frame does not cover a complete picture inside its mapped plane.");
         }
 
         var frame = new MemoryVideoFrame(width, height, PixelFormat.Bgra32, TimeSpan.FromMilliseconds(Environment.TickCount64));
@@ -574,6 +609,11 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
                 continue;
             }
 
+            if (meta.Size < Marshal.SizeOf<PipeWire.SpaMetaCursor>())
+            {
+                return null;
+            }
+
             var cursor = Marshal.PtrToStructure<PipeWire.SpaMetaCursor>(meta.Data);
             if (cursor.Id == 0)
             {
@@ -585,7 +625,7 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             CursorShape? shape = null;
             if (cursor.BitmapOffset != 0)
             {
-                shape = ReadBitmap(meta.Data, cursor);
+                shape = ReadBitmap(meta.Data, cursor, meta.Size);
             }
 
             return new CursorUpdate(cursor.PositionX, cursor.PositionY, Visible: true, shape, cursor.Id);
@@ -602,8 +642,13 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
     /// renderer drawing it normally would get an edge that shades towards black. Undoing it here costs one pass over
     /// a few kilobytes on the frames where the pointer changes — which is a handful of times a session.
     /// </remarks>
-    private static unsafe CursorShape? ReadBitmap(nint meta, in PipeWire.SpaMetaCursor cursor)
+    private static unsafe CursorShape? ReadBitmap(nint meta, in PipeWire.SpaMetaCursor cursor, uint metadataSize)
     {
+        if ((long)cursor.BitmapOffset + Marshal.SizeOf<PipeWire.SpaMetaBitmap>() > metadataSize)
+        {
+            return null;
+        }
+
         var bitmap = Marshal.PtrToStructure<PipeWire.SpaMetaBitmap>(meta + (nint)cursor.BitmapOffset);
         if (bitmap.Width is 0 or > 512 || bitmap.Height is 0 or > 512)
         {
@@ -616,7 +661,14 @@ public sealed partial class PipeWireScreenCapturer : IScreenCapturer
             return null;
         }
 
-        var source = (byte*)(meta + (nint)cursor.BitmapOffset + (nint)bitmap.Offset);
+        var required = ((long)stride * (bitmap.Height - 1)) + (bitmap.Width * 4L);
+        var pixelOffset = (long)cursor.BitmapOffset + bitmap.Offset;
+        if (pixelOffset < 0 || pixelOffset + required > metadataSize)
+        {
+            return null;
+        }
+
+        var source = (byte*)(meta + (nint)pixelOffset);
         var bgra = new byte[bitmap.Width * bitmap.Height * 4];
 
         for (var y = 0; y < bitmap.Height; y++)

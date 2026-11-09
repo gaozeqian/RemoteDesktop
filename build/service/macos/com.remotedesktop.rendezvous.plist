@@ -27,7 +27,7 @@
 
     <!-- The dedicated account the package's postinstall creates. Nothing this program does needs root: it listens above
          1024, reads its settings and writes its database under /usr/local/remotedesktop-server/var. If the postinstall
-         cannot make those permissions work it deletes these two keys, and the job runs as root as it did before. -->
+         cannot make those permissions work, installation fails rather than starting this job as root. -->
     <key>UserName</key>
     <string>_remotedesktop</string>
     <key>GroupName</key>

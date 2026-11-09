@@ -36,6 +36,9 @@ public enum AgentStatus
 
 public sealed record AgentState(AgentStatus Status, DesktopKind Desktop, string? Detail = null);
 
+/// <summary>The Windows session and user that the current agent serves; null on a secure desktop.</summary>
+public sealed record AgentSessionIdentity(uint SessionId, string? UserSid);
+
 public sealed class AgentUnavailableException : Exception
 {
     public AgentUnavailableException()
@@ -62,6 +65,9 @@ public sealed class AgentUnavailableException : Exception
 public interface IAgentGateway
 {
     AgentState State { get; }
+
+    /// <summary>The identity of the session currently served by the agent, when one is running.</summary>
+    AgentSessionIdentity? CurrentSession => null;
 
     event EventHandler? StateChanged;
 

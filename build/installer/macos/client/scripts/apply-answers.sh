@@ -18,14 +18,30 @@ rd_prepare_answers() {
     role="$1"
     plugin="$(rd_plugin_answers "$role")"
     root="$(rd_root_answers "$role")"
-    if [ -L "$plugin" ]; then
-        # /var/tmp is writable by every user, and this script reads the file as root: a link there would make root
-        # copy whatever it points at. The answers are optional, so the link is dropped and the install carries on
-        # without them (a root copy left by an earlier cancelled install is not applied either).
-        echo "Remote Desktop: ignoring $plugin, it is a symbolic link." >&2
+    if [ -L "$plugin" ] || { [ -e "$plugin" ] && [ ! -f "$plugin" ]; }; then
+        echo "Remote Desktop: ignoring $plugin, it is not a regular answer file." >&2
         rm -f "$plugin" "$root"
     elif [ -f "$plugin" ]; then
-        install -m 600 -o root -g wheel "$plugin" "$root"
+        owner="$(stat -f '%u:%l' "$plugin" 2>/dev/null || true)"
+        console_user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+        console_uid="$(id -u "$console_user" 2>/dev/null || true)"
+        allowed_owner="0:${console_uid:-root-only}"
+        if [ "${owner%:*}" != "0" ] && [ "${owner%:*}" != "${allowed_owner#*:}" ]; then
+            echo "Remote Desktop: ignoring $plugin, its owner is not root or the current console user." >&2
+            rm -f "$plugin" "$root"
+            return 0
+        fi
+        if [ "${owner#*:}" != "1" ]; then
+            echo "Remote Desktop: ignoring $plugin, answer files may not have hard links." >&2
+            rm -f "$plugin" "$root"
+            return 0
+        fi
+
+        # mktemp plus an atomic rename prevents a pre-created root-path symlink from becoming an install target.
+        rm -f "$root"
+        temporary="$(mktemp /var/tmp/com.remotedesktop.install."$role".root.XXXXXX)"
+        install -m 600 -o root -g wheel "$plugin" "$temporary"
+        mv -f "$temporary" "$root"
         rm -f "$plugin"
     else
         # No pane answers this time (installer -pkg, MDM). A root copy left by an earlier cancelled install must not

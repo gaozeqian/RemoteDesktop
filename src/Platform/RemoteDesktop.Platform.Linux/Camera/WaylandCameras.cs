@@ -224,6 +224,7 @@ public sealed partial class WaylandCameraEnumerator(
         var loop = PipeWire.ThreadLoopNew("remotedesktop-cameras", 0);
         if (loop == 0)
         {
+            _ = LibC.Close(descriptor);
             return cameras;
         }
 
@@ -232,6 +233,7 @@ public sealed partial class WaylandCameraEnumerator(
         nint hook = 0;
         nint events = 0;
         var held = default(GCHandle);
+        var ownsDescriptor = true;
 
         try
         {
@@ -252,6 +254,7 @@ public sealed partial class WaylandCameraEnumerator(
                     return cameras;
                 }
 
+                ownsDescriptor = false;
                 registry = PipeWire.CoreGetRegistry(core, PipeWire.RegistryVersion, 0);
                 if (registry == 0)
                 {
@@ -346,6 +349,11 @@ public sealed partial class WaylandCameraEnumerator(
             {
                 held.Free();
             }
+
+            if (ownsDescriptor)
+            {
+                _ = LibC.Close(descriptor);
+            }
         }
 
         return cameras;
@@ -427,8 +435,8 @@ public sealed partial class WaylandCameraSourceFactory(
         var connection = Connection()
             ?? throw new InvalidOperationException("Camera access has not been granted, so no camera can be opened.");
 
-        var descriptor = LibC.DuplicateFileDescriptor(
-            (int)connection.OpenCameraPipeWireRemoteAsync(CancellationToken.None).GetAwaiter().GetResult().DangerousGetHandle());
+        using var remote = connection.OpenCameraPipeWireRemoteAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var descriptor = LibC.DuplicateFileDescriptor((int)remote.DangerousGetHandle());
 
         LogOpening(logger, camera.Name, serial);
         return new WaylandCameraSource(

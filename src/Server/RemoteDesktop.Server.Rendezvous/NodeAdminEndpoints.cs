@@ -18,6 +18,8 @@ namespace RemoteDesktop.Server.Rendezvous;
 /// </remarks>
 public static class NodeAdminEndpoints
 {
+    private static readonly TimeSpan AdminCommandTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>Maps <c>/internal/v1/admin/*</c>.</summary>
     public static void MapNodeAdmin(this IEndpointRouteBuilder endpoints)
     {
@@ -56,19 +58,33 @@ public static class NodeAdminEndpoints
                     statusCode: StatusCodes.Status409Conflict);
             }
 
-            await device.TrySendAsync(
-                new ServerMessage
-                {
-                    AdminCommand = new AdminCommand
-                    {
-                        CommandId = Guid.CreateVersion7().ToString("D"),
-                        Command = ClientCapabilities.Commands.DisconnectSession,
-                        SessionId = sessionId,
-                    },
-                },
-                context.RequestAborted).ConfigureAwait(false);
-
-            return Results.Ok(new { delivered = true });
+            var command = new AdminCommand
+            {
+                CommandId = Guid.CreateVersion7().ToString("D"),
+                Command = ClientCapabilities.Commands.DisconnectSession,
+                SessionId = sessionId,
+            };
+            try
+            {
+                await device.ExecuteAdminCommandAsync(command, AdminCommandTimeout, context.RequestAborted).ConfigureAwait(false);
+                return Results.Ok(new { delivered = true, executed = true });
+            }
+            catch (TimeoutException)
+            {
+                return Results.Json(new { error = "timeout", message = "the device did not acknowledge the command in time" }, statusCode: 504);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = "refused", message = ex.Message }, statusCode: 409);
+            }
+            catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException or IOException or ObjectDisposedException)
+            {
+                return Results.Json(new { error = "delivery", message = ex.Message }, statusCode: 503);
+            }
+            catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
+            {
+                return Results.Json(new { error = "delivery", message = "the device connection closed before acknowledgment" }, statusCode: 503);
+            }
         });
 
         endpoints.MapPost("/internal/v1/admin/revoke", async (

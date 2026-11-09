@@ -422,7 +422,7 @@ export_server_certificate() {
         *.pfx|*.p12)
             temporary="$(mktemp)"
             chmod 600 "$temporary"
-            if openssl pkcs12 -in "$path" -clcerts -nokeys -passin "pass:${password}" -out "$temporary" 2>/dev/null \
+            if openssl pkcs12 -in "$path" -clcerts -nokeys -passin fd:3 -out "$temporary" 3<<<"$password" 2>/dev/null \
                 && [ -s "$temporary" ]; then
                 certificate="$temporary"
             fi
@@ -547,8 +547,11 @@ seed_local_nodes
 # here is to create it, hand it what it must own, and prove it can actually read and write before the jobs start.
 
 free_unix_id() {
-    local kind="$1" id=300
-    while dscl . -list "$kind" UniqueID 2>/dev/null | awk '{print $2}' | grep -qx "$id"; do
+    local kind="$1" id=300 property=UniqueID
+    if [ "$kind" = /Groups ]; then
+        property=PrimaryGroupID
+    fi
+    while dscl . -list "$kind" "$property" 2>/dev/null | awk '{print $2}' | grep -qx "$id"; do
         id=$((id + 1))
     done
     printf '%s' "$id"
@@ -581,6 +584,39 @@ create_service_account() {
     fi
 }
 
+prepare_database_directories() {
+    local role settings provider path directory
+    for role in Rendezvous Ops; do
+        settings="$INSTALL_DIR/$role/appsettings.json"
+        provider="$(plutil -extract "$role.Database.Provider" raw "$settings" 2>/dev/null || true)"
+        path="$(plutil -extract "$role.Database.Path" raw "$settings" 2>/dev/null || true)"
+        [ "$provider" = "sqlite" ] && [ -n "$path" ] || continue
+        case "$path" in /*) ;; *) return 1 ;; esac
+
+        directory="$(dirname "$path")"
+        mkdir -p "$directory" || return 1
+        directory="$(realpath "$directory")" || return 1
+        case "$directory" in
+            "$INSTALL_DIR/var") continue ;;
+            /|/etc|/private/etc|/usr|/var|/private/var|/private/var/root|/System|/Applications|/Library|/bin|/sbin|/tmp|/var/tmp|/private/tmp)
+                echo "Remote Desktop Server: the SQLite database must use a dedicated directory, not '$directory'." >&2
+                return 1
+                ;;
+        esac
+        case "$(basename "$directory")" in
+            remotedesktop|remotedesktop-*|remote-desktop|remote-desktop-*) ;;
+            *)
+                echo "Remote Desktop Server: the SQLite parent must be a dedicated 'remotedesktop' directory." >&2
+                return 1
+                ;;
+        esac
+
+        chown "$SERVICE_USER:$SERVICE_GROUP" "$directory" || return 1
+        chmod 700 "$directory" || return 1
+        runs_as_service -w "$directory" || return 1
+    done
+}
+
 prepare_service_account() {
     local folder file
 
@@ -608,6 +644,8 @@ prepare_service_account() {
             chmod 644 "$INSTALL_DIR/tls/signaling.crt"
         fi
     fi
+
+    prepare_database_directories
 }
 
 runs_as_service() {
@@ -634,9 +672,8 @@ service_account_can_run() {
         runs_as_service -r "$INSTALL_DIR/tls/signaling.key" || return 1
     fi
 
-    # "Existing certificate" is a path the operator chose, possibly outside the install directory with a mode only
-    # root can read. Running as root used to cover that; an unreadable certificate would now keep Kestrel from
-    # starting, so it counts as a reason to stay as root.
+    # An existing certificate may live outside the install directory. It must be readable by the service account;
+    # an unreadable certificate fails installation rather than elevating the network services to root.
     for settings in "$INSTALL_DIR/Rendezvous/appsettings.json" "$INSTALL_DIR/Gateway/appsettings.json"; do
         [ -f "$settings" ] || continue
         for key in Path KeyPath; do
@@ -653,14 +690,8 @@ service_account_can_run() {
 if create_service_account && prepare_service_account && service_account_can_run; then
     echo "  the servers run as $SERVICE_USER"
 else
-    # Better a working server that runs as root — what every earlier version did — than one that cannot read its own
-    # settings. The reason is in this log; the fix is to correct the permissions and reinstall.
-    echo "  warning: could not hand the servers to $SERVICE_USER; they will keep running as root" >&2
-    for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
-        plist="/Library/LaunchDaemons/$label.plist"
-        /usr/libexec/PlistBuddy -c "Delete :UserName" "$plist" >/dev/null 2>&1 || true
-        /usr/libexec/PlistBuddy -c "Delete :GroupName" "$plist" >/dev/null 2>&1 || true
-    done
+    echo "Remote Desktop Server: could not prepare the unprivileged $SERVICE_USER account; no service will be started as root." >&2
+    exit 1
 fi
 
 # --- launchd -----------------------------------------------------------------------------------
@@ -681,10 +712,51 @@ for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesk
     launchctl enable "system/$label" 2>/dev/null || true
 
     if ! launchctl bootstrap system "$plist"; then
-        echo "  warning: could not start $label; run 'sudo launchctl bootstrap system $plist' to see why" >&2
-        continue
+        echo "Remote Desktop Server: could not start $label; run 'sudo launchctl bootstrap system $plist' to see why" >&2
+        exit 1
+    fi
+
+    service_status=""
+    for attempt in 1 2 3 4 5; do
+        service_status="$(launchctl print "system/$label" 2>/dev/null || true)"
+        if printf '%s\n' "$service_status" | grep -Eq '^[[:space:]]*state = running'; then
+            break
+        fi
+        sleep 1
+    done
+    if ! printf '%s\n' "$service_status" | grep -Eq '^[[:space:]]*state = running'; then
+        echo "Remote Desktop Server: $label did not reach the running state after installation." >&2
+        exit 1
     fi
 done
+
+urls="$(plutil -extract Urls raw "$INSTALL_DIR/Rendezvous/appsettings.json" 2>/dev/null || true)"
+listen="${urls%%;*}"
+scheme="${listen%%:*}"
+authority="${listen#*://}"
+authority="${authority%%/*}"
+port="${authority##*:}"
+case "$port" in
+    ''|*[!0-9]*) if [ "$scheme" = https ]; then port=443; else port=80; fi ;;
+esac
+health_url="$scheme://127.0.0.1:$port/health"
+
+healthy=false
+for attempt in {1..20}; do
+    if [ "$scheme" = https ]; then
+        /usr/bin/curl -kfsS --max-time 2 "$health_url" >/dev/null 2>&1 && healthy=true
+    else
+        /usr/bin/curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1 && healthy=true
+    fi
+    if [ "$healthy" = true ]; then
+        break
+    fi
+    sleep 0.25
+done
+if [ "$healthy" != true ]; then
+    echo "Remote Desktop Server: the signaling health endpoint did not answer after installation." >&2
+    exit 1
+fi
 
 echo "Remote Desktop Server: installed in $INSTALL_DIR"
 echo "  health:  curl http://127.0.0.1:5080/health"

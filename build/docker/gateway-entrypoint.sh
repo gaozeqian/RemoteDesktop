@@ -55,17 +55,27 @@ done
 IFS=$old_ifs
 
 desired=$(printf '%s\n' "$san" | sha256sum | cut -d' ' -f1)
+matching_pair=false
+if [ -s "$certificate" ] && [ -s "$key" ]; then
+    certificate_public=$(openssl x509 -pubkey -noout -in "$certificate" 2>/dev/null | openssl pkey -pubin -outform pem 2>/dev/null)
+    key_public=$(openssl pkey -pubout -in "$key" 2>/dev/null)
+    if [ -n "$certificate_public" ] && [ "$certificate_public" = "$key_public" ]; then
+        matching_pair=true
+    fi
+fi
+
 reuse=false
-if [ -s "$certificate" ] && [ -s "$key" ] && [ -f "$state" ] \
+if [ "$matching_pair" = true ] && [ -f "$state" ] \
     && [ "$(cat "$state")" = "$desired" ] \
     && openssl x509 -checkend 2592000 -noout -in "$certificate" >/dev/null 2>&1; then
     reuse=true
 fi
 
 if [ "$reuse" = false ]; then
-    temporary_key="$key.tmp"
-    temporary_certificate="$certificate.tmp"
-    rm -f "$temporary_key" "$temporary_certificate"
+    temporary_key=$(mktemp "$key.XXXXXX")
+    temporary_certificate=$(mktemp "$certificate.XXXXXX")
+    state_temporary=$(mktemp "$state.XXXXXX")
+    trap 'rm -f "$temporary_key" "$temporary_certificate" "$state_temporary"' EXIT
 
     echo "Generating the Ops gateway certificate for $san."
     if ! openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1095 \
@@ -84,13 +94,13 @@ if [ "$reuse" = false ]; then
     chmod 0600 "$temporary_key"
     chmod 0644 "$temporary_certificate"
 
-    # The key and certificate move before the state marker: an interrupted start therefore regenerates rather than
-    # trusting a half-written pair.
+    # Reuse also checks the public-key pair, so an interruption between these moves is detected and repaired next start.
     mv "$temporary_key" "$key"
     mv "$temporary_certificate" "$certificate"
-    printf '%s\n' "$desired" >"$state.tmp"
-    mv "$state.tmp" "$state"
+    printf '%s\n' "$desired" >"$state_temporary"
+    mv "$state_temporary" "$state"
     chmod 0600 "$state"
+    trap - EXIT
 else
     echo "Using the existing Ops gateway certificate for $san."
 fi

@@ -175,6 +175,7 @@ if [[ "$SKIP_PUBLISH" != "1" ]]; then
             --configuration "$CONFIGURATION" \
             --runtime "$RID" \
             --self-contained true \
+            -p:RestoreLockedMode=true \
             --output "$PUBLISH_DIR/$project" \
             --nologo
     done
@@ -379,7 +380,7 @@ cat > "$WORK_DIR/distribution.xml" <<XML
     <options customize="never" rootVolumeOnly="true" hostArchitectures="$ARCH"/>
     <volume-check>
         <allowed-os-versions>
-            <os-version min="12.0"/>
+            <os-version min="26.0"/>
         </allowed-os-versions>
     </volume-check>
     <welcome file="welcome.html" mime-type="text/html"/>
@@ -476,9 +477,14 @@ fi
 # --- 9. Verify -------------------------------------------------------------------------------------------------
 
 echo "==> Verifying"
-pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
 if [[ "$DISTRIBUTION" == "1" ]]; then
-    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+else
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+fi
+if [[ "$NOTARIZE" == "1" ]]; then
+    xcrun stapler validate "$FINAL_PKG"
 fi
 
 # The payload is what actually has to be right here: two executables where the launchd plists say they are, and the

@@ -386,3 +386,9 @@ runs:
           if ($LASTEXITCODE -ne 0) { throw "$($check.Msi) is missing something (see the test output above)." }
           Remove-Item "Env:$($check.Variable)" -ErrorAction SilentlyContinue
         }
+
+    - name: Verify publishing did not change dependency locks
+      shell: pwsh
+      run: |
+        git diff --exit-code -- "**/packages*.lock.json"
+        if ($LASTEXITCODE -ne 0) { throw "RID-specific publishing changed a packages.lock.json." }

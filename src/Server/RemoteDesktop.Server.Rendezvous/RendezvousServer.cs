@@ -76,6 +76,7 @@ public static class RendezvousServer
 
         services.AddSingleton<PresenceService>();
         services.AddSingleton<NodeEventPublisher>();
+        services.AddSingleton<SessionDirectory>();
         services.AddSingleton<ConnectionBroker>();
         services.AddSingleton<TelemetryReceiver>();
         services.AddSingleton<SignalingEndpoint>();

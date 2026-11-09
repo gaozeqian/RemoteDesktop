@@ -44,6 +44,7 @@ mkdir -p "$work/DEBIAN" "$work/usr/lib/systemd/user" "$work/usr/share/applicatio
 echo "Publishing the host for $runtime (version $version)..."
 dotnet publish "$root/src/Hosts/RemoteDesktop.HostService" \
     -c Release -r "$runtime" --self-contained true \
+    -p:RestoreLockedMode=true \
     -p:RemoteDesktopCrossTargeting=true \
     -o "$program" \
     --nologo -v quiet

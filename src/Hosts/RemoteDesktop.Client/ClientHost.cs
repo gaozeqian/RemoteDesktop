@@ -163,7 +163,7 @@ internal static class ClientHost
 
             // The host starts at login in the same session as the client; wait for its socket instead of racing it
             // and creating a second controlled end under the same device identity.
-            return PipeHostControl.WaitUntilAvailableAsync(pipeName, HostServiceStartupWait, CancellationToken.None)
+            return PipeHostControl.WaitUntilAvailableAsync(pipeName, HostServiceStartupWait, cancellationToken: CancellationToken.None)
                 .GetAwaiter().GetResult();
         }
 

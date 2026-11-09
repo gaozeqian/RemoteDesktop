@@ -12,9 +12,23 @@ ROLE="server"
 PLUGIN_ANSWERS="/var/tmp/com.remotedesktop.install.$ROLE.plist"
 ROOT_ANSWERS="/var/tmp/com.remotedesktop.install.$ROLE.root.plist"
 
-if [ -f "$PLUGIN_ANSWERS" ]; then
-    install -m 600 -o root -g wheel "$PLUGIN_ANSWERS" "$ROOT_ANSWERS"
-    rm -f "$PLUGIN_ANSWERS"
+if [ -L "$PLUGIN_ANSWERS" ] || { [ -e "$PLUGIN_ANSWERS" ] && [ ! -f "$PLUGIN_ANSWERS" ]; }; then
+    echo "Remote Desktop Server: ignoring a non-regular answer file." >&2
+    rm -f "$PLUGIN_ANSWERS" "$ROOT_ANSWERS"
+elif [ -f "$PLUGIN_ANSWERS" ]; then
+    OWNER="$(stat -f '%u:%l' "$PLUGIN_ANSWERS" 2>/dev/null || true)"
+    CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null || true)"
+    CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+    if { [ "${OWNER%:*}" != "0" ] && [ "${OWNER%:*}" != "${CONSOLE_UID:-root-only}" ]; } || [ "${OWNER#*:}" != "1" ]; then
+        echo "Remote Desktop Server: ignoring answers not owned by root/the console user, or having hard links." >&2
+        rm -f "$PLUGIN_ANSWERS" "$ROOT_ANSWERS"
+    else
+        rm -f "$ROOT_ANSWERS"
+        TEMPORARY="$(mktemp /var/tmp/com.remotedesktop.install.server.root.XXXXXX)"
+        install -m 600 -o root -g wheel "$PLUGIN_ANSWERS" "$TEMPORARY"
+        mv -f "$TEMPORARY" "$ROOT_ANSWERS"
+        rm -f "$PLUGIN_ANSWERS"
+    fi
 else
     # No pane answers this time (installer -pkg, MDM). A root copy left by an earlier cancelled install must not be
     # applied to this one.

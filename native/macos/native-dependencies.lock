@@ -1,0 +1,10 @@
+# Trusted Homebrew bottle inputs. Update every field together after testing the new pair.
+MSQUIC_VERSION=2.6.3
+MSQUIC_TAG=arm64_tahoe
+MSQUIC_URL=https://ghcr.io/v2/homebrew/core/libmsquic/blobs/sha256:5a9a40b4ab6c8ee26b6232d2aa7baeb87758e2675fb96e213c71cf08f17d3efa
+MSQUIC_SHA256=5a9a40b4ab6c8ee26b6232d2aa7baeb87758e2675fb96e213c71cf08f17d3efa
+OPENSSL_FORMULA=openssl@4
+OPENSSL_VERSION=4.1.0
+OPENSSL_TAG=arm64_tahoe
+OPENSSL_URL=https://ghcr.io/v2/homebrew/core/openssl/4/blobs/sha256:382f63e829b116d5fb9a2b186147e489631b5bbbb06ac0089f795a3fed1085c4
+OPENSSL_SHA256=382f63e829b116d5fb9a2b186147e489631b5bbbb06ac0089f795a3fed1085c4

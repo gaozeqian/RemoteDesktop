@@ -60,6 +60,8 @@ public sealed class GatewayTests : IAsyncDisposable
         [
             "--Gateway:Listen", "http://127.0.0.1:0",
             "--ReverseProxy:Clusters:ops:Destinations:loopback:Address", upstreamAddress.ToString(),
+            "--ReverseProxy:Routes:ops:ClusterId", "ops",
+            "--ReverseProxy:Routes:ops:Match:Path", "/{**catchall}",
         ];
 
         _gateway = GatewayServer.Build(args);

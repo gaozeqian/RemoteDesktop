@@ -1,5 +1,8 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Principal;
+using Microsoft.Extensions.Logging.Abstractions;
+using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Application.Hosting;
 
 namespace RemoteDesktop.Platform.Windows.UnitTests;
@@ -106,5 +109,76 @@ public class WindowsPipesTests
         var answer = new byte[4];
         await client.ReadExactlyAsync(answer, Ct);
         Assert.Equal("pong"u8.ToArray(), answer);
+    }
+
+    [Fact]
+    public async Task Host_control_requires_the_current_agent_user_and_session()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Named pipes are Windows only here.");
+
+        var name = NewPipeName();
+        await using var server = WindowsPipes.CreateServer(name, Clients(), firstInstance: true);
+        var accepting = server.WaitForConnectionAsync(Ct);
+        await using var client = await HostControlEndpoint.ConnectAsync(name, TimeSpan.FromSeconds(5), Ct);
+        await accepting.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        // Impersonation requires the client to have written at least one byte.
+        await client.WriteAsync("auth"u8.ToArray(), Ct);
+        await client.FlushAsync(Ct);
+        var request = new byte[4];
+        await server.ReadExactlyAsync(request, Ct);
+
+        var user = WindowsIdentity.GetCurrent().User?.Value;
+        var session = (uint)Process.GetCurrentProcess().SessionId;
+        Assert.NotNull(user);
+        Assert.True(WindowsPipes.IsAuthorizedHostControlClient(server, new AgentSessionIdentity(session, user)));
+        Assert.False(WindowsPipes.IsAuthorizedHostControlClient(server, new AgentSessionIdentity(session + 1, user)));
+        Assert.False(WindowsPipes.IsAuthorizedHostControlClient(
+            server,
+            new AgentSessionIdentity(session, new SecurityIdentifier(WellKnownSidType.BuiltinGuestsSid, null).Value)));
+    }
+
+    [Fact]
+    public async Task A_normal_protocol_request_is_authorized_after_reading_without_test_only_bytes()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Named pipes are Windows only here.");
+
+        var name = NewPipeName();
+        await using var server = WindowsPipes.CreateServer(name, Clients(), firstInstance: true);
+        var accepting = server.WaitForConnectionAsync(Ct);
+        var request = new PipeHostControl(name, Environment.ProcessPath).GetStatusAsync(Ct);
+        await accepting.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        var identity = new AgentSessionIdentity(
+            (uint)Process.GetCurrentProcess().SessionId,
+            WindowsIdentity.GetCurrent().User!.Value);
+        var handling = HostControlHandler.HandleAsync(
+            server,
+            new StubHostControl(),
+            NullLogger.Instance,
+            () => Assert.True(WindowsPipes.IsAuthorizedHostControlClient(server, identity)),
+            Ct);
+
+        await Task.WhenAll(handling, request).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        var status = await request;
+        Assert.Equal("test", status.TemporaryPassword);
+    }
+
+    private sealed class StubHostControl : IHostControl
+    {
+        public Task<HostStatus> GetStatusAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new HostStatus(123456789, "Online", "test", [], null, true));
+
+        public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetCameraAccessAsync(bool allowed, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

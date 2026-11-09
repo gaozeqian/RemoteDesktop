@@ -197,7 +197,8 @@ done
 if [ -f "$HOST_DATA/secrets/device-identity.bin" ]; then
     log_pass "Host identity persisted to disk: $HOST_DATA/secrets/device-identity.bin"
 else
-    log_warn "Identity file not immediately visible on disk (in-memory or custom store)."
+    log_fail "Host identity was not persisted at $HOST_DATA/secrets/device-identity.bin."
+    exit 1
 fi
 
 # No controller process was started and no ConnectAsync ran: the only grounds for a PASS here are the health

@@ -94,6 +94,10 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
     public const int FirstVideoStream = unchecked((int)0xFFFFFFFC);
 
     private const uint ErrorAccessDenied = 0x80070005;
+    private static readonly TimeSpan ReaderStopTimeout = TimeSpan.FromSeconds(5);
+
+    private readonly Lock _resourceGate = new();
+    private IMFMediaSource? _source;
 
     public CameraInfo Camera { get; } = camera;
 
@@ -154,9 +158,32 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         }
         finally
         {
-            // The reader thread ends with the token (within one frame); frames still queued are released.
+            // Shutdown is the Media Foundation operation that wakes a synchronous ReadSample blocked in a driver.
+            // The reader thread retains ownership of disposal until it has actually returned.
             await stop.CancelAsync().ConfigureAwait(false);
-            await reader.ConfigureAwait(false);
+            StopSource();
+            try
+            {
+                await reader.WaitAsync(ReaderStopTimeout, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // End this capture within the stop budget. A driver thread that returns later still owns and releases
+                // the native objects; observe a late failure so it cannot become an unobserved-task crash.
+                _ = reader.ContinueWith(
+                    task =>
+                    {
+                        _ = task.Exception;
+                        while (frames.Reader.TryRead(out var late))
+                        {
+                            late.Dispose();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+
             while (frames.Reader.TryRead(out var left))
             {
                 left.Dispose();
@@ -173,6 +200,11 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         try
         {
             source = CreateMediaSource(Camera.Id);
+            lock (_resourceGate)
+            {
+                _source = source;
+            }
+
             using (var attributes = MediaFactory.MFCreateAttributes(2))
             {
                 // Lets the reader insert the decoder / colour converter between the camera's format and NV12.
@@ -202,7 +234,11 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
                     continue; // a gap in the stream; the next read waits for the next picture
                 }
 
-                writer.TryWrite(ToFrame(sample, width, height, yuy2, clock.Elapsed));
+                var frame = ToFrame(sample, width, height, yuy2, clock.Elapsed);
+                if (!writer.TryWrite(frame))
+                {
+                    frame.Dispose();
+                }
             }
         }
         catch (CameraUnavailableException ex)
@@ -217,23 +253,44 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         }
         finally
         {
-            reader?.Dispose();
-            if (source is not null)
+            lock (_resourceGate)
             {
-                try
+                reader?.Dispose();
+                if (source is not null)
                 {
-                    source.Shutdown();
-                }
-                catch (SharpGenException)
-                {
-                    // Already gone with the device.
+                    try
+                    {
+                        source.Shutdown();
+                    }
+                    catch (SharpGenException)
+                    {
+                        // Already gone with the device.
+                    }
+
+                    source.Dispose();
                 }
 
-                source.Dispose();
+                _source = null;
+            }
+
+            // Also complete on an unexpected conversion/argument failure; otherwise the consumer would wait forever.
+            writer.TryComplete();
+        }
+    }
+
+    private void StopSource()
+    {
+        lock (_resourceGate)
+        {
+            try
+            {
+                _source?.Shutdown();
+            }
+            catch (SharpGenException)
+            {
+                // The device may already have disappeared; the reader still gets the cancellation and bounded join.
             }
         }
-
-        writer.TryComplete();
     }
 
     // Before the first picture the caller is still waiting to start; afterwards the stream just ends with the error.

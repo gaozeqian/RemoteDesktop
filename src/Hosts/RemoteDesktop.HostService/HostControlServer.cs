@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Runtime.Versioning;
+using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Platform.Windows;
 
@@ -9,7 +10,11 @@ namespace RemoteDesktop.HostService;
 /// Lets the UI, running as the logged-in user, read this device's code, temporary password and sessions from the
 /// service and rotate the password. Open to interactive users of this machine, not to the network.
 /// </summary>
-internal sealed partial class HostControlServer(IHostControl control, IConfiguration configuration, ILogger<HostControlServer> logger) : BackgroundService
+internal sealed partial class HostControlServer(
+    IHostControl control,
+    IConfiguration configuration,
+    ILogger<HostControlServer> logger,
+    IAgentGateway? agent = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -102,7 +107,18 @@ internal sealed partial class HostControlServer(IHostControl control, IConfigura
         {
             await using (stream.ConfigureAwait(false))
             {
-                await HostControlHandler.HandleAsync(stream, control, logger, stoppingToken).ConfigureAwait(false);
+                void Authorize()
+                {
+                    if (OperatingSystem.IsWindows()
+                        && stream is NamedPipeServerStream pipe
+                        && !WindowsPipes.IsAuthorizedHostControlClient(pipe, agent?.CurrentSession))
+                    {
+                        LogClientRefused(logger);
+                        throw new UnauthorizedAccessException("The caller is outside the currently served Windows session.");
+                    }
+                }
+
+                await HostControlHandler.HandleAsync(stream, control, logger, Authorize, stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -118,4 +134,7 @@ internal sealed partial class HostControlServer(IHostControl control, IConfigura
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A request on the host control endpoint failed.")]
     private static partial void LogRequestFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused a host-control caller outside the current agent session.")]
+    private static partial void LogClientRefused(ILogger logger);
 }

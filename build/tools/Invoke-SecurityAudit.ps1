@@ -43,6 +43,15 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+function Resolve-AuditPath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or [System.IO.Path]::IsPathRooted($Path)) { return $Path }
+    return [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $Path))
+}
+$InstallDirectory = Resolve-AuditPath $InstallDirectory
+$SettingsPath = Resolve-AuditPath $SettingsPath
+$ClientSettingsPath = Resolve-AuditPath $ClientSettingsPath
+
 # 仓库里开发配置带的那把中继共享密钥。它被提交进了 appsettings.Development.json，是"开发用"的；生产环境
 # 必须换成自己生成的（openssl rand -base64 48）。见到这把钥匙等于见到"忘了换"。
 $DevelopmentRelayKey = 'FWNwaTxD3q0LBCdapWf8qLbfhyGxLFQOMRAtMt/PKl0='
@@ -105,17 +114,20 @@ function Test-SignalingUrl([string]$Url, [string]$Where) {
         return
     }
 
-    if ($Url.StartsWith('https://')) {
-        Add-Ok "$Where 信令走 TLS（$Url）。"
-    }
-    elseif ($Url.StartsWith('http://') -and (Test-IsLoopbackUrl $Url)) {
-        Add-Ok "$Where 的明文信令只监听回环（$Url），公网无法访问。"
-    }
-    elseif ($Url.StartsWith('http://')) {
-        Add-Finding "$Where 信令是明文 http（$Url）：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的“生产环境：信令必须走 TLS”一节。"
-    }
-    else {
-        Add-Finding "$Where 的信令地址 $Url 既不是 http:// 也不是 https://。"
+    foreach ($listener in $Url.Split(@(';'), [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        $listener = $listener.Trim()
+        if ($listener.StartsWith('https://')) {
+            Add-Ok "$Where 信令监听 $listener 走 TLS。"
+        }
+        elseif ($listener.StartsWith('http://') -and (Test-IsLoopbackUrl $listener)) {
+            Add-Ok "$Where 的明文信令只监听回环（$listener），公网无法访问。"
+        }
+        elseif ($listener.StartsWith('http://')) {
+            Add-Finding "$Where 信令监听 $listener 是明文 http：设备代码、IP、中继票据在途可被读取和抢用。见 docs/ops/README.md 的“生产环境：信令必须走 TLS”一节。"
+        }
+        else {
+            Add-Finding "$Where 的信令地址 $listener 既不是 http:// 也不是 https://。"
+        }
     }
 }
 
@@ -193,6 +205,11 @@ function Test-Database([string]$Provider, [string]$ConnectionString, [string]$Pa
             Add-Ok "$Where 用 SQLite 保存设备代码（$Path）。这个文件要备份：丢了等于所有设备码重发。"
         }
 
+        return
+    }
+
+    if ($Provider -ne 'postgres') {
+        Add-Finding "$Where 的数据库 provider '$Provider' 未知；只支持 sqlite、postgres 或 none。"
         return
     }
 
@@ -306,6 +323,7 @@ foreach ($entry in $settingsToCheck) {
 if ($ClientSettingsPath) {
     Write-Host "检查客户端/被控端（$ClientSettingsPath）："
     $client = Read-Settings -Path $ClientSettingsPath
+    if ($null -eq $client) { exit 3 }
     if ($null -ne $client) {
         $uri = $null
         if ($client.PSObject.Properties['Transport'] -and $client.Transport.PSObject.Properties['RendezvousUri'] -and $client.Transport.RendezvousUri) { $uri = [string]$client.Transport.RendezvousUri }

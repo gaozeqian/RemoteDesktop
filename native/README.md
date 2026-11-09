@@ -40,7 +40,8 @@ Windows 侧不需要编译出来的辅助库：它对系统 API 的调用是 C# 
   `libmsquic` `.deb`，按写死的 sha256 校验，只取里面的 `.so`（`libmsquic.so.<版本>`，另建 `libmsquic.so.2` 软链）。
   OpenSSL 用系统那份，不重定位。
 * **macOS**：还要一并处理 OpenSSL 的 dylib，把它们的 install name 改写成 `@loader_path`，再 `dlopen` 验一遍，
-  确认这组库在打包前就是自洽的。
+  确认这组库在打包前就是自洽的。版本、bottle 标签、URL 与 sha256 固定在 `macos/native-dependencies.lock`；脚本不再读取
+  当前 Homebrew formula，也不会复用版本戳不匹配的旧缓存。
 
 Windows 没有对应脚本——`msquic.dll` 由运行时包提供。
 

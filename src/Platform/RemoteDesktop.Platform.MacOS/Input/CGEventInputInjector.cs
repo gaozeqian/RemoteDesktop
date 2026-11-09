@@ -40,6 +40,7 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
     private DateTime _cachedAt;
     private int _pressedButtons;
     private ulong _modifierFlags;
+    private readonly InputSessionArbitrator _sessions = new();
 
     public CGEventInputInjector(IDisplayEnumerator displays)
     {
@@ -56,38 +57,65 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
 
     public void Inject(InputEvent inputEvent)
     {
-        ArgumentNullException.ThrowIfNull(inputEvent);
         lock (_gate)
         {
-            switch (inputEvent)
+            InjectCore(inputEvent);
+        }
+    }
+
+    public void Inject(InputEvent inputEvent, string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sessionId);
+        lock (_gate)
+        {
+            // One OS-level pressed state cannot safely represent two independent remote sessions. Keep the first
+            // controller until its channel has released its keys; other sessions cannot clear or alter that state.
+            if (_sessions.TryInject(sessionId))
             {
-                case PointerMoveEvent move:
-                    PostPointer(MoveEventType(), Point(move.DisplayId, move.X, move.Y), CoreGraphics.MouseButtonLeft);
-                    break;
-
-                case PointerButtonEvent button:
-                    PostPointerButton(button);
-                    break;
-
-                case PointerWheelEvent wheel:
-                    PostWheel(wheel);
-                    break;
-
-                case KeyEvent key:
-                    PostKey(key);
-                    break;
-
-                case TextInputEvent text:
-                    PostText(text.Text);
-                    break;
-
-                case SecureAttentionEvent:
-                    SendSecureAttentionSequence();
-                    break;
-
-                default:
-                    throw new ArgumentException($"Unsupported input event {inputEvent.GetType().Name}.", nameof(inputEvent));
+                InjectCore(inputEvent);
             }
+        }
+    }
+
+    public void ReleaseSession(string sessionId)
+    {
+        lock (_gate)
+        {
+            _sessions.Release(sessionId);
+        }
+    }
+
+    private void InjectCore(InputEvent inputEvent)
+    {
+        ArgumentNullException.ThrowIfNull(inputEvent);
+        switch (inputEvent)
+        {
+            case PointerMoveEvent move:
+                PostPointer(MoveEventType(), Point(move.DisplayId, move.X, move.Y), CoreGraphics.MouseButtonLeft);
+                break;
+
+            case PointerButtonEvent button:
+                PostPointerButton(button);
+                break;
+
+            case PointerWheelEvent wheel:
+                PostWheel(wheel);
+                break;
+
+            case KeyEvent key:
+                PostKey(key);
+                break;
+
+            case TextInputEvent text:
+                PostText(text.Text);
+                break;
+
+            case SecureAttentionEvent:
+                SendSecureAttentionSequence();
+                break;
+
+            default:
+                throw new ArgumentException($"Unsupported input event {inputEvent.GetType().Name}.", nameof(inputEvent));
         }
     }
 

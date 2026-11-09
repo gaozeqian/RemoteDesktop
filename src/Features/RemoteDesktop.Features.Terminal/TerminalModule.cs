@@ -119,9 +119,23 @@ public sealed partial class TerminalModule(
             }
 
             var name = shell ?? (available.Count > 0 ? available[0] : string.Empty);
-            LogOpened(logger, session.Id, name, columns, rows);
-            await SendAsync(stream, new TerminalEvent { Opened = new TerminalOpened { Shell = name } }, cancellationToken).ConfigureAwait(false);
-            await PumpAsync(stream, terminal, session, cancellationToken).ConfigureAwait(false);
+            var pumping = false;
+            try
+            {
+                LogOpened(logger, session.Id, name, columns, rows);
+                await SendAsync(stream, new TerminalEvent { Opened = new TerminalOpened { Shell = name } }, cancellationToken).ConfigureAwait(false);
+                pumping = true;
+                await PumpAsync(stream, terminal, session, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // PumpAsync owns disposal once entered. Before that point the Opened write can fail, but the started
+                // shell still belongs to this method and must not escape its cleanup.
+                if (!pumping)
+                {
+                    await terminal.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
         finally
         {

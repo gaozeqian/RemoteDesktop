@@ -26,8 +26,10 @@ set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/artifacts/lib/macos"
+. "$root/native/macos/native-dependencies.lock"
+versions="$MSQUIC_VERSION/$OPENSSL_VERSION/$MSQUIC_TAG/$OPENSSL_TAG"
 
-if [ -f "$out/libmsquic.dylib" ]; then
+if [ -f "$out/libmsquic.dylib" ] && [ -f "$out/.native-versions" ] && [ "$(cat "$out/.native-versions")" = "$versions" ]; then
     missing=$(for reference in $(otool -L "$out/libmsquic.dylib" | tail -n +2 | awk '{ print $1 }' | grep -E '@@HOMEBREW_|^/opt/homebrew/|^/usr/local/|^@loader_path/' || true); do
         [ -f "$out/$(basename "$reference")" ] || echo "$(basename "$reference")"
     done)
@@ -39,7 +41,7 @@ if [ -f "$out/libmsquic.dylib" ]; then
     echo "The staged set in $out is missing $missing; staging it again" >&2
 fi
 
-for tool in brew python3 curl tar shasum install_name_tool codesign clang; do
+for tool in python3 curl tar shasum install_name_tool codesign clang; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing required tool: $tool" >&2
         exit 1
@@ -49,24 +51,11 @@ done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Downloads the arm64 bottle of a formula and unpacks it, printing the directory holding its libraries.
+# Downloads one explicitly locked bottle and unpacks it, printing the directory holding its libraries.
 fetch_bottle() {
     formula=$1
-
-    info=$(brew info --json=v2 "$formula" | python3 -c '
-import json, sys
-
-formula = json.load(sys.stdin)["formulae"][0]
-files = formula["bottle"]["stable"]["files"]
-tags = [tag for tag in files if tag.startswith("arm64_")]
-if not tags:
-    sys.exit("no arm64 bottle for " + formula["name"])
-bottle = files[tags[0]]
-print(bottle["url"], bottle["sha256"])
-')
-
-    url=${info% *}
-    sha=${info#* }
+    url=$2
+    sha=$3
 
     # Homebrew serves bottles from a registry, so the blob needs a pull token scoped to the formula.
     repository=$(printf '%s' "$url" | sed -n 's|https://ghcr.io/v2/\(.*\)/blobs/.*|\1|p')
@@ -97,23 +86,8 @@ rewrite_homebrew_dependencies() {
     done
 }
 
-libmsquic_lib=$(fetch_bottle libmsquic)
-
-# Which OpenSSL the bottle was built against is Homebrew's business and it moves: the bottle in the CI runner
-# referenced libcrypto.3 while this script staged openssl@4's libcrypto.4, and the library then refused to load. So
-# the dependency is asked for rather than assumed.
-openssl_formula=$(brew info --json=v2 libmsquic | python3 -c '
-import json, sys
-
-formula = json.load(sys.stdin)["formulae"][0]
-for dependency in formula["dependencies"]:
-    if dependency.startswith("openssl"):
-        print(dependency)
-        break
-else:
-    sys.exit("libmsquic declares no openssl dependency to stage")
-')
-openssl_lib=$(fetch_bottle "$openssl_formula")
+libmsquic_lib=$(fetch_bottle libmsquic "$MSQUIC_URL" "$MSQUIC_SHA256")
+openssl_lib=$(fetch_bottle "$OPENSSL_FORMULA" "$OPENSSL_URL" "$OPENSSL_SHA256")
 
 mkdir -p "$out"
 rm -f "$out"/*.dylib
@@ -194,6 +168,7 @@ int main(int argc, char **argv)
 EOF
 clang -o "$work/check-load" "$work/check-load.c"
 (cd "$out" && "$work/check-load" ./*.dylib)
+printf '%s\n' "$versions" >"$out/.native-versions"
 
 echo
 echo "Staged in $out:"

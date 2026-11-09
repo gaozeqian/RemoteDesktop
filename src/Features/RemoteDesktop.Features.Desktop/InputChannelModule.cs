@@ -26,11 +26,18 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
 
         var pressedKeys = new HashSet<(int ScanCode, bool Extended)>();
         var pressedButtons = new Dictionary<Abstractions.Input.PointerButton, PointerButtonEvent>();
+        var sessionKey = session.Id.ToString();
         try
         {
             while (await ProtobufFrames.ReadAsync(channel.Stream, InputMessage.Parser, 4096, cancellationToken).ConfigureAwait(false) is { } message)
             {
                 var inputEvent = InputMessages.ToEvent(message);
+                if (inputEvent is SecureAttentionEvent && !session.Grant.Allows(Permissions.SecureAttention))
+                {
+                    LogSecureAttentionRefused(logger, session.Id);
+                    continue;
+                }
+
                 switch (inputEvent)
                 {
                     case null:
@@ -53,7 +60,7 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
 
                 try
                 {
-                    injector.Inject(inputEvent);
+                    injector.Inject(inputEvent, sessionKey);
                 }
                 catch (NotSupportedException ex)
                 {
@@ -72,26 +79,28 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
             // this block is unwinding with.
             foreach (var (scanCode, extended) in pressedKeys)
             {
-                Release(new KeyEvent(scanCode, extended, IsDown: false));
+                Release(new KeyEvent(scanCode, extended, IsDown: false), sessionKey);
             }
 
             foreach (var button in pressedButtons.Values)
             {
-                Release(button with { IsDown = false });
+                Release(button with { IsDown = false }, sessionKey);
             }
 
             if (pressedKeys.Count + pressedButtons.Count > 0)
             {
                 LogReleased(logger, pressedKeys.Count, pressedButtons.Count);
             }
+
+            injector.ReleaseSession(sessionKey);
         }
     }
 
-    private void Release(InputEvent release)
+    private void Release(InputEvent release, string sessionKey)
     {
         try
         {
-            injector.Inject(release);
+            injector.Inject(release, sessionKey);
         }
 #pragma warning disable CA1031 // The remaining keys and buttons must still be released.
         catch (Exception ex)
@@ -103,6 +112,9 @@ public sealed partial class InputChannelModule(IInputInjector injector, ILogger<
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not release a key or button left pressed by the controller: {Reason}")]
     private static partial void LogReleaseFailed(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Session {SessionId}: refused Ctrl+Alt+Del without SecureAttention permission.")]
+    private static partial void LogSecureAttentionRefused(ILogger logger, SessionId sessionId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Input ignored: {Reason}")]
     private static partial void LogUnsupported(ILogger logger, string reason);

@@ -83,7 +83,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
         services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
             ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
+            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+            lossless: true));
         services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
             ChannelType.Clipboard, Permissions.Clipboard, AgentChannelKind.Clipboard, replayFirstFrame: false,
             sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),

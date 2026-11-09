@@ -147,12 +147,14 @@ public sealed class LocalHostControl(
             throw new ArgumentException($"A fixed password must be at least {FixedPasswordPolicy.MinimumLength} characters.", nameof(password));
         }
 
-        credentials.FixedPassword = normalized;
+        // Commit the durable value first. A store failure must not leave a new password usable only until restart, or
+        // make a cleared password come back from the old stored value.
         if (secrets is not null)
         {
             FixedPasswordPolicy.Save(secrets, normalized);
         }
 
+        credentials.FixedPassword = normalized;
         return Task.CompletedTask;
     }
 

@@ -39,8 +39,9 @@
 ## 构建与测试
 
 ```bash
-dotnet build RemoteDesktop.slnx
-dotnet test --solution RemoteDesktop.slnx
+dotnet restore RemoteDesktop.slnx --locked-mode
+dotnet build RemoteDesktop.slnx --no-restore
+dotnet test --solution RemoteDesktop.slnx --no-build
 ```
 
 依赖只能向内：`Domain ← Abstractions ← Protocol ← Transport ← Application ← {Features, Hosts}`

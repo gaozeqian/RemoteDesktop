@@ -60,6 +60,31 @@ public sealed class TerminalModuleTests
         }
     }
 
+    [Fact]
+    public async Task A_failed_opened_response_still_disposes_the_started_terminal()
+    {
+        var pty = new FakePtyHost();
+        var (moduleEnd, controller) = await PipePair.CreateAsync();
+        var failing = new FailingWriteStream(moduleEnd);
+        var module = new TerminalModule(pty, new AllowEverything(), NullLogger<TerminalModule>.Instance);
+        try
+        {
+            var run = module.HandleAsync(new TestChannel(failing), TestSession, Ct);
+            await ProtobufFrames.WriteAsync(
+                controller,
+                new TerminalRequest { Open = new OpenTerminal { Shell = "fake", Columns = 80, Rows = 24 } },
+                Ct);
+
+            await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            Assert.Equal(1, pty.Session.DisposeCount);
+        }
+        finally
+        {
+            await controller.DisposeAsync();
+            await failing.DisposeAsync();
+        }
+    }
+
     private static async Task Run_until_the_controller_closes_async(FakePtyHost pty)
     {
         var (moduleEnd, controller) = await PipePair.CreateAsync();
@@ -110,6 +135,8 @@ public sealed class TerminalModuleTests
 
         public string OutputMarker => OutputStream.Marker;
 
+        public int DisposeCount { get; private set; }
+
         public Stream Input { get; } = new MemoryStream();
 
         public void Resize(int columns, int rows)
@@ -120,9 +147,51 @@ public sealed class TerminalModuleTests
 
         public ValueTask DisposeAsync()
         {
+            DisposeCount++;
             OutputStream.Dispose();
             _exit.TrySetResult(-1);
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FailingWriteStream(Stream inner) : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get; set; }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(buffer, cancellationToken);
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new IOException("Injected Opened response failure."));
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException("Injected write failure.");
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 

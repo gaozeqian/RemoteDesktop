@@ -50,11 +50,12 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
         new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.DropOldest });
 
     /// <summary>
-    /// Session-end reports waiting to go out. A separate queue from heartbeats so a burst of samples cannot push out
-    /// the one fact that closes a row. A device hosts at most 16 sessions, so the bound is generous.
+    /// Session-end reports are lifecycle facts, not samples. They are deduplicated by session and retained until a
+    /// send succeeds; unlike heartbeats, a full/offline period must not evict another session's only end fact.
     /// </summary>
-    private readonly Channel<SessionEndedReport> _sessionEnds = Channel.CreateBounded<SessionEndedReport>(
-        new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.DropOldest });
+    private readonly Channel<SessionEndedReport> _sessionEnds = Channel.CreateUnbounded<SessionEndedReport>(
+        new UnboundedChannelOptions { SingleReader = true });
+    private readonly ConcurrentDictionary<string, byte> _sessionEndKeys = new(StringComparer.Ordinal);
 
     private ClientWebSocket? _socket;
 
@@ -197,6 +198,9 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     public Task RejectAsync(string requestId, CancellationToken cancellationToken) =>
         SendAsync(new ClientMessage { ConnectReject = new ConnectReject { RequestId = requestId } }, cancellationToken);
 
+    public Task ReportAdminResultAsync(AdminResult result, CancellationToken cancellationToken) =>
+        SendAsync(new ClientMessage { AdminResult = result }, cancellationToken);
+
     public void ReportTelemetry(TelemetryReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -210,9 +214,22 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        // Same trade as a heartbeat: a report that cannot be queued is dropped rather than blocking the session's
-        // shutdown. The other end of the session reports the same fact independently.
-        _sessionEnds.Writer.TryWrite(report);
+        if (!_sessionEndKeys.TryAdd(report.SessionId, 0))
+        {
+            return;
+        }
+
+        if (!_sessionEnds.Writer.TryWrite(report))
+        {
+            _sessionEndKeys.TryRemove(report.SessionId, out _);
+            return;
+        }
+
+        var pending = _sessionEndKeys.Count;
+        if (pending == 33 || (pending > 33 && (pending & (pending - 1)) == 0))
+        {
+            LogSessionEndBacklog(logger, pending);
+        }
     }
 
     /// <summary>Drains the queue onto the socket while this connection is up.</summary>
@@ -252,6 +269,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
                 try
                 {
                     await SendLockedAsync(socket, new ClientMessage { SessionEnded = report }, cancellationToken).ConfigureAwait(false);
+                    _sessionEndKeys.TryRemove(report.SessionId, out _);
                 }
                 catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
                 {
@@ -500,4 +518,7 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
 
     [LoggerMessage(Level = LogLevel.Information, Message = "The server did not answer a presence query; device states are unknown.")]
     private static partial void LogPresenceUnanswered(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Count} session-end reports are waiting for signaling; none will be evicted.")]
+    private static partial void LogSessionEndBacklog(ILogger logger, int count);
 }

@@ -92,6 +92,7 @@ if [[ "${RD_SKIP_PUBLISH:-0}" != "1" ]]; then
         --configuration "$CONFIGURATION" \
         --runtime "$RUNTIME" \
         "--self-contained=$SELF_CONTAINED_ARG" \
+        -p:RestoreLockedMode=true \
         --nologo
 fi
 

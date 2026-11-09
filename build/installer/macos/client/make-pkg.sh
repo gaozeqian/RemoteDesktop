@@ -360,11 +360,15 @@ fi
 echo "==> Verifying"
 # --check-signature exits non-zero for an unsigned package, which is expected when no certificate is configured, so
 # it is not allowed to abort the script — the output is the point, not the status.
-pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
 if [[ "$DISTRIBUTION" == "1" ]]; then
-    # The question that actually matters for a user: would Gatekeeper let this install? "accepted" is the answer we
-    # want; "source=Notarized Developer ID" only appears once --notarize has run.
-    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+    # A signed package that Gatekeeper rejects is a failed signed build, not a warning.
+    spctl -a -vvv -t install "$FINAL_PKG" 2>&1 | sed 's/^/    /'
+else
+    pkgutil --check-signature "$FINAL_PKG" 2>&1 | sed 's/^/    /' || true
+fi
+if [[ "$NOTARIZE" == "1" ]]; then
+    xcrun stapler validate "$FINAL_PKG"
 fi
 echo "    payload:"
 # Read the listing once. Piping it to `head` closed the pipe after eight lines and pkgutil died of SIGPIPE; with

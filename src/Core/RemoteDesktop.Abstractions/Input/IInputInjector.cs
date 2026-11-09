@@ -4,6 +4,14 @@ public interface IInputInjector
 {
     void Inject(InputEvent inputEvent);
 
+    /// <summary>Injects as one remote session. Platforms with shared OS input state may use this for arbitration.</summary>
+    void Inject(InputEvent inputEvent, string sessionId) => Inject(inputEvent);
+
+    /// <summary>Releases any session-level input ownership. The channel still sends its pressed-key releases first.</summary>
+    void ReleaseSession(string sessionId)
+    {
+    }
+
     /// <summary>
     /// Whether <see cref="SendSecureAttentionSequence"/> can actually do anything here.
     /// </summary>

@@ -4,6 +4,7 @@ using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
+using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Application.Sessions;
@@ -32,22 +33,35 @@ public sealed partial class AdminCommandService(
 
         await foreach (var command in rendezvous.ReadAdminCommandsAsync(stoppingToken).ConfigureAwait(false))
         {
-            Handle(command);
+            await HandleAsync(command, stoppingToken).ConfigureAwait(false);
         }
     }
 
-    private void Handle(AdminCommand command)
+    private async Task HandleAsync(AdminCommand command, CancellationToken cancellationToken)
     {
+        AdminResult result;
         if (!string.Equals(command.Command, ClientCapabilities.Commands.DisconnectSession, StringComparison.Ordinal)
             || !SessionId.TryParse(command.SessionId, out var id))
         {
             LogIgnored(logger, command.CommandId, command.Command);
-            return;
+            result = new AdminResult { CommandId = command.CommandId, Succeeded = false, Error = "unsupported command" };
+        }
+        else
+        {
+            // Disconnect returns false when the session is already gone, which is still success for the operator's purpose.
+            var found = sessions.Disconnect(id);
+            LogHandled(logger, command.CommandId, id, found);
+            result = new AdminResult { CommandId = command.CommandId, Succeeded = true };
         }
 
-        // Disconnect returns false when the session is already gone, which is still success for the operator's purpose.
-        var found = sessions.Disconnect(id);
-        LogHandled(logger, command.CommandId, id, found);
+        try
+        {
+            await rendezvous!.ReportAdminResultAsync(result, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PeerConnectException ex)
+        {
+            LogResultFailed(logger, command.CommandId, ex);
+        }
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Operator command {CommandId}: disconnected session {SessionId} (was open: {WasOpen}).")]
@@ -55,4 +69,7 @@ public sealed partial class AdminCommandService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Ignored an unknown operator command {CommandId} ({Command}).")]
     private static partial void LogIgnored(ILogger logger, string commandId, string command);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not acknowledge operator command {CommandId}.")]
+    private static partial void LogResultFailed(ILogger logger, string commandId, Exception exception);
 }

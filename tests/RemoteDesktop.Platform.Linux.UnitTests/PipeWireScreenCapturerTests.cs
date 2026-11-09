@@ -147,16 +147,15 @@ public sealed class PipeWireScreenCapturerTests
     }
 
     [Fact]
-    public async Task A_screen_that_is_not_changing_reports_no_frame_rather_than_the_last_one_again()
+    public async Task A_second_capture_has_a_bounded_wait_even_when_the_desktop_is_animating()
     {
         var pair = Start();
         try
         {
             await using var capturer = pair.Capturer;
 
-            // Drain whatever is waiting, then ask again with a short timeout. The compositor sends a buffer when the
-            // screen is damaged, so with nothing happening there is nothing to hand back — which the pipeline uses
-            // to lower its frame rate. Returning the previous frame instead would keep it encoding a still image.
+            // This opt-in desktop test proves only the bounded wait: the machine may be animating. Deterministic
+            // timeout/null behavior is covered by the controlled-channel test below.
             using (var first = await capturer.CaptureAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken))
             {
                 Assert.NotNull(first);
@@ -173,4 +172,39 @@ public sealed class PipeWireScreenCapturerTests
             Stop(pair);
         }
     }
+
+    [Fact]
+    public async Task Caller_cancellation_is_not_a_static_screen_timeout()
+    {
+        var capturer = EmptyCapturer();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await capturer.CaptureAsync(TimeSpan.FromSeconds(1), cancelled.Token));
+    }
+
+    [Fact]
+    public async Task A_wait_timeout_still_means_no_changed_frame()
+    {
+        var capturer = EmptyCapturer();
+
+        var frame = await capturer.CaptureAsync(TimeSpan.FromMilliseconds(10), CancellationToken.None);
+
+        Assert.Null(frame);
+    }
+
+    [Fact]
+    public async Task A_closed_pipewire_channel_is_a_fault_not_an_endless_empty_frame()
+    {
+        var capturer = EmptyCapturer();
+        capturer.CompleteForTests();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await capturer.CaptureAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
+        Assert.True(capturer.IsFaulted);
+    }
+
+    private static PipeWireScreenCapturer EmptyCapturer() =>
+        new(new DisplayInfo("test", "Test", new PixelRect(0, 0, 1, 1), 1, true));
 }

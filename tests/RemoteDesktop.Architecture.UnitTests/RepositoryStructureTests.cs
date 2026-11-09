@@ -299,6 +299,75 @@ public class RepositoryStructureTests
         Assert.DoesNotContain("Name=\"\"$($directory.Name)\"\"", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Installer_scripts_keep_the_security_failure_guards()
+    {
+        var linuxConfig = File.ReadAllText(Path.Combine(Root, "build", "installer", "linux", "server", "config"));
+        var linuxPostinst = File.ReadAllText(Path.Combine(Root, "build", "installer", "linux", "server", "postinst"));
+        var macPostinstall = File.ReadAllText(Path.Combine(Root, "build", "installer", "macos", "server", "scripts", "postinstall"));
+
+        Assert.Contains("provider=postgres", linuxConfig, StringComparison.Ordinal);
+        Assert.Contains("realpath -m", linuxPostinst, StringComparison.Ordinal);
+        Assert.DoesNotContain("chown -R \"$SERVICE_USER:$SERVICE_USER\" \"$database_directory\"", linuxPostinst, StringComparison.Ordinal);
+        Assert.Contains("no service will be started as root", macPostinstall, StringComparison.Ordinal);
+        Assert.Contains("-passin fd:3", macPostinstall, StringComparison.Ordinal);
+        Assert.DoesNotContain("-passin \"pass:", macPostinstall, StringComparison.Ordinal);
+        Assert.Contains("launchctl print", macPostinstall, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void All_macos_extensionless_installer_scripts_are_forced_to_lf()
+    {
+        var attributes = File.ReadAllText(Path.Combine(Root, ".gitattributes"));
+        Assert.Contains("build/installer/macos/**/scripts/postinstall", attributes, StringComparison.Ordinal);
+        Assert.Contains("build/installer/macos/**/scripts/preinstall", attributes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Formal_releases_cannot_fall_back_to_unsigned_packages()
+    {
+        var release = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "release.yml"));
+        Assert.DoesNotContain("SkipSigning", release, StringComparison.Ordinal);
+        Assert.Contains("formal release requires", release, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("RD_TEST_POSTGRES", release, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_inputs_are_content_pinned_and_all_projects_have_lock_files()
+    {
+        var workflows = Directory.EnumerateFiles(Path.Combine(Root, ".github"), "*.yml", SearchOption.AllDirectories)
+            .Select(File.ReadAllText).ToArray();
+        Assert.All(workflows, text => Assert.DoesNotMatch(@"(?m)uses:\s+\S+@v\d+\s*(?:#.*)?$", text));
+
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Root, "build", "docker"), "Dockerfile*"))
+        {
+            foreach (Match from in Regex.Matches(File.ReadAllText(file), @"^FROM\s+(\S+)", RegexOptions.Multiline))
+            {
+                Assert.Contains("@sha256:", from.Groups[1].Value, StringComparison.Ordinal);
+            }
+        }
+
+        var projects = ProjectFiles()
+            .Concat(Directory.EnumerateFiles(Path.Combine(Root, "build", "installer", "windows"), "*.*proj", SearchOption.AllDirectories));
+        foreach (var project in projects)
+        {
+            Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(project)!, "packages.lock.json")),
+                $"Missing packages.lock.json beside {Relative(project)}.");
+            if (Relative(project).StartsWith("src/", StringComparison.Ordinal))
+            {
+                foreach (var rid in new[] { "win-x64", "linux-x64", "osx-arm64" })
+                {
+                    Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(project)!, $"packages.{rid}.lock.json")),
+                        $"Missing {rid} lock beside {Relative(project)}.");
+                }
+            }
+        }
+
+        var native = File.ReadAllText(Path.Combine(Root, "native", "macos", "fetch-libmsquic.sh"));
+        Assert.DoesNotContain("brew info", native, StringComparison.Ordinal);
+        Assert.Contains("native-dependencies.lock", native, StringComparison.Ordinal);
+    }
+
     private static readonly string[] SharedInstallerFunctions =
     [
         "Find-SigningCertificate", "Get-SigningCertificate", "Invoke-Signing",
