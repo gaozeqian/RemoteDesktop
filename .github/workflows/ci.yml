@@ -128,6 +128,8 @@ jobs:
       #
       # Nothing is uploaded: the packages are several hundred megabytes of self-contained runtime each, and the
       # release job builds its own. What is being checked is that the scripts still work, not the bytes.
+      - name: Test the Linux installer scripts with isolated stubs
+        run: bash build/tools/test-linux-installer-scripts.sh
       - name: Build the Linux packages
         run: |
           build/installer/linux/client/build-deb.sh
@@ -138,6 +140,24 @@ jobs:
       # nothing in it would still be a package. The contents are checked by the same shared action the other two
       # platforms call.
       - uses: ./.github/actions/verify-packages
+
+      - name: Install the Linux packages and verify the running services
+        run: |
+          set -euo pipefail
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ./artifacts/installer/linux/RemoteDesktop-Client-Linux-amd64-*.deb \
+            ./artifacts/installer/linux/RemoteDesktop-Host-Linux-amd64-*.deb \
+            ./artifacts/installer/linux/RemoteDesktop-Server-Linux-amd64-*.deb
+          for unit in rendezvous relay ops gateway; do
+            systemctl is-active --quiet "remotedesktop-$unit.service"
+            pid="$(systemctl show -p MainPID --value "remotedesktop-$unit.service")"
+            test "$pid" -gt 0
+            test "$(ps -o user= -p "$pid" | tr -d ' ')" = remotedesktop
+          done
+          curl -fsS http://127.0.0.1:5080/health | grep -qx Healthy
+          curl -fsS http://127.0.0.1:5083/health | grep -qx Healthy
+          curl -fsS http://127.0.0.1:5090/health | grep -qx Healthy
+          test "$(curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1:5443/health)" = 404
 
   build-macos:
     # The floor this port targets is macOS 26 (Tahoe), because the libmsquic and openssl@4 bottles it ships record
@@ -170,6 +190,8 @@ jobs:
       #
       # No --distribution: a runner has no Developer ID certificate, so the packages come out unsigned and the script
       # says so loudly. What is being checked is that the scripts still work, not the signature.
+      - name: Test the macOS installer scripts with isolated stubs
+        run: bash build/tools/test-macos-installer-scripts.sh
       - name: Build the macOS installers (.pkg)
         run: |
           ./build/installer/macos/client/make-pkg.sh --configuration Release
@@ -179,6 +201,23 @@ jobs:
       # The payload is what has to be right: a package that installs nothing would still be a package, and the scripts
       # do not assert that what they packed is in there. Same shared action as the other two platforms.
       - uses: ./.github/actions/verify-packages
+
+      - name: Install the macOS packages and verify the running daemons
+        run: |
+          set -euo pipefail
+          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-*.pkg -target /
+          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-*.pkg -target /
+          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
+          for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
+            launchctl print "system/$label" >/dev/null
+            pid="$(launchctl print "system/$label" | awk '/^[[:space:]]*pid = [0-9]+$/ { print $3 }')"
+            test -n "$pid"
+            test "$(ps -o user= -p "$pid" | tr -d ' ')" = _remotedesktop
+          done
+          curl -fsS http://127.0.0.1:5080/health | grep -qx Healthy
+          curl -fsS http://127.0.0.1:5083/health | grep -qx Healthy
+          curl -fsS http://127.0.0.1:5090/health | grep -qx Healthy
+          test "$(curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1:5443/health)" = 404
 
   docker:
     # The Docker path was the only deployment nobody built: the compose file was invalid YAML and the relay image was

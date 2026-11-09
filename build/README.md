@@ -74,7 +74,11 @@ macOS 的三个包共用一个 **Installer 面板**：源码是 `native/macos/rd
 | `installer/<平台>/` 本层 | 平台内跨角色共用：`linux/common.sh`（三个 `build-deb.sh` 共用）、`windows/Test-InstallerUpgrade.ps1`（`ci.yml`、`release.yml` 调用）、`windows/Import-SigningHelpers.ps1`（`client` 与 `server` 两个打包脚本共用的签名与清理函数，被它们点源引入，不能单独运行） | `<角色>/` |
 | `service/` | — | `<平台>/`：只有那个平台上的服务管理器读得懂的定义 |
 | `signing/` | 跨平台的证书脚本（纯 .NET API，`pwsh` 三平台可跑） | `windows/`：只在 Windows 上成立的两件事 |
-| `tools/` | 两个仓库维护脚本，与平台无关，见下 | — |
+| `tools/` | 仓库维护、安全审计与安装语义测试脚本，见下 | — |
+
+`test-linux-installer-scripts.sh` 与 `test-macos-installer-scripts.sh` 在临时目录执行安装脚本的隔离副本，用
+debconf、systemd、launchctl、账户和健康检查 stub 验证真实控制流、配置结果与退出码；不会修改运行测试的机器。
+它们分别在 CI 的 Linux/macOS job 中运行，之后同一 job 还会实际安装刚构建的包并检查四个服务的进程身份与健康状态。
 
 `installer/` 与 `signing/` 看起来是"脚本和子目录混在一层"，其实不是混放：**本层 = 共用，子目录 = 专属**。
 判断标准只有一句——这个文件是被两个以上的角色/平台用到，还是只被一个用到。

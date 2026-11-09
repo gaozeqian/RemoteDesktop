@@ -324,6 +324,20 @@ public class RepositoryStructureTests
     }
 
     [Fact]
+    public void Ci_executes_installer_semantics_and_real_installation_checks()
+    {
+        var ci = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml"));
+        var windows = File.ReadAllText(Path.Combine(Root, "build", "installer", "windows", "Test-InstallerUpgrade.ps1"));
+
+        Assert.Contains("test-linux-installer-scripts.sh", ci, StringComparison.Ordinal);
+        Assert.Contains("test-macos-installer-scripts.sh", ci, StringComparison.Ordinal);
+        Assert.Contains("apt-get install", ci, StringComparison.Ordinal);
+        Assert.Contains("sudo installer -pkg", ci, StringComparison.Ordinal);
+        Assert.Contains("Assert-RdServerHealth", windows, StringComparison.Ordinal);
+        Assert.DoesNotContain("'RemoteDesktopGateway', 'RemoteDesktopGateway'", windows, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Formal_releases_cannot_fall_back_to_unsigned_packages()
     {
         var release = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "release.yml"));

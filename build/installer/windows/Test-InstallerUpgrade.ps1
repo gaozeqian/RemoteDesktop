@@ -137,9 +137,29 @@ function Set-RendezvousUri([string]$Path, [string]$Value) {
     $settings | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Assert-RdServerHealth {
+    foreach ($service in 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway') {
+        $instance = Get-Service -Name $service -ErrorAction SilentlyContinue
+        if (-not $instance -or $instance.Status -ne 'Running') { throw "$service is not running after installation." }
+    }
+
+    foreach ($uri in 'http://127.0.0.1:5080/health', 'http://127.0.0.1:5083/health', 'http://127.0.0.1:5090/health') {
+        $response = Invoke-RestMethod -Uri $uri -TimeoutSec 15
+        if ([string]$response -ne 'Healthy') { throw "$uri returned '$response'." }
+    }
+
+    try {
+        $gateway = Invoke-WebRequest -Uri 'https://127.0.0.1:5443/health' -SkipCertificateCheck -TimeoutSec 15
+        if ($gateway.StatusCode -ne 404) { throw "Gateway /health returned $($gateway.StatusCode)." }
+    }
+    catch {
+        if ($null -eq $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+    }
+}
+
 function Stop-RdServices {
     $processIds = @()
-    foreach ($name in 'RemoteDesktopHost', 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway', 'RemoteDesktopGateway') {
+    foreach ($name in 'RemoteDesktopHost', 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway') {
         $service = Get-Service -Name $name -ErrorAction SilentlyContinue
         if (-not $service) { continue }
 
@@ -432,11 +452,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $serverConfig 'server-setup.log'))) 
 if (-not (Test-Path -LiteralPath (Join-Path $serverConfig 'ops.db'))) {
     throw 'The Ops database was not created under ProgramData.'
 }
-foreach ($service in 'RemoteDesktopRendezvous', 'RemoteDesktopRelay', 'RemoteDesktopOps', 'RemoteDesktopGateway') {
-    if (-not (Get-Service -Name $service -ErrorAction SilentlyContinue)) {
-        throw "The server package did not install the $service service."
-    }
-}
+Assert-RdServerHealth
 
 # Simulate the old layout: live files under Program Files, no ProgramData copy. The migration must bring them back.
 # Stop the services first: Ops keeps its SQLite database open, and deleting the directory under a running service can
@@ -482,6 +498,7 @@ $relayAfterUpgrade = Read-Settings $relaySettings
 if ($relayAfterUpgrade.Relay.SharedKey -ne $afterUpgrade.Rendezvous.RelaySharedKey) {
     throw 'A normal server upgrade did not repair the Relay SharedKey.'
 }
+Assert-RdServerHealth
 
 Uninstall-Msi $serverLater @('REMOVEDATA=1') 'server'
 if (Test-Path -LiteralPath $serverConfig) {
