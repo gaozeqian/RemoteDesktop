@@ -229,14 +229,17 @@ public class MacAudioCapturerTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reading = ReadOneAsync(capturer, started, Budget);
 
+        // The capture has to be live before anything is played, because the loopback only hands over what is
+        // rendered while it is running. A machine with no output device fails the rest of this class too, so a
+        // stream that never starts is a failure here — with the likely cause named — rather than an environment
+        // to skip: a capture that hangs is also what a defect in the port looks like.
         try
         {
             await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         }
         catch (TimeoutException)
         {
-            // The stream never got going, which on this machine means no output device rather than a code problem.
-            Assert.Skip("The loopback stream did not start in time; is there a default output device?");
+            throw new TimeoutException("The loopback capture never started; is there a default output device?");
         }
 
         // One 100 ms burst at a twentieth of full scale: audible enough to be real audio, quiet enough not to

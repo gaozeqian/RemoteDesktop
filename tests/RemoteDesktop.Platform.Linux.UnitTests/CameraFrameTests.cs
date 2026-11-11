@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Platform.Linux.XdgPortal;
 using RemoteDesktop.Platform.Linux.Camera;
 using RemoteDesktop.Platform.Linux.Video;
+using Tmds.DBus.Protocol;
 
 namespace RemoteDesktop.Platform.Linux.UnitTests;
 
@@ -121,24 +122,16 @@ public sealed class CameraFrameTests
     public async Task A_machine_with_no_camera_returns_none_without_asking_anybody()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+        Assert.SkipUnless(
+            await PortalsAnswerAsync(TestContext.Current.CancellationToken),
+            "Needs a session bus with xdg-desktop-portal; run this inside a graphical session.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        bool present;
-        try
-        {
-            // Both the connection and the question, because the connection itself is where a machine without a
-            // session bus refuses. What this test is about is the behaviour of a machine whose portal answers —
-            // which is the machine the product runs on — so a headless runner is the environment being unavailable,
-            // not a failure.
-            using var connection = new PortalConnection();
-            present = await connection.CameraPresentAsync(cancellationToken);
-        }
-        catch (PortalException error)
-        {
-            Assert.Skip($"The portals cannot be reached: {error.Message}");
-            return;
-        }
+        // Asked of the portal itself rather than of the environment: what this test is about is a machine whose portal
+        // answers and has no camera. An unreachable portal was ruled out above, so a failure here is a defect.
+        using var connection = new PortalConnection();
+        var present = await connection.CameraPresentAsync(cancellationToken);
 
         Assert.SkipWhen(present, "This machine has a camera, so listing them would legitimately ask about it.");
 
@@ -153,6 +146,28 @@ public sealed class CameraFrameTests
             .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
 
         Assert.Empty(listing);
+    }
+
+    /// <summary>
+    /// Whether the desktop portals answer at all. Asked before the test rather than caught around it, so that a portal
+    /// that fails while the test is running stays a defect instead of becoming a skip: a missing session bus is the
+    /// environment, a broken request is the product.
+    /// </summary>
+    private static async Task<bool> PortalsAnswerAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var connection = new PortalConnection();
+            _ = await connection.ScreenCastCapabilitiesAsync(cancellationToken);
+            return true;
+        }
+        catch (Exception error) when (error is PortalException or DBusExceptionBase or IOException or TimeoutException)
+        {
+            // Nothing answers on this machine: there is no session bus, the bus refuses the connection, or a portal
+            // never replies. Which of the three it was is the environment's business; the same list the display and
+            // keep-awake paths use for the same reason.
+            return false;
+        }
     }
 
     private static byte Average(ReadOnlySpan<byte> pixels)

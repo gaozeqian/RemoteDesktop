@@ -120,10 +120,10 @@ public sealed class PulseAudioTests
 
         await using var setup = await PulseSetup.CreateAsync();
         var sinks = await setup.ListSinksAsync();
-        if (sinks.Count < 2)
-        {
-            Assert.Skip("This machine has only one output device, so there is nothing to switch to.");
-        }
+        Assert.SkipUnless(
+            sinks.Count >= 2,
+            "Needs two output devices to switch between; one can be added for the run with "
+            + "'pactl load-module module-null-sink sink_name=rd-test'.");
 
         // The test changes the default output, so it puts it back. It uses sinks that are already there rather than
         // making one: loading a module to test with would leave something behind if the test ever failed halfway.

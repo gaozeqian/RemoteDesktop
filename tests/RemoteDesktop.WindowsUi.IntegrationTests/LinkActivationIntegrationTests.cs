@@ -3,27 +3,13 @@ using RemoteDesktop.Client;
 
 namespace RemoteDesktop.WindowsUi.IntegrationTests;
 
-public class LinkActivationIntegrationTests
+/// <summary>
+/// What link activation does when it cannot hand the link over. The delivered case is
+/// <see cref="ClientAppLifecycleTests.Link_forwarding_hands_off_link_to_primary_listener"/>, which is where it lives
+/// with the single-owner rule it depends on; a second copy here asserted the same delivery and nothing more.
+/// </summary>
+public sealed class LinkActivationIntegrationTests
 {
-    [Fact]
-    public async Task LinkActivation_forwarding_delivers_device_code_to_active_listener()
-    {
-        var pipeName = $"rd-link-test-{Guid.NewGuid():N}";
-        var received = new TaskCompletionSource<ConnectionLink>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        using var listener = LinkActivation.TryListen(link => received.TrySetResult(link), pipeName);
-        Assert.NotNull(listener);
-
-        Assert.True(ConnectionLink.TryParse("remotedesktop://connect?code=987654321", out var link));
-        var forwarded = LinkActivation.TryForward(link, pipeName);
-
-        Assert.True(forwarded);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var result = await received.Task.WaitAsync(cts.Token);
-
-        Assert.Equal(987654321, result.Device.Value);
-    }
-
     [Fact]
     public void LinkActivation_forwarding_returns_false_when_no_listener_exists()
     {

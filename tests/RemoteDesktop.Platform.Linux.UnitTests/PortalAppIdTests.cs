@@ -6,6 +6,7 @@ namespace RemoteDesktop.Platform.Linux.UnitTests;
 /// The application id the camera permission is keyed by. The rules are the portal's, not this product's, so the
 /// cases below are the shapes systemd actually produces rather than shapes invented to make the regex look right.
 /// </summary>
+[Collection(DesktopEnvironmentGroup.Name)]
 public sealed class PortalAppIdTests
 {
     [Theory]

@@ -30,7 +30,6 @@ public sealed class RecentDevicesAtomicStorageTests : IDisposable
         using var store = new RecentDevicesStore(_tempDir, new MemorySecrets());
         var ct = TestContext.Current.CancellationToken;
 
-        // Fire 10 concurrent writes
         var tasks = Enumerable.Range(1, 10).Select(i =>
             Task.Run(async () =>
             {

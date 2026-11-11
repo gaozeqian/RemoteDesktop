@@ -168,6 +168,13 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
     }
 
     /// <summary>A symbolic link where one can be made, otherwise a junction (Windows makes those without elevation).</summary>
+    /// <remarks>
+    /// The junction fallback is the only place in this assembly that starts a process: <c>mklink /J</c> is the one way
+    /// to make a reparse point on Windows without elevation or Developer Mode. It is provisioning for these sandbox
+    /// tests rather than the thing under test, which is why it stays beside the cases it makes runnable instead of
+    /// living in Platform.Windows.UnitTests — the link-swap cases below run on every platform and would lose their
+    /// Linux half there. The wait is bounded so a wedged <c>cmd.exe</c> fails the test instead of hanging the run.
+    /// </remarks>
     private static string? CreateDirectoryLinkOrJunction(string link, string target)
     {
         if (CreateDirectoryLink(link, target) is { } made)
@@ -186,8 +193,14 @@ public sealed class SymbolicLinkEscapeTests : IDisposable
             UseShellExecute = false,
             RedirectStandardOutput = true,
         });
-        process?.WaitForExit();
-        return process?.ExitCode == 0 ? link : null;
+
+        if (process is null || !process.WaitForExit(TimeSpan.FromSeconds(10)))
+        {
+            process?.Kill(entireProcessTree: true);
+            return null;
+        }
+
+        return process.ExitCode == 0 ? link : null;
     }
 
     /// <summary>

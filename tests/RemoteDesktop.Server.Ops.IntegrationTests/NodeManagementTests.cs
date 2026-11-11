@@ -92,7 +92,8 @@ public class NodeManagementTests(OpsHostFixture fixture) : IClassFixture<OpsHost
             }
 
             var listed = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
-            Assert.True(Assert.Single(listed!, item => item.Id == node.Id).HasOwnToken);
+            var afterSet = Assert.Single(listed!, item => item.Id == node.Id);
+            Assert.True(afterSet.HasOwnToken, "The node does not report the token that was just set on it.");
 
             // The token itself never comes back out of the API, not even base64-encoded inside a JSON field name.
             using (var raw = await client.GetAsync("/api/nodes", Ct))
@@ -119,7 +120,8 @@ public class NodeManagementTests(OpsHostFixture fixture) : IClassFixture<OpsHost
             }
 
             listed = await client.GetFromJsonAsync<List<NodeDto>>("/api/nodes", Ct);
-            Assert.False(Assert.Single(listed!, item => item.Id == node.Id).HasOwnToken);
+            var afterClear = Assert.Single(listed!, item => item.Id == node.Id);
+            Assert.False(afterClear.HasOwnToken, "The node still reports a token of its own after clearing it.");
 
             var audit = await client.GetFromJsonAsync<AuditList>("/api/audit?limit=100", Ct);
             Assert.Contains(audit!.Items, item => item.Action == "node.token.set" && item.Target == name);

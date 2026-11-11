@@ -168,6 +168,9 @@ public sealed class RendezvousCertificatePinTests : IDisposable
         public async ValueTask DisposeAsync()
         {
             await _stop.CancelAsync();
+
+            // The run loop ends by this cancellation, and the bound is waited on with no cancellation so that the
+            // test's own token (which may be the one that just fired) cannot turn teardown into an exception of its own.
             await _run.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
             _stop.Dispose();
         }

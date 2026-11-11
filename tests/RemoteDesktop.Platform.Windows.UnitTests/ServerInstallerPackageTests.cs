@@ -66,7 +66,7 @@ public sealed class ServerInstallerPackageTests
         var installed = services.Select(row => row[0]).ToList();
         foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps", "RemoteDesktopGateway" })
         {
-            Assert.True(installed.Contains(service), $"The package does not install the {service} service.");
+            Assert.Contains(service, installed);
         }
 
         Assert.All(services, row => Assert.Equal("2", row[1])); // 2 = automatic
@@ -75,7 +75,7 @@ public sealed class ServerInstallerPackageTests
         var controls = package.Rows("SELECT `Name` FROM `ServiceControl`", 1).Select(row => row[0]).ToList();
         foreach (var service in new[] { "RemoteDesktopRendezvous", "RemoteDesktopRelay", "RemoteDesktopOps", "RemoteDesktopGateway" })
         {
-            Assert.True(controls.Contains(service), $"The package never stops the {service} service.");
+            Assert.Contains(service, controls);
         }
 
         // --- the three ports the servers need -------------------------------------------------------------------

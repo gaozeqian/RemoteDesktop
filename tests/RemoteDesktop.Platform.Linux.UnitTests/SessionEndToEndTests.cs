@@ -49,6 +49,7 @@ namespace RemoteDesktop.Platform.Linux.UnitTests;
 /// control it — so it will cause two dialogs on a machine that has not granted either.
 /// </para>
 /// </remarks>
+[Collection(DesktopEnvironmentGroup.Name)]
 public sealed class SessionEndToEndTests
 {
     private const string LinuxOnly = "The desktop portals and libei, which only exist on Linux.";

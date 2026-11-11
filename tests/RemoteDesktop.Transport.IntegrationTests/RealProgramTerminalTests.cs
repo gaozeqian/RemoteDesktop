@@ -357,6 +357,10 @@ public sealed class RealProgramTerminalTests : IDisposable
         public async ValueTask DisposeAsync()
         {
             await _pty.DisposeAsync();
+
+            // Waited on with no cancellation on purpose — the test's token may already be cancelled by now, and that
+            // must not abort teardown — and whatever comes back is dropped: a reader still draining, or faulting
+            // because the console went away, is cleanup after the assertions rather than one of them.
             await _reader.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ContinueWith(static _ => { }, TaskScheduler.Default);
         }
 

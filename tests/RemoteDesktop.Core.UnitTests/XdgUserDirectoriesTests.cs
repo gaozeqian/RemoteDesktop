@@ -9,7 +9,13 @@ namespace RemoteDesktop.Core.UnitTests;
 /// <see cref="Environment.SpecialFolder"/> answers with a fixed English name under the home directory. On a Chinese
 /// install the desktop is <c>~/桌面</c>, so the answer does not exist — the file browser offers nothing and a
 /// recording is written somewhere nobody will look. The desktop's own file is what is read instead.
+/// <para>
+/// <c>XDG_CONFIG_HOME</c> is process-wide, so this class shares a collection with every other class that moves an XDG
+/// variable (<see cref="DataDirectoryTests"/>): xUnit runs classes in parallel, and two of them editing the same
+/// process environment would read each other's answer.
+/// </para>
 /// </remarks>
+[Collection("XDG environment variables")]
 public sealed class XdgUserDirectoriesTests : IDisposable
 {
     private const string UnixOnly = "The desktop's own folder list.";

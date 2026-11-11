@@ -8,9 +8,30 @@ namespace RemoteDesktop.Platform.Linux.UnitTests;
 /// pipe Windows uses, and the address has to stay inside the per-user runtime directory — that directory is the
 /// whole access control, so a socket that landed anywhere else would be open to every account on the machine.
 /// </summary>
-public sealed class HostControlEndpointTests
+public sealed class HostControlEndpointTests : IDisposable
 {
     private const string LinuxOnly = "A Unix domain socket, and XDG_RUNTIME_DIR.";
+
+    private readonly List<string> _directories = [];
+
+    public void Dispose()
+    {
+        foreach (var directory in _directories)
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>An empty temporary directory that is removed when the test ends.</summary>
+    private string NewDirectory()
+    {
+        var directory = Directory.CreateTempSubdirectory("rd-ctl-").FullName;
+        _directories.Add(directory);
+        return directory;
+    }
 
     [Fact]
     public void A_plain_name_becomes_a_socket_beside_the_other_runtime_state()
@@ -44,7 +65,7 @@ public sealed class HostControlEndpointTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        var address = Path.Combine(Directory.CreateTempSubdirectory("rd-ctl-").FullName, "host-control.sock");
+        var address = Path.Combine(NewDirectory(), "host-control.sock");
         await using var listener = new HostControlSocketListener(address);
 
         var accepted = listener.AcceptAsync(TestContext.Current.CancellationToken).AsTask();
@@ -66,7 +87,7 @@ public sealed class HostControlEndpointTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        var address = Path.Combine(Directory.CreateTempSubdirectory("rd-ctl-").FullName, "absent.sock");
+        var address = Path.Combine(NewDirectory(), "absent.sock");
 
         // The callers look for IOException to mean "no service is installed", so whatever the socket layer reports
         // has to arrive in that shape.
@@ -79,8 +100,7 @@ public sealed class HostControlEndpointTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        var directory = Directory.CreateTempSubdirectory("rd-ctl-").FullName;
-        var address = Path.Combine(directory, "host-control.sock");
+        var address = Path.Combine(NewDirectory(), "host-control.sock");
         File.WriteAllText(address, "not really a socket");
 
         await using var listener = new HostControlSocketListener(address);
@@ -93,7 +113,7 @@ public sealed class HostControlEndpointTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        var address = Path.Combine(Directory.CreateTempSubdirectory("rd-ctl-").FullName, "host-control.sock");
+        var address = Path.Combine(NewDirectory(), "host-control.sock");
         var listener = new HostControlSocketListener(address);
         Assert.True(File.Exists(address));
 

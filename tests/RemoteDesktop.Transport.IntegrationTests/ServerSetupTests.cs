@@ -909,8 +909,12 @@ public sealed class ServerSetupTests : IDisposable
 
         using var certificate = X509CertificateLoader.LoadCertificateFromFile(certificatePath);
 
-        Assert.True(certificate.HasPrivateKey == false); // the file holds the public half
-        Assert.True(certificate.NotAfter > DateTime.Now.AddYears(2));
+        Assert.False(certificate.HasPrivateKey, "The file holds the public half only.");
+        // NotAfter is a local-time value, which is why this one assertion reads the local clock; two years of slack
+        // means a slightly wrong clock cannot fail it.
+        Assert.True(
+            certificate.NotAfter > DateTime.Now.AddYears(2),
+            $"The certificate expires {certificate.NotAfter:O}, too soon to be worth serving.");
         Assert.Contains(SelfSignedCertificate.NameForThisMachine, certificate.Subject, StringComparison.Ordinal);
 
         // It has to be usable for the address clients are given, and its own machine name is in there.

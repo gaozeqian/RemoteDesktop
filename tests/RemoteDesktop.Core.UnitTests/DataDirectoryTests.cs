@@ -7,6 +7,11 @@ namespace RemoteDesktop.Core.UnitTests;
 /// wrong on Linux — <c>~/.config</c> for data, <c>/usr/share</c> for the machine's copy — so what it must not do is
 /// hand back either of those.
 /// </summary>
+/// <remarks>
+/// <c>XDG_DATA_HOME</c> is process-wide, so this class shares a collection with every other class that moves an XDG
+/// variable (<see cref="XdgUserDirectoriesTests"/>); see the note there.
+/// </remarks>
+[Collection("XDG environment variables")]
 public sealed class DataDirectoryTests
 {
     [Fact]
@@ -65,6 +70,29 @@ public sealed class DataDirectoryTests
         {
             Environment.SetEnvironmentVariable("XDG_DATA_HOME", previous);
             Directory.Delete(home, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// An empty variable is what a wrapper script that writes <c>XDG_DATA_HOME=</c> leaves behind. The desktop
+    /// convention treats it as unset, so the answer must be the fallback rather than the filesystem root.
+    /// </summary>
+    [Fact]
+    public void An_empty_data_home_is_treated_as_unset()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "XDG is the Linux convention.");
+
+        var previous = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+        try
+        {
+            Environment.SetEnvironmentVariable("XDG_DATA_HOME", string.Empty);
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            Assert.Equal(Path.Combine(home, ".local", "share", "RemoteDesktop"), DataDirectory.ForUser());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XDG_DATA_HOME", previous);
         }
     }
 }

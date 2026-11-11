@@ -138,7 +138,7 @@ public sealed class SessionTelemetryTests
     }
 
     [Fact]
-    public async Task When_the_session_ends_the_heartbeat_stops_and_leaves_no_timer_behind()
+    public async Task A_session_that_ends_stops_the_heartbeat_and_leaves_no_timer_behind()
     {
         var rig = new Rig(intervalSeconds: 5);
         using var end = new CancellationTokenSource();

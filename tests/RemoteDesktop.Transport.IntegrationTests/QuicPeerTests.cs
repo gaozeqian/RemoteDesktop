@@ -311,7 +311,7 @@ public sealed class QuicPeerTests
     // ------------------------------------------------------------------ what the connector reports when nothing works
 
     [Fact]
-    public async Task When_every_direct_candidate_fails_the_connector_still_falls_through_to_the_relay()
+    public async Task The_connector_falls_through_to_the_relay_when_every_direct_candidate_fails()
     {
         RequireQuic();
         using var controllerIdentity = DeviceIdentity.CreateEphemeral();
@@ -450,6 +450,11 @@ public sealed class QuicPeerTests
     // ------------------------------------------------------------------ helpers
 
     /// <summary>The listener's run loop ends by cancellation, which is how the host service stops it.</summary>
+    /// <remarks>
+    /// The bound is waited on with <see cref="CancellationToken.None"/> on purpose: passing the test's token would make
+    /// the wait itself throw the very <see cref="OperationCanceledException"/> this test is asserting the loop throws,
+    /// and the assertion would then hold no matter how the loop ended.
+    /// </remarks>
     private static async Task StopAsync(CancellationTokenSource stop, Task running)
     {
         await stop.CancelAsync();

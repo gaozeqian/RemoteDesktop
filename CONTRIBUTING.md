@@ -40,6 +40,11 @@ dotnet test --solution RemoteDesktop.slnx --no-build
 | `UnitTests` | 不需要外部服务或网络，随时可跑（个别用例例外：依赖已构建好的服务端 MSI 的用例，在 `artifacts/installer/windows/` 里找不到、也没设 `RD_SERVER_INSTALLER_MSI` 指向它时跳过；要人工点"分享"的 Linux portal 用例，不设 `RD_PORTAL_TEST=1` 就跳过；测真实摄像头帧率的用例，帧率取决于设备与接线，不设 `RD_CAMERA_RATE_TEST=1` 就跳过） | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
 | `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
 
+安装包那三个类各读一个环境变量：客户端（`InstallerPackageTests`）与被控端（`HostInstallerPackageTests`）读
+`RD_INSTALLER_MSI`——构建脚本把它指向刚产出的那个包，角色写在文件名里——服务端（`ServerInstallerPackageTests`）读
+`RD_SERVER_INSTALLER_MSI`。两个都不设时，用例去 `artifacts/installer/windows/` 找最新的
+`RemoteDesktop-<角色>-Windows-*.msi`，找不到就跳过。
+
 **后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
 `**/*.UnitTests` 会漏掉它，而漏掉是静默的。加新测试项目时请照这个模式命名，别用 `FooTests` 或 `Foo.Test`。
 
@@ -172,7 +177,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 `TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 37 个：`src/` 下 26 个，`tests/` 下 11 个）
+所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 38 个：`src/` 下 26 个，`tests/` 下 12 个）
 不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
 **唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们

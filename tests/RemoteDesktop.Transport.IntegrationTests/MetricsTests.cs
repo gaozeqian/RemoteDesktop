@@ -146,6 +146,13 @@ public class MetricsTests
             }
         }
 
+        // Failing here rather than handing the last sample back: by the time the caller asserts, the five seconds of
+        // waiting — and the metric's name — are no longer part of the message.
+        if (value != expected)
+        {
+            Assert.Fail($"{name} did not settle within five seconds: expected {expected}, saw {value}.");
+        }
+
         return value;
     }
 }

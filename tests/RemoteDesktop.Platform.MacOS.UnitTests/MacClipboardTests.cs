@@ -114,7 +114,7 @@ public class MacClipboardTests
     }
 
     [Fact]
-    public void Nothing_is_reported_after_the_last_listener_has_gone()
+    public async Task Nothing_is_reported_after_the_last_listener_has_gone()
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The pasteboard port is macOS only.");
 
@@ -140,8 +140,9 @@ public class MacClipboardTests
         clipboard.Set(new TextClipboardContent("after listening stopped"));
 
         // Longer than several poll ticks. Polling only while somebody listens is the whole reason the timer is
-        // reference-counted, and this is what would notice if the unsubscribe stopped stopping it.
-        Thread.Sleep(TimeSpan.FromSeconds(1));
+        // reference-counted, and this is what would notice if the unsubscribe stopped stopping it. There is no signal
+        // to await here: the assertion is that nothing arrives.
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
         Assert.Equal(before, Volatile.Read(ref seen));
     }
 

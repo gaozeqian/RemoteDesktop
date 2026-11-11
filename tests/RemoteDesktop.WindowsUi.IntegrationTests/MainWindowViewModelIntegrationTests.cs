@@ -95,7 +95,6 @@ public sealed class MainWindowViewModelIntegrationTests : IDisposable
         Assert.Contains(StandaloneFeature.Terminal, features);
         Assert.Contains(StandaloneFeature.Camera, features);
 
-        // Switch selection to FileTransfer
         var fileTransferMode = viewModel.ConnectionModes.First(m => m.Feature == StandaloneFeature.FileTransfer);
         viewModel.SelectedConnectionMode = fileTransferMode;
         Assert.Equal(StandaloneFeature.FileTransfer, viewModel.SelectedConnectionMode.Feature);
@@ -114,7 +113,6 @@ public sealed class MainWindowViewModelIntegrationTests : IDisposable
         const string alias = "Workstation-A";
         const string password = "TestPassword123!";
 
-        // Record with rememberPassword = true
         await MainWindowViewModel.RecordConnectedDeviceAsync(
             store,
             deviceCode,
