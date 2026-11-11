@@ -154,9 +154,11 @@ jobs:
             test "$pid" -gt 0
             test "$(ps -o user= -p "$pid" | tr -d ' ')" = remotedesktop
           done
-          curl -fsS http://127.0.0.1:5080/health | grep -qx Healthy
-          curl -fsS http://127.0.0.1:5083/health | grep -qx Healthy
-          curl -fsS http://127.0.0.1:5090/health | grep -qx Healthy
+          # The rendezvous answers the text "Healthy"; the relay and the console answer JSON, the console's naming the
+          # database it probed. -f has already failed on anything but a 2xx, so the word is the whole assertion.
+          for port in 5080 5083 5090; do
+            curl -fsS "http://127.0.0.1:$port/health" | grep -qi healthy
+          done
           test "$(curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1:5443/health)" = 404
 
   build-macos:
@@ -214,9 +216,11 @@ jobs:
             test -n "$pid"
             test "$(ps -o user= -p "$pid" | tr -d ' ')" = _remotedesktop
           done
-          curl -fsS http://127.0.0.1:5080/health | grep -qx Healthy
-          curl -fsS http://127.0.0.1:5083/health | grep -qx Healthy
-          curl -fsS http://127.0.0.1:5090/health | grep -qx Healthy
+          # The rendezvous answers the text "Healthy"; the relay and the console answer JSON, the console's naming the
+          # database it probed. -f has already failed on anything but a 2xx, so the word is the whole assertion.
+          for port in 5080 5083 5090; do
+            curl -fsS "http://127.0.0.1:$port/health" | grep -qi healthy
+          done
           test "$(curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1:5443/health)" = 404
 
   docker:

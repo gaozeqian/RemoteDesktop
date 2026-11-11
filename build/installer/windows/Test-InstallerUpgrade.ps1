@@ -143,8 +143,12 @@ function Assert-RdServerHealth {
     }
 
     foreach ($uri in 'http://127.0.0.1:5080/health', 'http://127.0.0.1:5083/health', 'http://127.0.0.1:5090/health') {
+        # The rendezvous answers the text "Healthy"; the relay and the console answer JSON, the console's naming the
+        # database it probed. Invoke-RestMethod parses the JSON, so both shapes have to be understood here — comparing
+        # the response as a string only ever worked for the first of the three.
         $response = Invoke-RestMethod -Uri $uri -TimeoutSec 15
-        if ([string]$response -ne 'Healthy') { throw "$uri returned '$response'." }
+        $healthy = if ($response -is [string]) { $response.Trim() -eq 'Healthy' } else { $response.status -ieq 'healthy' }
+        if (-not $healthy) { throw "$uri returned '$response'." }
     }
 
     try {
