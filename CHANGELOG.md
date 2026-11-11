@@ -672,8 +672,6 @@
 - **Agent 日志文件名改为 `agent-{desktop}-<日期>.log`**：用户桌面与登录/UAC 安全桌面的 Agent 分别写
   `agent-user-*.log` 与 `agent-secure-*.log`，因此不再需要 `shared`；保留 7 天不变。
 
-### Fixed
-
 **Linux：会话总线连不上时按"没有门户"报告，而不是抛传输层异常**
 
 - **`PortalConnection` 把会话总线的连接失败包成 `PortalException`**：此前只有"根本没有会话总线"被包装，地址还在但连不上

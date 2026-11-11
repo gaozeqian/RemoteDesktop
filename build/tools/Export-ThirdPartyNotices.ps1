@@ -173,11 +173,21 @@ function Add-NativeRow([string]$Id, [string]$Version, [string]$License, [string]
         LicenseText = Read-LicenseText $path
     }
 }
-$runtimeVersions = @(& dotnet --list-runtimes | ForEach-Object {
-    if ($_ -match '^Microsoft\.NETCore\.App\s+(\S+)\s') { [version]$Matches[1] }
-})
-if (-not $runtimeVersions) { throw 'Could not determine the redistributed .NET Runtime version.' }
-$runtimeVersion = ($runtimeVersions | Sort-Object -Descending | Select-Object -First 1).ToString()
+# The runtime the installers carry is the one the SDK bundles as its runtime pack, not the one installed on this
+# machine: "dotnet --list-runtimes" on the CI runner answered 10.0.15 while a self-contained publish from the pinned
+# SDK still ships 10.0.13, so the row was rewritten on pull requests that changed nothing and named a runtime no
+# package was built against. global.json pins the SDK, so asking MSBuild answers the same everywhere; the working
+# directory is moved to the repository root so that pin is the one the child process resolves.
+Push-Location $root
+try {
+    $runtimeVersion = "$(& dotnet msbuild $shipped[0] -getProperty:BundledNETCoreAppPackageVersion -nologo)".Trim()
+}
+finally {
+    Pop-Location
+}
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($runtimeVersion)) {
+    throw 'Could not determine the redistributed .NET Runtime version.'
+}
 $linuxFetch = [System.IO.File]::ReadAllText((Join-Path $root 'native/linux/fetch-libmsquic.sh'))
 if (-not $linuxFetch.Contains("`nversion=")) { throw 'Could not read the pinned Linux MsQuic version.' }
 $linuxMsQuicVersion = [regex]::Match($linuxFetch, '(?m)^version=([^\r\n]+)$').Groups[1].Value

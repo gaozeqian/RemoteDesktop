@@ -18,6 +18,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Spelled out rather than left to the SDK, which adds the same reference implicitly only where no .NET Framework
+      targeting pack is installed. On Windows it therefore never appeared, so it was missing from packages.lock.json,
+      while on the Linux and macOS runners the SDK added it and a locked-mode restore failed with NU1004 for a project
+      nobody had changed. Referencing it here makes the package graph the same everywhere, and the build now compiles
+      against the package's reference assemblies on Windows too instead of whatever targeting pack the machine has.
+    -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
     <PackageReference Include="WixToolset.Dtf.WindowsInstaller" Version="5.0.2" />
   </ItemGroup>
