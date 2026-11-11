@@ -869,7 +869,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {
-            // The host's own sentence names the reason (no app id, no permission store); keep it.
+            // The host's own sentence names the reason (no app id, no portal, no permission store); keep it.
             CameraAccessError = ex.Message;
             return;
         }

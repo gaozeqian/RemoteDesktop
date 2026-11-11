@@ -672,6 +672,15 @@
 - **Agent 日志文件名改为 `agent-{desktop}-<日期>.log`**：用户桌面与登录/UAC 安全桌面的 Agent 分别写
   `agent-user-*.log` 与 `agent-secure-*.log`，因此不再需要 `shared`；保留 7 天不变。
 
+### Fixed
+
+**Linux：会话总线连不上时按"没有门户"报告，而不是抛传输层异常**
+
+- **`PortalConnection` 把会话总线的连接失败包成 `PortalException`**：此前只有"根本没有会话总线"被包装，地址还在但连不上
+  （会话崩溃后遗留的 `DBUS_SESSION_BUS_ADDRESS`）会原样透传 D-Bus 库的 `DBusConnectFailedException`。按 `PortalException`
+  判断"这台机器没有门户"的调用点因此漏掉它——`--self-check` 在那种机器上直接崩溃，而不是报告门户不可用。摄像头授权的
+  错误映射保持 `InvalidOperationException`（文案改为"桌面没有接受摄像头的授权/撤销"），窗口与主机控制通道继续把它显示给用户。
+
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 
 首个正式版。自 0.3.0 起，产品从 Windows 单平台扩展到 Windows、macOS (Apple Silicon) 与 Linux，三个平台各出

@@ -92,8 +92,11 @@ internal sealed partial class CameraAccess : ICameraAccess, IDisposable
                 // The store reports "nothing recorded" as an error. That is the first-run state, not a failure.
                 _state = CameraAccessState.Unset;
             }
-            catch (DBusExceptionBase error)
+            catch (Exception error) when (error is DBusExceptionBase or PortalException)
             {
+                // PortalException is the "the portals cannot be asked at all" answer — no session bus, or one that
+                // cannot be reached — and it belongs in the same bucket as a D-Bus failure: the state is unknown, not
+                // denied.
                 LogReadFailed(_logger, error.Message);
                 _state = CameraAccessState.Unknown;
             }
@@ -123,10 +126,14 @@ internal sealed partial class CameraAccess : ICameraAccess, IDisposable
             {
                 await Connection().SetCameraPermissionAsync(_appId, allowed, cancellationToken).ConfigureAwait(false);
             }
-            catch (DBusExceptionBase error)
+            catch (Exception error) when (error is DBusExceptionBase or PortalException)
             {
+                // Same pairing as above, and the wording has to be honest for both causes: the permission store
+                // refused the write, or there is no portal to write to. The type stays InvalidOperationException
+                // because both the window and the host-control channel surface that one to the user.
                 throw new InvalidOperationException(
-                    $"The desktop's permission store did not accept the camera grant: {error.Message}", error);
+                    $"The desktop did not accept the camera {(allowed ? "grant" : "revocation")}: {error.Message}",
+                    error);
             }
 
             _state = allowed ? CameraAccessState.Allowed : CameraAccessState.Denied;

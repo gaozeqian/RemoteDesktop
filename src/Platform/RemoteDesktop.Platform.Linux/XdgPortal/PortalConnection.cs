@@ -97,16 +97,40 @@ public sealed partial class PortalConnection : IDisposable
     /// there the only symptom is a request that never returns. Which request it was is the whole diagnosis.
     /// </param>
     public PortalConnection(ILogger<PortalConnection>? logger = null)
+        : this(
+            DBusAddress.Session
+                ?? throw new PortalException("There is no session bus, so the desktop portals cannot be reached."),
+            logger)
+    {
+    }
+
+    /// <summary>The same connection, to an address given rather than looked up.</summary>
+    /// <remarks>
+    /// Reached by the tests only: the D-Bus library resolves the session address once per process, so pointing
+    /// <c>DBUS_SESSION_BUS_ADDRESS</c> at a socket that is not there only works for whichever test asks first. This is
+    /// the seam that lets an unreachable bus be pinned without depending on the order tests run in.
+    /// </remarks>
+    internal PortalConnection(string address, ILogger<PortalConnection>? logger = null)
     {
         _logger = logger ?? NullLogger<PortalConnection>.Instance;
+        _connection = new DBusConnection(address);
 
         // Blocking here, unlike everywhere else in this class: a constructor cannot await, and this is the one call
         // that has to finish before anything else can be built on top of it.
-        var address = DBusAddress.Session
-            ?? throw new PortalException("There is no session bus, so the desktop portals cannot be reached.");
+        try
+        {
+            _connection.ConnectAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception error) when (error is DBusExceptionBase or IOException or TimeoutException)
+        {
+            // A bus that is advertised but cannot be reached is the same answer to a caller as no bus at all: the
+            // portals cannot be asked. Left as the transport's own exception it was neither — callers classify "no
+            // portal here" by catching PortalException, so it escaped them. The self-check crashed on a machine whose
+            // session bus address outlived its bus, instead of reporting that the portals were unavailable.
+            _connection.Dispose();
+            throw new PortalException($"The session bus at '{address}' could not be reached: {error.Message}", error);
+        }
 
-        _connection = new DBusConnection(address);
-        _connection.ConnectAsync().AsTask().GetAwaiter().GetResult();
         _sender = _connection.UniqueName!.TrimStart(':').Replace('.', '_');
     }
 
