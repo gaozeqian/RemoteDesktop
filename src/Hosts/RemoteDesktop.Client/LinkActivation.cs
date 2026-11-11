@@ -45,10 +45,12 @@ internal static class LinkActivation
             writer.WriteLine($"remotedesktop://connect?code={link.Device}");
             return true;
         }
-        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException or NotSupportedException or ArgumentOutOfRangeException)
         {
             // No running client, a client that is starting, or a pipe this account may not use: all of them mean
-            // "start normally" — two windows are better than a launch that silently does nothing.
+            // "start normally" — two windows are better than a launch that silently does nothing. The last one is a
+            // name the platform cannot express: on macOS and Linux a pipe is a socket in the temp directory, whose
+            // path has a hard length limit, and a name past it is refused before any connection is attempted.
             return false;
         }
     }
@@ -110,10 +112,11 @@ internal static class LinkActivation
             {
                 break;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentOutOfRangeException)
             {
-                // The pipe cannot be served on this machine (an unsupported filesystem, a policy): stop trying rather
-                // than spin. Links then start a second window, which is the behaviour without this class at all.
+                // The pipe cannot be served on this machine (an unsupported filesystem, a policy, or a name whose
+                // socket path is too long here): stop trying rather than spin. Links then start a second window,
+                // which is the behaviour without this class at all.
                 break;
             }
         }

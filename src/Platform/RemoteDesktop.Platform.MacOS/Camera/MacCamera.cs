@@ -98,6 +98,11 @@ public sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraS
 {
     public ICameraSource Open(string cameraId)
     {
+        // An empty id never named a camera, so it is a caller's mistake rather than a camera that is not connected —
+        // the same distinction the Linux factory draws. Reporting it as "not connected" would send whoever reads the
+        // log looking for hardware.
+        ArgumentException.ThrowIfNullOrWhiteSpace(cameraId);
+
         var camera = cameras.GetCameras().FirstOrDefault(c => c.Id == cameraId)
             ?? throw new CameraUnavailableException("That camera is not connected.");
 

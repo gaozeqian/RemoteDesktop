@@ -57,8 +57,7 @@ public sealed class PosixPtyTests
         await using var session = Start("sh", columns: 100, rows: 40);
         var output = Read(session);
 
-        await WriteAsync(session, "stty size\n");
-        Assert.Contains("40 100", await output.UntilAsync("40 100"));
+        Assert.Contains("40 100", await AskForSizeAsync(session, output, "40 100"));
     }
 
     [Fact]
@@ -69,13 +68,11 @@ public sealed class PosixPtyTests
         await using var session = Start("sh", columns: 80, rows: 24);
         var output = Read(session);
 
-        await WriteAsync(session, "stty size\n");
-        await output.UntilAsync("24 80");
+        await AskForSizeAsync(session, output, "24 80");
 
         session.Resize(120, 50);
 
-        await WriteAsync(session, "stty size\n");
-        Assert.Contains("50 120", await output.UntilAsync("50 120"));
+        Assert.Contains("50 120", await AskForSizeAsync(session, output, "50 120"));
     }
 
     [Fact]
@@ -262,6 +259,30 @@ public sealed class PosixPtyTests
     {
         var bytes = Encoding.UTF8.GetBytes(text);
         return session.Input.WriteAsync(bytes, Ct).AsTask();
+    }
+
+    /// <summary>
+    /// Asks a freshly started shell for its terminal size, and types the question again if the first line was
+    /// swallowed. The size is set before the shell exists, but a line typed into the window where the shell has not
+    /// read anything yet is echoed by the terminal driver and then discarded when the shell puts the terminal into
+    /// its own mode — macOS's bash does exactly that, while Linux's dash does not, which is why this only ever cost
+    /// a run there. A shell that answers with the wrong shape still fails: the retry only repeats the question.
+    /// </summary>
+    private static async Task<string> AskForSizeAsync(IPtySession session, OutputReader output, string expected)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            await WriteAsync(session, "stty size\n");
+            try
+            {
+                // The first attempt gets the short deadline: it only has to cover a shell that was already reading.
+                return await output.UntilAsync(expected, TimeSpan.FromSeconds(attempt == 1 ? 5 : 15));
+            }
+            catch (TimeoutException) when (attempt < 2)
+            {
+                // Typed ahead of the shell's own terminal setup; ask again now that it exists.
+            }
+        }
     }
 
     /// <summary>Reads the terminal continuously, so a test can wait for something to appear in it.</summary>

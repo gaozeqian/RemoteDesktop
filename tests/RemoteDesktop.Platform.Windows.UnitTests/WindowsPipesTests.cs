@@ -154,6 +154,10 @@ public class WindowsPipesTests
         uint servedSessionId,
         bool expected)
     {
+        // SecurityIdentifier cannot be constructed anywhere else, even though the rule it is passed to is plain
+        // string comparison; the Windows runners are where this assembly's tests mean anything.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "SIDs are Windows only here.");
+
         var callerUser = callerUserSid is null ? null : new SecurityIdentifier(callerUserSid);
         var served = servedUserSid is null ? null : new AgentSessionIdentity(servedSessionId, servedUserSid);
 
