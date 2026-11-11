@@ -112,7 +112,7 @@ public class WindowsPipesTests
     }
 
     [Fact]
-    public async Task Host_control_requires_the_current_agent_user_and_session()
+    public async Task Host_control_accepts_the_current_agent_user_and_session()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Named pipes are Windows only here.");
 
@@ -128,14 +128,36 @@ public class WindowsPipesTests
         var request = new byte[4];
         await server.ReadExactlyAsync(request, Ct);
 
+        // The refusal side of the same rule is asserted on IsAuthorizedHostControl: this process cannot produce a
+        // caller that is neither privileged nor the served user, and on an administrator account it is privileged.
         var user = WindowsIdentity.GetCurrent().User?.Value;
         var session = (uint)Process.GetCurrentProcess().SessionId;
         Assert.NotNull(user);
         Assert.True(WindowsPipes.IsAuthorizedHostControlClient(server, new AgentSessionIdentity(session, user)));
-        Assert.False(WindowsPipes.IsAuthorizedHostControlClient(server, new AgentSessionIdentity(session + 1, user)));
-        Assert.False(WindowsPipes.IsAuthorizedHostControlClient(
-            server,
-            new AgentSessionIdentity(session, new SecurityIdentifier(WellKnownSidType.BuiltinGuestsSid, null).Value)));
+    }
+
+    [Theory]
+    // An administrator or SYSTEM is let in from any session, whether or not it is the one being served.
+    [InlineData(true, "S-1-5-21-0-0-0-1002", 3u, "S-1-5-21-0-0-0-1001", 2u, true)]
+    // Everyone else has to be the served user in the served session, and nothing else will do.
+    [InlineData(false, "S-1-5-21-0-0-0-1001", 2u, "S-1-5-21-0-0-0-1001", 2u, true)]
+    [InlineData(false, "S-1-5-21-0-0-0-1001", 3u, "S-1-5-21-0-0-0-1001", 2u, false)]
+    [InlineData(false, "S-1-5-21-0-0-0-1002", 2u, "S-1-5-21-0-0-0-1001", 2u, false)]
+    // No session served yet, and an identity that could not be read, are both refusals.
+    [InlineData(false, "S-1-5-21-0-0-0-1001", 2u, null, 0u, false)]
+    [InlineData(false, null, 2u, "S-1-5-21-0-0-0-1001", 2u, false)]
+    public void Host_control_rule_is_privileged_or_exactly_the_served_user_and_session(
+        bool privileged,
+        string? callerUserSid,
+        uint callerSessionId,
+        string? servedUserSid,
+        uint servedSessionId,
+        bool expected)
+    {
+        var callerUser = callerUserSid is null ? null : new SecurityIdentifier(callerUserSid);
+        var served = servedUserSid is null ? null : new AgentSessionIdentity(servedSessionId, servedUserSid);
+
+        Assert.Equal(expected, WindowsPipes.IsAuthorizedHostControl(privileged, callerUser, callerSessionId, served));
     }
 
     [Fact]

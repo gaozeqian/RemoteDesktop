@@ -92,15 +92,28 @@ public static partial class WindowsPipes
             user = identity.User;
         });
 
-        if (privileged)
-        {
-            return true;
-        }
-
-        return currentSession?.UserSid is { } expectedUser
-            && user?.Value == expectedUser
-            && (uint)process.SessionId == currentSession.SessionId;
+        return IsAuthorizedHostControl(privileged, user, (uint)process.SessionId, currentSession);
     }
+
+    /// <summary>
+    /// The decision behind <see cref="IsAuthorizedHostControlClient"/> once the caller's identity, process and session
+    /// are known: an administrator or SYSTEM is let in from any session, and everyone else has to be the exact user
+    /// and Windows session the agent currently serves.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the pipe because the two branches cannot both be reached from one caller: on a build machine
+    /// whose account is an administrator (every hosted Windows runner) the privileged short-circuit answers first, so
+    /// the rule that refuses another session — the one this exists for — would never be exercised anywhere.
+    /// </remarks>
+    internal static bool IsAuthorizedHostControl(
+        bool privileged,
+        SecurityIdentifier? callerUser,
+        uint callerSessionId,
+        AgentSessionIdentity? currentSession) =>
+        privileged
+        || (currentSession?.UserSid is { } expectedUser
+            && callerUser?.Value == expectedUser
+            && callerSessionId == currentSession.SessionId);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

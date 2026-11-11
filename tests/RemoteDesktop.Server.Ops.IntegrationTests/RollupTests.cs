@@ -15,7 +15,14 @@ public class RollupTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
         var store = fixture.Services.GetRequiredService<OpsStore>();
         var nodeId = "node-rollup-test";
         var metric = "cpu_usage";
-        var baseTime = 1_700_000_000_000L; // the samples below remain in one minute bucket
+
+        // The start of the current minute, not a fixed epoch. A timestamp from 2023 is older than the 30-day sample
+        // retention, and the host runs a retention pass when it starts — at the same moment this class's fixture is
+        // seeding its accounts. That pass could delete the first samples between two writes here, and the bucket then
+        // came back with 20 as its first value instead of 10. Aligned to the minute, the three samples are in one
+        // bucket and inside every retention window; a bucket that ends at "now" is also one the background rollup
+        // pass leaves alone, because that pass stops at now - 60s.
+        var baseTime = fixture.Now.ToUnixTimeMilliseconds() / 60_000 * 60_000;
 
         List<PrometheusSample> samples1 = [new PrometheusSample(metric, metric, 10.0)];
         List<PrometheusSample> samples2 = [new PrometheusSample(metric, metric, 30.0)];
