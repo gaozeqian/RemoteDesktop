@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
@@ -77,11 +78,12 @@ public sealed class PipeWireScreenCapturerTests
         }
     }
 
-    private static void Stop((PortalGrant Grant, PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) pair)
-    {
-        pair.Capturer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    /// <summary>
+    /// Releases the portal grant. The capturer is not touched here: every case holds it in an <c>await using</c>, so
+    /// disposing it again would be a second release of the same object.
+    /// </summary>
+    private static void Stop((PortalGrant Grant, PipeWireScreenCapturerFactory Factory, IScreenCapturer Capturer) pair) =>
         pair.Grant.Dispose();
-    }
 
     [Fact]
     public async Task A_frame_arrives_the_size_of_the_screen()
@@ -161,11 +163,14 @@ public sealed class PipeWireScreenCapturerTests
                 Assert.NotNull(first);
             }
 
+            var waited = Stopwatch.StartNew();
             using var second = await capturer.CaptureAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+            waited.Stop();
 
             // Not asserted to be null: something on this machine may well be animating. What must not happen is a
             // call that never returns, or one that throws because there was nothing to give.
-            Assert.True(second is null || second.Width > 0);
+            Assert.True(waited.Elapsed < TimeSpan.FromSeconds(3), $"a 250 ms wait took {waited.Elapsed}, so it was not bounded.");
+            Assert.True(second is null || second.Width > 0, "a picture came back with no width.");
         }
         finally
         {
@@ -189,7 +194,7 @@ public sealed class PipeWireScreenCapturerTests
     {
         var capturer = EmptyCapturer();
 
-        var frame = await capturer.CaptureAsync(TimeSpan.FromMilliseconds(10), CancellationToken.None);
+        var frame = await capturer.CaptureAsync(TimeSpan.FromMilliseconds(10), TestContext.Current.CancellationToken);
 
         Assert.Null(frame);
     }
@@ -201,7 +206,7 @@ public sealed class PipeWireScreenCapturerTests
         capturer.CompleteForTests();
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await capturer.CaptureAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
+            await capturer.CaptureAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
         Assert.True(capturer.IsFaulted);
     }
 

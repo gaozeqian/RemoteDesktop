@@ -75,11 +75,9 @@ public class OpsDatabaseSettingsTests
     [Fact]
     public void An_expansion_that_produces_nothing_is_treated_as_missing()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // %VAR% expansion is a Windows settings-file concern; the guard keeps the test honest where it cannot run.
-            return;
-        }
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "%VAR% expansion is a Windows settings-file concern; run the Windows leg to cover it.");
 
         Environment.SetEnvironmentVariable("RD_TEST_EMPTY_OPS_PATH", string.Empty);
         try

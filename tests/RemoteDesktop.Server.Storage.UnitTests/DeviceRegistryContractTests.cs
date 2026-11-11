@@ -8,7 +8,8 @@ namespace RemoteDesktop.Server.Storage.UnitTests;
 /// <remarks>
 /// The contract lives here rather than beside one implementation because it is the thing a fourth database has to
 /// satisfy: a new provider derives from this class and gets every case below without writing one. That is also why
-/// nothing here may reach for a type that only one store has.
+/// nothing here may reach for a type that only one store has. The file is compiled into the storage integration
+/// project as well, so the store that needs a real server is held to exactly these cases.
 /// </remarks>
 public abstract class DeviceRegistryContractTests
 {

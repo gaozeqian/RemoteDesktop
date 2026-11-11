@@ -12,7 +12,7 @@ public sealed class LocalHostControlTests
         var credentials = new HostCredentials { FixedPassword = "old-password" };
         var control = new LocalHostControl(null!, credentials, null!, null, false, new FailingSecretStore());
 
-        await Assert.ThrowsAsync<IOException>(() => control.SetFixedPasswordAsync("new-password", CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => control.SetFixedPasswordAsync("new-password", TestContext.Current.CancellationToken));
         Assert.Equal("old-password", credentials.FixedPassword);
     }
 
@@ -22,7 +22,7 @@ public sealed class LocalHostControlTests
         var credentials = new HostCredentials { FixedPassword = "old-password" };
         var control = new LocalHostControl(null!, credentials, null!, null, false, new FailingSecretStore());
 
-        await Assert.ThrowsAsync<IOException>(() => control.SetFixedPasswordAsync(null, CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => control.SetFixedPasswordAsync(null, TestContext.Current.CancellationToken));
         Assert.Equal("old-password", credentials.FixedPassword);
     }
 

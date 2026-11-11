@@ -118,7 +118,7 @@ public sealed class PulseAudioTests
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
 
-        await using var setup = new PulseSetup();
+        await using var setup = await PulseSetup.CreateAsync();
         var sinks = await setup.ListSinksAsync();
         if (sinks.Count < 2)
         {
@@ -185,53 +185,85 @@ public sealed class PulseAudioTests
         private readonly nint _mainloop;
         private readonly nint _context;
 
-        public PulseSetup()
+        private PulseSetup(nint mainloop, nint context)
         {
-            _mainloop = PulseApi.MainloopNew();
-            _context = PulseApi.ContextNew(PulseApi.MainloopGetApi(_mainloop), "Remote Desktop test");
+            _mainloop = mainloop;
+            _context = context;
+        }
+
+        /// <summary>
+        /// Connects to the sound server and pumps the loop until the context reports ready. The wait is bounded and
+        /// awaited: the connect can take a moment, and a sleeping test thread would stall every other case in the run.
+        /// </summary>
+        public static async Task<PulseSetup> CreateAsync()
+        {
+            var mainloop = PulseApi.MainloopNew();
+            var context = PulseApi.ContextNew(PulseApi.MainloopGetApi(mainloop), "Remote Desktop test");
 
             unsafe
             {
-                if (PulseApi.ContextConnect(_context, null, 0, 0) != 0)
+                if (PulseApi.ContextConnect(context, null, 0, 0) != 0)
                 {
+                    PulseApi.ContextUnref(context);
+                    PulseApi.MainloopFree(mainloop);
                     throw new InvalidOperationException("Could not reach the sound server for the test.");
                 }
             }
 
-            for (var attempt = 0; attempt < 3000 && PulseApi.ContextGetState(_context) != PulseApi.ContextReady; attempt++)
+            var setup = new PulseSetup(mainloop, context);
+            for (var attempt = 0; attempt < 3000 && PulseApi.ContextGetState(context) != PulseApi.ContextReady; attempt++)
             {
-                Pump();
-                Thread.Sleep(1);
+                setup.Pump();
+                await Task.Delay(1, TestContext.Current.CancellationToken);
             }
 
-            if (PulseApi.ContextGetState(_context) != PulseApi.ContextReady)
+            if (PulseApi.ContextGetState(context) != PulseApi.ContextReady)
             {
+                await setup.DisposeAsync();
                 throw new InvalidOperationException("The sound server did not become ready for the test.");
             }
+
+            return setup;
         }
 
         /// <summary>Every output the machine has.</summary>
         public async Task<List<string>> ListSinksAsync()
         {
+            lock (_names)
+            {
+                _names.Clear();
+            }
+
             unsafe
             {
                 _ = PulseApi.ContextGetSinkInfoList(_context, Callback, 0);
             }
 
             await PumpForAsync(TimeSpan.FromMilliseconds(500));
-            return _names;
+            lock (_names)
+            {
+                return [.. _names];
+            }
         }
 
         /// <summary>The name of the output that is currently the default.</summary>
         public async Task<string> DefaultSinkAsync()
         {
+            lock (_names)
+            {
+                _names.Clear();
+            }
+
             unsafe
             {
                 _ = PulseApi.ContextGetSinkInfoByName(_context, "@DEFAULT_SINK@", Callback, 0);
             }
 
             await PumpForAsync(TimeSpan.FromMilliseconds(500));
-            return _names.Count > 0 ? _names[0] : throw new InvalidOperationException("The sound server named no default output.");
+            lock (_names)
+            {
+                return _names.Count > 0 ? _names[0] : throw new InvalidOperationException("The sound server named no default output.");
+            }
         }
 
         public async Task SetDefaultSinkAsync(string name)
@@ -252,7 +284,11 @@ public sealed class PulseAudioTests
             return ValueTask.CompletedTask;
         }
 
-        private static List<string> _names = [];
+        /// <summary>
+        /// Names one listing produced. The callback is <c>UnmanagedCallersOnly</c> and cannot close over an instance,
+        /// so the slot has to be static — which is why every call clears it instead of letting results accumulate.
+        /// </summary>
+        private static readonly List<string> _names = [];
 
         private static unsafe nint Callback =>
             (nint)(delegate* unmanaged[Cdecl]<nint, nint, int, nint, void>)&OnSink;
@@ -266,7 +302,10 @@ public sealed class PulseAudioTests
             // The name is the first field of the structure, the one position in a C struct that cannot be wrong.
             if (endOfList == 0 && info != 0 && Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(info)) is { } name)
             {
-                _names.Add(name);
+                lock (_names)
+                {
+                    _names.Add(name);
+                }
             }
         }
 

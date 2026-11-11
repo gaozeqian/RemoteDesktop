@@ -31,7 +31,7 @@ public sealed class PunchSocketTests
 
             // Every packet comes from the port QUIC is about to inherit; that is what opens the NAT mapping.
             Assert.All(packets, packet => Assert.Equal(punch.Port, packet.From.Port));
-            Assert.Empty(peer.Drain());
+            Assert.Empty(await peer.DrainAsync());
         }
     }
 
@@ -61,7 +61,7 @@ public sealed class PunchSocketTests
 
         await punch.PunchAsync([], Ct);
 
-        Assert.Empty(bystander.Drain());
+        Assert.Empty(await bystander.DrainAsync());
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class PunchSocketTests
         await cancelled.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => punch.PunchAsync([peer.EndPoint], cancelled.Token));
-        Assert.Empty(peer.Drain());
+        Assert.Empty(await peer.DrainAsync());
     }
 
     [Fact]
@@ -339,6 +339,8 @@ public sealed class PunchSocketTests
     /// <summary>A UDP socket on loopback that records what arrives and can answer it.</summary>
     private sealed class FakeUdpPeer : IDisposable
     {
+        private static readonly TimeSpan QuietWindow = TimeSpan.FromMilliseconds(100);
+
         private readonly Socket _socket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         private readonly CancellationTokenSource _stop = new();
         private readonly List<Datagram> _received = [];
@@ -382,10 +384,13 @@ public sealed class PunchSocketTests
             }
         }
 
-        /// <summary>What has arrived so far, after a short pause for the receive loop to catch up with the sender.</summary>
-        public List<Datagram> Drain()
+        /// <summary>
+        /// What has arrived so far, after a quiet window for the receive loop to catch up with the sender. A
+        /// "nothing else was sent" assertion needs that window; awaiting it keeps the test thread free.
+        /// </summary>
+        public async Task<List<Datagram>> DrainAsync()
         {
-            Thread.Sleep(100);
+            await Task.Delay(QuietWindow, Ct);
             lock (_received)
             {
                 var all = _received.ToList();

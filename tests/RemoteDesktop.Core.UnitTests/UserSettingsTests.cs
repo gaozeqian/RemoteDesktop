@@ -25,7 +25,7 @@ public sealed class UserSettingsTests : IDisposable
     private JsonObject ReadSettings() => JsonNode.Parse(File.ReadAllText(SettingsPath))!.AsObject();
 
     [Fact]
-    public void It_writes_the_address_where_every_host_will_read_it()
+    public void Saving_writes_the_address_where_every_host_will_read_it()
     {
         UserSettings.SaveRendezvousUri(_directory, RendezvousAddress.Parse("wss://rd.example.com/ws"));
 

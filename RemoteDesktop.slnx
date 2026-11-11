@@ -48,6 +48,7 @@
     <Project Path="tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Architecture.UnitTests/RemoteDesktop.Architecture.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Server.Storage.UnitTests/RemoteDesktop.Server.Storage.UnitTests.csproj" />
+    <Project Path="tests/RemoteDesktop.Server.Storage.IntegrationTests/RemoteDesktop.Server.Storage.IntegrationTests.csproj" />
     <Project Path="tests/RemoteDesktop.Server.Ops.UnitTests/RemoteDesktop.Server.Ops.UnitTests.csproj" />
     <Project Path="tests/RemoteDesktop.Server.Ops.IntegrationTests/RemoteDesktop.Server.Ops.IntegrationTests.csproj" />
     <Project Path="tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj" />

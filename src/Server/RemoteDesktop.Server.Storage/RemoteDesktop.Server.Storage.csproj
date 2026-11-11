@@ -18,7 +18,9 @@
 
   <ItemGroup>
     <!-- The registry is constructed by its own tests with a fixed id allocator, so that the collision retry can be
-         reached without waiting for a 1-in-10^9 draw. -->
+         reached without waiting for a 1-in-10^9 draw. The PostgreSQL dialect is internal for the same reason: the
+         cases that pin its SQL need a real server, so they live in the integration project. -->
     <InternalsVisibleTo Include="RemoteDesktop.Server.Storage.UnitTests" />
+    <InternalsVisibleTo Include="RemoteDesktop.Server.Storage.IntegrationTests" />
   </ItemGroup>
 </Project>

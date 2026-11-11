@@ -2,8 +2,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using RemoteDesktop.Server.Storage;
+using RemoteDesktop.Server.Storage.UnitTests; // the shared contract, compiled into both test assemblies
 
-namespace RemoteDesktop.Server.Storage.UnitTests;
+namespace RemoteDesktop.Server.Storage.IntegrationTests;
 
 /// <summary>
 /// The device registry against a real PostgreSQL server: the shared contract, plus what only a server can get wrong —

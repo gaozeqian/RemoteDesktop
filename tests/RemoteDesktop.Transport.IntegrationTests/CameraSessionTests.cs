@@ -287,7 +287,7 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         Assert.False(pair.Session.Context.Grant.Allows(Permissions.Camera));
         Assert.True(pair.Session.Context.Grant.Allows(Permissions.ViewScreen)); // the session itself goes on
         await WaitUntilAsync(() => !pair.Source.Capturing);
-        await WaitUntilAsync(() => !control.GetStatusAsync(Ct).GetAwaiter().GetResult().Sessions.Single().CameraActive);
+        await WaitUntilAsync(async () => !(await control.GetStatusAsync(Ct)).Sessions.Single().CameraActive);
     }
 
     [Fact]
@@ -355,6 +355,17 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
+            await Task.Delay(25, Ct);
+        }
+    }
+
+    /// <summary>The same wait for a condition that has to be asked for over the connection.</summary>
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!await condition())
         {
             Assert.True(DateTime.UtcNow < deadline, "Timed out.");
             await Task.Delay(25, Ct);

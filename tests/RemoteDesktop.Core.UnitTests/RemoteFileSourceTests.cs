@@ -18,7 +18,7 @@ public sealed class RemoteFileSourceTests
     {
         var source = new RemoteFileSource(new SilentConnection(), TimeSpan.FromMilliseconds(50));
 
-        var ex = await Assert.ThrowsAsync<FileOperationException>(() => source.ListAsync("/home", CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<FileOperationException>(() => source.ListAsync("/home", TestContext.Current.CancellationToken));
 
         Assert.Equal(FileError.Io, ex.Error);
         Assert.Contains("did not answer", ex.Message, StringComparison.Ordinal);

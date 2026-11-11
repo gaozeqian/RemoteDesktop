@@ -76,15 +76,18 @@ public sealed class GatewayTests : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // Teardown gets a bound of its own: an unbounded stop and a test-scoped token are both wrong here.
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
         if (_gateway is not null)
         {
-            await _gateway.StopAsync(CancellationToken.None);
+            await _gateway.StopAsync(stop.Token);
             await _gateway.DisposeAsync();
         }
 
         if (_upstream is not null)
         {
-            await _upstream.StopAsync(CancellationToken.None);
+            await _upstream.StopAsync(stop.Token);
             await _upstream.DisposeAsync();
         }
     }

@@ -48,7 +48,7 @@ public sealed class RendezvousAddressTests
     }
 
     [Fact]
-    public void It_normalises_to_the_form_that_gets_written_down()
+    public void Parsing_normalises_to_the_form_that_gets_written_down()
     {
         Assert.True(RendezvousAddress.TryParse("  ws://rd.example.com:5080/ws ", out var parsed));
 

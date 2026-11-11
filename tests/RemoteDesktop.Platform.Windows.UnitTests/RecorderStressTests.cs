@@ -38,7 +38,9 @@ public class RecorderStressTests
                 }
                 catch (Exception ex)
                 {
-                    failures.Add($"take {i}: {ex.GetType().Name}: {ex.Message}");
+                    // The stack is what makes a failure in take 17 of 40 diagnosable; the type and message alone
+                    // do not say where in the take it came from.
+                    failures.Add($"take {i}: {ex}");
                 }
                 finally
                 {

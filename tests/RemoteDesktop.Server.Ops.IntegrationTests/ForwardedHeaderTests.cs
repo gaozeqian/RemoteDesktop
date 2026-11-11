@@ -19,11 +19,8 @@ public class ForwardedHeaderTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Fails today: with an empty list the framework's middleware has neither KnownProxies nor KnownIPNetworks to
-    /// check, and in that case it trusts every caller (it only validates the sender when at least one is configured).
-    /// So <c>UseOps</c> clearing the defaults does not stop a local caller choosing its audit address, its
-    /// sign-in throttle key or whether a cookie is Secure. Unskip once <c>OpsServer.ForwardedHeaderOptions</c> turns
-    /// forwarding off when <c>Ops:TrustedProxies</c> is empty.
+    /// With no <c>Ops:TrustedProxies</c> there is nobody to believe, so a caller on this machine cannot choose the
+    /// address its audit record carries or whether its cookie counts as Secure: both stay what the connection says.
     /// </summary>
     [Fact]
     public async Task With_no_trusted_proxy_a_local_caller_cannot_choose_its_address_or_scheme()

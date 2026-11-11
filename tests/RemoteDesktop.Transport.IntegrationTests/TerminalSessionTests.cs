@@ -129,7 +129,7 @@ public sealed class TerminalSessionTests(ServerFixture server) : IClassFixture<S
 
             await open[0].DisposeAsync();
             open.RemoveAt(0);
-            await WaitUntilAsync(() => TryOpenAsync(pair, open).GetAwaiter().GetResult());
+            await WaitUntilAsync(async () => await TryOpenAsync(pair, open));
         }
         finally
         {
@@ -176,15 +176,46 @@ public sealed class TerminalSessionTests(ServerFixture server) : IClassFixture<S
         Assert.SkipUnless(OperatingSystem.IsWindows(), "ConPTY is Windows only.");
         await using var pair = await Pair.StartAsync(server, new ConPtyHost());
         var session = await TerminalSession.StartAsync(pair.Session.Context.Connection, "cmd", 100, 30, Ct);
-        var before = Process.GetProcessesByName("PING").Length;
+        var pingsBefore = Pings();
         await WaitForScreenAsync(session, ">");
         session.SendText("ping -n 120 127.0.0.1\r");
-        await WaitUntilAsync(() => Process.GetProcessesByName("PING").Length > before);
+
+        // The shell's own ping is the one that was not there before. Counting them all would let an unrelated
+        // ping.exe on the machine decide the result in either direction.
+        await WaitUntilAsync(() => Pings().Except(pingsBefore).Any());
+        var ours = Pings().Except(pingsBefore).ToArray();
 
         await pair.Session.DisposeAsync();
 
-        await WaitUntilAsync(() => Process.GetProcessesByName("PING").Length <= before);
+        await WaitUntilAsync(() => !ours.Any(IsRunning));
         await session.DisposeAsync();
+    }
+
+    private static HashSet<int> Pings()
+    {
+        var ids = new HashSet<int>();
+        foreach (var process in Process.GetProcessesByName("PING"))
+        {
+            using (process)
+            {
+                ids.Add(process.Id);
+            }
+        }
+
+        return ids;
+    }
+
+    private static bool IsRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false; // already gone, which is what the case expects
+        }
     }
 
     private static async Task<bool> TryOpenAsync(Pair pair, List<TerminalSession> open)
@@ -214,6 +245,17 @@ public sealed class TerminalSessionTests(ServerFixture server) : IClassFixture<S
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
+            await Task.Delay(50, Ct);
+        }
+    }
+
+    /// <summary>The same wait for a condition that has to be asked for over the connection.</summary>
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!await condition())
         {
             Assert.True(DateTime.UtcNow < deadline, "Timed out.");
             await Task.Delay(50, Ct);

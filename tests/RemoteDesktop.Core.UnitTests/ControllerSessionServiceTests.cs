@@ -14,7 +14,7 @@ public sealed class ControllerSessionServiceTests
         var service = Service(connection, TimeSpan.FromMilliseconds(25));
 
         var error = await Assert.ThrowsAsync<SessionException>(() =>
-            service.ConnectAsync(new DeviceId(123456789), "password", SessionMode.Control, CancellationToken.None));
+            service.ConnectAsync(new DeviceId(123456789), "password", SessionMode.Control, TestContext.Current.CancellationToken));
 
         Assert.Equal(SessionFailure.Timeout, error.Failure);
         Assert.True(connection.Disposed);

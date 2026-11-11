@@ -13,7 +13,7 @@ public sealed class RequestTimeoutTests
     [Fact]
     public async Task An_answer_that_arrives_in_time_is_returned()
     {
-        var answer = await RequestTimeout.RunAsync(_ => Task.FromResult(42), CancellationToken.None, Short);
+        var answer = await RequestTimeout.RunAsync(_ => Task.FromResult(42), TestContext.Current.CancellationToken, Short);
 
         Assert.Equal(42, answer);
     }
@@ -22,7 +22,7 @@ public sealed class RequestTimeoutTests
     public async Task A_host_that_never_answers_ends_the_request_with_a_deadline()
     {
         var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
-            RequestTimeout.RunAsync(Silence, CancellationToken.None, Short));
+            RequestTimeout.RunAsync(Silence, TestContext.Current.CancellationToken, Short));
 
         Assert.Contains("did not answer", ex.Message, StringComparison.Ordinal);
     }

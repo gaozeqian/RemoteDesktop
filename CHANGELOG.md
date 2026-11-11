@@ -244,6 +244,11 @@
   同名同形状（`ci.yml` 与 `release.yml` 都是 `build-windows` / `build-linux` / `build-macos`），"发版"只剩一处。
   发布说明改在 `release` 里读同一批 Secret 与 `DEFAULT_RENDEZVOUS_URI` 生成，不靠 job 之间的环境变量传递。
 
+**测试归类与用例确定性整理（产品行为不变）**
+
+- **设备注册表直连 PostgreSQL 的那组用例迁到新的 `tests/RemoteDesktop.Server.Storage.IntegrationTests`**：`UnitTests` 只留内存与 SQLite 两种实现，与"需要真实服务的用例不进 UnitTests"的分类一致；`CONTRIBUTING.md` 的容器跑法同步改指新项目。为让迁移后的用例仍能覆盖 PostgreSQL 方言的 SQL，`Server.Storage` 对该程序集开放了内部类型。
+- **测试自身的确定性修复**：等待改成有上限的信号或截止时间（传输列表、PulseAudio 上下文就绪、进程存活都按 PID/事件判断，不再用固定睡眠）；启动失败时释放已经建好的 host 与临时目录；非 Windows 上静默返回的用例改为断言级跳过；预期无回包的 UDP 绑定与"丢包"区分开，后者现在会让用例失败而不是冒充"被拒绝"。
+
 ### Fixed
 
 **Windows 客户端装好后打不开（本机实测）**

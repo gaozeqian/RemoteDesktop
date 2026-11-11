@@ -85,6 +85,7 @@ run_test_suite "Architecture-Rules" "tests/RemoteDesktop.Architecture.UnitTests/
 run_test_suite "Core-Domain-Protocol-Security" "tests/RemoteDesktop.Core.UnitTests/RemoteDesktop.Core.UnitTests.csproj"
 run_test_suite "Platform-Linux-Subsystems" "tests/RemoteDesktop.Platform.Linux.UnitTests/RemoteDesktop.Platform.Linux.UnitTests.csproj"
 run_test_suite "Server-Storage" "tests/RemoteDesktop.Server.Storage.UnitTests/RemoteDesktop.Server.Storage.UnitTests.csproj"
+run_test_suite "Server-Storage-Integration" "tests/RemoteDesktop.Server.Storage.IntegrationTests/RemoteDesktop.Server.Storage.IntegrationTests.csproj"
 run_test_suite "Server-Ops-Unit" "tests/RemoteDesktop.Server.Ops.UnitTests/RemoteDesktop.Server.Ops.UnitTests.csproj"
 run_test_suite "Server-Ops-Integration" "tests/RemoteDesktop.Server.Ops.IntegrationTests/RemoteDesktop.Server.Ops.IntegrationTests.csproj"
 run_test_suite "Transport-Network-Channels-E2E" "tests/RemoteDesktop.Transport.IntegrationTests/RemoteDesktop.Transport.IntegrationTests.csproj"

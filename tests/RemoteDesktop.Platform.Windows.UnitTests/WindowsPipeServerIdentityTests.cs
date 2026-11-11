@@ -113,9 +113,11 @@ public sealed class WindowsPipeServerIdentityTests
         {
             pipe.Connect(TimeSpan.FromSeconds(2));
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or TimeoutException)
         {
-            Assert.Skip($"The host-control pipe is not reachable: {ex.Message}");
+            // The service is installed but not running. Being refused is not that: it is the identity check
+            // failing, and it has to fail the case rather than skip it.
+            Assert.Skip($"The host-control pipe is not reachable ({ex.Message}); start the host service and rerun.");
         }
 
         Assert.Null(Record.Exception(() => WindowsPipeServerIdentity.EnsureExpected(pipe, expected)));

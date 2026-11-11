@@ -281,8 +281,16 @@ public class RelayBindTests
                 var answer = await _client.ReceiveAsync(timeout.Token);
                 return answer.Buffer;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (!Ct.IsCancellationRequested)
             {
+                // A refused bind is answered with silence, so an absent packet is a result rather than an error —
+                // but only where the caller says it does not need one. A lost packet that was expected fails here
+                // instead of surfacing later as an unexplained "rejected".
+                if (expectAnswer)
+                {
+                    throw new TimeoutException("The relay did not answer within five seconds: the bind or its acknowledgement was lost.");
+                }
+
                 return [];
             }
         }

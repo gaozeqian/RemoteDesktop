@@ -19,6 +19,8 @@ public sealed class TestDevice : IAsyncDisposable
 
     private TestDevice(IHost host) => _host = host;
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     public DeviceId Id => Rendezvous.DeviceId ?? throw new InvalidOperationException("Not registered.");
 
     public IRendezvousClient Rendezvous => _host.Services.GetRequiredService<IRendezvousClient>();
@@ -98,9 +100,18 @@ public sealed class TestDevice : IAsyncDisposable
             }
         };
 
-        await device._host.StartAsync();
-        await online.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        return device;
+        try
+        {
+            await device._host.StartAsync(Ct);
+            await online.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            return device;
+        }
+        catch
+        {
+            // The caller never receives the instance, so nothing else would ever stop the host this attempt built.
+            await device.DisposeAsync();
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()

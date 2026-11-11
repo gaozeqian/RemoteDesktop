@@ -166,7 +166,7 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
         Assert.SkipUnless(OperatingSystem.IsWindows(), "The features under load need Windows.");
         var codecs = CreateCodecs();
         await using var host = await StartHostAsync(codecs);
-        var shellsBefore = Process.GetProcessesByName("cmd").Length;
+        var shellsBefore = Shells();
 
         for (var round = 0; round < Reconnects; round++)
         {
@@ -195,17 +195,16 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
         TestContext.Current.SendDiagnosticMessage($"{Reconnects} sessions came and went");
 
         // A leftover shell is already running when the last round ends, so the long session budget above would only
-        // delay the report. The count is machine-wide: another program starting a cmd.exe of its own inflates it,
-        // which is why the message says so rather than leaving the failure pointing at the terminal code.
+        // delay the report. Only the shells this run started are counted: an unrelated cmd.exe of somebody else's
+        // would otherwise decide the result.
         await WaitForAsync(
-            () => Process.GetProcessesByName("cmd").Length <= shellsBefore,
-            "the shells of finished sessions to be gone (the count is machine-wide, so an unrelated cmd.exe also trips this)",
+            () => !Shells().Except(shellsBefore).Any(Running),
+            "the shells of finished sessions to be gone",
             TimeSpan.FromSeconds(20));
     }
 
     private async Task<TestDevice> StartHostAsync(VideoCodecSelector codecs)
     {
-        var files = Directory.CreateDirectory(Path.Combine(_root, "files")).FullName;
         var host = await TestDevice.StartAsync(
             server,
             forceRelay: false,
@@ -213,12 +212,39 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
             new FileTransferModule(new AllowFiles(), new FileAccessPolicy([_root]), NullLogger<FileTransferModule>.Instance),
             new TerminalModule(new ConPtyHost(), new AllowFiles(), NullLogger<TerminalModule>.Instance));
         host.Credentials.AllowedPermissions = Permissions.All;
-        _ = files;
         return host;
     }
 
     private static VideoCodecSelector CreateCodecs() =>
         new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
+
+    /// <summary>The ids of the shells running on this machine right now, with their handles released.</summary>
+    private static HashSet<int> Shells()
+    {
+        var ids = new HashSet<int>();
+        foreach (var process in Process.GetProcessesByName("cmd"))
+        {
+            using (process)
+            {
+                ids.Add(process.Id);
+            }
+        }
+
+        return ids;
+    }
+
+    private static bool Running(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
 
     private static byte[] RandomBytes(int length, int seed)
     {

@@ -274,12 +274,15 @@ public sealed class PosixPtyTests
 
         public OutputReader(Stream source)
         {
+            // Captured here rather than read inside the loop: the background task must stop with the test even if
+            // the test never gets as far as disposing the session.
+            var reading = Ct;
             _ = Task.Run(async () =>
             {
                 var buffer = new byte[4096];
                 try
                 {
-                    while (await source.ReadAsync(buffer, CancellationToken.None) is var read and > 0)
+                    while (await source.ReadAsync(buffer, reading) is var read and > 0)
                     {
                         lock (_gate)
                         {

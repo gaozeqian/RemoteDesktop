@@ -129,10 +129,19 @@ public sealed class EndToEndNode : IAsyncDisposable
             online.TrySetResult();
         }
 
-        await host.StartAsync(cancellationToken);
-        await online.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
-
-        return node;
+        try
+        {
+            await host.StartAsync(cancellationToken);
+            await online.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+            return node;
+        }
+        catch
+        {
+            // The caller never receives the instance, so nothing else would stop the host or remove the data folder
+            // that this attempt already created.
+            await node.DisposeAsync();
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()

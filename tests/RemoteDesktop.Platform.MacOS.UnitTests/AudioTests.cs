@@ -271,9 +271,11 @@ public class MacAudioCapturerTests
 
             return null;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Reported on the waiting side, where it can become a skip rather than a failure.
+            // Handed to the waiting side: a capturer that fails is a defect, and only a stream that never starts
+            // (no output device) is allowed to become a skip.
+            started.TrySetException(ex);
             return null;
         }
     }

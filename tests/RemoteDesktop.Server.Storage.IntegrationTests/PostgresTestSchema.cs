@@ -1,6 +1,6 @@
 using Npgsql;
 
-namespace RemoteDesktop.Server.Storage.UnitTests;
+namespace RemoteDesktop.Server.Storage.IntegrationTests;
 
 /// <summary>
 /// A throw-away schema on a real PostgreSQL server, so that each test starts from an empty database and no test can

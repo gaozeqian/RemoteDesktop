@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- The PostgreSQL registry is exercised against a real server, which is why these cases live here rather than
+         beside the in-memory and SQLite ones: everything in the UnitTests project runs without a service. -->
+    <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Storage\RemoteDesktop.Server.Storage.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests build registries by hand, which means passing a logger. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      The PostgreSQL registry has to satisfy the same contract as the in-memory and SQLite ones. That contract is
+      written once, in the project that holds those two, and compiled in here rather than duplicated or reached
+      through a reference to another test project — a project reference between test assemblies would drag a second
+      test host into the output for the sake of one abstract class.
+    -->
+    <Compile Include="..\RemoteDesktop.Server.Storage.UnitTests\DeviceRegistryContractTests.cs" Link="DeviceRegistryContractTests.cs" />
+  </ItemGroup>
+</Project>

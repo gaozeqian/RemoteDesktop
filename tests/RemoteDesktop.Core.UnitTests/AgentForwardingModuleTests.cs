@@ -93,6 +93,10 @@ public class AgentForwardingModuleTests
 
         await agent.DisposeAsync();
         var replacement = await rig.OfferAgentAsync();
+
+        // Input that arrives before the module has picked the replacement up belongs to the dead desktop and is
+        // discarded with it (by design), so this waits for the generation to start rather than racing that discard.
+        await rig.Gateway.NextTaken.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await rig.ControllerSendsAsync(1, 0xBB);
 
         Assert.Equal([0xBB], await ReadPayloadAsync(replacement));
@@ -205,19 +209,34 @@ public class AgentForwardingModuleTests
     private sealed class QueueGateway : IAgentGateway
     {
         private readonly Channel<Func<Stream>> _opens = Channel.CreateUnbounded<Func<Stream>>();
+        private TaskCompletionSource _taken = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public AgentState State => new(AgentStatus.Running, DesktopKind.User);
+
+        /// <summary>
+        /// Completes once the module has picked up the most recently offered channel — the point after which input
+        /// belongs to the new generation instead of being discarded with the old one.
+        /// </summary>
+        public Task NextTaken => _taken.Task;
 
 #pragma warning disable CS0067
         public event EventHandler? StateChanged;
 #pragma warning restore CS0067
 
-        public void Offer(Stream serviceEnd) => _opens.Writer.TryWrite(() => serviceEnd);
+        public void Offer(Stream serviceEnd)
+        {
+            _taken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _opens.Writer.TryWrite(() => serviceEnd);
+        }
 
         public void OfferFailure() => _opens.Writer.TryWrite(() => throw new AgentUnavailableException("still starting"));
 
-        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken) =>
-            (await _opens.Reader.ReadAsync(cancellationToken))();
+        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
+        {
+            var open = await _opens.Reader.ReadAsync(cancellationToken);
+            _taken.TrySetResult();
+            return open();
+        }
     }
 
     private sealed class TestChannel(ChannelType type, Stream stream) : IChannel

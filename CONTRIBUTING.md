@@ -37,7 +37,7 @@ dotnet test --solution RemoteDesktop.slnx --no-build
 
 | 种类 | 含义 | 例子 |
 |---|---|---|
-| `UnitTests` | 不需要外部服务或网络，随时可跑（个别用例例外：依赖已构建好的服务端 MSI 的用例，在 `artifacts/installer/windows/` 里找不到、也没设 `RD_SERVER_INSTALLER_MSI` 指向它时跳过；要人工点"分享"的 Linux portal 用例，不设 `RD_PORTAL_TEST=1` 就跳过） | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
+| `UnitTests` | 不需要外部服务或网络，随时可跑（个别用例例外：依赖已构建好的服务端 MSI 的用例，在 `artifacts/installer/windows/` 里找不到、也没设 `RD_SERVER_INSTALLER_MSI` 指向它时跳过；要人工点"分享"的 Linux portal 用例，不设 `RD_PORTAL_TEST=1` 就跳过；测真实摄像头帧率的用例，帧率取决于设备与接线，不设 `RD_CAMERA_RATE_TEST=1` 就跳过） | `RemoteDesktop.Core.UnitTests`、`RemoteDesktop.Platform.Windows.UnitTests` |
 | `IntegrationTests` | 需要真实网络、容器或其他进程 | `RemoteDesktop.Transport.IntegrationTests` |
 
 **后缀必须从这个集合里取。** 名字里没有 `UnitTests` / `IntegrationTests` 的项目会让「按类型筛选」变成一件靠不住的事——
@@ -51,10 +51,11 @@ dotnet test --solution RemoteDesktop.slnx --no-build
 ```bash
 docker run -d --name rd-pg-test -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
 RD_TEST_POSTGRES='Host=127.0.0.1;Port=55432;Username=postgres;Password=test;Database=postgres' \
-  dotnet test --project tests/RemoteDesktop.Server.Storage.UnitTests
+  dotnet test --project tests/RemoteDesktop.Server.Storage.IntegrationTests
 docker rm -f rd-pg-test
 ```
 
+设备注册表那组在 `tests/RemoteDesktop.Server.Storage.IntegrationTests`（`UnitTests` 只留内存与 SQLite 两种实现），
 监控台存储的那组在 `tests/RemoteDesktop.Server.Ops.IntegrationTests`，同样用这个环境变量启用。
 
 **`<区域>` 指的是"被测代码在哪一块"，但它不总是等于 `src/` 下的某个目录名**，这一点容易看错：
@@ -65,7 +66,8 @@ docker rm -f rd-pg-test
 | `RemoteDesktop.Transport.IntegrationTests` | 传输层的端到端用例（要真网络，所以是 `IntegrationTests`，与上面那个是**种类**的区别不是区域的区别）。它的 `ProjectReference` 不止 Transport：`Application`、`Features.*`、`Platform.Windows` / `Platform.MacOS`、`Server.Rendezvous`、`Server.Relay` 都在里面，所以信令、中继与功能通道的联调用例放这里 |
 | `RemoteDesktop.E2E.IntegrationTests` | 跨系统角色完整闭环端到端集成测试（信令集群编排、中继与直连通道、双向 SRP-6a 鉴权、固定密码无人值守、访问授权协商与会话生命周期） |
 | `RemoteDesktop.WindowsUi.IntegrationTests` | 客户端图形界面与集成工作流测试（ViewModel 状态绑定、深度连接激活、最近设备持久化、固定密码安全表单校验与界面会话流转） |
-| `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表） |
+| `RemoteDesktop.Server.Storage.UnitTests` | `Server.Storage`（信令服务器的设备注册表）：内存与 SQLite 两种实现 |
+| `RemoteDesktop.Server.Storage.IntegrationTests` | 同一个设备注册表直连真实 PostgreSQL 的那一组（不设 `RD_TEST_POSTGRES` 时跳过） |
 | `RemoteDesktop.Server.Ops.UnitTests` | 监控台核心 `Server.Ops.Core` 与 `Server.Shared` |
 | `RemoteDesktop.Server.Ops.IntegrationTests` | 监控台三层（`Server.Ops`、`Server.Ops.Core`、`Server.Ops.Storage`）合起来跑 |
 | `RemoteDesktop.Architecture.UnitTests` | 不是某个区域，是**规则本身**：分层依赖、`RepositoryStructureTests` 里的结构约定、以及 `DocumentationTests` 里的文档规范 |

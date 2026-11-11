@@ -110,7 +110,10 @@ public class MetricsTests
             Assert.StartsWith("remotedesktop_", name, StringComparison.Ordinal);
             Assert.Contains($"# HELP {name} ", body, StringComparison.Ordinal);
             Assert.Contains($"# TYPE {name} {type}", body, StringComparison.Ordinal);
-            Assert.True(Value(body, name) >= 0);
+
+            // A metric that is declared but never written is a blind spot for the scraper: Value() fails the case
+            // when the sample line is missing or is not a number.
+            Assert.InRange(Value(body, name), 0, long.MaxValue);
         }
 
         // The format needs the last line to end with a newline as well.

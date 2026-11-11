@@ -3,12 +3,43 @@ using RemoteDesktop.Protocol.File;
 
 namespace RemoteDesktop.Core.UnitTests;
 
-public sealed class FileAccessPolicyTests
+public sealed class FileAccessPolicyTests : IDisposable
 {
-    private const string WindowsOnly = "Windows path syntax.";
-    private const string UnixOnly = "Posix path syntax.";
+    private const string WindowsOnly = "Windows path syntax; run the Windows leg to cover it.";
+    private const string UnixOnly = "Posix path syntax; run a Linux or macOS leg to cover it.";
 
     private static readonly FileAccessPolicy Open = FileAccessPolicy.Unrestricted;
+
+    private readonly List<string> _temporary = [];
+
+    /// <summary>
+    /// Every directory the cases below create is real filesystem state under the temp folder; one run without this
+    /// leaves a dozen of them behind.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var path in _temporary)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A handle the case under test still holds; the OS reclaims the folder later.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private string TempDirectory(string prefix)
+    {
+        var path = Directory.CreateTempSubdirectory(prefix).FullName;
+        _temporary.Add(path);
+        return path;
+    }
 
     [Theory]
     [InlineData("")]
@@ -58,7 +89,7 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void A_filesystem_root_configured_as_the_shared_root_allows_the_paths_beneath_it()
     {
-        var folder = Directory.CreateTempSubdirectory("rd-fsroot-").FullName;
+        var folder = TempDirectory("rd-fsroot-");
         try
         {
             var root = Path.GetPathRoot(folder)!;
@@ -146,7 +177,7 @@ public sealed class FileAccessPolicyTests
     public void A_configured_root_confines_every_posix_path_including_tricks_that_climb_out_of_it()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), UnixOnly);
-        var root = Directory.CreateTempSubdirectory("rd-root-").FullName;
+        var root = TempDirectory("rd-root-");
         var policy = new FileAccessPolicy([root]);
 
         Assert.Equal(Path.Combine(root, "sub", "f.txt"), policy.Normalize(Path.Combine(root, "sub", "f.txt")));
@@ -175,10 +206,10 @@ public sealed class FileAccessPolicyTests
     public void A_symbolic_link_out_of_a_root_is_refused()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), UnixOnly);
-        var outside = Directory.CreateTempSubdirectory("rd-outside-").FullName;
+        var outside = TempDirectory("rd-outside-");
         File.WriteAllText(Path.Combine(outside, "secret.txt"), "x");
 
-        var root = Directory.CreateTempSubdirectory("rd-link-root-").FullName;
+        var root = TempDirectory("rd-link-root-");
         File.CreateSymbolicLink(Path.Combine(root, "escape"), outside);
 
         var policy = new FileAccessPolicy([root]);
@@ -193,8 +224,8 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void A_handle_that_really_points_outside_the_root_is_refused_after_the_open()
     {
-        var outside = Directory.CreateTempSubdirectory("rd-handle-outside-").FullName;
-        var root = Directory.CreateTempSubdirectory("rd-handle-root-").FullName;
+        var outside = TempDirectory("rd-handle-outside-");
+        var root = TempDirectory("rd-handle-root-");
         var secret = Path.Combine(outside, "secret.txt");
         File.WriteAllText(secret, "x");
 
@@ -239,7 +270,7 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void Creating_a_file_that_exists_says_so()
     {
-        var root = Directory.CreateTempSubdirectory("rd-exists-").FullName;
+        var root = TempDirectory("rd-exists-");
         try
         {
             var path = Path.Combine(root, "taken.txt");
@@ -261,7 +292,7 @@ public sealed class FileAccessPolicyTests
     [Fact]
     public void A_verified_handle_can_be_read_after_the_path_is_gone()
     {
-        var root = Directory.CreateTempSubdirectory("rd-handle-inside-").FullName;
+        var root = TempDirectory("rd-handle-inside-");
         var path = Path.Combine(root, "file.txt");
         File.WriteAllText(path, "content");
 
@@ -371,7 +402,7 @@ public sealed class FileAccessPolicyTests
     public void The_filesystem_root_and_configured_roots_are_protected_from_deletion()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), UnixOnly);
-        var root = Directory.CreateTempSubdirectory("rd-root-").FullName;
+        var root = TempDirectory("rd-root-");
         var policy = new FileAccessPolicy([root]);
 
         Assert.True(policy.IsProtectedRoot("/"));

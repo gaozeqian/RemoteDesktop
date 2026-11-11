@@ -135,10 +135,12 @@ public sealed partial class FileTransferSessionTests
         }
 
         var jobs = await manager.EnqueueAsync(TransferDirection.Upload, localFolder, entries, hostFolder, ConflictPolicy.Overwrite, Ct);
+        var deadline = DateTime.UtcNow + JobTimeout;
         var peak = 0;
         while (jobs.Any(j => j.IsActive))
         {
             peak = Math.Max(peak, jobs.Count(j => j.State == TransferState.Running));
+            Assert.True(DateTime.UtcNow < deadline, $"the transfers never finished; still active: {jobs.Count(j => j.IsActive)}");
             await Task.Delay(2, Ct);
         }
 

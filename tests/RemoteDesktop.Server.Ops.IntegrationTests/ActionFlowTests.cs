@@ -235,7 +235,7 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
     }
 
     /// <summary>A mutating request with the CSRF header the console requires of signed-in browsers.</summary>
-    private static Task<HttpResponseMessage> PostWithCsrfAsync(HttpClient client, CookieContainer cookies, string url, object? body)
+    private static async Task<HttpResponseMessage> PostWithCsrfAsync(HttpClient client, CookieContainer cookies, string url, object? body)
     {
         var csrf = cookies.GetCookies(client.BaseAddress!)["ops_csrf"]!.Value;
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -245,7 +245,7 @@ public class ActionFlowTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixt
         }
 
         request.Headers.Add("X-Ops-CSRF", csrf);
-        return client.SendAsync(request, Ct);
+        return await client.SendAsync(request, Ct);
     }
 
     /// <summary>A signaling node that records the management commands it is asked to carry out.</summary>
