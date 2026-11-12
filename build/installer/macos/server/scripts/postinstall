@@ -668,14 +668,26 @@ service_can() {
     local description="$1"
     shift
 
-    local status=0
-    runs_as_service "$@" || status=$?
-    if [ "$status" -eq 0 ]; then
+    if runs_as_service "$@"; then
         return 0
     fi
 
-    echo "Remote Desktop Server: the unprivileged $SERVICE_USER account cannot $description (exit $status)." >&2
-    return "$status"
+    # sudo's own words are the difference between "the account may not read this file" and "the account could not be
+    # used at all", and both come back as the same nonzero status from a probe whose output is discarded.
+    local detail
+    detail="$(/usr/bin/sudo -u "$SERVICE_USER" /usr/bin/test "$@" 2>&1)" || true
+    echo "Remote Desktop Server: the unprivileged $SERVICE_USER account cannot $description (${detail:-no output})." >&2
+    return 1
+}
+
+# Printed only when the account cannot reach something: identity and modes are what the probe depends on, and a log
+# line that names neither leaves the failure unexplained on the machine in question.
+report_service_account() {
+    echo "Remote Desktop Server: $SERVICE_USER resolves to:" >&2
+    /usr/bin/id "$SERVICE_USER" >&2 2>&1 || true
+    /usr/bin/dscl . -read "/Users/$SERVICE_USER" PrimaryGroupID >&2 2>&1 || true
+    /usr/bin/dscl . -read "/Groups/$SERVICE_GROUP" PrimaryGroupID >&2 2>&1 || true
+    /bin/ls -ldn "$INSTALL_DIR" "$INSTALL_DIR/Rendezvous" "$INSTALL_DIR/Rendezvous/appsettings.json" >&2 2>&1 || true
 }
 
 service_account_can_run() {
@@ -718,6 +730,7 @@ if ! prepare_service_account; then
 fi
 
 if ! service_account_can_run; then
+    report_service_account
     echo "Remote Desktop Server: $SERVICE_USER cannot reach what the servers need; no service will be started as root." >&2
     exit 1
 fi
