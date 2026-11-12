@@ -582,6 +582,9 @@ create_service_account() {
         dscl . -create "/Users/$SERVICE_USER" IsHidden 1
         dscl . -create "/Users/$SERVICE_USER" Password '*'
     fi
+
+    # dscl says little when it refuses, so what is checked is the account itself rather than the calls that made it.
+    dscl . -read "/Users/$SERVICE_USER" >/dev/null 2>&1
 }
 
 prepare_database_directories() {
@@ -621,15 +624,15 @@ prepare_service_account() {
     local folder file
 
     # The daemons write here: the databases (and SQLite's -wal/-shm files), the key ring, and launchd's log files.
-    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR/var" "$INSTALL_DIR/logs"
-    chmod 700 "$INSTALL_DIR/var" "$INSTALL_DIR/logs"
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR/var" "$INSTALL_DIR/logs" || return 1
+    chmod 700 "$INSTALL_DIR/var" "$INSTALL_DIR/logs" || return 1
 
     # Settings hold the relay key and, with PostgreSQL, its password: root owns them, the service group reads.
     for folder in Rendezvous Relay Ops Gateway; do
         file="$INSTALL_DIR/$folder/appsettings.json"
         if [ -f "$file" ]; then
-            chown "root:$SERVICE_GROUP" "$file"
-            chmod 640 "$file"
+            chown "root:$SERVICE_GROUP" "$file" || return 1
+            chmod 640 "$file" || return 1
         fi
     done
 
@@ -658,18 +661,35 @@ runs_as_service() {
     return 0
 }
 
+# One probe, named. A bare "could not prepare the account" leaves the operator — and whoever reads a CI log — with
+# nothing to act on, and the file modes and the directory-service state are the parts most likely to differ between
+# machines.
+service_can() {
+    local description="$1"
+    shift
+
+    local status=0
+    runs_as_service "$@" || status=$?
+    if [ "$status" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "Remote Desktop Server: the unprivileged $SERVICE_USER account cannot $description (exit $status)." >&2
+    return "$status"
+}
+
 service_account_can_run() {
     local folder settings key path
     for folder in Rendezvous Relay Ops Gateway; do
-        runs_as_service -r "$INSTALL_DIR/$folder/appsettings.json" || return 1
-        runs_as_service -x "$INSTALL_DIR/$folder/RemoteDesktop.Server.$folder" || return 1
+        service_can "read $folder/appsettings.json" -r "$INSTALL_DIR/$folder/appsettings.json" || return 1
+        service_can "run the $folder server" -x "$INSTALL_DIR/$folder/RemoteDesktop.Server.$folder" || return 1
     done
 
-    runs_as_service -w "$INSTALL_DIR/var" || return 1
-    runs_as_service -w "$INSTALL_DIR/logs" || return 1
+    service_can "write $INSTALL_DIR/var" -w "$INSTALL_DIR/var" || return 1
+    service_can "write $INSTALL_DIR/logs" -w "$INSTALL_DIR/logs" || return 1
 
     if [ -f "$INSTALL_DIR/tls/signaling.key" ]; then
-        runs_as_service -r "$INSTALL_DIR/tls/signaling.key" || return 1
+        service_can "read the signaling key" -r "$INSTALL_DIR/tls/signaling.key" || return 1
     fi
 
     # An existing certificate may live outside the install directory. It must be readable by the service account;
@@ -679,7 +699,7 @@ service_account_can_run() {
         for key in Path KeyPath; do
             path="$(plutil -extract "Kestrel.Certificates.Default.$key" raw "$settings" 2>/dev/null || true)"
             case "$path" in
-                /*) runs_as_service -r "$path" || return 1 ;;
+                /*) service_can "read the certificate at $path" -r "$path" || return 1 ;;
             esac
         done
     done
@@ -687,12 +707,22 @@ service_account_can_run() {
     return 0
 }
 
-if create_service_account && prepare_service_account && service_account_can_run; then
-    echo "  the servers run as $SERVICE_USER"
-else
-    echo "Remote Desktop Server: could not prepare the unprivileged $SERVICE_USER account; no service will be started as root." >&2
+if ! create_service_account; then
+    echo "Remote Desktop Server: could not create the unprivileged $SERVICE_USER account; no service will be started as root." >&2
     exit 1
 fi
+
+if ! prepare_service_account; then
+    echo "Remote Desktop Server: could not hand the servers' files to $SERVICE_USER; no service will be started as root." >&2
+    exit 1
+fi
+
+if ! service_account_can_run; then
+    echo "Remote Desktop Server: $SERVICE_USER cannot reach what the servers need; no service will be started as root." >&2
+    exit 1
+fi
+
+echo "  the servers run as $SERVICE_USER"
 
 # --- launchd -----------------------------------------------------------------------------------
 
