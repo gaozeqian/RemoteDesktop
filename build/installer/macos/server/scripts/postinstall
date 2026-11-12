@@ -651,9 +651,16 @@ prepare_service_account() {
     prepare_database_directories
 }
 
+# macOS keeps test in /bin; /usr/bin/test is where the GNU systems put it and does not exist here, so naming that
+# path makes sudo answer "command not found" and every probe fail for a reason that has nothing to do with the account.
+TEST_BINARY=/bin/test
+if [ ! -x "$TEST_BINARY" ]; then
+    TEST_BINARY=/usr/bin/test
+fi
+
 runs_as_service() {
     if [ -x /usr/bin/sudo ]; then
-        /usr/bin/sudo -u "$SERVICE_USER" /usr/bin/test "$@" >/dev/null 2>&1
+        /usr/bin/sudo -u "$SERVICE_USER" "$TEST_BINARY" "$@" >/dev/null 2>&1
         return $?
     fi
 
@@ -675,7 +682,7 @@ service_can() {
     # sudo's own words are the difference between "the account may not read this file" and "the account could not be
     # used at all", and both come back as the same nonzero status from a probe whose output is discarded.
     local detail
-    detail="$(/usr/bin/sudo -u "$SERVICE_USER" /usr/bin/test "$@" 2>&1)" || true
+    detail="$(/usr/bin/sudo -u "$SERVICE_USER" "$TEST_BINARY" "$@" 2>&1)" || true
     echo "Remote Desktop Server: the unprivileged $SERVICE_USER account cannot $description (${detail:-no output})." >&2
     return 1
 }
