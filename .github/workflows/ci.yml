@@ -210,9 +210,19 @@ jobs:
       - name: Install the macOS packages and verify the running daemons
         run: |
           set -euo pipefail
-          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-*.pkg -target /
-          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-*.pkg -target /
-          sudo installer -pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg -target /
+          # `installer` reports only "an error occurred while running scripts" when a pre/postinstall exits nonzero;
+          # the scripts' own output, and the exit code, are only in the system log. Without that tail a failing package
+          # install here says nothing about what failed.
+          install_pkg() {
+            if ! sudo installer -pkg "$1" -target / -dumplog; then
+              echo "--- /var/log/install.log (tail) ---" >&2
+              sudo tail -n 120 /var/log/install.log >&2
+              exit 1
+            fi
+          }
+          install_pkg artifacts/installer/macos/RemoteDesktop-Client-macOS-arm64-*.pkg
+          install_pkg artifacts/installer/macos/RemoteDesktop-Host-macOS-arm64-*.pkg
+          install_pkg artifacts/installer/macos/RemoteDesktop-Server-macOS-arm64-*.pkg
           for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesktop.ops com.remotedesktop.gateway; do
             launchctl print "system/$label" >/dev/null
             pid="$(launchctl print "system/$label" | awk '/^[[:space:]]*pid = [0-9]+$/ { print $3 }')"
