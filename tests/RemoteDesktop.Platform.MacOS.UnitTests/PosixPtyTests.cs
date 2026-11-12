@@ -41,12 +41,13 @@ public partial class PosixPtyTests
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         await using var session = Host.Start(Options("sh"));
+        var output = new OutputReader(session.Output);
+        await WaitForShellAsync(session, output);
 
         await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo hello-pty\nexit 7\n"), Ct);
         await session.Input.FlushAsync(Ct);
-        var output = await ReadToEndAsync(session, TimeSpan.FromSeconds(20));
 
-        Assert.Contains("hello-pty", output);
+        Assert.Contains("hello-pty", await output.UntilAsync("hello-pty", TimeSpan.FromSeconds(20)));
         Assert.Equal(7, await session.WaitForExitAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct));
     }
 
@@ -58,6 +59,8 @@ public partial class PosixPtyTests
         // -f keeps the user's rc files out of it: this test is about the terminal the shell was given, not about
         // whatever their prompt is configured to print.
         await using var session = Host.Start(Options("zsh", ["-f"]));
+        var output = new OutputReader(session.Output);
+        await WaitForShellAsync(session, output);
 
         await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo tty=$(tty)\n"), Ct);
         await session.Input.FlushAsync(Ct);
@@ -65,14 +68,14 @@ public partial class PosixPtyTests
         // Waiting for the command's output rather than for its echo: a terminal echoes what is typed, so matching
         // the command text would return before the shell had run anything. This also means the startup output has
         // been collected by the time the assertions run, which is where the complaint about job control appears.
-        var output = await WaitForOutputAsync(session, "tty=/dev/tty", TimeSpan.FromSeconds(20));
+        var banner = await output.UntilAsync("tty=/dev/tty", TimeSpan.FromSeconds(20));
 
         // The replica path is the proof the shell was attached to a pseudo-terminal at all...
-        Assert.Contains("tty=/dev/tty", output);
+        Assert.Contains("tty=/dev/tty", banner);
 
         // ...and the absence of this complaint is the proof that it was made the controlling one. Without a
         // controlling terminal zsh starts without job control and says so.
-        Assert.DoesNotContain("no job control", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no job control", banner, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -80,13 +83,15 @@ public partial class PosixPtyTests
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         await using var session = Host.Start(Options("sh", columns: 90, rows: 25));
+        var output = new OutputReader(session.Output);
+        await WaitForShellAsync(session, output);
 
         await session.Input.WriteAsync(Encoding.UTF8.GetBytes("stty size\n"), Ct);
-        await WaitForOutputAsync(session, "25 90", TimeSpan.FromSeconds(20));
+        await output.UntilAsync("25 90", TimeSpan.FromSeconds(20));
 
         session.Resize(120, 40);
         await session.Input.WriteAsync(Encoding.UTF8.GetBytes("stty size\n"), Ct);
-        await WaitForOutputAsync(session, "40 120", TimeSpan.FromSeconds(20));
+        await output.UntilAsync("40 120", TimeSpan.FromSeconds(20));
     }
 
     [Fact]
@@ -94,6 +99,8 @@ public partial class PosixPtyTests
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         var session = Host.Start(Options("sh"));
+        var output = new OutputReader(session.Output);
+        await WaitForShellAsync(session, output);
 
         // $! is the shell's own report of the background job's pid. Tracking that one process is what makes this
         // test mean what it says: counting every process named "sleep" on the machine made it fail whenever anything
@@ -104,8 +111,8 @@ public partial class PosixPtyTests
         await session.Input.WriteAsync(Encoding.UTF8.GetBytes("sleep 300 &\necho child-$!\n"), Ct);
         await session.Input.FlushAsync(Ct);
 
-        var output = await WaitForOutputAsync(session, text => ChildPattern().IsMatch(text), TimeSpan.FromSeconds(20));
-        var childPid = int.Parse(ChildPattern().Match(output).Groups[1].Value, CultureInfo.InvariantCulture);
+        var banner = await output.UntilAsync(text => ChildPattern().IsMatch(text), TimeSpan.FromSeconds(20));
+        var childPid = int.Parse(ChildPattern().Match(banner).Groups[1].Value, CultureInfo.InvariantCulture);
 
         Assert.True(IsRunning(childPid), $"The background sleep ({childPid}) should be running.");
 
@@ -149,37 +156,85 @@ public partial class PosixPtyTests
         }
     }
 
-    private static async Task<string> ReadToEndAsync(IPtySession session, TimeSpan timeout)
+    /// <summary>
+    /// Waits until the shell is reading. A login shell prints nothing while it runs the system profile — seconds on a
+    /// hosted runner — and a line typed into that window is echoed by the terminal driver and then discarded, which is
+    /// what made these tests fail there and nowhere else. The probe is repeated because an early one is lost; only a
+    /// shell that ran the command prints "ready-42", since the echoed line carries the $((6 * 7)) text instead.
+    /// </summary>
+    private static async Task WaitForShellAsync(IPtySession session, OutputReader output)
     {
-        var text = new StringBuilder();
-        var buffer = new byte[8192];
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        limit.CancelAfter(timeout);
-        int read;
-        while ((read = await session.Output.ReadAsync(buffer, limit.Token)) > 0)
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
         {
-            text.Append(Encoding.UTF8.GetString(buffer, 0, read));
+            await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo ready-$((6 * 7))\n"), Ct);
+            await session.Input.FlushAsync(Ct);
+            try
+            {
+                await output.UntilAsync("ready-42", TimeSpan.FromMilliseconds(500));
+                return;
+            }
+            catch (TimeoutException)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "The shell never answered.");
+            }
         }
-
-        return text.ToString();
     }
 
-    private static Task<string> WaitForOutputAsync(IPtySession session, string expected, TimeSpan timeout) =>
-        WaitForOutputAsync(session, text => text.Contains(expected, StringComparison.Ordinal), timeout);
-
-    private static async Task<string> WaitForOutputAsync(IPtySession session, Func<string, bool> isSatisfied, TimeSpan timeout)
+    /// <summary>Reads the terminal continuously, so a test can wait for something to appear in it.</summary>
+    private sealed class OutputReader
     {
-        var text = new StringBuilder();
-        var buffer = new byte[8192];
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        limit.CancelAfter(timeout);
-        while (!isSatisfied(text.ToString()))
+        private readonly StringBuilder _seen = new();
+        private readonly Lock _gate = new();
+
+        public OutputReader(Stream source)
         {
-            var read = await session.Output.ReadAsync(buffer, limit.Token);
-            Assert.True(read > 0, $"The output ended before the expected text appeared: {text}");
-            text.Append(Encoding.UTF8.GetString(buffer, 0, read));
+            var reading = Ct;
+            _ = Task.Run(async () =>
+            {
+                var buffer = new byte[8192];
+                try
+                {
+                    while (await source.ReadAsync(buffer, reading) is var read and > 0)
+                    {
+                        lock (_gate)
+                        {
+                            _seen.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+                {
+                    // The session was closed, which is how these tests end.
+                }
+            });
         }
 
-        return text.ToString();
+        public Task<string> UntilAsync(string marker, TimeSpan timeout) =>
+            UntilAsync(text => text.Contains(marker, StringComparison.Ordinal), timeout);
+
+        /// <summary>Waits for <paramref name="isSatisfied"/> and returns everything read so far.</summary>
+        public async Task<string> UntilAsync(Func<string, bool> isSatisfied, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (_gate)
+                {
+                    var text = _seen.ToString();
+                    if (isSatisfied(text))
+                    {
+                        return text;
+                    }
+                }
+
+                await Task.Delay(25, Ct);
+            }
+
+            lock (_gate)
+            {
+                throw new TimeoutException($"The expected text never appeared. The terminal had:\n{_seen}");
+            }
+        }
     }
 }

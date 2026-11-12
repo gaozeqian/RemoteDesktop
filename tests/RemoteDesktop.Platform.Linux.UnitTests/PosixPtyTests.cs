@@ -131,10 +131,12 @@ public sealed class PosixPtyTests
         var output = Read(session);
         await WaitForShellAsync(session, output);
 
-        // Start something long, then interrupt it the way a terminal does — by writing the control character, so that
-        // the tty driver is what decides who gets signalled.
-        await WriteAsync(session, "sleep 30\n");
-        await Task.Delay(500, Ct);
+        // Start something long that announces itself first, then interrupt it the way a terminal does — by writing the
+        // control character, so the tty driver is what decides who gets signalled. The announcement is what makes the
+        // interrupt land on the sleep: a fixed pause only guesses at how long the shell takes to start it, and on a
+        // contended runner the ^C then reaches the prompt instead.
+        await WriteAsync(session, "echo running-$((6 * 7)); sleep 30; echo slept-42\n");
+        await output.UntilAsync("running-42", TimeSpan.FromSeconds(10));
         await WriteAsync(session, "\u0003");
 
         // If the shell were not the leader of its own session with this terminal as its controlling one, the tty
