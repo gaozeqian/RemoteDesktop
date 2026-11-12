@@ -41,6 +41,7 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
         await WriteAsync(session, "echo marker-$((6 * 7))\n");
 
@@ -56,8 +57,10 @@ public sealed class PosixPtyTests
         // wrong shape and looks like a broken emulator.
         await using var session = Start("sh", columns: 100, rows: 40);
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
-        Assert.Contains("40 100", await AskForSizeAsync(session, output, "40 100"));
+        await WriteAsync(session, "stty size\n");
+        Assert.Contains("40 100", await output.UntilAsync("40 100"));
     }
 
     [Fact]
@@ -67,12 +70,15 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh", columns: 80, rows: 24);
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
-        await AskForSizeAsync(session, output, "24 80");
+        await WriteAsync(session, "stty size\n");
+        await output.UntilAsync("24 80");
 
         session.Resize(120, 50);
 
-        Assert.Contains("50 120", await AskForSizeAsync(session, output, "50 120"));
+        await WriteAsync(session, "stty size\n");
+        Assert.Contains("50 120", await output.UntilAsync("50 120"));
     }
 
     [Fact]
@@ -82,6 +88,7 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
         // Start something long, then interrupt it the way a terminal does — by writing the control character, so that
         // the tty driver is what decides who gets signalled.
@@ -103,6 +110,7 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
         await WriteAsync(session, "exit 7\n");
 
@@ -116,6 +124,7 @@ public sealed class PosixPtyTests
 
         var session = Start("sh");
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
         // Something that would outlive the shell: a plain shell does not pass a hangup on to its background jobs, so
         // signalling only the shell would leave this running with nothing attached to it.
@@ -231,6 +240,7 @@ public sealed class PosixPtyTests
     private static async Task<string> ListOpenDescriptorsAsync(IPtySession session)
     {
         var output = Read(session);
+        await WaitForShellAsync(session, output);
 
         // The marker is typed as don""e so that the line the terminal echoes back does not contain it.
         await WriteAsync(session, "ls -l /proc/self/fd; echo don\"\"e-$((6 * 7))\n");
@@ -262,25 +272,28 @@ public sealed class PosixPtyTests
     }
 
     /// <summary>
-    /// Asks a freshly started shell for its terminal size, and types the question again if the first line was
-    /// swallowed. The size is set before the shell exists, but a line typed into the window where the shell has not
-    /// read anything yet is echoed by the terminal driver and then discarded when the shell puts the terminal into
-    /// its own mode — macOS's bash does exactly that, while Linux's dash does not, which is why this only ever cost
-    /// a run there. A shell that answers with the wrong shape still fails: the retry only repeats the question.
+    /// Waits until the shell is reading, by typing a probe until one comes back answered. A login shell prints nothing
+    /// while it runs the system profile, and a line typed into that window is echoed by the terminal driver and then
+    /// discarded — macOS's bash, with a profile that takes seconds on a hosted runner, is where this bit; Linux's dash
+    /// is ready before the first line arrives. Every test here types into a shell that has just started, so each one
+    /// waits for this first rather than assuming the shell was already listening.
     /// </summary>
-    private static async Task<string> AskForSizeAsync(IPtySession session, OutputReader output, string expected)
+    private static async Task WaitForShellAsync(IPtySession session, OutputReader output)
     {
-        for (var attempt = 1; ; attempt++)
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
         {
-            await WriteAsync(session, "stty size\n");
+            await WriteAsync(session, "echo ready-$((6 * 7))\n");
             try
             {
-                // The first attempt gets the short deadline: it only has to cover a shell that was already reading.
-                return await output.UntilAsync(expected, TimeSpan.FromSeconds(attempt == 1 ? 5 : 15));
+                // The probe is repeated because one written before the shell was reading is lost, and the marker is
+                // only printed by a shell that ran the command: the echoed line carries the $((6 * 7)) text instead.
+                await output.UntilAsync("ready-42", TimeSpan.FromMilliseconds(500));
+                return;
             }
-            catch (TimeoutException) when (attempt < 2)
+            catch (TimeoutException)
             {
-                // Typed ahead of the shell's own terminal setup; ask again now that it exists.
+                Assert.True(DateTime.UtcNow < deadline, "The shell never answered.");
             }
         }
     }
