@@ -175,6 +175,9 @@ run_postinstall() {
 }
 custom="$work/shared/remotedesktop-custom"
 mkdir -p "$custom"
+# The postinstall runs the database directory through realpath before it chowns it, and on macOS /var is a symlink
+# into /private/var — the log then holds a path that neither mktemp nor $work ever printed. Compare canonical forms.
+custom="$(cd "$custom" && pwd -P)"
 printf 'keep\n' >"$custom/sentinel"
 RD_TEST_DATABASE_PATH="$custom/rendezvous.db" run_postinstall
 grep -F keep "$custom/sentinel" >/dev/null

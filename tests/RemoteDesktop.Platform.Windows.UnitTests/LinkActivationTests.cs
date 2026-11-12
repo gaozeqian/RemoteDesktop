@@ -25,7 +25,17 @@ public sealed class LinkActivationTests
         Assert.NotNull(listener);
 
         Assert.True(ConnectionLink.TryParse("remotedesktop://connect?code=902226105", out var link));
-        Assert.True(LinkActivation.TryForward(link, pipe));
+
+        // The listener is started on a thread-pool thread, so its pipe may not exist the instant TryListen returns.
+        // Forwarding is exactly the operation that has to cope with a client that is still starting — it retries for
+        // two seconds inside — but a loaded runner can hold the thread pool longer than that, and the assertion is
+        // that the link arrives, not that one attempt beat the scheduler.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!LinkActivation.TryForward(link, pipe))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The running client never accepted the link.");
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
 
         var taken = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal("902226105", taken.Device.ToString());

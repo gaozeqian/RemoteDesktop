@@ -72,6 +72,10 @@ public sealed class TerminalSessionTests(ServerFixture server) : IClassFixture<S
         var ended = new TaskCompletionSource();
         session.Ended += (_, _) => ended.TrySetResult();
 
+        // The shell has to be up before it is told to leave: the fake writes this banner as soon as it exists, and a
+        // line sent into a session that has not started yet is the race this waits out.
+        await WaitForScreenAsync(session, "ready");
+
         session.SendText("exit\r");
 
         await ended.Task.WaitAsync(TimeSpan.FromSeconds(15), Ct);

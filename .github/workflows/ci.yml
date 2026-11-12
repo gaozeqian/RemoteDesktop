@@ -154,9 +154,12 @@ jobs:
             test "$pid" -gt 0
             test "$(ps -o user= -p "$pid" | tr -d ' ')" = remotedesktop
           done
-          # The rendezvous answers the text "Healthy"; the relay and the console answer JSON, the console's naming the
-          # database it probed. -f has already failed on anything but a 2xx, so the word is the whole assertion.
-          for port in 5080 5083 5090; do
+          # The server package's TLS question defaults to generating a self-signed certificate, so the rendezvous
+          # answers https on 5080; the relay and the console stay on loopback HTTP, with the gateway in front of the
+          # console. The rendezvous answers the text "Healthy" and the other two answer JSON, and -f has already
+          # failed on anything but a 2xx, so the word is the whole assertion.
+          curl -kfsS https://127.0.0.1:5080/health | grep -qi healthy
+          for port in 5083 5090; do
             curl -fsS "http://127.0.0.1:$port/health" | grep -qi healthy
           done
           test "$(curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1:5443/health)" = 404
@@ -216,8 +219,10 @@ jobs:
             test -n "$pid"
             test "$(ps -o user= -p "$pid" | tr -d ' ')" = _remotedesktop
           done
-          # The rendezvous answers the text "Healthy"; the relay and the console answer JSON, the console's naming the
-          # database it probed. -f has already failed on anything but a 2xx, so the word is the whole assertion.
+          # A scripted install answers no TLS question, so this package keeps the plain HTTP listener on 5080 — the
+          # Linux job's package generates a certificate instead and is probed over https. The rendezvous answers the
+          # text "Healthy" and the relay and the console answer JSON, and -f has already failed on anything but a 2xx,
+          # so the word is the whole assertion.
           for port in 5080 5083 5090; do
             curl -fsS "http://127.0.0.1:$port/health" | grep -qi healthy
           done
