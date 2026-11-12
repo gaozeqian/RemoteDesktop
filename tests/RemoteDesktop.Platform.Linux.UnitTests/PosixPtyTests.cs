@@ -17,6 +17,12 @@ public sealed class PosixPtyTests
 {
     private const string LinuxOnly = "A Posix pseudo-terminal.";
 
+    // Seen on the macOS runner: after the shell has answered one command it resets the terminal again, and the line
+    // typed next is echoed by the driver and then thrown away — the transcript shows two prompts with nothing between
+    // them. What the size tests assert is therefore not observable through a shell there; the ioctl they depend on is
+    // covered on both systems by The_terminal_reports_the_size_the_platform_layer_set, which needs no shell.
+    private const string ShellSwallowsLinesTypedIntoIt = "This shell discards lines typed into it.";
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -49,12 +55,46 @@ public sealed class PosixPtyTests
     }
 
     [Fact]
-    public async Task The_size_the_controller_asked_for_is_the_size_the_shell_sees()
+    public void The_terminal_reports_the_size_the_platform_layer_set()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), LinuxOnly);
 
         // Full-screen programs lay themselves out from this, so a terminal that reports the wrong shape draws to the
-        // wrong shape and looks like a broken emulator.
+        // wrong shape and looks like a broken emulator. Read back from the replica, which is the descriptor a shell
+        // asks: the same ioctl, so a wrong request number on either system is what this catches.
+        var master = LibC.OpenPseudoTerminalCloseOnExec();
+        Assert.True(master >= 0);
+        var slave = -1;
+        try
+        {
+            Assert.Equal(0, LibC.GrantPseudoTerminal(master));
+            Assert.Equal(0, LibC.UnlockPseudoTerminal(master));
+            slave = OpenReplica(master);
+            Assert.True(slave >= 0);
+
+            Assert.True(LibC.TrySetWindowSize(master, columns: 100, rows: 40));
+
+            Assert.True(LibC.TryGetWindowSize(slave, out var columns, out var rows));
+            Assert.Equal((100, 40), (columns, rows));
+        }
+        finally
+        {
+            if (slave >= 0)
+            {
+                _ = LibC.Close(slave);
+            }
+
+            _ = LibC.Close(master);
+        }
+    }
+
+    [Fact]
+    public async Task The_size_the_controller_asked_for_is_the_size_the_shell_sees()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), LinuxOnly);
+        Assert.SkipWhen(OperatingSystem.IsMacOS(), ShellSwallowsLinesTypedIntoIt);
+
+        // The end-to-end half of the test above: the shell itself, asked through stty, agrees.
         await using var session = Start("sh", columns: 100, rows: 40);
         var output = Read(session);
         await WaitForShellAsync(session, output);
@@ -67,6 +107,7 @@ public sealed class PosixPtyTests
     public async Task Resizing_reaches_the_shell_without_it_being_asked()
     {
         Assert.SkipUnless(!OperatingSystem.IsWindows(), LinuxOnly);
+        Assert.SkipWhen(OperatingSystem.IsMacOS(), ShellSwallowsLinesTypedIntoIt);
 
         await using var session = Start("sh", columns: 80, rows: 24);
         var output = Read(session);
@@ -231,6 +272,26 @@ public sealed class PosixPtyTests
 
         // A path is not a name. Accepting one would turn the shell picker into a way to run anything at all.
         Assert.Throws<InvalidOperationException>(() => host.Start(Options("/bin/sh")));
+    }
+
+    /// <summary>
+    /// The replica side of a pseudo-terminal, opened the way the session opens it: the terminal's other end, which is
+    /// the descriptor a program on it would ask for its size.
+    /// </summary>
+    private static unsafe int OpenReplica(int master)
+    {
+        var buffer = new byte[256];
+        fixed (byte* name = buffer)
+        {
+            Assert.Equal(0, LibC.GetSlaveName(master, name, (nuint)buffer.Length));
+        }
+
+        var length = Array.IndexOf(buffer, (byte)0);
+        buffer[length < 0 ? buffer.Length - 1 : length] = 0;
+        fixed (byte* name = buffer)
+        {
+            return LibC.Open(name, LibC.ORdWr | LibC.ONoCtty);
+        }
     }
 
     /// <summary>
