@@ -47,11 +47,8 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
-        await WriteAsync(session, "echo marker-$((6 * 7))\n");
-
-        Assert.Contains("marker-42", await output.UntilAsync("marker-42"));
+        Assert.Contains("marker-42", await AskAsync(session, output, "echo marker-$((6 * 7))\n", "marker-42"));
     }
 
     [Fact]
@@ -97,10 +94,8 @@ public sealed class PosixPtyTests
         // The end-to-end half of the test above: the shell itself, asked through stty, agrees.
         await using var session = Start("sh", columns: 100, rows: 40);
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
-        await WriteAsync(session, "stty size\n");
-        Assert.Contains("40 100", await output.UntilAsync("40 100"));
+        Assert.Contains("40 100", await AskAsync(session, output, "stty size\n", "40 100"));
     }
 
     [Fact]
@@ -111,15 +106,12 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh", columns: 80, rows: 24);
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
-        await WriteAsync(session, "stty size\n");
-        await output.UntilAsync("24 80");
+        await AskAsync(session, output, "stty size\n", "24 80");
 
         session.Resize(120, 50);
 
-        await WriteAsync(session, "stty size\n");
-        Assert.Contains("50 120", await output.UntilAsync("50 120"));
+        Assert.Contains("50 120", await AskAsync(session, output, "stty size\n", "50 120"));
     }
 
     [Fact]
@@ -129,21 +121,19 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
         // Start something long that announces itself first, then interrupt it the way a terminal does — by writing the
         // control character, so the tty driver is what decides who gets signalled. The announcement is what makes the
         // interrupt land on the sleep: a fixed pause only guesses at how long the shell takes to start it, and on a
         // contended runner the ^C then reaches the prompt instead.
-        await WriteAsync(session, "echo running-$((6 * 7)); sleep 30; echo slept-42\n");
-        await output.UntilAsync("running-42", TimeSpan.FromSeconds(10));
+        await AskAsync(session, output, "echo running-$((6 * 7)); sleep 30; echo slept-42\n", "running-42");
         await WriteAsync(session, "\u0003");
 
         // If the shell were not the leader of its own session with this terminal as its controlling one, the tty
         // would have nobody to send the interrupt to and the sleep would run to the end — so this line would not be
-        // reached for thirty seconds.
-        await WriteAsync(session, "echo interrupted\n");
-        Assert.Contains("interrupted", await output.UntilAsync("interrupted", TimeSpan.FromSeconds(10)));
+        // reached for thirty seconds. The empty quotes keep the marker out of the echo of the line itself, and the
+        // arithmetic keeps it out of the command text: only a shell that ran the echo prints "ted-42".
+        Assert.Contains("ted-42", await AskAsync(session, output, "echo interrup''ted-$((6 * 7))\n", "ted-42", TimeSpan.FromSeconds(15)));
     }
 
     [Fact]
@@ -153,11 +143,23 @@ public sealed class PosixPtyTests
 
         await using var session = Start("sh");
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
-        await WriteAsync(session, "exit 7\n");
-
-        Assert.Equal(7, await session.WaitForExitAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct));
+        // No marker to wait for: the line makes the shell go away, so it is typed again until it does. A line that
+        // was swallowed leaves the shell at its prompt, which is indistinguishable from a slow one without a retry.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (true)
+        {
+            await WriteAsync(session, "exit 7\n");
+            try
+            {
+                Assert.Equal(7, await session.WaitForExitAsync(Ct).WaitAsync(TimeSpan.FromSeconds(1), Ct));
+                return;
+            }
+            catch (TimeoutException)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "The shell never acted on 'exit 7'.");
+            }
+        }
     }
 
     [Fact]
@@ -167,7 +169,6 @@ public sealed class PosixPtyTests
 
         var session = Start("sh");
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
         // Something that would outlive the shell: a plain shell does not pass a hangup on to its background jobs, so
         // signalling only the shell would leave this running with nothing attached to it.
@@ -175,8 +176,7 @@ public sealed class PosixPtyTests
         // The marker is typed with an empty quote inside it — star""ted — so that the shell prints "started" while the
         // line the terminal echoes back contains something else. A terminal echoes what is written to it, so without
         // that the marker would appear in the output before the command had even run.
-        await WriteAsync(session, "sleep 30 &\necho star\"\"ted-$!\n");
-        var started = await output.UntilAsync("started-");
+        var started = await AskAsync(session, output, "sleep 30 &\necho star\"\"ted-$!\n", "started-");
         var backgroundId = int.Parse(started.Split("started-")[1].Split(['\r', '\n'])[0], System.Globalization.CultureInfo.InvariantCulture);
 
         await session.DisposeAsync();
@@ -303,11 +303,9 @@ public sealed class PosixPtyTests
     private static async Task<string> ListOpenDescriptorsAsync(IPtySession session)
     {
         var output = Read(session);
-        await WaitForShellAsync(session, output);
 
         // The marker is typed as don""e so that the line the terminal echoes back does not contain it.
-        await WriteAsync(session, "ls -l /proc/self/fd; echo don\"\"e-$((6 * 7))\n");
-        var text = await output.UntilAsync("done-42");
+        var text = await AskAsync(session, output, "ls -l /proc/self/fd; echo don\"\"e-$((6 * 7))\n", "done-42");
 
         // The listing must really be there, or "no ptmx" would be true of an empty answer.
         Assert.Contains("/dev/pts/", text, StringComparison.Ordinal);
@@ -335,28 +333,27 @@ public sealed class PosixPtyTests
     }
 
     /// <summary>
-    /// Waits until the shell is reading, by typing a probe until one comes back answered. A login shell prints nothing
-    /// while it runs the system profile, and a line typed into that window is echoed by the terminal driver and then
-    /// discarded — macOS's bash, with a profile that takes seconds on a hosted runner, is where this bit; Linux's dash
-    /// is ready before the first line arrives. Every test here types into a shell that has just started, so each one
-    /// waits for this first rather than assuming the shell was already listening.
+    /// Types a command and waits for what the shell prints for it, typing it again until that appears. A login shell
+    /// prints nothing while it runs the system profile and resets the terminal afterwards, and a line that arrives in
+    /// that window is echoed by the terminal driver and then discarded — macOS's bash does it on a hosted runner, and
+    /// the transcript shows two prompts with nothing between them. One write is therefore not enough; a write that is
+    /// repeated until the marker shows up is, because the resets stop.
     /// </summary>
-    private static async Task WaitForShellAsync(IPtySession session, OutputReader output)
+    private static async Task<string> AskAsync(IPtySession session, OutputReader output, string command, string marker, TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
         while (true)
         {
-            await WriteAsync(session, "echo ready-$((6 * 7))\n");
+            await WriteAsync(session, command);
             try
             {
-                // The probe is repeated because one written before the shell was reading is lost, and the marker is
-                // only printed by a shell that ran the command: the echoed line carries the $((6 * 7)) text instead.
-                await output.UntilAsync("ready-42", TimeSpan.FromMilliseconds(500));
-                return;
+                // Short, because the answer to a line that was swallowed is nothing at all: waiting the whole budget
+                // on the first attempt only delays the retry that lands.
+                return await output.UntilAsync(marker, TimeSpan.FromSeconds(1));
             }
             catch (TimeoutException)
             {
-                Assert.True(DateTime.UtcNow < deadline, "The shell never answered.");
+                Assert.True(DateTime.UtcNow < deadline, $"'{marker}' never appeared.");
             }
         }
     }

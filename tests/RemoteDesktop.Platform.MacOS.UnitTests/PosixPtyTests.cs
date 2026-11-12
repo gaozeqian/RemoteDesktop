@@ -42,12 +42,11 @@ public partial class PosixPtyTests
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         await using var session = Host.Start(Options("sh"));
         var output = new OutputReader(session.Output);
-        await WaitForShellAsync(session, output);
 
-        await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo hello-pty\nexit 7\n"), Ct);
-        await session.Input.FlushAsync(Ct);
-
-        Assert.Contains("hello-pty", await output.UntilAsync("hello-pty", TimeSpan.FromSeconds(20)));
+        // The empty quotes and the arithmetic keep the marker out of the echo of the typed line: only a shell that ran
+        // the command prints "ty-42".
+        var banner = await AskAsync(session, output, "echo hello-pl\"\"ty-$((6 * 7))\nexit 7\n", "ty-42", TimeSpan.FromSeconds(20));
+        Assert.Contains("ty-42", banner);
         Assert.Equal(7, await session.WaitForExitAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct));
     }
 
@@ -60,15 +59,11 @@ public partial class PosixPtyTests
         // whatever their prompt is configured to print.
         await using var session = Host.Start(Options("zsh", ["-f"]));
         var output = new OutputReader(session.Output);
-        await WaitForShellAsync(session, output);
-
-        await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo tty=$(tty)\n"), Ct);
-        await session.Input.FlushAsync(Ct);
 
         // Waiting for the command's output rather than for its echo: a terminal echoes what is typed, so matching
         // the command text would return before the shell had run anything. This also means the startup output has
         // been collected by the time the assertions run, which is where the complaint about job control appears.
-        var banner = await output.UntilAsync("tty=/dev/tty", TimeSpan.FromSeconds(20));
+        var banner = await AskAsync(session, output, "echo tty=$(tty)\n", "tty=/dev/tty", TimeSpan.FromSeconds(20));
 
         // The replica path is the proof the shell was attached to a pseudo-terminal at all...
         Assert.Contains("tty=/dev/tty", banner);
@@ -84,14 +79,11 @@ public partial class PosixPtyTests
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         await using var session = Host.Start(Options("sh", columns: 90, rows: 25));
         var output = new OutputReader(session.Output);
-        await WaitForShellAsync(session, output);
 
-        await session.Input.WriteAsync(Encoding.UTF8.GetBytes("stty size\n"), Ct);
-        await output.UntilAsync("25 90", TimeSpan.FromSeconds(20));
+        await AskAsync(session, output, "stty size\n", "25 90", TimeSpan.FromSeconds(20));
 
         session.Resize(120, 40);
-        await session.Input.WriteAsync(Encoding.UTF8.GetBytes("stty size\n"), Ct);
-        await output.UntilAsync("40 120", TimeSpan.FromSeconds(20));
+        await AskAsync(session, output, "stty size\n", "40 120", TimeSpan.FromSeconds(20));
     }
 
     [Fact]
@@ -100,7 +92,6 @@ public partial class PosixPtyTests
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "The BSD pseudo-terminal is macOS only.");
         var session = Host.Start(Options("sh"));
         var output = new OutputReader(session.Output);
-        await WaitForShellAsync(session, output);
 
         // $! is the shell's own report of the background job's pid. Tracking that one process is what makes this
         // test mean what it says: counting every process named "sleep" on the machine made it fail whenever anything
@@ -108,10 +99,12 @@ public partial class PosixPtyTests
         //
         // The awaited pattern needs digits after "child-", so the terminal's echo of the typed line — which contains
         // the literal "$!" — cannot satisfy it. Only the shell having run the line can.
-        await session.Input.WriteAsync(Encoding.UTF8.GetBytes("sleep 300 &\necho child-$!\n"), Ct);
-        await session.Input.FlushAsync(Ct);
-
-        var banner = await output.UntilAsync(text => ChildPattern().IsMatch(text), TimeSpan.FromSeconds(20));
+        var banner = await AskAsync(
+            session,
+            output,
+            "sleep 300 &\necho child-$!\n",
+            text => ChildPattern().IsMatch(text),
+            TimeSpan.FromSeconds(20));
         var childPid = int.Parse(ChildPattern().Match(banner).Groups[1].Value, CultureInfo.InvariantCulture);
 
         Assert.True(IsRunning(childPid), $"The background sleep ({childPid}) should be running.");
@@ -157,22 +150,24 @@ public partial class PosixPtyTests
     }
 
     /// <summary>
-    /// Waits until the shell is reading. A login shell prints nothing while it runs the system profile — seconds on a
-    /// hosted runner — and a line typed into that window is echoed by the terminal driver and then discarded, which is
-    /// what made these tests fail there and nowhere else. The probe is repeated because an early one is lost; only a
-    /// shell that ran the command prints "ready-42", since the echoed line carries the $((6 * 7)) text instead.
+    /// Types a command and waits for what the shell prints for it, typing it again until that appears. A login shell
+    /// prints nothing while it runs the system profile — seconds on a hosted runner — and resets the terminal
+    /// afterwards; a line that arrives in that window is echoed by the driver and then discarded, which is what the
+    /// transcript's two prompts with nothing between them were. One write is not enough there; a repeated one is.
     /// </summary>
-    private static async Task WaitForShellAsync(IPtySession session, OutputReader output)
+    private static async Task<string> AskAsync(
+        IPtySession session, OutputReader output, string command, Func<string, bool> isAnswered, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var deadline = DateTime.UtcNow + timeout;
         while (true)
         {
-            await session.Input.WriteAsync(Encoding.UTF8.GetBytes("echo ready-$((6 * 7))\n"), Ct);
+            await session.Input.WriteAsync(Encoding.UTF8.GetBytes(command), Ct);
             await session.Input.FlushAsync(Ct);
             try
             {
-                await output.UntilAsync("ready-42", TimeSpan.FromMilliseconds(500));
-                return;
+                // Short, because the answer to a line that was swallowed is nothing at all: waiting the whole budget
+                // on the first attempt only delays the retry that lands.
+                return await output.UntilAsync(isAnswered, TimeSpan.FromSeconds(1));
             }
             catch (TimeoutException)
             {
@@ -180,6 +175,10 @@ public partial class PosixPtyTests
             }
         }
     }
+
+    private static Task<string> AskAsync(
+        IPtySession session, OutputReader output, string command, string marker, TimeSpan timeout) =>
+        AskAsync(session, output, command, text => text.Contains(marker, StringComparison.Ordinal), timeout);
 
     /// <summary>Reads the terminal continuously, so a test can wait for something to appear in it.</summary>
     private sealed class OutputReader
