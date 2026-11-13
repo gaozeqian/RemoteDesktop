@@ -1659,9 +1659,9 @@ host 的 `UnattendedPassword` 也会留在这份文件里（`root:wheel`，0600�
 # 产出 artifacts/installer/windows/RemoteDesktop-Host-Windows-x64-<版本>.msi
 ```
 
-两个包走同一个脚本（`Build-ClientInstaller.ps1 -HostOnly`）：服务定义、崩溃重启、UDP 防火墙规则和
-`--configure-system` 只有一份，所以不会出现"客户端那个修好了、被控端那个还是旧行为"。产品名与 UpgradeCode
-各自独立；两者共用服务名、不能同机共存，规则见 [安装](#2-安装)。
+两个包走同一个脚本、共用一套服务定义与防火墙规则；为什么这样分、脚本与角色目录怎么对应，见
+[`build/README.md`](../../build/README.md) 的“这个目录怎么分层”。两者共用服务名、不能同机共存，规则见
+[安装](#2-安装)。
 
 **Host 包的安装向导多一页“无人值守设置”**：host 装完没有窗口，临时密码只存在进程内存里，所以这一页是全新
 机器唯一能直接输入固定密码的地方。留空表示不修改已有密码；勾选“清除已设置”则清掉。静默安装等价于：
@@ -1772,9 +1772,9 @@ build/installer/macos/server/make-pkg.sh --configuration Release
 
 macOS 打包有三处值得知道的构建细节：
 
-- **安装面板是编出来的**：`native/macos/build-installer-plugin.sh` 用 `clang` 编译
-  `native/macos/rd_installer_plugin.m`，三个 make-pkg 都会调用它，并用 `productbuild --plugins` 放进产品归档。
-  传 `--distribution` 且找到签名身份时，它用同一个 `Developer ID Application` 身份签名；分发时被公证一起扫描。
+- **安装面板是编出来的**：三个 `.pkg` 共用一个由 `native/macos/rd_installer_plugin.m` 编译的 Installer 面板；
+  目录归属与两个角色共用它的原因见 [`build/README.md`](../../build/README.md)。
+  传 `--distribution` 且找到签名身份时，面板用同一个 `Developer ID Application` 身份签名，分发时被公证一起扫描。
 - **服务端载荷逐个签名**：`make-pkg.sh --distribution` 会对 payload 里的每个 Mach-O（四个 apphost 与原生库）
   单独签名；做法与原因见 [`build/signing/README.md`](../../build/signing/README.md) 的 macOS 一节。
 - **一次性密码不进包**：`--distribution` 拒绝 `--postgres` / `--relay-key` / `--tls-password`。安装期答案由
@@ -1782,7 +1782,8 @@ macOS 打包有三处值得知道的构建细节：
 
 ### Linux（`.deb`）
 
-三个包各装各的，在 Linux 上构建（自包含发布，目标机器不需要装 .NET）：
+三个包各装各的（角色划分与脚本分层见 [`build/README.md`](../../build/README.md)），在 Linux 上构建
+（自包含发布，目标机器不需要装 .NET）：
 
 ```bash
 build/installer/linux/client/build-deb.sh   # 用来控制别人
