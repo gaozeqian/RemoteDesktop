@@ -10,7 +10,7 @@ namespace RemoteDesktop.Platform.Windows.Display;
 /// per-monitor DPI aware process.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class DxgiDisplayEnumerator : IDisplayEnumerator
+internal sealed class DxgiDisplayEnumerator : IDisplayEnumerator
 {
     public IReadOnlyList<DisplayInfo> GetDisplays()
     {

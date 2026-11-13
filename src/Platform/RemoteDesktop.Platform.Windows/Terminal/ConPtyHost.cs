@@ -8,7 +8,7 @@ namespace RemoteDesktop.Platform.Windows.Terminal;
 /// in the session agent (the signed-in user), never in a service or the login-screen agent.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class ConPtyHost : IPtyHost
+internal sealed class ConPtyHost : IPtyHost
 {
     // The names the controller sees, best default first. They are looked up here; a controller never supplies a path.
     private static readonly string[] ShellNames = ["pwsh", "powershell", "cmd"];

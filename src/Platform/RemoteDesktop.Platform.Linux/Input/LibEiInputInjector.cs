@@ -32,7 +32,7 @@ namespace RemoteDesktop.Platform.Linux.Input;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, IDisposable
+internal sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, IDisposable
 {
     /// <summary>BTN_LEFT and the four to its right, from linux/input-event-codes.h.</summary>
     private const uint ButtonLeft = 0x110;

@@ -28,7 +28,7 @@ namespace RemoteDesktop.Platform.Linux.Display;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandDisplayEnumerator(ILogger<WaylandDisplayEnumerator> logger) : IDisplayEnumerator, IDisposable
+internal sealed partial class WaylandDisplayEnumerator(ILogger<WaylandDisplayEnumerator> logger) : IDisplayEnumerator, IDisposable
 {
     private MutterDisplayConfig? _compositor;
     private bool _reportedFailure;

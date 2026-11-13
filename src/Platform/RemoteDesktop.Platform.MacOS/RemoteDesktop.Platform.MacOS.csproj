@@ -20,6 +20,8 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.MacOS.UnitTests" />
+    <!-- The transport suite composes the platform's codecs to exercise real encode/decode paths. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
   </ItemGroup>
   <!-- The Objective-C helper is built by native/macos/build-native.sh into artifacts/lib; it is embedded into the
        .app bundle by the packaging script. Keep it out of the compile set. -->

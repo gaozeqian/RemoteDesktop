@@ -29,7 +29,7 @@ namespace RemoteDesktop.Platform.Linux.Clipboard;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandClipboard(
+internal sealed partial class WaylandClipboard(
     PortalControlSession control,
     ILogger<WaylandClipboard> logger) : IClipboard, IDisposable
 {

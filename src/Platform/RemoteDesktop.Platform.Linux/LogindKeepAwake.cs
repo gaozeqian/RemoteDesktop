@@ -26,7 +26,7 @@ namespace RemoteDesktop.Platform.Linux;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class LogindKeepAwake(ILogger<LogindKeepAwake> logger) : ISystemKeepAwake, IDisposable
+internal sealed partial class LogindKeepAwake(ILogger<LogindKeepAwake> logger) : ISystemKeepAwake, IDisposable
 {
     private const string Destination = "org.freedesktop.login1";
     private const string ObjectPath = "/org/freedesktop/login1";

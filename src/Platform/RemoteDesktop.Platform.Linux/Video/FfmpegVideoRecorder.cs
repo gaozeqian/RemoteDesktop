@@ -22,7 +22,7 @@ namespace RemoteDesktop.Platform.Linux.Video;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegVideoRecorder : IVideoRecorder
+internal sealed class FfmpegVideoRecorder : IVideoRecorder
 {
     /// <summary>A second of frames at the usual rate. Beyond that the recording is behind live and dropping is kind.</summary>
     private const int QueueLength = 30;
@@ -482,7 +482,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
 /// <summary>Creates a recorder per recording, which is how the callers use it.</summary>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegVideoRecorderFactory : IVideoRecorderFactory
+internal sealed class FfmpegVideoRecorderFactory : IVideoRecorderFactory
 {
     public IVideoRecorder Create() => new FfmpegVideoRecorder();
 }

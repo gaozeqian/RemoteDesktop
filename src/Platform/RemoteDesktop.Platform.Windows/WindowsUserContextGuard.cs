@@ -6,7 +6,7 @@ namespace RemoteDesktop.Platform.Windows;
 
 /// <summary>Refuses to serve files or shells while running as LocalSystem, i.e. in the agent that owns the login screen.</summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsUserContextGuard : IUserContextGuard
+internal sealed class WindowsUserContextGuard : IUserContextGuard
 {
     private static readonly bool IsSystem = WindowsIdentity.GetCurrent().IsSystem;
 

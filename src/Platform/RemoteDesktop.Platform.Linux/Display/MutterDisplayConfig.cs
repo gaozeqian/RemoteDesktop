@@ -42,7 +42,7 @@ public readonly record struct MutterMonitor(string Connector, string DisplayName
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class MutterDisplayConfig : IDisposable
+internal sealed class MutterDisplayConfig : IDisposable
 {
     private const string Service = "org.gnome.Mutter.DisplayConfig";
     private const string Path = "/org/gnome/Mutter/DisplayConfig";

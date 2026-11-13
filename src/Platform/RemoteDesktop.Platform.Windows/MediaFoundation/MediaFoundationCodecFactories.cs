@@ -73,7 +73,7 @@ internal sealed class MediaFoundationH264EncoderFactory : IVideoEncoderFactory
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class MediaFoundationH264DecoderFactory : IVideoDecoderFactory
+internal sealed class MediaFoundationH264DecoderFactory : IVideoDecoderFactory
 {
     private const uint Flags = MfGuids.EnumSyncMft | MfGuids.EnumSortAndFilter;
 

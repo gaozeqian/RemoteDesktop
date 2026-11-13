@@ -12,7 +12,7 @@ using Vortice.DXGI;
 namespace RemoteDesktop.Platform.Windows.Display;
 
 [SupportedOSPlatform("windows")]
-public sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenCapturerFactory, IAsyncDisposable
+internal sealed partial class DxgiScreenCapturerFactory(ILoggerFactory loggers) : IScreenCapturerFactory, IAsyncDisposable
 {
     private const int SmRemoteSession = 0x1000;
 

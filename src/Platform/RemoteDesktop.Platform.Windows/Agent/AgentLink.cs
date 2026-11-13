@@ -13,7 +13,7 @@ public readonly record struct AgentChannelRequest(AgentChannelKind Kind, Guid Ch
 /// Agent side of the pipes to the host service: one control connection, plus one data connection per feature channel.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class AgentLink : IAsyncDisposable
+internal sealed class AgentLink : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
 

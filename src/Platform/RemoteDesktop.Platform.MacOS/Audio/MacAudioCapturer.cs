@@ -9,7 +9,7 @@ namespace RemoteDesktop.Platform.MacOS.Audio;
 
 /// <summary>Creates capturers of what the machine is playing.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class MacAudioCapturerFactory : IAudioCapturerFactory
+internal sealed class MacAudioCapturerFactory : IAudioCapturerFactory
 {
     public IAudioCapturer Create() => new MacAudioCapturer();
 }

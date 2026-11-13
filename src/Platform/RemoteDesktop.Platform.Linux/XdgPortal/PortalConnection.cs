@@ -873,7 +873,7 @@ internal sealed partial class PortalConnection : IDisposable
 }
 
 /// <summary>Why a portal request did not succeed.</summary>
-public sealed class PortalException : Exception
+internal sealed class PortalException : Exception
 {
     /// <summary>The portal's own answer: 0 agreed, 1 cancelled, 2 refused.</summary>
     public uint Response { get; }

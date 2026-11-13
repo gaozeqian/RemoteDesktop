@@ -17,7 +17,7 @@ namespace RemoteDesktop.Platform.Windows.Clipboard;
 /// would make them wait.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-public sealed partial class WindowsClipboard : IClipboard, IDisposable
+internal sealed partial class WindowsClipboard : IClipboard, IDisposable
 {
     private const uint CfUnicodeText = 13;
     private const uint CfDib = 8;

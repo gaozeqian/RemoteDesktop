@@ -27,7 +27,7 @@ namespace RemoteDesktop.Platform.Linux.Input;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public static class ScanCodeToEvdev
+internal static class ScanCodeToEvdev
 {
     /// <summary>Numbers keys by position, the way evdev does; the values are from <c>linux/input-event-codes.h</c>.</summary>
     public const int KeyEsc = 1;

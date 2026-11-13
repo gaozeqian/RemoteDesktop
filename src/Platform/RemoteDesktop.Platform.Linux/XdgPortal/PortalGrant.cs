@@ -29,7 +29,7 @@ namespace RemoteDesktop.Platform.Linux.XdgPortal;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PortalGrant : IDisposable
+internal sealed partial class PortalGrant : IDisposable
 {
     private const string RestoreTokenName = "portal-restore-token";
 

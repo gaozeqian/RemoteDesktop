@@ -20,7 +20,7 @@ namespace RemoteDesktop.Platform.Linux.Interop;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public static class FfmpegLibraries
+internal static class FfmpegLibraries
 {
     /// <summary>Overrides where the libraries are looked for.</summary>
     public const string PathVariable = "RD_FFMPEG_PATH";

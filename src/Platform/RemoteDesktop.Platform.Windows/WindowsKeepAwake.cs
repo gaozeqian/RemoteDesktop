@@ -15,7 +15,7 @@ namespace RemoteDesktop.Platform.Windows;
 /// therefore marshalled to one long-lived background thread; the process can still exit normally because it is a
 /// background thread.
 /// </remarks>
-public sealed partial class WindowsKeepAwake : ISystemKeepAwake, IDisposable
+internal sealed partial class WindowsKeepAwake : ISystemKeepAwake, IDisposable
 {
     private const uint EsContinuous = 0x80000000;
     private const uint EsSystemRequired = 0x00000001;

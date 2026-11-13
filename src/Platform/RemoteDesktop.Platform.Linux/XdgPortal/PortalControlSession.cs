@@ -29,7 +29,7 @@ namespace RemoteDesktop.Platform.Linux.XdgPortal;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PortalControlSession(ILoggerFactory loggerFactory, ILogger<PortalControlSession> logger) : IDisposable
+internal sealed partial class PortalControlSession(ILoggerFactory loggerFactory, ILogger<PortalControlSession> logger) : IDisposable
 {
     /// <summary>How long to leave a failed attempt alone before asking again.</summary>
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(30);

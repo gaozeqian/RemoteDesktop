@@ -33,7 +33,7 @@ namespace RemoteDesktop.Platform.Linux.Audio;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class PulseAudioCapturer : IAudioCapturer
+internal sealed class PulseAudioCapturer : IAudioCapturer
 {
     /// <summary>The default output device's monitor, spelled the way PulseAudio resolves it.</summary>
     private const string DefaultMonitor = "@DEFAULT_MONITOR@";

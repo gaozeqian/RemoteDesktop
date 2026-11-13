@@ -17,7 +17,7 @@ namespace RemoteDesktop.Platform.MacOS.Recording;
 /// top-row-first, and CVPixelBuffer memory is too, so they go in without the bottom-up flip Media Foundation needs.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacVideoRecorder : IVideoRecorder
+internal sealed class MacVideoRecorder : IVideoRecorder
 {
     private readonly Lock _lock = new();
     private readonly Stopwatch _clock = new();

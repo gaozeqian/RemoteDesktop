@@ -8,13 +8,13 @@ using Vortice.MediaFoundation;
 namespace RemoteDesktop.Platform.Windows.Recording;
 
 [SupportedOSPlatform("windows")]
-public sealed class MfVideoRecorderFactory : IVideoRecorderFactory
+internal sealed class MfVideoRecorderFactory : IVideoRecorderFactory
 {
     public IVideoRecorder Create() => new MfVideoRecorder();
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class MfVideoRecorder : IVideoRecorder
+internal sealed class MfVideoRecorder : IVideoRecorder
 {
     private readonly Lock _lock = new();
     private readonly Stopwatch _clock = new();

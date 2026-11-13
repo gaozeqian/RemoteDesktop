@@ -12,7 +12,7 @@ namespace RemoteDesktop.Platform.Windows.Camera;
 
 /// <summary>Finds the video capture devices Media Foundation knows (USB webcams, built-in cameras, virtual cameras) and the modes they offer.</summary>
 [SupportedOSPlatform("windows")]
-public sealed class MediaFoundationCameraEnumerator : ICameraEnumerator
+internal sealed class MediaFoundationCameraEnumerator : ICameraEnumerator
 {
     private const int MinWidth = 160;
     private const int MinFrameRate = 5;
@@ -72,7 +72,7 @@ public sealed class MediaFoundationCameraEnumerator : ICameraEnumerator
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class MediaFoundationCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
+internal sealed class MediaFoundationCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
 {
     public ICameraSource Open(string cameraId)
     {

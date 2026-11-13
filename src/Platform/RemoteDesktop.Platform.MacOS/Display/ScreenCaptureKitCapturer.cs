@@ -8,7 +8,7 @@ namespace RemoteDesktop.Platform.MacOS.Display;
 
 /// <summary>Creates ScreenCaptureKit capturers.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class ScreenCaptureKitCapturerFactory : IScreenCapturerFactory
+internal sealed class ScreenCaptureKitCapturerFactory : IScreenCapturerFactory
 {
     public IScreenCapturer Create(DisplayInfo display) => new ScreenCaptureKitCapturer(display);
 }
@@ -331,7 +331,7 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
 /// <see cref="TccGrants"/> for the check to run first.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class ScreenCaptureUnavailableException : Exception
+internal sealed class ScreenCaptureUnavailableException : Exception
 {
     public ScreenCaptureUnavailableException(string message)
         : base(message)

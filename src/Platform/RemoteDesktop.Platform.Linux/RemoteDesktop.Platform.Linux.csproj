@@ -19,4 +19,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux.UnitTests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The transport suite composes the platform's codecs to exercise real encode/decode paths. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
+  </ItemGroup>
 </Project>

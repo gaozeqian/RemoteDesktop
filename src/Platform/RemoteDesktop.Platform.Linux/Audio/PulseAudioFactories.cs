@@ -12,13 +12,13 @@ namespace RemoteDesktop.Platform.Linux.Audio;
 /// start over — and the caller already has a simpler way to say that.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class PulseAudioCapturerFactory : IAudioCapturerFactory
+internal sealed class PulseAudioCapturerFactory : IAudioCapturerFactory
 {
     public IAudioCapturer Create() => new PulseAudioCapturer();
 }
 
 [SupportedOSPlatform("linux")]
-public sealed class PulseAudioPlayerFactory : IAudioPlayerFactory
+internal sealed class PulseAudioPlayerFactory : IAudioPlayerFactory
 {
     public IAudioPlayer Create() => new PulseAudioPlayer();
 }

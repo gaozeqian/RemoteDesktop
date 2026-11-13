@@ -17,7 +17,7 @@ namespace RemoteDesktop.Platform.MacOS.Camera;
 /// not a mode a remote viewer would choose, and virtual cameras advertise a long tail of such sizes.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacCameraEnumerator : ICameraEnumerator
+internal sealed class MacCameraEnumerator : ICameraEnumerator
 {
     public IReadOnlyList<CameraInfo> GetCameras()
     {
@@ -94,7 +94,7 @@ public sealed class MacCameraEnumerator : ICameraEnumerator
 
 /// <summary>Opens one of the cameras the enumerator found.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
+internal sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
 {
     public ICameraSource Open(string cameraId)
     {

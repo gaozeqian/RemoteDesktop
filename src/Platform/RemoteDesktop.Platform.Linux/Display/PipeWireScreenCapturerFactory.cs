@@ -22,7 +22,7 @@ namespace RemoteDesktop.Platform.Linux.Display;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PipeWireScreenCapturerFactory(
+internal sealed partial class PipeWireScreenCapturerFactory(
     PortalGrant grant,
     IDisplayEnumerator desktop,
     ILoggerFactory loggerFactory,

@@ -27,7 +27,7 @@ public readonly record struct DrmRenderNode(string Path, uint Vendor, string Dri
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public static class DrmRenderNodes
+internal static class DrmRenderNodes
 {
     private const string SysfsDrm = "/sys/class/drm";
     private const string DeviceDirectory = "/dev/dri";

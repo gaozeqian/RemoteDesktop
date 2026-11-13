@@ -7,7 +7,7 @@ namespace RemoteDesktop.Platform.Linux.Display;
 // spa/pod/pod.h calls them, and a pod's type word is exactly this number. Renaming them to suit the analyzer would
 // make the one thing this enum has to be checked against, the C header, harder to compare with.
 #pragma warning disable CA1720 // Identifier contains type name
-public enum SpaPodType : uint
+internal enum SpaPodType : uint
 {
     None = 1,
     Bool = 2,
@@ -33,10 +33,10 @@ public enum SpaPodType : uint
 #pragma warning restore CA1720
 
 /// <summary>A width and a height, as SPA writes one.</summary>
-public readonly record struct SpaRectangle(int Width, int Height);
+internal readonly record struct SpaRectangle(int Width, int Height);
 
 /// <summary>One property of a SPA object: a key, and the value stored under it.</summary>
-public readonly record struct SpaProperty(uint Key, SpaPod Value);
+internal readonly record struct SpaProperty(uint Key, SpaPod Value);
 
 /// <summary>
 /// A single value in PipeWire's serialization format.
@@ -58,7 +58,7 @@ public readonly record struct SpaProperty(uint Key, SpaPod Value);
 /// Little-endian throughout, and bodies are padded to eight bytes so that a nested pod always starts aligned.
 /// </para>
 /// </remarks>
-public readonly struct SpaPod
+internal readonly struct SpaPod
 {
     /// <summary>Two words: the body's length, then its type.</summary>
     public const int HeaderSize = 8;

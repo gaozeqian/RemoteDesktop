@@ -28,7 +28,7 @@ namespace RemoteDesktop.Platform.Linux.Display;
 /// </list>
 /// </para>
 /// </remarks>
-public static class SpaPodBuilder
+internal static class SpaPodBuilder
 {
     /// <summary>SPA_TYPE_OBJECT_Format.</summary>
     public const uint TypeObjectFormat = 262147;

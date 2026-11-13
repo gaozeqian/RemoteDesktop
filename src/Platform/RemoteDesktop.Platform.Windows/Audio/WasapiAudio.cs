@@ -10,7 +10,7 @@ using RemoteDesktop.Abstractions.Audio;
 namespace RemoteDesktop.Platform.Windows.Audio;
 
 [SupportedOSPlatform("windows")]
-public sealed class WasapiAudioCapturerFactory : IAudioCapturerFactory
+internal sealed class WasapiAudioCapturerFactory : IAudioCapturerFactory
 {
     public IAudioCapturer Create() => new WasapiLoopbackAudioCapturer();
 }
@@ -157,7 +157,7 @@ internal sealed class WasapiLoopbackAudioCapturer : IAudioCapturer
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class WasapiAudioPlayerFactory : IAudioPlayerFactory
+internal sealed class WasapiAudioPlayerFactory : IAudioPlayerFactory
 {
     public IAudioPlayer Create() => new WasapiAudioPlayer();
 }

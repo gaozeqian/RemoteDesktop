@@ -18,7 +18,7 @@ namespace RemoteDesktop.Platform.Linux.Audio;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class PulseAudioPlayer : IAudioPlayer
+internal sealed class PulseAudioPlayer : IAudioPlayer
 {
     /// <summary>Queued audio beyond this is thrown away rather than played late.</summary>
     private static readonly TimeSpan MaximumBacklog = TimeSpan.FromMilliseconds(200);
