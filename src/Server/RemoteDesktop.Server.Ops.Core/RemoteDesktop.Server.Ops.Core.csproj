@@ -10,4 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Server.Ops.UnitTests" />
+  </ItemGroup>
 </Project>

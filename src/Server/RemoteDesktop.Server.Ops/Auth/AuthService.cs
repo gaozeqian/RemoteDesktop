@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.Server.Ops.Core.Security;
 using RemoteDesktop.Server.Ops.Storage;
 
 namespace RemoteDesktop.Server.Ops.Auth;

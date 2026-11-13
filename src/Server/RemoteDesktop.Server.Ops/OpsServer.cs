@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.Server.Ops.Core.Security;
 using RemoteDesktop.Server.Ops.Storage;
 using RemoteDesktop.Server.Shared;
 
