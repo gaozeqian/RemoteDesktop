@@ -642,7 +642,10 @@ jobs:
 
           # 三个变量都是 FileInfo，.FullName 各取一次。此前这里混着两种形状（一个存 FileInfo，两个存 FullName 字符串），
           # 于是 `$windows.FullName` 静默成了空数组——清点通过、三个 MSI 却没上传，v1.0.1 第一次发布就少了一半资产。
-          $assets = @($windows.FullName) + @($linux.FullName) + @($packages.FullName)
+          #
+          # macOS 那一段走管道而不是 @($packages.FullName)：空数组的 .FullName 是 $null，@($null) 会变成一个含 null
+          # 的元素，于是下面那条断言会把 6 个资产数成 7 个。
+          $assets = @($windows.FullName) + @($linux.FullName) + @($packages | ForEach-Object { $_.FullName })
           if ($assets.Count -ne (6 + $packages.Count)) {
               throw "Expected $(6 + $packages.Count) assets, collected $($assets.Count)."
           }
