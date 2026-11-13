@@ -784,7 +784,7 @@
           "RemoteDesktop.Abstractions": "[1.0.1, )"
         }
       },
-      "remotedesktop.server.relay": {
+      "remotedesktop.server.hosting": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
@@ -792,11 +792,17 @@
           "RemoteDesktop.Server.Shared": "[1.0.1, )"
         }
       },
+      "remotedesktop.server.relay": {
+        "type": "Project",
+        "dependencies": {
+          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
+          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+        }
+      },
       "remotedesktop.server.rendezvous": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
-          "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.14, )",
+          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
           "RemoteDesktop.Server.Shared": "[1.0.1, )",
           "RemoteDesktop.Server.Storage": "[1.0.1, )"
         }

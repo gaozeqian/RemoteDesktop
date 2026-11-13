@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <!-- A web host library, not a server process: the SDK defaults to an executable. -->
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+  <!--
+    The startup path the four server hosts share: configuration layering, the Windows service / systemd registration,
+    and the node-token endpoint filter. It is deliberately not Server.Shared: Ops.Core references that project and must
+    stay free of ASP.NET, which a project carrying the web host and the service packages would leak into it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+  </ItemGroup>
+</Project>

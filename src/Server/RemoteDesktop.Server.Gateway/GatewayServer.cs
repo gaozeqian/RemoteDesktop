@@ -1,3 +1,4 @@
+using RemoteDesktop.Server.Hosting;
 using RemoteDesktop.Server.Shared;
 
 namespace RemoteDesktop.Server.Gateway;
@@ -9,17 +10,7 @@ public static class GatewayServer
 {
     public static WebApplication Build(string[] args)
     {
-        var builder = WebApplication.CreateBuilder(args);
-        ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.GatewayFolder);
-
-        if (OperatingSystem.IsWindows())
-        {
-            builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopGateway");
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            builder.Host.UseSystemd();
-        }
+        var builder = ServerHost.CreateBuilder(args, ServerSetup.GatewayFolder, "RemoteDesktopGateway");
 
         var listen = builder.Configuration["Gateway:Listen"] ?? ServerSetup.DefaultGatewayListen;
         builder.WebHost.UseUrls(listen);

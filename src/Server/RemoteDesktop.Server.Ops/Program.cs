@@ -1,3 +1,4 @@
+using RemoteDesktop.Server.Hosting;
 using RemoteDesktop.Server.Ops;
 using RemoteDesktop.Server.Shared;
 
@@ -14,22 +15,12 @@ if (SetupCommands.TryRun(args, Console.Out, out var setupExitCode))
 // the default (the project's own wwwroot) is the right one.
 var publishedWebRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var builder = Directory.Exists(publishedWebRoot)
-    ? WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = publishedWebRoot })
-    : WebApplication.CreateBuilder(args);
-
-// The console's live settings are next to the program on Linux and macOS, and in ProgramData on Windows (where the
-// MSI's major upgrade would otherwise delete them). Add the Windows layer before AddOps binds the options.
-ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.OpsFolder);
-
-// Same three deployment shapes as the signaling server: console, systemd unit, Windows service.
-if (OperatingSystem.IsWindows())
-{
-    builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopOps");
-}
-else if (OperatingSystem.IsLinux())
-{
-    builder.Host.UseSystemd();
-}
+    ? ServerHost.CreateBuilder(
+        args,
+        ServerSetup.OpsFolder,
+        "RemoteDesktopOps",
+        new WebApplicationOptions { Args = args, WebRootPath = publishedWebRoot })
+    : ServerHost.CreateBuilder(args, ServerSetup.OpsFolder, "RemoteDesktopOps");
 
 var listen = builder.Configuration["Ops:Listen"];
 if (!string.IsNullOrWhiteSpace(listen))

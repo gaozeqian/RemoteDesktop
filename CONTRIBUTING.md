@@ -184,7 +184,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 `TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 39 个：`src/` 下 27 个，`tests/` 下 12 个）
+所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 40 个：`src/` 下 28 个，`tests/` 下 12 个）
 不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
 **唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们

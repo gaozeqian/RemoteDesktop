@@ -104,13 +104,16 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
   与客户端只共享 `Signaling` 契约。项目分工如下：
   * `Server.Shared`：服务端公共契约与配置步骤——`RelayTicket`、`RelayCookie`、`OpsEventEnvelope` / `OpsEventKinds` / `OpsEventSigner`、`NodeTokenGuard`、
     `ServerSetup` 等；引用 `Signaling`。
-  * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared`；Rendezvous 还引用
-    `Server.Storage`（见下）。
+  * `Server.Hosting`：四个宿主共用的启动路径——实机设置分层、Windows 服务 / systemd 注册与节点令牌端点过滤器；
+    引用 `Server.Shared`，被四个宿主引用。它**不能**放进 `Server.Shared`：`Ops.Core` 引用 Shared，而 Hosting 带
+    ASP.NET 与宿主包，放进去会让“控制台策略层不含 ASP.NET”的契约静默失效。
+  * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared` 与 `Server.Hosting`；
+    Rendezvous 还引用 `Server.Storage`（见下）。
   * `Server.Storage`：设备注册表的持久化，没有项目依赖。
   * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见“运维监控台”一节。依赖只向内：`Ops.Core` →
-    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared`；三者都**不**引用
-    `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
-  * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared`。
+    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared` 与
+    `Server.Hosting`；三者都**不**引用 `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
+  * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared` 与 `Server.Hosting`。
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的一个

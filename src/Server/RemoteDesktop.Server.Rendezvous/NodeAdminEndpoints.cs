@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.Options;
+using RemoteDesktop.Server.Hosting;
 using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Server.Storage;
 using RemoteDesktop.Signaling;
@@ -28,17 +29,8 @@ public static class NodeAdminEndpoints
         endpoints.MapPost("/internal/v1/admin/disconnect", async (
             HttpContext context,
             DisconnectRequest request,
-            DevicePresence presence,
-            IOptions<RendezvousOptions> options) =>
+            DevicePresence presence) =>
         {
-            if (!NodeTokenGuard.IsAuthorized(
-                    context.Request.Headers.Authorization.ToString(),
-                    options.Value.NodeToken,
-                    context.Connection.RemoteIpAddress))
-            {
-                return Results.Unauthorized();
-            }
-
             if (!uint.TryParse(request.DeviceId, NumberStyles.None, CultureInfo.InvariantCulture, out var deviceId)
                 || !SessionIdText.TryParse(request.SessionId, out var sessionId))
             {
@@ -85,24 +77,15 @@ public static class NodeAdminEndpoints
             {
                 return Results.Json(new { error = "delivery", message = "the device connection closed before acknowledgment" }, statusCode: 503);
             }
-        });
+        }).RequireNodeToken(context =>
+            context.RequestServices.GetRequiredService<IOptions<RendezvousOptions>>().Value.NodeToken);
 
         endpoints.MapPost("/internal/v1/admin/revoke", async (
-            HttpContext context,
             RevokeRequest request,
             IDeviceRegistry registry,
             DevicePresence presence,
-            IOptions<RendezvousOptions> options,
             CancellationToken cancellationToken) =>
         {
-            if (!NodeTokenGuard.IsAuthorized(
-                    context.Request.Headers.Authorization.ToString(),
-                    options.Value.NodeToken,
-                    context.Connection.RemoteIpAddress))
-            {
-                return Results.Unauthorized();
-            }
-
             if (!uint.TryParse(request.DeviceId, NumberStyles.None, CultureInfo.InvariantCulture, out var deviceId))
             {
                 return Results.BadRequest(new { error = "id", message = "deviceId is not in the expected form" });
@@ -118,7 +101,8 @@ public static class NodeAdminEndpoints
             }
 
             return Results.Ok(new { revoked = request.Revoked });
-        });
+        }).RequireNodeToken(context =>
+            context.RequestServices.GetRequiredService<IOptions<RendezvousOptions>>().Value.NodeToken);
     }
 
     /// <summary>What the console posts to disconnect one session. Both ids are the host's, not the controller's.</summary>

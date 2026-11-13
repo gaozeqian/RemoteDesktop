@@ -2,21 +2,6 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
-      "Microsoft.Extensions.Hosting.Systemd": {
-        "type": "Direct",
-        "requested": "[10.0.14, )",
-        "resolved": "10.0.14",
-        "contentHash": "0FhENwIcoXxIvF0jfW1wwNqrtG2JU/H8fSNfyXwzRdxdRtG6HuKacu6utS5PxeXQS+NkhWKpKOUm3gUKGvj+cg=="
-      },
-      "Microsoft.Extensions.Hosting.WindowsServices": {
-        "type": "Direct",
-        "requested": "[10.0.14, )",
-        "resolved": "10.0.14",
-        "contentHash": "IQSOKNkh06e2eskQ6ltSBZmtQqdu7/0A634/XSmXrtrlDwPbMFbTNEJs1bySQFOxH3xlCAnYNbf+Hh4Fp3nQ5Q==",
-        "dependencies": {
-          "System.ServiceProcess.ServiceController": "10.0.14"
-        }
-      },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
         "resolved": "10.0.14",
@@ -50,6 +35,14 @@
         "contentHash": "ZU60dSqoSNRe49KcQDUmOVgdRtjITOssVXFtiISs+zJXDI4D2Sndwpn2NOtzDQNPu0ZAvpoLPQ+GLKv6iEZn8Q==",
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.13"
+        }
+      },
+      "remotedesktop.server.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
+          "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.14, )",
+          "RemoteDesktop.Server.Shared": "[1.0.1, )"
         }
       },
       "remotedesktop.server.shared": {
@@ -86,6 +79,21 @@
           "Microsoft.Data.Sqlite.Core": "10.0.14",
           "SQLitePCLRaw.bundle_e_sqlite3": "2.1.13",
           "SQLitePCLRaw.core": "2.1.13"
+        }
+      },
+      "Microsoft.Extensions.Hosting.Systemd": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "0FhENwIcoXxIvF0jfW1wwNqrtG2JU/H8fSNfyXwzRdxdRtG6HuKacu6utS5PxeXQS+NkhWKpKOUm3gUKGvj+cg=="
+      },
+      "Microsoft.Extensions.Hosting.WindowsServices": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "IQSOKNkh06e2eskQ6ltSBZmtQqdu7/0A634/XSmXrtrlDwPbMFbTNEJs1bySQFOxH3xlCAnYNbf+Hh4Fp3nQ5Q==",
+        "dependencies": {
+          "System.ServiceProcess.ServiceController": "10.0.14"
         }
       },
       "Npgsql": {
