@@ -46,11 +46,15 @@
   Windows PowerShell 5.1 读取中文提示不再乱码。
 - **Ops 指标降采样增量执行**：每轮从最新桶继续（并重算该桶），不再把 30 天历史全部重算并逐行重写；首次运行
   只回看 24 小时，迁移 8 增加 `(ts)` 与 `(step_seconds, bucket)` 索引。
+- **删除孤立 E2E 脚本**：`build/tools/run-e2e-automated-tests.sh` 没有任何调用方，且依赖 Linux 的
+  `/etc/os-release`；同类场景已由 `E2E.IntegrationTests` 覆盖。
 - **锁文件同步**：项目依赖版本范围更新到 1.0.1，并为新组合项目补齐四个 `packages*.lock.json`。
 - **告警评估租约续期**：一次 pass 时间较长时按租期一半续租；租约被另一个副本拿走时取消本次 pass，避免同一批
   通知被两个实例各发一次。
 - **组合根收敛**：新增 `RemoteDesktop.Hosts.Composition`，客户端独立托管、HostService 的 Linux/macOS 分支与
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
+- **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
+  `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
 
 ## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 
