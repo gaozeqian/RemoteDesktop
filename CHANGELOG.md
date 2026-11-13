@@ -64,6 +64,10 @@
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 - **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
   `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **平台能力接口**：新增 `IHostInstallation` 与 `IPlatformIdentity`，由各平台层注册；客户端不再用
+  `OperatingSystem.Is*` 判断宿主安装形态、摄像头授权或遥测平台。摄像头授权节只在注册了 `ICameraAccess` 时显示；
+  Windows 服务名、Linux unit 与 macOS 宿主路径常量从 `HostControlProtocol` 移到平台层，遥测平台名缺失时
+  报告 `unknown` 而不是默认成 Linux。
 
 ## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 

@@ -66,6 +66,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IRendezvousClient _rendezvous;
     private readonly IVideoRecorderFactory? _recorderFactory;
     private readonly ILoginItem? _loginItem;
+    private readonly IClientPlatformPresentation _presentation;
+    private readonly IHostInstallation _installation;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _presenceTimer;
     private readonly string _hostControlPipeName;
@@ -88,15 +90,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IRendezvousClient rendezvous,
         ClientEnvironment environment,
         TransportOptions transport,
+        IClientPlatformPresentation presentation,
+        IHostInstallation installation,
         IVideoRecorderFactory? recorderFactory = null,
         ILoginItem? loginItem = null,
+        ICameraAccess? cameraAccess = null,
         StartupLink? startupLink = null)
     {
         _rendezvous = rendezvous;
         _hostControl = hostControl;
         _hostControlPipeName = environment.HostControlPipeName;
-        _probeForHostService = environment.ControlledEndInThisProcess
-            && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS());
+        _presentation = presentation;
+        _installation = installation;
+        HasCameraAccess = cameraAccess is not null;
+        _probeForHostService = environment.ControlledEndInThisProcess && installation.StartsWithUserSession;
         _controller = controller;
         _codecs = codecs;
         _time = time;
@@ -115,7 +122,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // the installed service, which the server MSI sets up. Null where the platform layer registers none, and
         // that null hides the whole UI section.
         _loginItem = loginItem;
-        if (OperatingSystem.IsMacOS())
+        if (_loginItem is not null)
         {
             RefreshLoginItemState();
         }
@@ -123,8 +130,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SelectedConnectionMode = ConnectionModes[0];
         DataDirectory = environment.DataDirectory;
         IsHostService = !environment.ControlledEndInThisProcess;
-        ClientCodeNote = DescribeClientCode(environment.ControlledEndInThisProcess);
-        ServerAddressNote = DescribeServerAddress(environment.ControlledEndInThisProcess);
+        ClientCodeNote = ClientPlatformPresentation.DescribeClientCode(environment.ControlledEndInThisProcess);
+        ServerAddressNote = _presentation.DescribeServerAddress(environment.ControlledEndInThisProcess);
         ClientRendezvousUri = transport.RendezvousUri?.ToString() is { Length: > 0 } uri ? uri : "未配置";
 
         // The host side may live in another process (the background service), so its state is polled rather than observed.
@@ -219,16 +226,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public partial bool IsCameraAccessBusy { get; set; }
 
     /// <summary>
-    /// Whether the camera-permission section applies. It is a Linux answer to a Linux portal limitation; the other
-    /// platforms ask through their own camera APIs and have no separate grant to show.
+    /// Whether the camera-permission section applies. It is shown exactly where the platform layer registered an
+    /// <see cref="ICameraAccess"/>: the Linux portal has a separate grant to manage, the other platforms ask through
+    /// their own camera APIs and have none.
     /// </summary>
-    public static bool HasCameraAccess => OperatingSystem.IsLinux();
+    public bool HasCameraAccess { get; }
 
     /// <summary>
-    /// Whether this machine has a login-item concept: macOS, where the client is its own host. On Windows the same
-    /// job is done by the installed service, so the section stays hidden rather than offering a second way to do it.
+    /// Whether this machine has a login-item concept. Only the macOS layer registers <see cref="ILoginItem"/>, and
+    /// only macOS needs one: on Windows the same job is done by the installed service, so the section stays hidden
+    /// rather than offering a second way to do it.
     /// </summary>
-    public bool HasLoginItem => OperatingSystem.IsMacOS() && _loginItem is not null;
+    public bool HasLoginItem => _loginItem is not null;
 
     /// <summary>State of the login item, as macOS itself reports it (the user may also change it in System Settings).</summary>
     [ObservableProperty]
@@ -316,68 +325,32 @@ public sealed partial class MainWindowViewModel : ObservableObject
     // The captions below describe how this build actually behaves, and the three platforms differ in all of them:
     // where a fixed password is kept (DPAPI / keychain / owner-only file), what changing the server address costs
     // (elevation and a service restart / a process restart / neither), and what the controlled side even is
-    // (an installed service / this process / a systemd --user service).
-    //
-    // Static, because nothing about them depends on the instance — the view reaches them with {x:Static}; the
-    // Linux-only caption pairs with a static flag for the same reason.
-
-    /// <summary>
-    /// Picks the sentence for the running platform. Three branches, not "Windows or not": the non-Windows branch
-    /// used to mean macOS, which made Linux read a wrong statement wherever the two differ — where a secret is
-    /// kept, what changing the server address costs, and which process a device code belongs to. Linux is not
-    /// macOS: secrets live in an owner-only file and the controlled end is a systemd --user service, see
-    /// the Linux section of docs/usage/README.md, "1. 支持矩阵".
-    /// </summary>
-    private static string ByPlatform(string windows, string macOS, string linux) =>
-        OperatingSystem.IsWindows() ? windows
-        : OperatingSystem.IsMacOS() ? macOS
-        : linux;
+    // (an installed service / this process / a systemd --user service). The platform-specific words come from
+    // IClientPlatformPresentation, chosen next to the platform layer, so this view model no longer asks which OS it
+    // is running on.
 
     /// <summary>The caption under 固定密码, naming the store this platform actually uses.</summary>
-    public static string FixedPasswordStorageNote => ByPlatform(
-        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 Windows DPAPI 加密保存在本机。",
-        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以 macOS 钥匙串加密保存在本机。",
-        "设置后本机可用同一密码随时接入，无需现场人员告知临时密码。密码以仅本用户可读写的文件（0600）保存在本机。");
+    public string FixedPasswordStorageNote => _presentation.FixedPasswordStorageNote;
 
     /// <summary>The caption under 服务器地址. It depends on the platform and on who hosts the controlled end.</summary>
-    internal static string DescribeServerAddress(bool controlledEndInThisProcess) =>
-        OperatingSystem.IsMacOS()
-            ? "两台机器必须连同一台服务器。修改后本应用会自动重启：macOS 上客户端与被控端是同一个进程，重启后两边一起换到新地址。"
-            : controlledEndInThisProcess
-                ? OperatingSystem.IsWindows()
-                    ? "两台机器必须连同一台服务器。被控端在本进程内运行；修改地址请关闭客户端，改启动参数（--Transport:RendezvousUri）或 appsettings.json 后再启动。"
-                    : "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端会重启并生效。"
-                : OperatingSystem.IsWindows()
-                    ? "两台机器必须连同一台服务器。修改配置将请求管理员权限 (UAC)，完成后将自动重启服务与本客户端以使双端同时生效。"
-                    : "两台机器必须连同一台服务器。修改无需管理员权限：地址写入用户配置文件后，客户端与已安装的被控端服务会各自重启，两边一起换到新地址。";
-
-    /// <summary>
-    /// The caption explaining 本机控制端代码. It branches by where the controlled end runs, not by operating system:
-    /// a background service has an identity of its own, so the window's code and the home page's are two different
-    /// codes; a controlled end inside this process shows the same code on both.
-    /// </summary>
-    internal static string DescribeClientCode(bool controlledEndInThisProcess) =>
-        controlledEndInThisProcess
-            ? "「本机控制端代码」是这台机器连出去时用的身份。被控端在本进程内运行，所以它和主页显示的是同一个代码——别人控制本机时，他那台机器的会话里显示的就是它。"
-            : "「本机控制端代码」是这台机器连出去时用的身份，和主页上那个不一样：主页显示的是后台服务（被控端）的代码。别人控制本机时，他那台机器的会话里显示的就是这个代码——被问起「谁在连我」时用它对。";
+    internal string DescribeServerAddress(bool controlledEndInThisProcess) =>
+        _presentation.DescribeServerAddress(controlledEndInThisProcess);
 
     /// <summary>
     /// Linux only: a fixed password cannot make this machine unattended there — the desktop portal refuses to
     /// persist a remote-desktop session, so every control connection needs a fresh consent at the machine. Null
     /// on the other two platforms, hidden together with <see cref="ShowFixedPasswordPlatformNote"/>.
     /// </summary>
-    public static string? FixedPasswordPlatformNote => OperatingSystem.IsLinux()
-        ? "注意：本平台无法让控制变成无人值守——portal 不允许远程桌面会话持久授权，控制权限每次连接都要重新授权（被观看不受此限制）。要在无人值守的机器上被操作，只能用 Windows 的被控端。"
-        : null;
+    public string? FixedPasswordPlatformNote => _presentation.FixedPasswordPlatformNote;
 
     /// <summary>Whether <see cref="FixedPasswordPlatformNote"/> has anything to say on this platform.</summary>
-    public static bool ShowFixedPasswordPlatformNote => OperatingSystem.IsLinux();
+    public bool ShowFixedPasswordPlatformNote => _presentation.ShowFixedPasswordPlatformNote;
 
     /// <summary>
     /// The sentence for "the host did not answer", which has to name the thing that is actually unreachable: a
     /// background service on Windows and Linux, this process's own host state on macOS.
     /// </summary>
-    private static string HostUnreachable => OperatingSystem.IsMacOS() ? "无法读取本机被控状态" : "无法联系后台服务";
+    private string HostUnreachable => _presentation.HostUnreachable;
 
     /// <summary>The address <em>this</em> process dials. In service mode that is not the address in use: the service
     /// has its own, and reports it through the control pipe as <see cref="HostRendezvousUri"/>.</summary>
@@ -887,7 +860,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>Reads the login-item state macOS reports. Called at start-up and from the status poll, because the user can also change it in System Settings → 登录项.</summary>
-    [SupportedOSPlatform("macos")]
     private void RefreshLoginItemState()
     {
         if (_loginItem is null)
@@ -900,15 +872,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    [SupportedOSPlatform("macos")]
     private void EnableLoginItem()
     {
+        if (_loginItem is null)
+        {
+            return;
+        }
+
         LoginItemError = null;
         try
         {
             // SMAppService only accepts a signed .app sitting in /Applications; a bare binary or an ad-hoc build is
             // refused with exactly that sentence, which is the whole troubleshooting story for this button.
-            _loginItem!.Register();
+            _loginItem.Register();
             RefreshLoginItemState();
         }
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
@@ -918,13 +894,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    [SupportedOSPlatform("macos")]
     private void DisableLoginItem()
     {
+        if (_loginItem is null)
+        {
+            return;
+        }
+
         LoginItemError = null;
         try
         {
-            _loginItem!.Unregister();
+            _loginItem.Unregister();
             RefreshLoginItemState();
         }
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
@@ -1328,10 +1308,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // standalone Windows client has no service, so it must not claim that this window's code differs from the
         // home page's, nor promise a UAC prompt and a service restart. The same applies to a Linux standalone client.
         IsHostService = status.IsService;
-        ClientCodeNote = DescribeClientCode(!status.IsService);
-        ServerAddressNote = DescribeServerAddress(!status.IsService);
+        ClientCodeNote = ClientPlatformPresentation.DescribeClientCode(!status.IsService);
+        ServerAddressNote = _presentation.DescribeServerAddress(!status.IsService);
         CanEditHostServerAddress = status.IsService && !string.IsNullOrEmpty(status.RendezvousUri);
-        if (OperatingSystem.IsMacOS())
+        if (_loginItem is not null)
         {
             // Read every poll: the state is one property on a launchd-side object, and the user may have flipped it
             // in System Settings → 登录项 since the last tick.
@@ -1349,15 +1329,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // A socket from a package that has since been removed is not a service to hand over to. The unit file
             // (Linux) or app/launchd plist (macOS) is what tells an installed controlled end from a process the
             // package manager no longer shows.
-            var hostPackageInstalled = OperatingSystem.IsMacOS()
-                ? HostControlProtocol.MacOSHostInstalled
-                : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
-            if (hostPackageInstalled)
+            if (_installation.IsInstalled)
             {
                 using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                 try
                 {
-                    _hostServiceAppeared = await PipeHostControl.IsAvailableAsync(_hostControlPipeName, probeTimeout.Token);
+                    _hostServiceAppeared = await PipeHostControl.IsAvailableAsync(
+                        _hostControlPipeName,
+                        probeTimeout.Token,
+                        windowsServiceName: _installation.ServiceName);
                 }
                 catch (OperationCanceledException)
                 {

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Platform.Linux;
 using RemoteDesktop.Platform.MacOS;
 using RemoteDesktop.Platform.Windows;
@@ -47,6 +48,31 @@ internal static class ClientPlatformRegistration
 
         // Unreachable: Program.Main rejects anything else before a host is built. Kept so that adding a platform
         // without wiring it up here fails loudly instead of starting a client with no screen, input or secrets.
+        throw new PlatformNotSupportedException("Remote Desktop has no platform layer for this operating system.");
+    }
+
+    /// <summary>
+    /// The installation answer the hosting-mode decision needs before the container exists. Building the container
+    /// first would mean deciding what to register inside it, so this is the one value read outside; it is the same
+    /// implementation <c>AddClientPlatform</c> registers.
+    /// </summary>
+    public static IHostInstallation CreateHostInstallation()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return WindowsPlatform.CreateHostInstallation();
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return MacOSPlatform.CreateHostInstallation();
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return LinuxPlatform.CreateHostInstallation();
+        }
+
         throw new PlatformNotSupportedException("Remote Desktop has no platform layer for this operating system.");
     }
 }

@@ -5,7 +5,8 @@ namespace RemoteDesktop.Application.Hosting;
 /// <summary>UI side of the background service's control pipe.</summary>
 public sealed class PipeHostControl(
     string pipeName = HostControlProtocol.PipeName,
-    string? windowsServicePath = null) : IHostControl
+    string? windowsServicePath = null,
+    string? windowsServiceName = null) : IHostControl
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(800);
 
@@ -23,11 +24,13 @@ public sealed class PipeHostControl(
     public static async Task<bool> IsAvailableAsync(
         string pipeName,
         CancellationToken cancellationToken,
-        string? windowsServicePath = null)
+        string? windowsServicePath = null,
+        string? windowsServiceName = null)
     {
         try
         {
-            await new PipeHostControl(pipeName, windowsServicePath).GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            await new PipeHostControl(pipeName, windowsServicePath, windowsServiceName)
+                .GetStatusAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
         // A probe answers a question and must not take the caller down with it: the identity check needs the
@@ -176,7 +179,8 @@ public sealed class PipeHostControl(
             {
                 WindowsPipeServerIdentity.EnsureExpected(
                     pipe,
-                    windowsServicePath ?? Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe"));
+                    windowsServicePath ?? Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe"),
+                    windowsServiceName);
             }
 
             await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);

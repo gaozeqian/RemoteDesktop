@@ -83,8 +83,9 @@ internal static class ClientHost
         }
 
         var pipeName = builder.Configuration["HostControlPipe"] ?? HostControlProtocol.PipeName;
+        var hostInstallation = ClientPlatformRegistration.CreateHostInstallation();
         var useService = !string.Equals(builder.Configuration["HostMode"], "standalone", StringComparison.OrdinalIgnoreCase) &&
-                         DetectHostService(pipeName);
+                         DetectHostService(pipeName, hostInstallation);
 
         builder.Services
             .AddClientPlatform(dataDirectory)
@@ -99,6 +100,8 @@ internal static class ClientHost
             // Registered even when there is no link: the window asks one question, and "no link" is an answer rather
             // than a missing service.
             .AddSingleton(new StartupLink(startupLink))
+            .AddSingleton(hostInstallation)
+            .AddSingleton(ClientPlatformPresentation.ForCurrentPlatform())
             .AddSingleton<MainWindowViewModel>();
 
         // Off unless the deployment turns it on. Read here rather than inside the application layer so both
@@ -120,7 +123,7 @@ internal static class ClientHost
             builder.Services
                 .AddQuicTransport(transport, identitySecretName)
                 .AddRemoteDesktopApplication(telemetry)
-                .AddSingleton<IHostControl>(new PipeHostControl(pipeName));
+                .AddSingleton<IHostControl>(new PipeHostControl(pipeName, windowsServiceName: hostInstallation.ServiceName));
         }
         else
         {
@@ -140,27 +143,28 @@ internal static class ClientHost
     /// and registers under the device identity the service is about to claim, so the two abort each other every time
     /// either one reconnects.
     /// </summary>
-    private static bool DetectHostService(string pipeName)
+    private static bool DetectHostService(string pipeName, IHostInstallation installation)
     {
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        // The control socket outlives a removed package: the user service/LaunchAgent may keep running until its
+        // session ends. Without the installed unit/plist a live socket is not the controlled end the package manager
+        // still shows, so this window hosts in-process rather than delegating to a removed process.
+        if (!installation.IsInstalled)
         {
-            // The control socket outlives a removed package: the user service/LaunchAgent may keep running until its
-            // session ends. Without the installed unit/plist a live socket is not the controlled end the package
-            // manager still shows, so this window hosts in-process rather than delegating to a removed process.
-            var installed = OperatingSystem.IsMacOS()
-                ? HostControlProtocol.MacOSHostInstalled
-                : File.Exists(HostControlProtocol.LinuxHostServiceUnit);
-            if (!installed)
-            {
-                return false;
-            }
+            return false;
+        }
 
+        if (installation.StartsWithUserSession)
+        {
             // The host starts at login in the same session as the client; wait for its socket instead of racing it
             // and creating a second controlled end under the same device identity.
             return PipeHostControl.WaitUntilAvailableAsync(pipeName, HostServiceStartupWait, cancellationToken: CancellationToken.None)
                 .GetAwaiter().GetResult();
         }
 
-        return PipeHostControl.IsAvailableAsync(pipeName, CancellationToken.None).GetAwaiter().GetResult();
+        return PipeHostControl.IsAvailableAsync(
+                pipeName,
+                CancellationToken.None,
+                windowsServiceName: installation.ServiceName)
+            .GetAwaiter().GetResult();
     }
 }

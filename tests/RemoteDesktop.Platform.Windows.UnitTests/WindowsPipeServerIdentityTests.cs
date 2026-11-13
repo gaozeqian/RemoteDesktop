@@ -23,7 +23,7 @@ public sealed class WindowsPipeServerIdentityTests
     [InlineData(@"C:\Program Files\RemoteDesktop\RemoteDesktop.HostService.exe -k host")]
     public void A_service_registered_for_the_expected_executable_is_accepted(string commandLine)
     {
-        Assert.Null(WindowsPipeServerIdentity.DescribeMismatch(PipePid, PipePid, commandLine, Expected));
+        Assert.Null(DescribeMismatch(PipePid, PipePid, commandLine, Expected));
     }
 
     [Theory]
@@ -31,7 +31,7 @@ public sealed class WindowsPipeServerIdentityTests
     [InlineData(0u)]
     public void A_different_or_stopped_service_process_is_refused(uint servicePid)
     {
-        var mismatch = WindowsPipeServerIdentity.DescribeMismatch(PipePid, servicePid, Expected, Expected);
+        var mismatch = DescribeMismatch(PipePid, servicePid, Expected, Expected);
 
         Assert.NotNull(mismatch);
         Assert.Contains($"process {PipePid}", mismatch, StringComparison.Ordinal);
@@ -41,7 +41,7 @@ public sealed class WindowsPipeServerIdentityTests
     [Fact]
     public void A_service_pointed_at_another_executable_is_refused()
     {
-        var mismatch = WindowsPipeServerIdentity.DescribeMismatch(
+        var mismatch = DescribeMismatch(
             PipePid, PipePid, @"""C:\Somewhere Else\Other.exe"" --service", Expected);
 
         Assert.NotNull(mismatch);
@@ -54,19 +54,19 @@ public sealed class WindowsPipeServerIdentityTests
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows paths.");
 
-        Assert.Null(WindowsPipeServerIdentity.DescribeMismatch(
+        Assert.Null(DescribeMismatch(
             PipePid,
             PipePid,
             @"c:\program files\remotedesktop\REMOTEDESKTOP.HOSTSERVICE.EXE",
             Expected));
-        Assert.Null(WindowsPipeServerIdentity.DescribeMismatch(
+        Assert.Null(DescribeMismatch(
             PipePid, PipePid, Expected, @"\\?\C:\Program Files\RemoteDesktop\RemoteDesktop.HostService.exe"));
     }
 
     [Fact]
     public void An_unrecognised_path_is_a_mismatch_rather_than_a_crash()
     {
-        var mismatch = WindowsPipeServerIdentity.DescribeMismatch(PipePid, PipePid, "\"\0bad\u0001path\"", Expected);
+        var mismatch = DescribeMismatch(PipePid, PipePid, "\"\0bad\u0001path\"", Expected);
 
         Assert.NotNull(mismatch);
     }
@@ -79,7 +79,7 @@ public sealed class WindowsPipeServerIdentityTests
         Assert.Equal(
             Expected,
             WindowsPipeServerIdentity.ServiceExecutable(@"%ProgramFiles%\RemoteDesktop\RemoteDesktop.HostService.exe"));
-        Assert.Null(WindowsPipeServerIdentity.DescribeMismatch(
+        Assert.Null(DescribeMismatch(
             PipePid, PipePid, @"""%ProgramFiles%\RemoteDesktop\RemoteDesktop.HostService.exe"" -k host", Expected));
     }
 
@@ -94,7 +94,7 @@ public sealed class WindowsPipeServerIdentityTests
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer services are Windows only.");
 
         using var service = Registry.LocalMachine.OpenSubKey(
-            @"SYSTEM\CurrentControlSet\Services\" + HostControlProtocol.WindowsHostServiceName);
+            @"SYSTEM\CurrentControlSet\Services\" + WindowsHostInstallation.WindowsServiceName);
         Assert.SkipWhen(service is null, "The host service is not installed on this machine.");
 
         var commandLine = service!.GetValue("ImagePath") as string;
@@ -120,6 +120,15 @@ public sealed class WindowsPipeServerIdentityTests
             Assert.Skip($"The host-control pipe is not reachable ({ex.Message}); start the host service and rerun.");
         }
 
-        Assert.Null(Record.Exception(() => WindowsPipeServerIdentity.EnsureExpected(pipe, expected)));
+        Assert.Null(Record.Exception(() => WindowsPipeServerIdentity.EnsureExpected(
+            pipe, expected, WindowsHostInstallation.WindowsServiceName)));
     }
+
+    private static string? DescribeMismatch(
+        uint pipePid,
+        uint servicePid,
+        string commandLine,
+        string expectedPath) =>
+        WindowsPipeServerIdentity.DescribeMismatch(
+            pipePid, servicePid, commandLine, expectedPath, WindowsHostInstallation.WindowsServiceName);
 }

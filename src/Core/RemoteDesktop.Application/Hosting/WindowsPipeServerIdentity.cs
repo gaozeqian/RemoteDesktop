@@ -11,7 +11,7 @@ internal static class WindowsPipeServerIdentity
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const int ErrorAccessDenied = 5;
 
-    public static void EnsureExpected(NamedPipeClientStream pipe, string expectedPath)
+    public static void EnsureExpected(NamedPipeClientStream pipe, string expectedPath, string? serviceName)
     {
         ArgumentNullException.ThrowIfNull(pipe);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedPath);
@@ -38,7 +38,7 @@ internal static class WindowsPipeServerIdentity
             // an administrator can change either answer. So the service is asked when the process cannot be opened.
             if (error == ErrorAccessDenied)
             {
-                EnsureExpectedService(processId, expectedPath);
+                EnsureExpectedService(processId, expectedPath, serviceName);
                 return;
             }
 
@@ -68,9 +68,14 @@ internal static class WindowsPipeServerIdentity
     /// running as the service (a process that took the pipe name for itself has a different id), and the stored
     /// executable proves that service is the one expected here rather than a service that was pointed elsewhere.
     /// </remarks>
-    private static void EnsureExpectedService(uint processId, string expectedPath)
+    private static void EnsureExpectedService(uint processId, string expectedPath, string? serviceName)
     {
-        var serviceName = HostControlProtocol.WindowsHostServiceName;
+        if (string.IsNullOrEmpty(serviceName))
+        {
+            throw new UnauthorizedAccessException(
+                "The host-control pipe belongs to a process this account cannot inspect, and no Windows service name was supplied to identify it.");
+        }
+
         var manager = OpenSCManager(null, null, ScManagerConnect);
         if (manager == IntPtr.Zero)
         {
@@ -101,7 +106,8 @@ internal static class WindowsPipeServerIdentity
                     processId,
                     status.ProcessId,
                     ReadServiceCommandLine(service, serviceName),
-                    expectedPath);
+                    expectedPath,
+                    serviceName);
                 if (mismatch is not null)
                 {
                     throw new UnauthorizedAccessException(mismatch);
@@ -128,12 +134,13 @@ internal static class WindowsPipeServerIdentity
         uint pipeProcessId,
         uint serviceProcessId,
         string serviceCommandLine,
-        string expectedPath)
+        string expectedPath,
+        string serviceName)
     {
         if (serviceProcessId == 0 || serviceProcessId != pipeProcessId)
         {
             return $"The host-control pipe belongs to an unexpected server process. Actual: process {pipeProcessId}; "
-                   + $"expected: the {HostControlProtocol.WindowsHostServiceName} service, which is process {serviceProcessId}.";
+                   + $"expected: the {serviceName} service, which is process {serviceProcessId}.";
         }
 
         var actualPath = ServiceExecutable(serviceCommandLine);

@@ -33,6 +33,8 @@ public static class ServiceCollectionExtensions
     [SupportedOSPlatform("windows")]
     public static IServiceCollection AddWindowsPlatform(this IServiceCollection services, string dataDirectory, DataProtectionScope scope)
     {
+        services.AddSingleton<IPlatformIdentity>(new PlatformIdentity("windows"));
+        services.AddSingleton<IHostInstallation>(new WindowsHostInstallation());
         services.AddSingleton<ISecretStore>(new DpapiSecretStore(Path.Combine(dataDirectory, "secrets"), scope));
         services.AddSingleton<IDisplayEnumerator, DxgiDisplayEnumerator>();
         services.AddSingleton<IScreenCapturerFactory, DxgiScreenCapturerFactory>();

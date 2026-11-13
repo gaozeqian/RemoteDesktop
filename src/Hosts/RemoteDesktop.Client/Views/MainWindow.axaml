@@ -360,13 +360,13 @@
                   <StackPanel Spacing="{DynamicResource RdSpaceMd}">
                     <TextBlock Text="固定密码（无人值守）" Classes="sectionHeader" />
                     <TextBlock Classes="caption"
-                               Text="{x:Static vm:MainWindowViewModel.FixedPasswordStorageNote}" />
+                               Text="{Binding FixedPasswordStorageNote}" />
                     <!-- Linux only: the portal restriction that keeps a fixed password from meaning unattended
                          access there. Null on the other two platforms, which hides the whole banner. It is a
                          limitation on what the setting buys, not a footnote, so it gets the warning treatment. -->
-                    <Border Classes="banner warning" IsVisible="{x:Static vm:MainWindowViewModel.ShowFixedPasswordPlatformNote}">
+                    <Border Classes="banner warning" IsVisible="{Binding ShowFixedPasswordPlatformNote}">
                       <TextBlock Classes="warning" FontSize="{DynamicResource RdFontCaption}"
-                                 Text="{x:Static vm:MainWindowViewModel.FixedPasswordPlatformNote}" />
+                                 Text="{Binding FixedPasswordPlatformNote}" />
                     </Border>
 
                     <StackPanel Spacing="{DynamicResource RdSpaceSm}">
@@ -403,7 +403,7 @@
 
                     <!-- Linux only: the camera portal asks for a system access dialog that GNOME only lets the
                          focused application show. A background host never is, so the grant is made explicit here. -->
-                    <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{x:Static vm:MainWindowViewModel.HasCameraAccess}">
+                    <StackPanel Spacing="{DynamicResource RdSpaceMd}" IsVisible="{Binding HasCameraAccess}">
                       <TextBlock Text="摄像头权限" Classes="sectionHeader" />
                       <TextBlock Classes="caption" TextWrapping="Wrap"
                                  Text="Linux 的后台宿主不能弹出桌面的摄像头授权框（GNOME 只允许焦点应用弹出）。这里允许一次后，控制端才能列出并使用本机摄像头；可随时撤销。" />

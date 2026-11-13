@@ -1,3 +1,4 @@
+using RemoteDesktop.Client;
 using RemoteDesktop.Client.ViewModels;
 
 namespace RemoteDesktop.Platform.Windows.UnitTests;
@@ -10,11 +11,14 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 /// </summary>
 public class MainWindowPlatformNoteTests
 {
+    private static readonly IClientPlatformPresentation Presentation =
+        ClientPlatformPresentation.ForCurrentPlatform();
+
     [Fact]
     public void Client_code_wording_follows_the_hosting_mode()
     {
-        var inProcess = MainWindowViewModel.DescribeClientCode(controlledEndInThisProcess: true);
-        var service = MainWindowViewModel.DescribeClientCode(controlledEndInThisProcess: false);
+        var inProcess = ClientPlatformPresentation.DescribeClientCode(controlledEndInThisProcess: true);
+        var service = ClientPlatformPresentation.DescribeClientCode(controlledEndInThisProcess: false);
 
         Assert.Contains("同一个代码", inProcess);
         Assert.DoesNotContain("后台服务", inProcess);
@@ -25,8 +29,8 @@ public class MainWindowPlatformNoteTests
     [Fact]
     public void Server_address_wording_matches_what_the_platform_can_actually_do()
     {
-        var inProcess = MainWindowViewModel.DescribeServerAddress(controlledEndInThisProcess: true);
-        var service = MainWindowViewModel.DescribeServerAddress(controlledEndInThisProcess: false);
+        var inProcess = Presentation.DescribeServerAddress(controlledEndInThisProcess: true);
+        var service = Presentation.DescribeServerAddress(controlledEndInThisProcess: false);
 
         if (OperatingSystem.IsWindows())
         {
@@ -56,17 +60,17 @@ public class MainWindowPlatformNoteTests
     {
         if (OperatingSystem.IsLinux())
         {
-            Assert.DoesNotContain("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
-            Assert.DoesNotContain("macOS", MainWindowViewModel.FixedPasswordStorageNote);
+            Assert.DoesNotContain("钥匙串", Presentation.FixedPasswordStorageNote);
+            Assert.DoesNotContain("macOS", Presentation.FixedPasswordStorageNote);
         }
         else if (OperatingSystem.IsWindows())
         {
-            Assert.DoesNotContain("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
-            Assert.Contains("DPAPI", MainWindowViewModel.FixedPasswordStorageNote);
+            Assert.DoesNotContain("钥匙串", Presentation.FixedPasswordStorageNote);
+            Assert.Contains("DPAPI", Presentation.FixedPasswordStorageNote);
         }
         else
         {
-            Assert.Contains("钥匙串", MainWindowViewModel.FixedPasswordStorageNote);
+            Assert.Contains("钥匙串", Presentation.FixedPasswordStorageNote);
         }
     }
 
@@ -77,14 +81,14 @@ public class MainWindowPlatformNoteTests
         // so a fixed password cannot make a Linux machine unattended. The sentence belongs to Linux alone.
         var onLinux = OperatingSystem.IsLinux();
 
-        Assert.Equal(onLinux, MainWindowViewModel.ShowFixedPasswordPlatformNote);
-        Assert.Equal(onLinux, MainWindowViewModel.FixedPasswordPlatformNote is not null);
+        Assert.Equal(onLinux, Presentation.ShowFixedPasswordPlatformNote);
+        Assert.Equal(onLinux, Presentation.FixedPasswordPlatformNote is not null);
 
         // The sentence has to say what goes wrong and where the operator finds the difference. These are the words
         // the Linux pane is built from, so a rewrite that drops one of them is a change of meaning, not of style.
         if (onLinux)
         {
-            var note = Assert.IsType<string>(MainWindowViewModel.FixedPasswordPlatformNote);
+            var note = Assert.IsType<string>(Presentation.FixedPasswordPlatformNote);
             Assert.Contains("portal", note, StringComparison.Ordinal);
             Assert.Contains("无人值守", note, StringComparison.Ordinal);
             Assert.Contains("重新授权", note, StringComparison.Ordinal);
@@ -93,7 +97,7 @@ public class MainWindowPlatformNoteTests
         }
         else
         {
-            Assert.Null(MainWindowViewModel.FixedPasswordPlatformNote);
+            Assert.Null(Presentation.FixedPasswordPlatformNote);
         }
     }
 }
