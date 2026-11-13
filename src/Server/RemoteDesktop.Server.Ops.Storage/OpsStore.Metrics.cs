@@ -221,11 +221,17 @@ public sealed partial class OpsStore
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        // A bucket is comparable to a timestamp only after multiplying by the step, and the step differs per row. The
+        // join turns that expression into an equality on step_seconds plus a range on bucket — the shape of
+        // ix_ops_metric_rollup_step_bucket — so a batch no longer scans the whole rollup table.
         command.CommandText = """
             DELETE FROM ops_metric_rollup
             WHERE (node_id, metric, step_seconds, bucket) IN (
-                SELECT node_id, metric, step_seconds, bucket FROM ops_metric_rollup
-                WHERE (bucket + 1) * step_seconds * 1000 <= @before
+                SELECT r.node_id, r.metric, r.step_seconds, r.bucket
+                FROM (SELECT DISTINCT step_seconds FROM ops_metric_rollup) AS s
+                JOIN ops_metric_rollup AS r
+                  ON r.step_seconds = s.step_seconds
+                 AND r.bucket < (@before / (s.step_seconds * 1000))
                 LIMIT @limit
             );
             """;

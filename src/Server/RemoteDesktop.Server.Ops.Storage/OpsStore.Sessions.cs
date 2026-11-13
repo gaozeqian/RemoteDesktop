@@ -102,7 +102,7 @@ public sealed partial class OpsStore
         command.CommandText = """
             DELETE FROM ops_session WHERE id IN (
                 SELECT id FROM ops_session
-                WHERE COALESCE(ended_at, updated_at) < @before
+                WHERE ended_at < @before OR (ended_at IS NULL AND updated_at < @before)
                 LIMIT @limit
             );
             """;

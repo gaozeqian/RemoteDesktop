@@ -11,6 +11,9 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- The development file carries a fixed relay key that is public in the repository. It is still used by
          `dotnet run`, but a published server (the packages and the container images) runs in Production and has no
          reason to carry a known secret. -->

@@ -55,6 +55,9 @@ public static class OpsServer
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(OpsStore.Open(options.Database));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton(sp => new OpsHealthProbe(
+            sp.GetRequiredService<OpsStore>().ProbeAsync,
+            sp.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton<LoginThrottle>();
         builder.Services.AddSingleton<AddressThrottle>();
         builder.Services.AddSingleton<ChallengeStore>();

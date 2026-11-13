@@ -105,5 +105,10 @@ public static class OpsMigrations
             CREATE INDEX IF NOT EXISTS ix_ops_metric_sample_ts ON ops_metric_sample (ts);
             CREATE INDEX IF NOT EXISTS ix_ops_metric_rollup_step_bucket ON ops_metric_rollup (step_seconds, bucket);
             """),
+
+        // 9 — retention deletes resolved alerts by state and resolve time. The baseline index leads with opened_at,
+        // so the resolved_at branch of that predicate had no index of its own; the OR the query now uses is served
+        // by this index and by the existing (state, opened_at) one.
+        new(9, "CREATE INDEX IF NOT EXISTS ix_ops_alert_resolved ON ops_alert (state, resolved_at);"),
     ];
 }
