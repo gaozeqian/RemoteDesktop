@@ -64,6 +64,8 @@
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 - **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
   `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **`MainWindowViewModel` 拆分**：约 1,400 行的单文件拆成 `.Connection`、`.Settings`、`.RecentDevices`、
+  `.HostStatus` 四个 partial，方法体未改。
 - **服务端宿主收敛**：新增 `RemoteDesktop.Server.Hosting`，四个宿主共用配置分层、Windows 服务/systemd 注册与
   节点令牌端点过滤器；`Server.Shared` 继续保持不含 ASP.NET，`Ops.Core` 的依赖闭包不变。
 - **平台实现继续收窄**：Windows/macOS/Linux/Posix 的六十余个只被测试或同程序集使用的实现类型改为 `internal`；
