@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Abstractions.Platform;
@@ -7,6 +5,7 @@ using RemoteDesktop.Application;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
+using RemoteDesktop.TestSupport;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -79,35 +78,22 @@ public sealed class EndToEndNode : IAsyncDisposable
             FixedPasswordPolicy.Save(secretStore, options.FixedPassword);
         }
 
-        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
-        {
-            DisableDefaults = true,
-            ContentRootPath = AppContext.BaseDirectory,
-        });
-
-        builder.Configuration.AddEnvironmentVariables();
-
-        builder.Services
-            .AddSingleton<ISecretStore>(secretStore)
-            .AddQuicTransport(new TransportOptions
+        var host = TestNodeHost.Build(
+            new TestNodeHostOptions(rendezvousUri, options.ForceRelay, AllowInsecureSignaling: true),
+            secretStore,
+            services =>
             {
-                RendezvousUri = rendezvousUri,
-                ForceRelay = options.ForceRelay,
-                AllowInsecureSignaling = true,
-            })
-            .AddRemoteDesktopApplication();
+                if (options.Features is not null)
+                {
+                    foreach (var feature in options.Features)
+                    {
+                        services.AddSingleton<IFeatureModule>(feature);
+                    }
+                }
 
-        if (options.Features is not null)
-        {
-            foreach (var feature in options.Features)
-            {
-                builder.Services.AddSingleton<IFeatureModule>(feature);
-            }
-        }
+                options.ConfigureServices?.Invoke(services);
+            });
 
-        options.ConfigureServices?.Invoke(builder.Services);
-
-        var host = builder.Build();
         var node = new EndToEndNode(host, dataDir);
 
         if (options.AllowedPermissions is { } permissions)
@@ -115,24 +101,9 @@ public sealed class EndToEndNode : IAsyncDisposable
             node.Credentials.AllowedPermissions = permissions;
         }
 
-        var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        node.Rendezvous.StateChanged += (_, _) =>
-        {
-            if (node.Rendezvous.State == RendezvousState.Online)
-            {
-                online.TrySetResult();
-            }
-        };
-
-        if (node.Rendezvous.State == RendezvousState.Online)
-        {
-            online.TrySetResult();
-        }
-
         try
         {
-            await host.StartAsync(cancellationToken);
-            await online.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+            await TestNodeHost.StartAndWaitOnlineAsync(host, node.Rendezvous, TimeSpan.FromSeconds(15), cancellationToken);
             return node;
         }
         catch
@@ -169,16 +140,5 @@ public sealed class EndToEndNode : IAsyncDisposable
                 // Best effort cleanup
             }
         }
-    }
-
-    private sealed class InMemorySecretStore : ISecretStore
-    {
-        private readonly ConcurrentDictionary<string, byte[]> _secrets = new(StringComparer.Ordinal);
-
-        public void Save(string name, ReadOnlySpan<byte> secret) => _secrets[name] = secret.ToArray();
-
-        public byte[]? Load(string name) => _secrets.GetValueOrDefault(name);
-
-        public void Delete(string name) => _secrets.TryRemove(name, out _);
     }
 }

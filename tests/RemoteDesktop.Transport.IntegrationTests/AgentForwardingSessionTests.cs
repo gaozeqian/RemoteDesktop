@@ -8,6 +8,7 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -112,13 +113,6 @@ public sealed class AgentForwardingSessionTests(ServerFixture server) : IClassFi
         new AgentForwardingModule(ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, replayFirstFrame: false, gateway, NullLogger<AgentForwardingModule>.Instance),
     ];
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(100, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(30));
 }

@@ -64,6 +64,8 @@
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 - **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
   `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **测试脚手架收敛**：E2E 与 Transport 集成测试共用 `TestSupport`（节点宿主组合、在线等待、`TestRendezvous`
+  与 `TestWait`）；约 20 份 `WaitForAsync`/`WaitUntilAsync` 改为同一实现，超时抛 `TimeoutException`，不再静默返回。
 - **文档规范收敛**：`CLAUDE.md` 改为最短上手与易踩坑清单，规范、索引与细节分别指向 `CONTRIBUTING.md` 与 `docs/`；
   `docs/ops` 中与 `build/README.md` 重复的打包脚本分层段落改为链接。
 - **观看端时钟统一**：解码器监管与关键帧看门狗改用注入的 `TimeProvider`（生产仍是系统单调时钟）；停滞判定不再

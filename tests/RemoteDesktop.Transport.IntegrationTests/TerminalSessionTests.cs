@@ -13,6 +13,7 @@ using RemoteDesktop.Features.Terminal.Emulation;
 using RemoteDesktop.Platform.Windows.Terminal;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.Terminal;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -245,26 +246,12 @@ public sealed class TerminalSessionTests(ServerFixture server) : IClassFixture<S
         }
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitUntilAsync(Func<bool> condition) =>
+        TestWait.UntilAsync(condition, "the terminal state", TimeSpan.FromSeconds(30));
 
     /// <summary>The same wait for a condition that has to be asked for over the connection.</summary>
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!await condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitUntilAsync(Func<Task<bool>> condition) =>
+        TestWait.UntilAsync(condition, "the terminal state", TimeSpan.FromSeconds(30));
 
     private sealed class SwitchableGuard : IUserContextGuard
     {

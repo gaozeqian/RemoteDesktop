@@ -7,6 +7,7 @@ using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -128,15 +129,8 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
     private static AdminCommand Disconnect(string commandId, string sessionId) =>
         new() { CommandId = commandId, Command = ClientCapabilities.Commands.DisconnectSession, SessionId = sessionId };
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(20));
 
     private sealed class CapturingLogger : ILogger<AdminCommandService>
     {

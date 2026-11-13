@@ -16,6 +16,7 @@ using RemoteDesktop.Platform.Windows.Camera;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.Camera;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -351,26 +352,12 @@ public sealed class CameraSessionTests(ServerFixture server) : IClassFixture<Ser
         return new([new MediaFoundationH264EncoderFactory(hardware: false)], [new MediaFoundationH264DecoderFactory()]);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
-            await Task.Delay(25, Ct);
-        }
-    }
+    private static Task WaitUntilAsync(Func<bool> condition) =>
+        TestWait.UntilAsync(condition, "the camera state", TimeSpan.FromSeconds(30));
 
     /// <summary>The same wait for a condition that has to be asked for over the connection.</summary>
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!await condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
-            await Task.Delay(25, Ct);
-        }
-    }
+    private static Task WaitUntilAsync(Func<Task<bool>> condition) =>
+        TestWait.UntilAsync(condition, "the camera state", TimeSpan.FromSeconds(30));
 
     private sealed class FakeCameraAccess(CameraAccessState state) : ICameraAccess
     {

@@ -1,13 +1,11 @@
-using System.Collections.Concurrent;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RemoteDesktop.Abstractions.Input;
-using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
+using RemoteDesktop.TestSupport;
 using RemoteDesktop.Transport.Rendezvous;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
@@ -60,50 +58,28 @@ public sealed class TestDevice : IAsyncDisposable
         IFeatureModule[] modules,
         Action<IServiceCollection>? configure)
     {
-        // Deliberately not the full set of defaults. Host.CreateApplicationBuilder() adds appsettings.json as a
-        // *reloading* file provider, and a reloading provider holds an inotify instance for as long as the host lives.
-        // This project has no appsettings.json, so the watcher watches nothing — but these tests start hosts in
-        // parallel, and enough of them at once exhausts the machine's user-wide limit of 128 inotify instances. The
-        // suite then fails at host construction on any desktop that is already holding most of them, with an error
-        // that says nothing about the code under test. TestRendezvous avoids this the same way, by using the slim
-        // builder. What is kept here is everything the defaults would have provided except the watching file source:
-        // the content root, and the environment.
-        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
-        {
-            DisableDefaults = true,
-            ContentRootPath = AppContext.BaseDirectory,
-        });
-        builder.Configuration.AddEnvironmentVariables();
-        builder.Services
-            .AddSingleton<ISecretStore, InMemorySecretStore>()
-            .AddQuicTransport(new TransportOptions { RendezvousUri = rendezvousUri, ForceRelay = forceRelay })
-            .AddRemoteDesktopApplication();
-        foreach (var module in modules)
-        {
-            builder.Services.AddSingleton(module);
-        }
-
-        if (inputAccess is not null)
-        {
-            builder.Services.AddSingleton(inputAccess);
-        }
-
-        configure?.Invoke(builder.Services);
-
-        var device = new TestDevice(builder.Build());
-        var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        device.Rendezvous.StateChanged += (_, _) =>
-        {
-            if (device.Rendezvous.State == RendezvousState.Online)
+        var host = TestNodeHost.Build(
+            new TestNodeHostOptions(rendezvousUri, forceRelay, AllowInsecureSignaling: false),
+            new InMemorySecretStore(),
+            services =>
             {
-                online.TrySetResult();
-            }
-        };
+                foreach (var module in modules)
+                {
+                    services.AddSingleton(module);
+                }
 
+                if (inputAccess is not null)
+                {
+                    services.AddSingleton(inputAccess);
+                }
+
+                configure?.Invoke(services);
+            });
+
+        var device = new TestDevice(host);
         try
         {
-            await device._host.StartAsync(Ct);
-            await online.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await TestNodeHost.StartAndWaitOnlineAsync(host, device.Rendezvous, TimeSpan.FromSeconds(10), Ct);
             return device;
         }
         catch
@@ -118,16 +94,5 @@ public sealed class TestDevice : IAsyncDisposable
     {
         await _host.StopAsync(TimeSpan.FromSeconds(5));
         _host.Dispose();
-    }
-
-    private sealed class InMemorySecretStore : ISecretStore
-    {
-        private readonly ConcurrentDictionary<string, byte[]> _secrets = [];
-
-        public void Save(string name, ReadOnlySpan<byte> secret) => _secrets[name] = secret.ToArray();
-
-        public byte[]? Load(string name) => _secrets.GetValueOrDefault(name);
-
-        public void Delete(string name) => _secrets.TryRemove(name, out _);
     }
 }

@@ -11,6 +11,7 @@ using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Platform.Windows.Terminal;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.File;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -253,15 +254,8 @@ public sealed class StressTests(ServerFixture server) : IClassFixture<ServerFixt
         return bytes;
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what, TimeSpan? budget = null)
-    {
-        var deadline = DateTime.UtcNow + (budget ?? Timeout);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(25, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what, TimeSpan? budget = null) =>
+        TestWait.UntilAsync(condition, what, budget ?? Timeout);
 
     /// <summary>The tests run as an ordinary user, so files and shells may be served.</summary>
     private sealed class AllowFiles : IUserContextGuard

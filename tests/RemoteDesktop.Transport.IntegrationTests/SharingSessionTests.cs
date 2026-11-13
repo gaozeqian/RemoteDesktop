@@ -5,6 +5,7 @@ using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -128,15 +129,8 @@ public sealed class SharingSessionTests(ServerFixture server) : IClassFixture<Se
         return new RunningClipboard(channel, new ClipboardSynchronizer(clipboard, NullLogger<ClipboardSynchronizer>.Instance));
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(30));
 
     private sealed class RunningClipboard : IAsyncDisposable
     {

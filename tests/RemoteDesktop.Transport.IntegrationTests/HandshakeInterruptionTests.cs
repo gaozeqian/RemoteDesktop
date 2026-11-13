@@ -4,6 +4,7 @@ using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Quic;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -92,15 +93,8 @@ public sealed class HandshakeInterruptionTests(ServerFixture server) : IClassFix
         Assert.Equal(SessionMode.Control, session.Context.Grant.Mode);
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what, int seconds = 20)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(seconds);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what, int seconds = 20) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(seconds));
 
     private sealed class BreakableLink
     {

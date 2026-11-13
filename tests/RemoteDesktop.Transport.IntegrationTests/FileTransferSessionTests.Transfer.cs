@@ -2,6 +2,7 @@ using RemoteDesktop.Domain;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.File;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -155,13 +156,6 @@ public sealed partial class FileTransferSessionTests
         return new FileEntryInfo(info.Name, IsDirectory: false, info.Length, info.LastWriteTimeUtc, FileEntryAttributes.None);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + JobTimeout;
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "Timed out.");
-            await Task.Delay(2, Ct);
-        }
-    }
+    private static Task WaitUntilAsync(Func<bool> condition) =>
+        TestWait.UntilAsync(condition, "the transfer job", JobTimeout, TimeSpan.FromMilliseconds(2));
 }

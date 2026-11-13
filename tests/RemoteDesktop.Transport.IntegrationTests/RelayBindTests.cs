@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Shared;
 using RemoteDesktop.Signaling;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -305,21 +306,8 @@ public class RelayBindTests
         }
     }
 
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(25), Ct);
-        }
-
-        return condition();
-    }
+    private static Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout) =>
+        TestWait.TryUntilAsync(condition, timeout, TimeSpan.FromMilliseconds(25));
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 }
