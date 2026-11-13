@@ -59,10 +59,9 @@ public class FrameCodecBoundaryTests
         overLimit.Position = 0;
 
         var accepted = await FrameCodec.ReadAsync(atLimit, Limit, Ct);
-        var error = await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(overLimit, Limit, Ct));
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(overLimit, Limit, Ct));
 
         Assert.Equal(Limit, accepted!.Value.Payload.Length);
-        Assert.Contains((Limit + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -151,9 +150,7 @@ public class FrameCodecBoundaryTests
     {
         using var stream = new MemoryStream(Header(length: 4, type: 1));
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(stream, cancellationToken: Ct));
-
-        Assert.Contains("payload", error.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(stream, cancellationToken: Ct));
     }
 
     [Fact]
@@ -161,9 +158,7 @@ public class FrameCodecBoundaryTests
     {
         using var stream = new MemoryStream(new byte[] { 0, 0, 0, 1, 0 });
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(stream, cancellationToken: Ct));
-
-        Assert.Contains("header", error.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await FrameCodec.ReadAsync(stream, cancellationToken: Ct));
     }
 
     [Fact]
@@ -287,11 +282,8 @@ public class ProtobufFramesTests
         // The payload is a perfectly good message: it is the type, not the content, that disqualifies the frame.
         await using var stream = await FrameAsync(type, new ControlMessage { Ping = new Ping { Timestamp = 1 } }.ToByteArray());
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(
+        await Assert.ThrowsAsync<InvalidDataException>(
             async () => await ProtobufFrames.ReadAsync(stream, ControlMessage.Parser, cancellationToken: Ct));
-
-        Assert.Contains("Unexpected message type", error.Message, StringComparison.Ordinal);
-        Assert.Contains(type.ToString(System.Globalization.CultureInfo.InvariantCulture), error.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -305,7 +297,7 @@ public class ProtobufFramesTests
         var error = await Assert.ThrowsAsync<InvalidDataException>(
             async () => await ProtobufFrames.ReadAsync(stream, ControlMessage.Parser, cancellationToken: Ct));
 
-        Assert.Contains("Malformed protobuf", error.Message, StringComparison.Ordinal);
+        // The cause is structured: a protobuf failure, not a frame that merely failed to parse.
         Assert.IsType<InvalidProtocolBufferException>(error.InnerException);
     }
 

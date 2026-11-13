@@ -10,8 +10,7 @@ namespace RemoteDesktop.Core.UnitTests;
 /// </summary>
 public abstract class ViewerDecoderTests
 {
-    // The viewers measure the stall timeout (two seconds) with the monotonic clock, which a test cannot move; the tests
-    // that need it wait it out in real time.
+    /// <summary>Past the two-second stall timeout, on the stepped clock the viewer and its supervisor share.</summary>
     protected static readonly TimeSpan PastStallTimeout = TimeSpan.FromMilliseconds(2300);
 
     protected static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -42,7 +41,7 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
 
         await rig.SendDeltaFramesAsync(2);
         await rig.WaitForDecodesAsync(3);
@@ -57,7 +56,7 @@ public abstract class ViewerDecoderTests
     public async Task A_key_frame_the_decoder_has_nothing_for_does_not_count_towards_a_rebuild()
     {
         await using var rig = await StartRigAsync();
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
 
         // Parameter sets on their own give no picture; throwing the decoder away over them would lose what it learned.
         for (var i = 0; i < 6; i++)
@@ -66,7 +65,6 @@ public abstract class ViewerDecoderTests
         }
 
         await rig.WaitForDecodesAsync(6);
-        await Task.Delay(200, Ct);
         Assert.Equal(1, rig.Factory.Created);
     }
 
@@ -76,7 +74,7 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
 
         rig.Factory.FailNextCreate = true;
         await rig.SendDeltaFramesAsync(3);
@@ -96,13 +94,16 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+
+        // Stepping past the stall also runs the watchdog once; that request is not what this test is about.
+        rig.Time.Advance(PastStallTimeout);
+        Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the watchdog asks after the stall");
 
         rig.Factory.FailNextCreate = true;
         await rig.SendDeltaFramesAsync(3);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.Factory.FailedCreates == 1), "a rebuild was attempted");
 
-        Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the host is asked for a key frame");
+        Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 2), "the failed rebuild still asks for a key frame");
         Assert.Equal(1, rig.Factory.Created);
     }
 
@@ -126,11 +127,13 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
 
         await rig.SendDeltaFramesAsync(3);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.Factory.Created == 2), "the decoder was rebuilt");
-        await rig.ExpectKeyFrameRequestsAsync(1);
+
+        // One request came from the watchdog when the clock passed the stall; the rebuild adds the second.
+        await rig.ExpectKeyFrameRequestsAsync(2);
 
         // The new decoder knows nothing of the stream: only a key frame may be fed to it.
         await rig.SendDeltaFramesAsync(2);
@@ -146,7 +149,7 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
         await rig.SendDeltaFramesAsync(3);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.Factory.Created == 2), "the decoder was rebuilt");
 
@@ -165,7 +168,7 @@ public abstract class ViewerDecoderTests
         await using var rig = await StartRigAsync();
         await rig.SendKeyFrameAsync();
         await rig.WaitForDecodesAsync(1);
-        await Task.Delay(PastStallTimeout, Ct);
+        rig.Time.Advance(PastStallTimeout);
         await rig.SendDeltaFramesAsync(2);
         await rig.WaitForDecodesAsync(3);
 

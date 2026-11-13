@@ -61,7 +61,6 @@ public sealed class DesktopViewerDecoderTests : ViewerDecoderTests
 
         // Waiting for a key frame, but the stream began a moment ago: not yet a reason to ask.
         await rig.TickAsync(TimeSpan.FromSeconds(1));
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
 
         await rig.ExpectKeyFrameRequestsAsync(0);
     }
@@ -70,13 +69,10 @@ public sealed class DesktopViewerDecoderTests : ViewerDecoderTests
     public async Task The_watchdog_asks_for_a_key_frame_once_nothing_decodable_has_arrived_for_the_stall_timeout_and_not_again_at_once()
     {
         await using var rig = await DesktopViewerRig.StartAsync();
-        await Task.Delay(PastStallTimeout, Ct);
-
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(PastStallTimeout);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the first pass asks");
 
-        // The retry rate while no picture can be shown is one request per two seconds of real time.
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        // The retry rate while no picture can be shown is one request per two seconds of clock time.
         await rig.TickAsync(TimeSpan.FromSeconds(1));
         await rig.ExpectKeyFrameRequestsAsync(1);
     }
@@ -85,9 +81,7 @@ public sealed class DesktopViewerDecoderTests : ViewerDecoderTests
     public async Task The_watchdog_does_not_ask_before_the_host_has_described_a_stream()
     {
         await using var rig = await DesktopViewerRig.StartAsync(sendStreamInfo: false);
-        await Task.Delay(PastStallTimeout, Ct);
-
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(PastStallTimeout);
 
         await rig.ExpectKeyFrameRequestsAsync(0);
     }
@@ -102,14 +96,12 @@ public sealed class DesktopViewerDecoderTests : ViewerDecoderTests
         Assert.False(rig.Viewer.IsStalled);
 
         // Two seconds without a picture: the watchdog asks the host for one. That alone is not a stall.
-        await Task.Delay(PastStallTimeout, Ct);
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(PastStallTimeout);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the watchdog asked");
         Assert.False(rig.Viewer.IsStalled);
 
         // Four seconds on, still unanswered: what is on screen is old, not just unchanged. It asks again, too.
-        await Task.Delay(TimeSpan.FromMilliseconds(4200), Ct);
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(TimeSpan.FromMilliseconds(4200));
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 2), "the watchdog asked again");
         Assert.True(rig.Viewer.IsStalled);
 

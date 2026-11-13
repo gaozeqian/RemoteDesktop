@@ -64,6 +64,8 @@
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 - **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
   `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **观看端时钟统一**：解码器监管与关键帧看门狗改用注入的 `TimeProvider`（生产仍是系统单调时钟）；停滞判定不再
+  需要测试真实等待两秒，观看端测试从约 32 秒缩短到数秒。
 - **平台实现收窄与坐标纯函数**：`SendInputInjector`、`MediaFoundationH264EncoderFactory`、`PipeWireScreenCapturer`、
   `PortalConnection` 改为 `internal`；显示选择与归一化坐标到虚拟桌面的映射抽成 `SendInputCoordinates` 纯函数，
   并补齐边界/回退单测。

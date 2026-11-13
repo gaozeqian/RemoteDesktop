@@ -39,8 +39,8 @@ public sealed partial class DesktopViewer : IAsyncDisposable
         _time = time;
         _logger = logger;
 
-        // The stall time is real monotonic time; the viewer's own clock only drives the watchdog tick and the latency.
-        _supervisor = new VideoDecoderSupervisor(codecs, TimeProvider.System, ex => LogDecoderRebuildFailed(_logger, ex));
+        // The same clock as the watchdog tick, so a test can step silence forward instead of waiting two seconds.
+        _supervisor = new VideoDecoderSupervisor(codecs, time, ex => LogDecoderRebuildFailed(_logger, ex));
     }
 
     public DesktopStreamInfo? StreamInfo { get; private set; }
