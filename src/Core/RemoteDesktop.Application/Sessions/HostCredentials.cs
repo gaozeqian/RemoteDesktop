@@ -38,8 +38,7 @@ public sealed class HostCredentials(TimeProvider? time = null)
         set
         {
             _fixedPassword = string.IsNullOrEmpty(value) ? null : value;
-            Changed?.Invoke(this, EventArgs.Empty);
-        }
+            }
     }
 
     /// <summary>
@@ -48,13 +47,10 @@ public sealed class HostCredentials(TimeProvider? time = null)
     /// </summary>
     public Permissions AllowedPermissions { get; set; } = HostPolicy.Default;
 
-    public event EventHandler? Changed;
-
     public void RotateTemporaryPassword()
     {
         _temporaryPassword = TemporaryPasswordGenerator.Generate();
         Volatile.Write(ref _rotatedAtTicks, _time.GetUtcNow().UtcTicks);
-        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
