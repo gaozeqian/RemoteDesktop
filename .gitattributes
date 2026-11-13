@@ -68,6 +68,13 @@ build/docker/.env.example                              text eol=lf
 *.props             text eol=crlf
 *.rtf               text eol=crlf
 
+# The Windows copy of the server quick guide is generated with CRLF by
+# build/tools/Export-ServerConfigurationGuides.ps1, and the release job's -Check compares
+# the file byte for byte. Without this line the guide is checked out LF on Linux (the blob
+# is LF) while the generator writes CRLF, so `-Check` passed on the Windows job and failed
+# in check-version — the one job that gates a release.
+build/installer/windows/**/*.txt    text eol=crlf
+
 # --- Binary assets ---------------------------------------------------------
 # Never diff, never convert. git would detect most of these on its own; saying
 # so keeps a future file that happens to look like text from being mangled.
