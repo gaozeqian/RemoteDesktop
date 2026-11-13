@@ -125,10 +125,50 @@ jobs:
           # 一个都没打出来时，失败要发生在这里并说清原因，而不是推迟到发布 job 去下载一个不存在的 artifact。
           if-no-files-found: error
 
-  # macOS 安装包（.pkg）。先跑，因为下面的发布 job 需要它的产物才能发版——
-  # 只发出 Windows 的三个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错。
-  build-macos:
+  # macOS 的包只在凭据齐全时才构建：`.pkg` 必须签名并公证，缺一项就没有可发布的产物。Secret 不能出现在 job 级
+  # `if` 里，所以先由一个只读 Secret 的小 job 把"齐不齐"变成 output，`build-macos` 与 `release` 都读它。
+  #
+  # 这里是这条规则唯一的例外，写清楚：凭据不全时**不构建** macOS 的包，发布只含 Windows 与 Linux 的六个包，
+  # 发布说明里会写明少了哪一个和为什么。绝不发布未签名或未公证的 `.pkg`。
+  check-signing:
     needs: check-version
+    runs-on: ubuntu-26.04
+    outputs:
+      macos: ${{ steps.decide.outputs.ready }}
+    env:
+      HAS_APP_CERT: ${{ secrets.MACOS_APP_CERT_BASE64 != '' }}
+      HAS_APP_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD != '' }}
+      HAS_INSTALLER_CERT: ${{ secrets.MACOS_INSTALLER_CERT_BASE64 != '' }}
+      HAS_INSTALLER_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD != '' }}
+      HAS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY_BASE64 != '' }}
+      HAS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID != '' }}
+      HAS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID != '' }}
+    steps:
+      - name: Decide whether the macOS packages can be built
+        id: decide
+        run: |
+          set -euo pipefail
+          ready=true
+          for name in HAS_APP_CERT HAS_APP_PASSWORD HAS_INSTALLER_CERT HAS_INSTALLER_PASSWORD \
+                      HAS_NOTARY_KEY HAS_NOTARY_KEY_ID HAS_NOTARY_ISSUER; do
+            if [ "${!name}" != "true" ]; then
+              ready=false
+              echo "::warning::$name is not configured."
+            fi
+          done
+
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          if [ "$ready" != "true" ]; then
+            echo "::warning::macOS 签名或公证凭据不全：本次发布只含 Windows 与 Linux 的安装包。"
+          fi
+
+  # macOS 安装包（.pkg）。先跑，因为下面的发布 job 需要它的产物才能发版——
+  # 只发出 Windows 的三个 MSI、悄悄少了 macOS 的包，是发完才会被发现的那种错；但缺凭据时连包都不构建，
+  # 那种情况由 check-signing 的 output 明确标出，不是悄悄少。
+  build-macos:
+    needs: [check-version, check-signing]
+    # 没有证书与公证凭据时不构建：下面打包步骤的断言会拒绝未签名的正式包，跳过比红一次更诚实。
+    if: needs.check-version.result == 'success' && needs.check-signing.outputs.macos == 'true'
     # 这个移植的下限是 macOS 26 (Tahoe)：随包分发的 libmsquic / openssl@4 bottle 的 minos 是 26.0，
     # dyld 拒绝在更老的系统上加载（docs/ports/README.md"最低系统版本是 macOS 26"）。macos-26 就是 arm64 镜像。
     runs-on: macos-26
@@ -458,8 +498,18 @@ jobs:
   # 发布本身：不打包任何东西，只等三个平台的 artifact 到齐，把九个包与发布说明交给 GitHub。从 Windows 那个 job
   # 里拆出来，是为了 job 列表里三个 build-<平台> 形状一致，而且"发版"这件事只有一个地方能发生。
   release:
-    # 三个打包 job 都做完才发：发布是一个原子动作，缺一个产物就不该发（见上面 build-linux 与 build-macos 的注释）。
-    needs: [check-version, build-linux, build-macos, build-windows]
+    # 每个平台做完才发：发布是一个原子动作，缺一个产物就不该发（见上面 build-linux 与 build-macos 的注释）。
+    #
+    # 唯一的例外是 macOS 因凭据不全被**跳过**：那种情况不是"少了一个产物"，而是"这个平台这次不发布"，由
+    # check-signing 的 output 决定，发布说明里会写明。真正失败的构建（failure）仍然拦下发布。
+    needs: [check-version, check-signing, build-linux, build-macos, build-windows]
+    # `>-` 把这些行折成一行表达式：多行的 `|` 会带上换行，规则和可读性都靠一行更稳妥。
+    if: >-
+      always()
+      && needs.check-version.result == 'success'
+      && needs.build-linux.result == 'success'
+      && needs.build-windows.result == 'success'
+      && (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped')
     # 与 build-windows 同一个 runner：发布说明用 pwsh 拼，gh 在托管 runner 上预装。
     runs-on: windows-latest
 
@@ -488,6 +538,7 @@ jobs:
         # or a $( ) would otherwise be parsed as PowerShell.
         env:
           DEFAULT_RENDEZVOUS_URI: ${{ vars.DEFAULT_RENDEZVOUS_URI }}
+          MACOS_BUILT: ${{ needs.check-signing.outputs.macos }}
         run: |
           $address = $env:DEFAULT_RENDEZVOUS_URI
           if ($address) {
@@ -511,8 +562,16 @@ jobs:
           $boundaries.Add('> 修改固定密码；其他本机账户与其他 Windows 会话会被控制管道拒绝。')
           $boundaries.Add('> 见 [安全边界](https://github.com/gaozeqian/RemoteDesktop/blob/master/docs/design/README.md#3-安全边界)。')
 
-          if ($env:MACOS_SIGNED -ne 'true' -or $env:MACOS_NOTARIZED -ne 'true') {
-              throw 'The signed and notarized macOS build did not complete; refusing to publish it.'
+          # macOS 只有在构建过的时候才要求签名与公证：构建过却没签，是错的；没构建，是这个平台这次不发布。
+          if ($env:MACOS_BUILT -eq 'true' -and ($env:MACOS_SIGNED -ne 'true' -or $env:MACOS_NOTARIZED -ne 'true')) {
+              throw 'The macOS build reported success without signing or notarization; refusing to publish it.'
+          }
+
+          if ($env:MACOS_BUILT -ne 'true') {
+              $boundaries.Insert(0, '')
+              $boundaries.Insert(0, '> 配好 `MACOS_APP_CERT_BASE64` / `MACOS_INSTALLER_CERT_BASE64` / `MACOS_NOTARY_*` 之后重跑本工作流即可补上。')
+              $boundaries.Insert(0, '> **本次发布不含 macOS 安装包**：仓库没有配置 Developer ID 证书与公证凭据，未签名或未经公证的 `.pkg` 不发布。')
+              $boundaries.Insert(0, '> [!NOTE]')
           }
 
           # The build jobs have already enforced these credentials. Repeat the assertion before the write-only job.
@@ -544,6 +603,8 @@ jobs:
       # 取回 build-macos 打好的 .pkg。用 artifact 而不是让 macOS job 自己上传 Release，是为了让"发版"只发生
       # 在这一处——否则 Windows 和 macOS 会各自尝试创建同一个 Release，谁先谁后不定。
       - name: Download the macOS installer
+        # 凭据不全时那个 job 是 skipped，没有 artifact 可取——发布说明里已经写明这次不含 macOS。
+        if: needs.build-macos.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: macos-installer
@@ -568,9 +629,12 @@ jobs:
               throw "Expected three Linux packages, found $($linux.Count)."
           }
 
-          # macOS 三个角色各一个。少一个就说明 build-macos 只出了一部分，而那是发完才会被发现的那种错。
+          # macOS 三个角色各一个，或者一个都没有（凭据不全时那个 job 没有运行）。有一个却不齐，说明 build-macos
+          # 只出了一部分，而那是发完才会被发现的那种错。
           $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-          if ($packages.Count -ne 3) { throw "Expected the macOS client, host and server installers from build-macos, got $($packages.Count)." }
+          if ($packages.Count -gt 0 -and $packages.Count -ne 3) {
+              throw "Expected three macOS installers or none, found $($packages.Count)."
+          }
 
           # Windows 三个来自 build-windows。少一个就说明那个 job 只出了一部分。
           $windows = @(Get-ChildItem -Path windows-packages/*.msi -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
