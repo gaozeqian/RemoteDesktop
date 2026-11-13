@@ -31,11 +31,11 @@ public sealed partial class RollupMaintenanceService(
 
         // 1. Rollup into 60-second (1-minute) buckets for samples up to 1 minute ago
         var minuteCutoff = now - 60_000;
-        var minuteCount = await store.RollupSamplesAsync(minuteCutoff, 60, cancellationToken).ConfigureAwait(false);
+        var minuteCount = await store.RollupSamplesIncrementallyAsync(minuteCutoff, 60, cancellationToken).ConfigureAwait(false);
 
         // 2. Rollup into 3600-second (1-hour) buckets for samples up to 1 hour ago
         var hourCutoff = now - 3_600_000;
-        var hourCount = await store.RollupSamplesAsync(hourCutoff, 3600, cancellationToken).ConfigureAwait(false);
+        var hourCount = await store.RollupSamplesIncrementallyAsync(hourCutoff, 3600, cancellationToken).ConfigureAwait(false);
 
         if (minuteCount > 0 || hourCount > 0)
         {

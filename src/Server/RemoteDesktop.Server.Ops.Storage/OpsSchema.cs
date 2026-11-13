@@ -198,5 +198,5 @@ public static class OpsSchema
         """;
 
     /// <summary>The schema version this build writes. Only ever increases.</summary>
-    public const int Version = 7;
+    public const int Version = 8;
 }

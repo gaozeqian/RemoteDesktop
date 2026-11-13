@@ -940,7 +940,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             await _hostControl.RotateTemporaryPasswordAsync(CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or InvalidOperationException)
         {
             StatusMessage = $"{HostUnreachable}。";
         }

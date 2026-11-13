@@ -78,7 +78,15 @@ public sealed class VideoToolboxH264DecoderFactory : IVideoDecoderFactory
         }
 
         var decoder = new VideoToolboxH264Decoder();
-        decoder.Open();
-        return decoder;
+        try
+        {
+            decoder.Open();
+            return decoder;
+        }
+        catch
+        {
+            decoder.Dispose();
+            throw;
+        }
     }
 }

@@ -24,6 +24,27 @@ public sealed class PartialFileSweeperTests : IDisposable
         Assert.Equal([partial], Ledger().Entries());
     }
 
+    /// <summary>
+    /// Unix paths are case-sensitive. An OrdinalIgnoreCase ledger treats these as one record: the second one is not
+    /// recorded (so the sweeper never sees it) and forgetting one removes the other.
+    /// </summary>
+    [Fact]
+    public void On_a_case_sensitive_filesystem_paths_that_differ_only_in_case_are_separate()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows paths are case-insensitive.");
+
+        var lower = Path.Combine(_folder, "movie.1-a.rdpart");
+        var upper = Path.Combine(_folder, "MOVIE.1-a.rdpart");
+        var ledger = Ledger();
+        ledger.Record(lower);
+        ledger.Record(upper);
+
+        var entries = Ledger().Entries();
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(lower, entries);
+        Assert.Contains(upper, entries);
+    }
+
     [Fact]
     public void Forgetting_a_record_takes_it_out_of_the_file()
     {

@@ -11,6 +11,9 @@ namespace RemoteDesktop.Features.Desktop;
 /// <summary>Controller side of the audio channel: requests the host's audio, decodes it and plays it.</summary>
 public sealed partial class AudioPlayback : IAsyncDisposable
 {
+    /// <summary>Opus packets are bounded by the codec; anything larger is not audio and is not buffered.</summary>
+    private const int MaxFrameBytes = 64 * 1024;
+
     private readonly IChannel _channel;
     private readonly IAudioPlayerFactory _players;
     private readonly ILogger _logger;
@@ -71,7 +74,9 @@ public sealed partial class AudioPlayback : IAsyncDisposable
         float[] pcm = [];
         try
         {
-            while (await FrameCodec.ReadAsync(_channel.Stream, cancellationToken: _stop.Token).ConfigureAwait(false) is { } frame)
+            // An Opus packet is at most a few hundred bytes; the 16 MiB default would let a broken or hostile host
+            // make the controller allocate a large buffer per "audio" frame.
+            while (await FrameCodec.ReadAsync(_channel.Stream, MaxFrameBytes, _stop.Token).ConfigureAwait(false) is { } frame)
             {
                 if (frame.MessageType == ProtobufFrames.EnvelopeMessageType)
                 {

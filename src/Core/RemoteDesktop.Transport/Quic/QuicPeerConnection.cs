@@ -109,9 +109,11 @@ internal sealed class QuicPeerConnection(
 [SupportedOSPlatform("macos")]
 internal sealed class QuicChannel(ChannelType type, QuicStream stream) : IChannel
 {
+    private readonly Stream _stream = new QuicChannelStream(stream);
+
     public ChannelType Type { get; } = type;
 
-    public Stream Stream => stream;
+    public Stream Stream => _stream;
 
-    public ValueTask DisposeAsync() => stream.DisposeAsync();
+    public ValueTask DisposeAsync() => _stream.DisposeAsync();
 }

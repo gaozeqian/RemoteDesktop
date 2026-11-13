@@ -1,4 +1,4 @@
-<Project Sdk="WixToolset.Sdk/5.0.2">
+<Project Sdk="WixToolset.Sdk">
 
   <PropertyGroup>
     <!-- WiX v5 on purpose: from v6 the Open Source Maintenance Fee applies to commercial use. v5 gets no more
@@ -45,10 +45,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
-    <PackageReference Include="WixToolset.Firewall.wixext" Version="5.0.2" />
-    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
-    <PackageReference Include="WixToolset.Iis.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" />
+    <PackageReference Include="WixToolset.Firewall.wixext" />
+    <PackageReference Include="WixToolset.Util.wixext" />
+    <PackageReference Include="WixToolset.Iis.wixext" />
   </ItemGroup>
 
   <!-- The WiX SDK already compiles every *.wxs in this folder (EnableDefaultCompileItems); listing them again

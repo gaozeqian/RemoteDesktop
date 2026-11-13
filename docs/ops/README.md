@@ -1106,7 +1106,7 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 ## 三、自动化发布到 GitHub Releases
 
-项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您推送形如 `vX.Y.Z` 的 Tag（例如 `v1.0.0`）时，云端会自动跑测试、打包，并把**九个**安装包放进同一个 Release——三个平台各出三个角色，装的机器不同，版本是同一个。
+项目已经配置好了 GitHub Actions 自动化流水线 (`.github/workflows/release.yml`)，当您推送形如 `vX.Y.Z` 的 Tag（例如 `v1.0.0`）时，云端会自动跑测试、打包，并把安装包放进同一个 Release——三个平台各出三个角色，装的机器不同，版本是同一个。**配置了 macOS 签名与公证凭据时是九个；缺这些凭据时 macOS 整组不构建，本次发布只有 Windows 与 Linux 的六个**，发布说明会把这一点写在最上面。
 
 同一个 `<Version>` 在三个平台上的最终形态不同，这是安装包格式决定的，不是漂移：
 
@@ -1124,21 +1124,24 @@ sudo security add-trusted-cert -d -r trustRoot \
 | 被控端 | Windows 只有服务与会话 Agent，没有客户端窗口；macOS 是独立的 `Remote Desktop Host.app`（无窗口，装在 `/Library/Application Support/RemoteDesktop/Host`，不出现在“应用程序”）+ 登录项；Linux 是 HostService |
 | 服务端 | Rendezvous + Relay + Ops + Gateway |
 
-九个资产的完整名单、命名约定（角色词一律写全，架构词各平台用自己的说法，Linux 那个与包内 `Architecture`
+最多九个资产的完整名单、命名约定（角色词一律写全，架构词各平台用自己的说法，Linux 那个与包内 `Architecture`
 字段同源）见 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 的“构建产物布局”一节；这里只写每个角色装什么，不再重列。
 
-Release 还包含 `SHA256SUMS`，覆盖九个安装包；下载后可用 `sha256sum -c SHA256SUMS` 或 PowerShell `Get-FileHash` 复核。
+Release 还包含 `SHA256SUMS`，覆盖**本次实际发布的资产**（六个或九个）；下载后可用 `sha256sum -c SHA256SUMS`
+或 PowerShell `Get-FileHash` 复核。
 同一个平台上的包版本号相同。三个角色各自装在不同的机器上是常态；Windows 的客户端包与被控端包不能同机共存
 （见 [安装](#2-安装)），而服务端包和它们互不影响。
 
-发布前要准备好下面这些。服务器地址可选；**正式 tag 的签名与公证凭据是必填项**，缺失会使流水线失败而不是降级：
+发布前要准备好下面这些。服务器地址可选；**正式 tag 的 Windows 代码签名凭据是必填项**，缺失会使流水线失败而不是
+降级；macOS 的签名与公证凭据可选，缺任意一项时 `check-signing` 会把 macOS 整组标为跳过：
 
 - **服务器地址**（可选）：配了 `DEFAULT_RENDEZVOUS_URI`，客户端安装包就内置这个地址，下载的人装完直接可用；
   不配就是"不内置"，见"配置默认服务器地址"那一节。
 - **代码签名证书**（必填）：`CODE_SIGN_CERT_BASE64` 与 `CODE_SIGN_CERT_PASSWORD` 缺一不可；未签名的 Agent 无法获得
   UIAccess，见"准备代码签名证书"那一节。
-- **macOS 证书与公证**（必填）：`release.yml` 要求两张 `MACOS_*` 证书及三个公证 Secrets 全部配置，并验证签名、
-  Gatekeeper 与 staple 票据。具体是哪几个、怎么准备，见
+- **macOS 证书与公证**（可选）：配齐两张 `MACOS_*` 证书及三个公证 Secrets 时，`release.yml` 会构建、签名、公证并
+  验证 `.pkg`；缺任意一项时 `build-macos` 不运行，本次只发布 Windows 与 Linux 的六个资产（发布说明会标注）。
+  具体是哪几个、怎么准备，见
   [build/signing/README.md](../../build/signing/README.md#github-secrets-与变量) 的「GitHub Secrets 与变量」。
 - **许可文本**：仓库根的 `LICENSE` 已经是填好的正式文本，不需要动。只有里面重新出现【方括号】占位符时
   打包脚本才会拒绝出包——那道闸门是留给"换个人/换主体来发布"的，构建日志会列出是哪几处。
@@ -1188,7 +1191,7 @@ Release 还包含 `SHA256SUMS`，覆盖九个安装包；下载后可用 `sha256
 
 ### 3. 升版本并触发自动发布
 
-版本只有一处：仓库根 `Directory.Build.props` 的 `<Version>`。九个安装包、`.app` 的 `Info.plist` 与遥测都从它派生，
+版本只有一处：仓库根 `Directory.Build.props` 的 `<Version>`。安装包（最多九个）、`.app` 的 `Info.plist` 与遥测都从它派生，
 所以发布前**先改它，再打 Tag**：
 
 1. 把 `Directory.Build.props` 里的 `<Version>` 改成这次要发的三段数字（例如 `1.0.0`）。Windows Installer 只认
@@ -1203,8 +1206,9 @@ Release 还包含 `SHA256SUMS`，覆盖九个安装包；下载后可用 `sha256
    ```
 
 流水线第一步 `check-version` 会核对 Tag 与 `<Version>`、以及 `CHANGELOG.md` 里有没有对应小节；任何一处不一致
-都会在打包前失败。之后 GitHub Actions 拉三个平台各跑测试、打包，几分钟后您的 Releases 页面会出现**九个**包，
-名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如 `RemoteDesktop-Client-Windows-x64-v1.0.0.msi`）。
+都会在打包前失败。之后 GitHub Actions 拉三个平台各跑测试、打包，几分钟后您的 Releases 页面会出现**最多九个**包
+（macOS 凭据不全时为六个），名字统一是 `<产品>-<角色>-<平台>-<架构>-<tag>`（例如
+`RemoteDesktop-Client-Windows-x64-v1.0.0.msi`）。
 
 服务器地址可以在安装时填写；构建时给的 `-RendezvousUri` 只是安装页和静默安装的默认值。
 

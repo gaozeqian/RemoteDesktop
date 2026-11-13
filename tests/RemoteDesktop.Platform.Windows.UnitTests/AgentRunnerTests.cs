@@ -108,6 +108,8 @@ public sealed class AgentRunnerTests : IDisposable
         {
             await Task.Delay(50, Ct);
         }
+
+        Assert.True(condition(), $"Timed out after {timeout} waiting for the condition.");
     }
 
     private sealed class AllowEverything : IUserContextGuard

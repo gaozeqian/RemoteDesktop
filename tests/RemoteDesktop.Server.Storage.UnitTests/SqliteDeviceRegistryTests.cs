@@ -23,6 +23,30 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     protected override IDeviceRegistry CreateEmptyRegistry() => new SqliteDeviceRegistry(NewPath(), Logger);
 
     /// <summary>
+    /// The cache is an optimisation, not a registry: a public server meets a new device on every install, so it has
+    /// to stay bounded. Dropping it must still answer from the database with the same id.
+    /// </summary>
+    [Fact]
+    public async Task The_device_cache_is_bounded_and_falls_back_to_the_database()
+    {
+        var path = NewPath();
+        using var registry = new SqliteDeviceRegistry(path, Logger);
+        await registry.EnsureSchemaAsync(Ct);
+        registry.CacheCapacity = 2;
+
+        var ids = new List<uint>();
+        for (var index = 0; index < 4; index++)
+        {
+            ids.Add((await registry.GetOrAllocateAsync($"fingerprint-{index}", Ct)).DeviceId);
+            Assert.True(registry.CachedDeviceCount <= registry.CacheCapacity);
+        }
+
+        var again = await registry.GetOrAllocateAsync("fingerprint-0", Ct);
+        Assert.Equal(ids[0], again.DeviceId);
+        Assert.False(again.Created);
+    }
+
+    /// <summary>
     /// The point of a file: a new process — here, a new registry with an empty cache — finds the same id. Without
     /// this, every restart of a single-machine server would reissue every device code.
     /// </summary>

@@ -148,9 +148,9 @@ public sealed class NvencH264EncoderFactory : IVideoEncoderFactory
         unsafe
         {
             // No render node of NVIDIA's is looked at: NVENC is reached through CUDA, not through /dev/dri, and a
-            // machine whose driver exposes no render node can still encode perfectly well.
-            return ffmpeg.avcodec_find_encoder_by_name("h264_nvenc") is not null
-                && DrmRenderNodes.Enumerate().Any(node => node.IsNvidia);
+            // machine whose driver exposes no render node (a container, a headless box) can still encode perfectly
+            // well. Whether the settings can actually be opened is left to Create and the selector's fallback.
+            return ffmpeg.avcodec_find_encoder_by_name("h264_nvenc") is not null;
         }
     });
 

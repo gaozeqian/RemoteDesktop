@@ -2,6 +2,51 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布]
+
+### Fixed
+
+- **Windows 被控端防休眠**：`SetThreadExecutionState` 的调用现在固定在一条专用线程上。此前会话开始与结束时
+  常落在不同线程池线程，`Release` 清不掉 `Acquire` 设下的状态，机器在第一次会话后不再自动睡眠。
+- **并发握手不再“Accepted 后断开”**：会话上限在发送 `AuthResult` 之前预留名额，超限的控制端在握手内收到
+  `TOO_MANY_SESSIONS`，而不是先被接受再看到连接关闭。
+- **全局拒绝摄像头会停止现有流**：本机设置“拒绝”后，运行中的会话立刻失去 `Camera` 权限并关闭摄像头通道；
+  重新允许只影响新会话。
+- **异常断线不再中断特性循环与关闭链**：QUIC 的 `QuicException` 在传输层翻译为 `IOException`；关闭远程桌面窗口
+  时每一步都会执行，即使剪贴板/音频/输入的释放失败，QUIC 会话也会被释放。
+- **上传失败会回执**：被控端在接收阶段遇到 IO/协议错误时发送 `Complete{FileError.Io}`，控制端不再挂到
+  finish 超时（最长 1 小时）。
+- **主机控制管道错误语义**：未知命令、无效的会话 id、非法的摄像头参数返回 `error`，不再静默回答 `ok`。
+- **设备注册表缓存有界**：超过上限时整体丢弃并回读数据库，长期运行的服务不再随累计设备数增长内存。
+- **Ops 摄取校验**：签名批次中的 `null` 元素返回 400 而不是 500；事件 id/node/kind/correlation id 有长度上限；
+  SQLite schema 迁移在 `BEGIN IMMEDIATE` 下读取版本并应用，两个进程同时启动不再可能重复应用同一迁移。
+- **SRP 挑战单次使用**：`HostPasswordChallenge` 增加消费标志，同一个挑战第二次 `VerifyHost` 直接拒绝，兑现文档里的
+  “exactly one call”。
+- **macOS 编码失败与句柄**：VideoToolbox 编码失败保留原生错误文本；解码器工厂在 `Open` 失败时释放已构造的解码器
+  （包括其 GCHandle）。
+
+### Changed
+
+- **Linux NVENC 探测**：只检查 `h264_nvenc` 是否存在，不再要求 NVIDIA 的 DRM render node；无 `/dev/dri` 的
+  headless/容器机器也能尝试 NVENC，打开失败仍由选择器回退。
+- **音频帧上限**：控制端音频通道以 64 KiB 为单帧上限，而不是默认的 16 MiB。
+
+### Build
+
+- 新增 `build/tools/Update-LockFiles.ps1`（`-Check` 只验证），CI 的 `lock-files` job 对 `win-x64`、
+  `linux-x64`、`osx-arm64` 三个 RID 检查锁文件，不再等到打包阶段才发现漂移。
+- **发布可重入**：Release 已存在时用 `gh release upload --clobber` 补资产并更新说明，不再因
+  `gh release create` 拒绝已存在的 Release 而中断；上传后回读资产列表，按精确的九个（或六个）角色名校验。
+- **CI 成本**：漏洞审计只在 Windows job 跑一次；setup-dotnet 启用 NuGet 缓存；PR 上的旧运行会被 concurrency
+  取消；第三方声明生成器的失败不再被后续 `git diff` 掩盖。
+- **打包版本来源**：WiX SDK 固定到 `global.json` 的 `msbuild-sdks`，安装器包版本集中到
+  `build/installer/windows/Directory.Packages.props`；`Set-ServerConfiguration.ps1` 改为 UTF-8 带 BOM，
+  Windows PowerShell 5.1 读取中文提示不再乱码。
+- **Ops 指标降采样增量执行**：每轮从最新桶继续（并重算该桶），不再把 30 天历史全部重算并逐行重写；首次运行
+  只回看 24 小时，迁移 8 增加 `(ts)` 与 `(step_seconds, bucket)` 索引。
+- **告警评估租约续期**：一次 pass 时间较长时按租期一半续租；租约被另一个副本拿走时取消本次 pass，避免同一批
+  通知被两个实例各发一次。
+
 ## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 
 ### Security

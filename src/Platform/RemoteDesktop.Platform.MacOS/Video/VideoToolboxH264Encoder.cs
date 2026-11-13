@@ -94,7 +94,7 @@ internal sealed class VideoToolboxH264Encoder : IVideoEncoder
 
         if (status != MacNativeInterop.Ok)
         {
-            throw new InvalidOperationException(DescribeFailure(status, error: null));
+            throw new InvalidOperationException(DescribeFailure(status, ReadError(_scratch)));
         }
 
         var results = new EncodedVideoFrame[count];

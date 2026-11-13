@@ -25,6 +25,21 @@ public class PasswordAuthenticatorTests
         Assert.False(PasswordAuthenticator.VerifyServer(attempt, RandomNumberGenerator.GetBytes(32)));
     }
 
+    /// <summary>
+    /// The challenge class documents that one challenge is consumed by exactly one verification. Without the guard,
+    /// the same SRP server state could be advanced by a second response.
+    /// </summary>
+    [Fact]
+    public void A_challenge_cannot_be_verified_twice()
+    {
+        var credentials = new HostCredentials();
+        var challenge = credentials.BeginAuthentication(HostFp, ControllerFp)[0];
+        var attempt = PasswordAuthenticator.Respond(credentials.TemporaryPassword, challenge.Salt, challenge.ServerPublic, HostFp, ControllerFp);
+
+        Assert.True(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, attempt.ClientEvidence, out _));
+        Assert.False(PasswordAuthenticator.VerifyHost(challenge, attempt.ClientPublic, attempt.ClientEvidence, out _));
+    }
+
     [Fact]
     public void Temporary_and_fixed_passwords_use_different_slots()
     {

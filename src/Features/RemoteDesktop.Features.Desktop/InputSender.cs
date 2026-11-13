@@ -70,9 +70,18 @@ public sealed class InputSender : IAsyncDisposable
                     buffered[move] = inputEvent;
                 }
 
-                foreach (var queued in buffered)
+                try
                 {
-                    _queue.Writer.WriteAsync(queued, _stop.Token).AsTask().GetAwaiter().GetResult();
+                    foreach (var queued in buffered)
+                    {
+                        _queue.Writer.WriteAsync(queued, _stop.Token).AsTask().GetAwaiter().GetResult();
+                    }
+                }
+                catch (Exception ex) when (ex is ChannelClosedException or OperationCanceledException)
+                {
+                    // The session closed while the coalesced moves were being written back. The caller is the UI
+                    // thread; an exception escaping here would reach Avalonia's input handler instead of ending
+                    // quietly with the session.
                 }
 
                 return;

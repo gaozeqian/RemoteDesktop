@@ -15,6 +15,7 @@ namespace RemoteDesktop.Application.Sessions;
 public sealed class HostPasswordChallenge
 {
     private readonly Srp6Server _server;
+    private int _consumed;
 
     internal HostPasswordChallenge(byte[] salt, byte[] serverPublic, Srp6Server server)
     {
@@ -30,6 +31,9 @@ public sealed class HostPasswordChallenge
     public byte[] ServerPublic { get; }
 
     internal Srp6Server Server => _server;
+
+    /// <summary>Marks the challenge as used; true for the first caller and false for every later one.</summary>
+    internal bool TryConsume() => Interlocked.Exchange(ref _consumed, 1) == 0;
 }
 
 /// <summary>
@@ -170,6 +174,13 @@ public static class PasswordAuthenticator
     {
         ArgumentNullException.ThrowIfNull(challenge);
         serverEvidence = [];
+        if (!challenge.TryConsume())
+        {
+            // The class documents one verification per challenge; a second call is a replay of the same SRP
+            // exchange, and the server state is not meant to be advanced twice.
+            return false;
+        }
+
         if (clientPublic.IsEmpty || clientPublic.Length > MaxPublicValueSize
             || clientEvidence.IsEmpty || clientEvidence.Length > MaxEvidenceSize)
         {

@@ -67,6 +67,29 @@ public class AlertingTests
         Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 0, hasOpenAlert: true));
     }
 
+    /// <summary>
+    /// A pending timer and an already-open alert cannot coexist: the database says the alert is open, so the in-memory
+    /// timer must be forgotten rather than allowed to fire a second alert later.
+    /// </summary>
+    [Fact]
+    public void An_open_alert_clears_a_pending_timer()
+    {
+        var time = new ManualTimeProvider(Start);
+        var machine = new AlertStateMachine(time);
+
+        Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: true));
+
+        // A fresh condition starts a fresh window; the old one must not fire at t0+30.
+        Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
+        time.Advance(TimeSpan.FromSeconds(29));
+        Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal(AlertDecision.Open, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
+    }
+
     [Fact]
     public void A_cleared_condition_resolves_an_open_alert()
     {

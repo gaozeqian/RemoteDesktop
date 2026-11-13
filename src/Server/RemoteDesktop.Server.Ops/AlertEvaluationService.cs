@@ -77,12 +77,61 @@ public sealed partial class AlertEvaluationService(
             return;
         }
 
-        var (opened, resolved) = await alerts.EvaluateOnceAsync(cancellationToken).ConfigureAwait(false);
-        if (opened > 0 || resolved > 0)
+        // A notification pass can outlive the lease: pending deliveries are sent one at a time, each with a timeout.
+        // Renew while the pass runs so a second replica does not take over and send the same pages again. If the
+        // lease is lost anyway, cancel the pass rather than keep working under a lease this instance no longer holds.
+        using var pass = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var renewal = RenewLeaseAsync(pass);
+
+        try
         {
-            Evaluated(logger, opened, resolved);
+            var (opened, resolved) = await alerts.EvaluateOnceAsync(pass.Token).ConfigureAwait(false);
+            if (opened > 0 || resolved > 0)
+            {
+                Evaluated(logger, opened, resolved);
+            }
+        }
+        catch (OperationCanceledException) when (pass.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The renewal found another holder; the next timer tick will try to acquire the lease again.
+        }
+        finally
+        {
+            await pass.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await renewal.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
     }
+
+    private async Task RenewLeaseAsync(CancellationTokenSource pass)
+    {
+        var half = TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(1).Ticks, LeaseDuration.Ticks / 2));
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(half, pass.Token).ConfigureAwait(false);
+                if (!await Lease.TryAcquireAsync(LeaseName, LeaseDuration, pass.Token).ConfigureAwait(false))
+                {
+                    LogLeaseLost(logger, LeaseName);
+                    await pass.CancelAsync().ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The pass finished (or the host is stopping); that is the normal way this loop ends.
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The {Lease} lease was lost during a pass; the pass was cancelled.")]
+    private static partial void LogLeaseLost(ILogger logger, string lease);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Alert evaluation opened {Opened} and resolved {Resolved} alerts.")]
     private static partial void Evaluated(ILogger logger, int opened, int resolved);

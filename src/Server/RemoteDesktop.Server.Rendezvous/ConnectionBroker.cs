@@ -13,6 +13,13 @@ namespace RemoteDesktop.Server.Rendezvous;
 /// </summary>
 public sealed partial class ConnectionBroker
 {
+    /// <summary>
+    /// The most a request id may occupy. Clients mint a 32-character GUID; the bound exists because the id is a
+    /// client-chosen string that is kept as a dictionary key and echoed back, and the pending table can hold
+    /// thousands of them.
+    /// </summary>
+    private const int MaxRequestIdLength = 128;
+
     private readonly ConcurrentDictionary<string, PendingRequest> _pending = new(StringComparer.Ordinal);
 
     // The per-device count is kept beside the table rather than walked out of it, and both are updated under the same
@@ -78,9 +85,15 @@ public sealed partial class ConnectionBroker
         }
 
         var host = _presence.Find(request.TargetDeviceId);
-        if (host is null || host == controller || string.IsNullOrEmpty(request.RequestId))
+        if (host is null || host == controller)
         {
             await FailAsync(controller, request.RequestId, FailureReason.TargetOffline, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!IsValidRequestId(request.RequestId))
+        {
+            await FailAsync(controller, request.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -150,6 +163,9 @@ public sealed partial class ConnectionBroker
             await FailAsync(pending.Controller, reject.RequestId, FailureReason.Rejected, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private static bool IsValidRequestId(string? requestId) =>
+        !string.IsNullOrEmpty(requestId) && requestId.Length <= MaxRequestIdLength;
 
     // Only the targeted host may answer a request.
     private bool TryComplete(DeviceSession host, string requestId, out PendingRequest pending)

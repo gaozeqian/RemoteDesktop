@@ -78,17 +78,17 @@ jobs:
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
 
-      # 与 ci.yml 逐字同源的三件事：runner 准备（libmsquic / FFmpeg / PulseAudio / 声音服务器）、依赖漏洞
-      # 审计、带重试策略的测试套件——都用同一份共享动作，所以两边不会各改一半。
+      # 与 ci.yml 逐字同源的两件事：runner 准备（libmsquic / FFmpeg / PulseAudio / 声音服务器）与带重试策略的
+      # 测试套件——都用同一份共享动作，所以两边不会各改一半。漏洞审计与依赖图平台无关，只在 Windows job 跑一次。
       - uses: ./.github/actions/prepare-linux-tests
 
       - name: Restore and build
         run: |
           dotnet restore RemoteDesktop.slnx --locked-mode
           dotnet build RemoteDesktop.slnx --no-restore -c Release
-
-      - uses: ./.github/actions/audit-packages
 
       - uses: ./.github/actions/run-test-suite
         with:
@@ -111,7 +111,10 @@ jobs:
       # renaming anything and ship files named for the previous version.
       - name: Name them after the tag
         run: |
-          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
+          set -euo pipefail
+          # The same read and validation the packagers use; check-version already sourced it too.
+          . build/installer/version.sh
+          version=$(read_product_version "$PWD")
           for package in artifacts/installer/linux/*.deb; do
             mv "$package" "${package%-"$version".deb}-${GITHUB_REF_NAME}.deb"
           done
@@ -187,6 +190,8 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
       # macOS 不从 .NET 运行时包拿到 MsQuic，任何碰传输层的东西没有它连加载都做不到。
       - name: Stage the native MsQuic library
         run: ./native/macos/fetch-libmsquic.sh
@@ -196,7 +201,6 @@ jobs:
           dotnet build RemoteDesktop.slnx --no-restore -c Release
       # 与 ci.yml 逐字同源：release 是唯一一个发出去之前没人再检查一遍的构建，依赖漏洞必须在这里也拦住。
       # 此前这一步只在 Windows 那个 job 里有——三个平台里只有一个在发版时审过依赖。
-      - uses: ./.github/actions/audit-packages
       # 与 ci.yml 同一策略：release 是唯一一个发出去之前没人再检查一遍的构建，所以它自己跑测试。
       - uses: ./.github/actions/run-test-suite
         with:
@@ -336,6 +340,8 @@ jobs:
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
 
       # A release is the one build nobody gets to re-check before it is public, so it runs the tests itself rather
       # than trusting that CI passed on some earlier commit.
@@ -346,6 +352,7 @@ jobs:
 
       # A release is the one build nobody re-checks before it is public, so a known-vulnerable dependency must stop it
       # here exactly as it stops CI — through the same shared action, so that the rule cannot drift between the two.
+      # The audit reads the same dependency graph on every platform, so this is the one release job that runs it.
       - uses: ./.github/actions/audit-packages
 
       # Same retry-once policy as ci.yml, and now literally the same steps: this used to be a copy of the shared
@@ -650,14 +657,59 @@ jobs:
               throw "Expected $(6 + $packages.Count) assets, collected $($assets.Count)."
           }
 
+          # Counts alone cannot tell a duplicate role from a missing one. Build the exact set the release is
+          # allowed to contain and compare names both ways.
+          $tag = $env:GITHUB_REF_NAME
+          $expected = [System.Collections.Generic.List[string]]::new()
+          foreach ($role in 'Client', 'Host', 'Server') {
+              $expected.Add("RemoteDesktop-$role-Windows-x64-$tag.msi")
+              $expected.Add("RemoteDesktop-$role-Linux-amd64-$tag.deb")
+          }
+          if ($packages.Count -gt 0) {
+              foreach ($role in 'Client', 'Host', 'Server') {
+                  $expected.Add("RemoteDesktop-$role-macOS-arm64-$tag.pkg")
+              }
+          }
+
+          $actual = @($assets | ForEach-Object { Split-Path -Leaf $_ })
+          $missing = @($expected | Where-Object { $actual -notcontains $_ })
+          $unexpected = @($actual | Where-Object { $expected -notcontains $_ })
+          if ($missing.Count -gt 0 -or $unexpected.Count -gt 0) {
+              throw "Release assets do not match the expected names. Missing: $($missing -join ', '). Unexpected: $($unexpected -join ', ')."
+          }
+
           $hashes = $assets | Sort-Object | ForEach-Object {
               $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
               "$($hash.Hash.ToLowerInvariant())  $(Split-Path -Leaf $_)"
           }
           [System.IO.File]::WriteAllLines("$PWD/SHA256SUMS", [string[]]$hashes, [System.Text.UTF8Encoding]::new($false))
 
-          gh release create "$env:GITHUB_REF_NAME" `
-            $assets "SHA256SUMS" `
-            --title "$env:GITHUB_REF_NAME" `
-            --notes-file release-body.md `
-            --generate-notes
+          $upload = @($assets) + @("$PWD/SHA256SUMS")
+
+          # Rerunning the workflow is the documented way to add macOS packages after configuring the credentials.
+          # `gh release create` refuses an existing release, so an existing one is updated in place instead.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag @upload --clobber
+              if ($LASTEXITCODE -ne 0) { throw "Uploading the assets to the existing release failed." }
+
+              gh release edit $tag --notes-file release-body.md
+              if ($LASTEXITCODE -ne 0) { throw "Updating the release notes failed." }
+          }
+          else {
+              gh release create $tag @upload `
+                --title $tag `
+                --notes-file release-body.md `
+                --generate-notes
+              if ($LASTEXITCODE -ne 0) { throw "Creating the release failed." }
+          }
+
+          # Read the result back: the API is the only proof that every asset and the checksum file arrived.
+          $uploaded = @(& gh release view $tag --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the release assets back." }
+
+          $required = @($expected) + 'SHA256SUMS'
+          $missingAfterUpload = @($required | Where-Object { $uploaded -notcontains $_ })
+          if ($missingAfterUpload.Count -gt 0) {
+              throw "The release is missing assets after upload: $($missingAfterUpload -join ', ')."
+          }

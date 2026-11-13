@@ -43,7 +43,11 @@ public sealed partial class PartialFileLedger
     // Serialises the disk write and rejects stale snapshots. The snapshot is taken under _lock, but the write itself
     // runs under _writeLock so a slow disk never blocks the in-memory bookkeeping of another transfer.
     private readonly Lock _writeLock = new();
-    private readonly Dictionary<string, LinkedListNode<string>> _paths = new(StringComparer.OrdinalIgnoreCase);
+    // Windows compares paths without regard to case; Unix does not. An OrdinalIgnoreCase table on Linux/macOS
+    // treats "a.rdpart" and "A.rdpart" as one entry, so the second is never recorded (and never swept) and
+    // forgetting one removes the other's record.
+    private readonly Dictionary<string, LinkedListNode<string>> _paths = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private readonly LinkedList<string> _order = new();
     private readonly ILogger<PartialFileLedger> _logger;
     private readonly int _maxEntries;

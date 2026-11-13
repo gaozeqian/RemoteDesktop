@@ -310,3 +310,18 @@ public class RendezvousLimitTests
         Assert.Equal(PeerConnectFailure.Rejected, second.Failure);
     }
 }
+
+/// <summary>
+/// The two values that are not collection limits but cause the same class of failure when they are not positive:
+/// the fire-and-forget expiry task, and every relay ticket.
+/// </summary>
+public class RendezvousOptionsValidationTests
+{
+    [Fact]
+    public void A_zero_connect_timeout_is_refused() =>
+        Assert.Throws<InvalidOperationException>(() => new RendezvousOptions { ConnectTimeout = TimeSpan.Zero }.Validate());
+
+    [Fact]
+    public void A_negative_ticket_lifetime_is_refused() =>
+        Assert.Throws<InvalidOperationException>(() => new RendezvousOptions { RelayTicketLifetime = TimeSpan.FromSeconds(-1) }.Validate());
+}

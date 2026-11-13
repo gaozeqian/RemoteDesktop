@@ -34,7 +34,7 @@ public sealed partial class HostSessionItem(HostSessionInfo info, IHostControl c
         {
             await action();
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or TimeoutException or InvalidDataException or InvalidOperationException)
         {
         }
     }

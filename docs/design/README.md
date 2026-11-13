@@ -177,8 +177,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 **已经验证到什么程度。** 契约测试同时跑内存与 SQLite（同一指纹并发、32 路并发、撞车重试、跨实例持久化、
 删文件后探活失败、`CHECK` 约束），`/health` 有 SQLite 起服务的用例，三个 RID 的自包含发布都带
-`e_sqlite3`。**没验证的**：三平台安装包的真机安装（CI 只构建、不安装），以及真 PostgreSQL 上的往返
-（CI 没有 PG，PG 的 DDL 与 upsert 只由文本断言钉住）。动这两处时，别把"测试通过"当成"装过一遍"。
+`e_sqlite3`。**验证边界**：三平台安装包在 CI 的一次性 runner 上真实安装并检查服务（Windows 还做升级/卸载）；
+Linux job 用 PostgreSQL 18 跑设备注册表与监控台存储的契约测试，Windows/macOS job 只跑内存与 SQLite。
+真机长期运行、生产数据库迁移与跨机器安装仍由人工验收。动这些地方时，别把"测试通过"当成"在生产上装过一遍"。
 
 ## 2. 通信协议
 
@@ -596,7 +597,8 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
   中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
   被控端无论会话怎么结束（本机点断开、控制端正常离开、断网）都会上报，心跳也随之停止。结束报告描述的是 QUIC 会话，
-  与信令 WebSocket 无关，所以信令断开时尚未发出（或发送失败）的报告会留在队列里，重连后补发（队列上限 32，满则丢最旧）；
+  与信令 WebSocket 无关，所以信令断开时尚未发出（或发送失败）的报告会留在队列里，重连后补发（按会话去重，
+  发送成功即移除；队列不设固定上限，也不淘汰别的会话的结束事实）；
   心跳则相反，断开即丢弃。服务端按设备限流，重连后一次冲出多条时可能丢一部分，这是已接受的取舍。
 
 ### 数据模型
@@ -606,7 +608,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 以那个文件为准。即使一列"感觉上属于 CREATE TABLE"，也写成迁移而不是改基线——改基线只帮得了新库，帮不了已有的库。
 时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL（个别迁移按方言分写）。
 
-核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；后台任务每 10 分钟将原始样本聚合为 1 分钟与 1 小时桶，并按较长保留期保存长期趋势数据）、
+核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；后台任务每 10 分钟从最新桶继续增量聚合为 1 分钟与 1 小时桶，首次只回看 24 小时，并按较长保留期保存趋势数据）、
 `ops_event` / `ops_session`（事实与投影）、`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_notification_channel`
 （预留，当前未使用：通道是代码里的常量 `webhook` / `smtp`，不是表）/ `ops_notification_attempt`（投递记录）、
 `ops_silence`（静默）、`ops_admin_user` / `_session`（账号）、
