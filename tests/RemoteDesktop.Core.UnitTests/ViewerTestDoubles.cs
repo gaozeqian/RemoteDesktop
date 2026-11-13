@@ -3,6 +3,7 @@ using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Transport;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -95,20 +96,11 @@ public sealed class FakeConnection(Stream stream) : IPeerConnection
     public string RemoteFingerprint => "remote";
 
     public ValueTask<IChannel> OpenChannelAsync(ChannelType type, bool bidirectional, CancellationToken cancellationToken) =>
-        ValueTask.FromResult<IChannel>(new FakeChannel(type, stream));
+        ValueTask.FromResult<IChannel>(new TestChannel(type, stream));
 
     public ValueTask<IChannel?> AcceptChannelAsync(CancellationToken cancellationToken) => ValueTask.FromResult<IChannel?>(null);
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-}
-
-public sealed class FakeChannel(ChannelType type, Stream stream) : IChannel
-{
-    public ChannelType Type => type;
-
-    public Stream Stream => stream;
-
-    public ValueTask DisposeAsync() => stream.DisposeAsync();
 }
 
 /// <summary>Two ends of a buffered pipe: the viewer gets <c>Server</c>, the test plays the host on <c>Client</c>.</summary>

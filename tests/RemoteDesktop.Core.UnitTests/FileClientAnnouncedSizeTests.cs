@@ -5,6 +5,7 @@ using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.File;
 using RemoteDesktop.Protocol.Framing;
 using RemoteDesktop.Transport;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -110,15 +111,6 @@ public sealed class FileClientAnnouncedSizeTests : IDisposable
         }
     }
 
-    private sealed class StubChannel(Stream stream) : IChannel
-    {
-        public ChannelType Type => ChannelType.FileTransfer;
-
-        public Stream Stream => stream;
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
     private sealed class StubConnection(Stream clientEnd) : IPeerConnection
     {
         public DeviceId RemoteDevice => new(123456789);
@@ -132,7 +124,7 @@ public sealed class FileClientAnnouncedSizeTests : IDisposable
         public string RemoteFingerprint => "remote";
 
         public ValueTask<IChannel> OpenChannelAsync(ChannelType type, bool bidirectional, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IChannel>(new StubChannel(clientEnd));
+            ValueTask.FromResult<IChannel>(new TestChannel(ChannelType.FileTransfer, clientEnd));
 
         public ValueTask<IChannel?> AcceptChannelAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IChannel?>(null);

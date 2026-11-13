@@ -3,6 +3,7 @@ using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Transport;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -15,7 +16,7 @@ public sealed class RemoteSessionClosedTests
     [Fact]
     public async Task A_handler_added_after_the_session_ended_is_called_once()
     {
-        var control = new StubChannel();
+        var control = new TestChannel(ChannelType.Control);
         var context = new SessionContext(
             SessionId.New(),
             SessionRole.Controller,
@@ -38,7 +39,7 @@ public sealed class RemoteSessionClosedTests
             SessionRole.Controller,
             new StubConnection(),
             AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
-        var session = RemoteSession.Start(context, new StubChannel(), TimeProvider.System);
+        var session = RemoteSession.Start(context, new TestChannel(ChannelType.Control), TimeProvider.System);
         var calls = 0;
         session.Closed += (_, _) => calls++;
 
@@ -46,16 +47,6 @@ public sealed class RemoteSessionClosedTests
         await session.DisposeAsync();
 
         Assert.Equal(1, calls);
-    }
-
-    private sealed class StubChannel : IChannel
-    {
-        public ChannelType Type => ChannelType.Control;
-
-        // Reads as an already closed channel and swallows writes.
-        public Stream Stream { get; } = Stream.Null;
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class StubConnection : IPeerConnection

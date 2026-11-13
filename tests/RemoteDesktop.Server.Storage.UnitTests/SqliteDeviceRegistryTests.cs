@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Storage;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Storage.UnitTests;
 
@@ -158,7 +159,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task A_cached_device_that_registers_again_refreshes_last_seen_once_the_throttle_window_has_passed()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -184,7 +185,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task A_device_that_registers_again_inside_the_throttle_window_does_not_cause_a_write()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -211,7 +212,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task The_throttle_is_per_device()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -263,16 +264,6 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     }
 
     private string NewPath() => Path.Combine(_folder, $"{Guid.NewGuid():N}.db");
-
-    /// <summary>A clock the test moves by hand.</summary>
-    private sealed class ManualTimeProvider : TimeProvider
-    {
-        private DateTimeOffset _now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
 
     public void Dispose()
     {

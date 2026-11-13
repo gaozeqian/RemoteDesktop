@@ -197,9 +197,9 @@ public class RelayBindTests
         private readonly Task _loop;
         private readonly UdpClient _client;
 
-        private readonly FakeTimeProvider _time;
+        private readonly TestClock _time;
 
-        private TestRelay(UdpRelay relay, UdpClient client, byte[] ticket, FakeTimeProvider time)
+        private TestRelay(UdpRelay relay, UdpClient client, byte[] ticket, TestClock time)
         {
             Relay = relay;
             _client = client;
@@ -231,7 +231,7 @@ public class RelayBindTests
             Microsoft.Extensions.Logging.ILogger<UdpRelay>? logger = null,
             IOpsEventSink? events = null)
         {
-            var time = new FakeTimeProvider();
+            var time = new TestClock(DateTimeOffset.UnixEpoch);
             var relay = new UdpRelay(
                 new IPEndPoint(IPAddress.Loopback, 0),
                 Key,

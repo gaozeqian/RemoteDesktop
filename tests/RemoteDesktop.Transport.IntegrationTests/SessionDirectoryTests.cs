@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -26,7 +27,7 @@ public sealed class SessionDirectoryTests
     [Fact]
     public void One_registration_sweeps_a_bounded_number_of_expired_sessions()
     {
-        var clock = new FakeTimeProvider();
+        var clock = new TestClock(DateTimeOffset.UnixEpoch);
         var sessions = new SessionDirectory(clock);
         var ids = Enumerable.Range(0, 600).Select(_ => Guid.NewGuid()).ToArray();
         foreach (var id in ids)
@@ -43,7 +44,7 @@ public sealed class SessionDirectoryTests
     [Fact]
     public void Repeated_registrations_eventually_remove_every_expired_session()
     {
-        var clock = new FakeTimeProvider();
+        var clock = new TestClock(DateTimeOffset.UnixEpoch);
         var sessions = new SessionDirectory(clock);
         var ids = Enumerable.Range(0, 600).Select(_ => Guid.NewGuid()).ToArray();
         foreach (var id in ids)

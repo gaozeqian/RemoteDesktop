@@ -17,4 +17,9 @@
     <ProjectReference Include="..\..\src\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Test-only helpers shared by several suites; see the files for why they are linked. -->
+    <Compile Include="..\RemoteDesktop.Transport.IntegrationTests\TestSupport\TestClock.cs" Link="TestSupport\TestClock.cs" />
+    <Compile Include="..\RemoteDesktop.Transport.IntegrationTests\TestSupport\TestChannel.cs" Link="TestSupport\TestChannel.cs" />
+  </ItemGroup>
 </Project>

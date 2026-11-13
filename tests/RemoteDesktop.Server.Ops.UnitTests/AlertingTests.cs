@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.UnitTests;
 
@@ -29,7 +30,7 @@ public class AlertingTests
     [Fact]
     public void A_condition_that_has_not_held_long_enough_does_not_alert()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var machine = new AlertStateMachine(time);
 
         Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
@@ -44,7 +45,7 @@ public class AlertingTests
     [Fact]
     public void A_condition_that_clears_before_the_window_resets_the_timer()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var machine = new AlertStateMachine(time);
 
         machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false);
@@ -60,7 +61,7 @@ public class AlertingTests
     [Fact]
     public void An_open_alert_is_not_opened_twice()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var machine = new AlertStateMachine(time);
 
         Assert.Equal(AlertDecision.Open, machine.Observe("key", firing: true, forSeconds: 0, hasOpenAlert: false));
@@ -74,7 +75,7 @@ public class AlertingTests
     [Fact]
     public void An_open_alert_clears_a_pending_timer()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var machine = new AlertStateMachine(time);
 
         Assert.Equal(AlertDecision.None, machine.Observe("key", firing: true, forSeconds: 30, hasOpenAlert: false));
@@ -93,7 +94,7 @@ public class AlertingTests
     [Fact]
     public void A_cleared_condition_resolves_an_open_alert()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var machine = new AlertStateMachine(time);
 
         Assert.Equal(AlertDecision.Resolve, machine.Observe("key", firing: false, forSeconds: 0, hasOpenAlert: true));

@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops.Core.Security;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.UnitTests;
 
@@ -14,7 +15,7 @@ public sealed class ChallengeStoreTests
     [Fact]
     public void A_challenge_expires_after_five_minutes()
     {
-        var clock = new ManualTimeProvider(Start);
+        var clock = new TestClock(Start);
         var store = new ChallengeStore(clock);
         var id = store.Create("user-1", out var expiresAt);
 
@@ -30,7 +31,7 @@ public sealed class ChallengeStoreTests
     [Fact]
     public void Five_wrong_codes_discard_the_challenge()
     {
-        var store = new ChallengeStore(new ManualTimeProvider(Start));
+        var store = new ChallengeStore(new TestClock(Start));
         var id = store.Create("user-1", out _);
 
         for (var attempt = 1; attempt <= 4; attempt++)
@@ -45,7 +46,7 @@ public sealed class ChallengeStoreTests
     [Fact]
     public void A_successful_code_consumes_the_challenge()
     {
-        var store = new ChallengeStore(new ManualTimeProvider(Start));
+        var store = new ChallengeStore(new TestClock(Start));
         var id = store.Create("user-1", out _);
 
         store.Remove(id);
@@ -61,7 +62,7 @@ public sealed class ChallengeStoreTests
     [Fact]
     public void The_store_does_not_grow_past_its_cap()
     {
-        var store = new ChallengeStore(new ManualTimeProvider(Start));
+        var store = new ChallengeStore(new TestClock(Start));
         for (var i = 0; i < 10_001; i++)
         {
             store.Create($"user-{i}", out _);

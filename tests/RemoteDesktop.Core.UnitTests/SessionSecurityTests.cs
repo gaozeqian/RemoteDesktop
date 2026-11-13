@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using RemoteDesktop.Application.Security;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -121,7 +122,7 @@ public class PasswordAuthenticatorTests
     [Fact]
     public void A_temporary_password_stops_working_once_it_is_old_enough()
     {
-        var time = new ManualTime();
+        var time = new TestClock();
         var credentials = new HostCredentials(time);
         var shown = credentials.TemporaryPassword;
 
@@ -140,7 +141,7 @@ public class PasswordAuthenticatorTests
     [Fact]
     public void A_fixed_password_does_not_expire()
     {
-        var time = new ManualTime();
+        var time = new TestClock();
         var credentials = new HostCredentials(time) { FixedPassword = "unattended-password" };
 
         time.Advance(TimeSpan.FromDays(30));
@@ -291,7 +292,7 @@ public class PasswordAuthenticatorTests
 
 public class AuthAttemptLimiterTests
 {
-    private readonly ManualTime _time = new();
+    private readonly TestClock _time = new();
 
     [Fact]
     public void Device_is_blocked_after_max_failures_and_released_after_the_window()

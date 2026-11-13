@@ -1,5 +1,6 @@
 using System.Data.Common;
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.UnitTests;
 
@@ -12,7 +13,7 @@ public sealed class OpsHealthProbeTests
     [Fact]
     public async Task Checks_within_the_cache_window_share_one_database_probe()
     {
-        var clock = new ManualTimeProvider(Start);
+        var clock = new TestClock(Start);
         var probes = 0;
         using var probe = new OpsHealthProbe(
             _ =>
@@ -34,7 +35,7 @@ public sealed class OpsHealthProbeTests
     [Fact]
     public async Task An_unreachable_database_is_cached_like_a_healthy_one()
     {
-        var clock = new ManualTimeProvider(Start);
+        var clock = new TestClock(Start);
         var probes = 0;
         using var probe = new OpsHealthProbe(
             _ =>
@@ -56,7 +57,7 @@ public sealed class OpsHealthProbeTests
     [Fact]
     public async Task Recovery_is_reported_after_the_cache_expires()
     {
-        var clock = new ManualTimeProvider(Start);
+        var clock = new TestClock(Start);
         var reachable = false;
         using var probe = new OpsHealthProbe(
             _ => reachable ? Task.CompletedTask : throw new UnreachableException(),

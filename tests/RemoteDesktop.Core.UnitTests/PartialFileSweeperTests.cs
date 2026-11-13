@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Features.FileTransfer;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -12,7 +13,7 @@ namespace RemoteDesktop.Core.UnitTests;
 public sealed class PartialFileSweeperTests : IDisposable
 {
     private readonly string _folder = Directory.CreateTempSubdirectory("rd-partial-").FullName;
-    private readonly ManualTime _time = new();
+    private readonly TestClock _time = new();
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 

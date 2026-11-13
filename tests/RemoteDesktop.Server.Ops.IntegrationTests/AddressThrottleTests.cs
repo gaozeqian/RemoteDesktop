@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops.Auth;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.IntegrationTests;
 
@@ -11,7 +12,7 @@ public class AddressThrottleTests
     [Fact]
     public void An_address_locks_on_the_fiftieth_failure_and_not_before()
     {
-        var time = new TestTimeProvider();
+        var time = new TestClock(DateTimeOffset.UtcNow);
         var throttle = new AddressThrottle(time);
 
         for (var attempt = 0; attempt < 49; attempt++)
@@ -30,7 +31,7 @@ public class AddressThrottleTests
     [Fact]
     public void A_locked_address_does_not_lock_another_and_opens_after_ten_minutes()
     {
-        var time = new TestTimeProvider();
+        var time = new TestClock(DateTimeOffset.UtcNow);
         var throttle = new AddressThrottle(time);
         for (var attempt = 0; attempt < 50; attempt++)
         {

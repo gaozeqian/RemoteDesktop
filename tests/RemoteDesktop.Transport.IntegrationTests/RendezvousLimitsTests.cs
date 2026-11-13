@@ -7,6 +7,7 @@ using RemoteDesktop.Server.Rendezvous;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Identity;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -21,7 +22,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void A_burst_is_spent_and_then_refused()
     {
-        var bucket = new KeyedTokenBucket<string>(3, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(3, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.True(bucket.TryTake("one"));
@@ -35,7 +36,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Tokens_come_back_one_refill_at_a_time()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var bucket = new KeyedTokenBucket<string>(2, Refill, time);
 
         Assert.True(bucket.TryTake("one"));
@@ -54,7 +55,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void A_refunded_token_can_be_spent_again()
     {
-        var bucket = new KeyedTokenBucket<string>(1, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(1, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.False(bucket.TryTake("one"));
@@ -66,7 +67,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Refunding_cannot_bank_credit_beyond_a_full_burst()
     {
-        var bucket = new KeyedTokenBucket<string>(2, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(2, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         bucket.Refund("one");
         bucket.Refund("one");
@@ -79,7 +80,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Forgetting_a_key_gives_it_a_full_burst_back()
     {
-        var bucket = new KeyedTokenBucket<string>(1, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(1, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.False(bucket.TryTake("one"));
@@ -94,7 +95,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Keys_nobody_has_touched_for_a_while_are_dropped()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var bucket = new KeyedTokenBucket<string>(1, Refill, time);
 
         for (var i = 0; i < 100; i++)

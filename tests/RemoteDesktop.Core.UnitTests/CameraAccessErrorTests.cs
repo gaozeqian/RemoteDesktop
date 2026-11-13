@@ -10,6 +10,7 @@ using RemoteDesktop.Media;
 using RemoteDesktop.Protocol;
 using RemoteDesktop.Protocol.Camera;
 using RemoteDesktop.Protocol.Framing;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -26,7 +27,7 @@ public class CameraAccessErrorTests
         await using var serverEnd = server;
         await using var clientEnd = client;
 
-        var channel = new FakeChannel(ChannelType.Camera, serverEnd);
+        var channel = new TestChannel(ChannelType.Camera, serverEnd);
         var session = new SessionContext(
             SessionId.New(),
             SessionRole.Host,
@@ -69,7 +70,7 @@ public class CameraAccessErrorTests
         await using var serverEnd = server;
         await using var clientEnd = client;
 
-        var channel = new FakeChannel(ChannelType.Camera, serverEnd);
+        var channel = new TestChannel(ChannelType.Camera, serverEnd);
         var session = new SessionContext(
             SessionId.New(),
             SessionRole.Host,

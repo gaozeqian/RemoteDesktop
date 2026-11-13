@@ -64,6 +64,8 @@
   SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 - **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
   `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **测试时钟与通道收敛**：共享 `TestClock` 与 `TestChannel`，删除 4 份手写时钟和重复的流通道桩；
+  定时器型时钟与带行为断言的通道保留。
 - **`MainWindowViewModel` 拆分**：约 1,400 行的单文件拆成 `.Connection`、`.Settings`、`.RecentDevices`、
   `.HostStatus` 四个 partial，方法体未改。
 - **服务端宿主收敛**：新增 `RemoteDesktop.Server.Hosting`，四个宿主共用配置分层、Windows 服务/systemd 注册与
