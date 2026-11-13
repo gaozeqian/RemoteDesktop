@@ -24,6 +24,8 @@
   “exactly one call”。
 - **macOS 编码失败与句柄**：VideoToolbox 编码失败保留原生错误文本；解码器工厂在 `Open` 失败时释放已构造的解码器
   （包括其 GCHandle）。
+- **采集故障可观测**：ScreenCaptureKit 的启动等待现在受 15 秒上限约束；原生层暴露“流被系统停止”的状态，
+  采集器的 `IsFaulted` 据此返回；GDI 回退在 `BitBlt` 失败时也报告故障，恢复逻辑不再把死流当成静态桌面。
 
 ### Changed
 
@@ -44,8 +46,11 @@
   Windows PowerShell 5.1 读取中文提示不再乱码。
 - **Ops 指标降采样增量执行**：每轮从最新桶继续（并重算该桶），不再把 30 天历史全部重算并逐行重写；首次运行
   只回看 24 小时，迁移 8 增加 `(ts)` 与 `(step_seconds, bucket)` 索引。
+- **锁文件同步**：项目依赖版本范围更新到 1.0.1，并为新组合项目补齐四个 `packages*.lock.json`。
 - **告警评估租约续期**：一次 pass 时间较长时按租期一半续租；租约被另一个副本拿走时取消本次 pass，避免同一批
   通知被两个实例各发一次。
+- **组合根收敛**：新增 `RemoteDesktop.Hosts.Composition`，客户端独立托管、HostService 的 Linux/macOS 分支与
+  SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
 
 ## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 

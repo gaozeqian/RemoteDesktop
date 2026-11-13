@@ -355,6 +355,17 @@ void rd_capture_stop(rd_capture_ref handle)
     dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
 }
 
+int rd_capture_stopped(rd_capture_ref handle, char *reason, size_t reason_size)
+{
+    RDCapture *capture = (__bridge RDCapture *)handle;
+    if (capture == nil || capture.output == nil || !capture.output.stoppedUnexpectedly) {
+        return 0;
+    }
+
+    RDSetError(reason, reason_size, capture.output.stopReason ?: @"The stream stopped.");
+    return 1;
+}
+
 void rd_capture_destroy(rd_capture_ref handle)
 {
     if (handle == NULL) {

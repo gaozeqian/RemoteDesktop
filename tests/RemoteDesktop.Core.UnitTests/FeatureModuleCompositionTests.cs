@@ -14,20 +14,21 @@ using RemoteDesktop.Features.Camera;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Features.FileTransfer;
 using RemoteDesktop.Features.Terminal;
+using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.Media;
 using RemoteDesktop.Protocol;
 
 namespace RemoteDesktop.Core.UnitTests;
 
 /// <summary>
-/// The four <c>Add…Feature</c> calls a host composes itself from, checked as one set: which channels end up served,
-/// and under which permission. Every other test in this repository either serves a channel it registered by hand or
+/// The host-feature helper a host composes itself from, checked as one set: which channels end up served, and under
+/// which permission. Every other test in this repository either serves a channel it registered by hand or
 /// drives the dispatcher with a fake module, so a feature that quietly stopped being registered — or one that asked
 /// for the wrong permission — would leave all of them green.
 /// </summary>
 /// <remarks>
-/// The hosts are what call these four together: <c>RemoteDesktop.HostService</c> on Linux and macOS,
-/// <c>RemoteDesktop.SessionAgent</c>, and the client when it hosts incoming sessions itself.
+/// The hosts call <see cref="ServiceCollectionExtensions.AddRemoteDesktopHostFeatures"/>: <c>RemoteDesktop.HostService</c>
+/// on Linux and macOS, <c>RemoteDesktop.SessionAgent</c>, and the client when it hosts incoming sessions itself.
 /// </remarks>
 public class FeatureModuleCompositionTests
 {
@@ -149,10 +150,7 @@ public class FeatureModuleCompositionTests
         services.AddSingleton(TimeProvider.System);
 
         var provider = services
-            .AddDesktopFeature()
-            .AddFileTransferFeature()
-            .AddTerminalFeature()
-            .AddCameraFeature()
+            .AddRemoteDesktopHostFeatures(Path.Combine(Path.GetTempPath(), "rd-compose-test"))
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 
         // The desktop feature registers four modules of its own; the three others one each.

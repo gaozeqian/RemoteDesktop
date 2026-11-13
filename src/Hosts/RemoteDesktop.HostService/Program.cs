@@ -4,11 +4,8 @@ using System.Security.Cryptography;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
+using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.HostService;
-using RemoteDesktop.Features.Camera;
-using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Features.FileTransfer;
-using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Linux;
 using RemoteDesktop.Platform.MacOS;
@@ -184,10 +181,7 @@ else if (OperatingSystem.IsLinux())
         .AddQuicTransport(transport)
         .AddRemoteDesktopApplication(telemetry)
         .AddRemoteDesktopMedia()
-        .AddDesktopFeature()
-        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-        .AddTerminalFeature()
-        .AddCameraFeature()
+        .AddRemoteDesktopHostFeatures(dataDirectory)
         .AddLocalHostControl(isService: true)
         .AddHostedService<HostControlServer>();
 }
@@ -203,10 +197,7 @@ else if (OperatingSystem.IsMacOS())
         .AddQuicTransport(transport)
         .AddRemoteDesktopApplication(telemetry)
         .AddRemoteDesktopMedia()
-        .AddDesktopFeature()
-        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-        .AddTerminalFeature()
-        .AddCameraFeature()
+        .AddRemoteDesktopHostFeatures(dataDirectory)
         .AddLocalHostControl(isService: true)
         .AddHostedService<HostControlServer>();
 }

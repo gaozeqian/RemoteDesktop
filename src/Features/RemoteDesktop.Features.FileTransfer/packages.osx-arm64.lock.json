@@ -69,7 +69,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.0, )"
+          "RemoteDesktop.Domain": "[1.0.1, )"
         }
       },
       "remotedesktop.application": {
@@ -81,7 +81,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Transport": "[1.0.0, )"
+          "RemoteDesktop.Transport": "[1.0.1, )"
         }
       },
       "remotedesktop.domain": {
@@ -91,7 +91,7 @@
         "type": "Project",
         "dependencies": {
           "Google.Protobuf": "[3.36.2, )",
-          "RemoteDesktop.Abstractions": "[1.0.0, )"
+          "RemoteDesktop.Abstractions": "[1.0.1, )"
         }
       },
       "remotedesktop.signaling": {
@@ -105,8 +105,8 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Protocol": "[1.0.0, )",
-          "RemoteDesktop.Signaling": "[1.0.0, )"
+          "RemoteDesktop.Protocol": "[1.0.1, )",
+          "RemoteDesktop.Signaling": "[1.0.1, )"
         }
       },
       "BouncyCastle.Cryptography": {

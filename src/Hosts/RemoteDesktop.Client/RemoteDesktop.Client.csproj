@@ -28,6 +28,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Hosts.Composition\RemoteDesktop.Hosts.Composition.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Desktop\RemoteDesktop.Features.Desktop.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
     <ProjectReference Include="..\..\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />

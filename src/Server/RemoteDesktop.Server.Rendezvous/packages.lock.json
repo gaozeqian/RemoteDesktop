@@ -55,7 +55,7 @@
       "remotedesktop.server.shared": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Signaling": "[1.0.0, )"
+          "RemoteDesktop.Signaling": "[1.0.1, )"
         }
       },
       "remotedesktop.server.storage": {

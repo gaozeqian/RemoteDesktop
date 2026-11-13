@@ -217,6 +217,10 @@ internal static unsafe partial class MacNativeInterop
     [LibraryImport(NativeLibraries.MacNative)]
     public static partial void rd_capture_stop(nint capture);
 
+    /// <summary>1 when ScreenCaptureKit stopped the stream itself; the reason is copied into <paramref name="reason"/>.</summary>
+    [LibraryImport(NativeLibraries.MacNative)]
+    public static partial int rd_capture_stopped(nint capture, byte* reason, nuint reasonSize);
+
     [LibraryImport(NativeLibraries.MacNative)]
     public static partial void rd_capture_destroy(nint capture);
 

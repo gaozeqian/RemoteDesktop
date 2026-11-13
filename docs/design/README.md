@@ -96,6 +96,9 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
 * **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）
   创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有
   Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
+* **`RemoteDesktop.Hosts.Composition`**: 不是可执行文件，只把被控端要提供的四个特性收成一份
+  `AddRemoteDesktopHostFeatures(dataDirectory)`；客户端独立托管、HostService 的非 Windows 分支与
+  SessionAgent 都调用它，新增特性时不必在四个组合根里各改一遍。
 * **`RemoteDesktop.Server.*`**: 服务端，可以部署在 Windows、Linux（含 Docker）和 macOS 上。它不引用
   `Abstractions`、`Protocol`、`Transport`、`Application`、`Features`、`Media`、`Platform` 和各宿主（架构测试保证），
   与客户端只共享 `Signaling` 契约。项目分工如下：

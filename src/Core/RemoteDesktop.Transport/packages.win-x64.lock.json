@@ -20,7 +20,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.0, )"
+          "RemoteDesktop.Domain": "[1.0.1, )"
         }
       },
       "remotedesktop.domain": {
@@ -30,7 +30,7 @@
         "type": "Project",
         "dependencies": {
           "Google.Protobuf": "[3.36.2, )",
-          "RemoteDesktop.Abstractions": "[1.0.0, )"
+          "RemoteDesktop.Abstractions": "[1.0.1, )"
         }
       },
       "remotedesktop.signaling": {

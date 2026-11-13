@@ -44,6 +44,7 @@ internal sealed partial class GdiScreenCapturer : IScreenCapturer
     private readonly int _sourceX;
     private readonly int _sourceY;
     private bool _disposed;
+    private bool _faulted;
 
     public GdiScreenCapturer(DisplayInfo display)
     {
@@ -109,6 +110,9 @@ internal sealed partial class GdiScreenCapturer : IScreenCapturer
 
     public DisplayInfo Display => _display;
 
+    /// <summary>True after a BitBlt that failed; cleared by the next successful capture.</summary>
+    public bool IsFaulted => _faulted;
+
     public event EventHandler<CursorShape>? CursorChanged
     {
         add { }
@@ -132,10 +136,12 @@ internal sealed partial class GdiScreenCapturer : IScreenCapturer
         if (!BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy | CaptureLayered)
             && !BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy))
         {
+            _faulted = true;
             Thread.Sleep(timeout);
             return ValueTask.FromResult<VideoFrame?>(null);
         }
 
+        _faulted = false;
         DrawCursor();
 
         var frame = new MemoryVideoFrame(_width, _height, PixelFormat.Bgra32, _clock.Elapsed);

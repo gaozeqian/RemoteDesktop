@@ -9,10 +9,7 @@ using RemoteDesktop.Application.Links;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Client.ViewModels;
-using RemoteDesktop.Features.Camera;
-using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Features.FileTransfer;
-using RemoteDesktop.Features.Terminal;
+using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.Media;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Identity;
@@ -130,10 +127,7 @@ internal static class ClientHost
             builder.Services
                 .AddQuicTransport(transport)
                 .AddRemoteDesktopApplication(telemetry)
-                .AddDesktopFeature()
-                .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-                .AddTerminalFeature()
-                .AddCameraFeature()
+                .AddRemoteDesktopHostFeatures(dataDirectory)
                 .AddLocalHostControl(isService: false);
         }
 

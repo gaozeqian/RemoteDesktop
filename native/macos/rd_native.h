@@ -116,6 +116,10 @@ RD_EXPORT int rd_capture_start(rd_capture_ref capture, char *error, size_t error
 /// Stops delivering frames. Safe to call on a capture that was never started, and safe to call twice.
 RD_EXPORT void rd_capture_stop(rd_capture_ref capture);
 
+/// Returns 1 when ScreenCaptureKit stopped the stream on its own (a permission or display failure), 0 otherwise.
+/// The reason, when present, is copied into the caller's buffer; both buffers may be NULL/0.
+RD_EXPORT int rd_capture_stopped(rd_capture_ref capture, char *reason, size_t reason_size);
+
 /// Stops if needed, releases everything, and invalidates the handle. No frames arrive after this returns.
 RD_EXPORT void rd_capture_destroy(rd_capture_ref capture);
 
