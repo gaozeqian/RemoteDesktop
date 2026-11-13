@@ -710,6 +710,9 @@
 - **缺 macOS 签名凭据时的发布行为**：`release.yml` 新增 `check-signing`——Developer ID 证书或公证凭据不全时
   `build-macos` 不构建（绝不产出未签名或未公证的 `.pkg`），发布只含 Windows 与 Linux 的六个包，发布说明第一段
   写明少了哪个平台、为什么，以及补齐哪些 Secret 后重跑即可。真正失败的构建仍然拦下整个发布。
+- **发布资产清点漏掉 Windows 的三个 MSI**：发布 job 里三个变量混着 `FileInfo` 与 `FullName` 字符串两种形状，
+  `$windows.FullName` 静默成了空数组——三包清点通过，`gh release create` 却只上传了 Linux 的三个包和一份缺项的
+  `SHA256SUMS`。统一成 `FileInfo`，并加了一条"资产数必须等于 6 + macOS 包数"的断言，让这种错在发布前就红。
 
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 

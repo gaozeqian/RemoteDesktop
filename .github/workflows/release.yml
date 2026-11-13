@@ -624,23 +624,29 @@ jobs:
           # 九个包是不是都到了，少一个就什么都不发。
           #
           # Linux 的包按平台惯例用 amd64，Windows 的用 x64——各随各的约定，不为了让列表整齐而互相将就。
-          $linux = Get-ChildItem -Path linux-packages/*.deb -ErrorAction SilentlyContinue
-          if ($linux.Count -lt 3) {
+          $linux = @(Get-ChildItem -Path linux-packages/*.deb -ErrorAction SilentlyContinue)
+          if ($linux.Count -ne 3) {
               throw "Expected three Linux packages, found $($linux.Count)."
           }
 
           # macOS 三个角色各一个，或者一个都没有（凭据不全时那个 job 没有运行）。有一个却不齐，说明 build-macos
           # 只出了一部分，而那是发完才会被发现的那种错。
-          $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          $packages = @(Get-ChildItem -Path macos-installer/*.pkg -ErrorAction SilentlyContinue)
           if ($packages.Count -gt 0 -and $packages.Count -ne 3) {
               throw "Expected three macOS installers or none, found $($packages.Count)."
           }
 
           # Windows 三个来自 build-windows。少一个就说明那个 job 只出了一部分。
-          $windows = @(Get-ChildItem -Path windows-packages/*.msi -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          $windows = @(Get-ChildItem -Path windows-packages/*.msi -ErrorAction SilentlyContinue)
           if ($windows.Count -ne 3) { throw "Expected the Windows client, host and server installers from build-windows, got $($windows.Count)." }
 
-          $assets = @($windows.FullName) + @($linux.FullName) + @($packages)
+          # 三个变量都是 FileInfo，.FullName 各取一次。此前这里混着两种形状（一个存 FileInfo，两个存 FullName 字符串），
+          # 于是 `$windows.FullName` 静默成了空数组——清点通过、三个 MSI 却没上传，v1.0.1 第一次发布就少了一半资产。
+          $assets = @($windows.FullName) + @($linux.FullName) + @($packages.FullName)
+          if ($assets.Count -ne (6 + $packages.Count)) {
+              throw "Expected $(6 + $packages.Count) assets, collected $($assets.Count)."
+          }
+
           $hashes = $assets | Sort-Object | ForEach-Object {
               $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
               "$($hash.Hash.ToLowerInvariant())  $(Split-Path -Leaf $_)"
