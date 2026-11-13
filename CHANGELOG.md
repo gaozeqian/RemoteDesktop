@@ -69,7 +69,8 @@
 - **`MainWindowViewModel` 拆分**：约 1,400 行的单文件拆成 `.Connection`、`.Settings`、`.RecentDevices`、
   `.HostStatus` 四个 partial，方法体未改。
 - **服务端宿主收敛**：新增 `RemoteDesktop.Server.Hosting`，四个宿主共用配置分层、Windows 服务/systemd 注册与
-  节点令牌端点过滤器；`Server.Shared` 继续保持不含 ASP.NET，`Ops.Core` 的依赖闭包不变。
+  节点令牌端点过滤器；`Server.Shared` 继续保持不含 ASP.NET，`Ops.Core` 的依赖闭包不变。Hosting 使用类库 SDK +
+  ASP.NET 框架引用，避免 Web SDK 把锁文件当作发布内容而与宿主重名（验收中发现的发布失败已修复）。
 - **平台实现继续收窄**：Windows/macOS/Linux/Posix 的六十余个只被测试或同程序集使用的实现类型改为 `internal`；
   宿主真正使用的 setup、self-check 与控制管道 API 仍为 public。
 - **测试脚手架收敛**：E2E 与 Transport 集成测试共用 `TestSupport`（节点宿主组合、在线等待、`TestRendezvous`
