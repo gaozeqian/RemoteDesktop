@@ -20,5 +20,9 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Windows.UnitTests" />
+    <!-- The session agent wraps SendInputInjector to route Ctrl+Alt+Del through the service. -->
+    <InternalsVisibleTo Include="RemoteDesktop.SessionAgent" />
+    <!-- Desktop/camera/agent tests compose the Media Foundation codecs directly. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
   </ItemGroup>
 </Project>

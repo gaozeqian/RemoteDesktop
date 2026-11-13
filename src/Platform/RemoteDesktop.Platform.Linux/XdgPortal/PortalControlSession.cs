@@ -174,7 +174,7 @@ public sealed partial class PortalControlSession(ILoggerFactory loggerFactory, I
     /// Handed out together because neither is much use alone, and because a caller holding one across a forget would
     /// be holding a handle onto a closed connection. Callers re-read them each time rather than caching.
     /// </remarks>
-    public (PortalConnection Connection, string Session) Current()
+    internal (PortalConnection Connection, string Session) Current()
     {
         lock (_gate)
         {

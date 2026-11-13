@@ -47,7 +47,7 @@ public readonly record struct SharedScreen(uint NodeId, int X, int Y, int Width,
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PortalConnection : IDisposable
+internal sealed partial class PortalConnection : IDisposable
 {
     private const string Destination = "org.freedesktop.portal.Desktop";
     private const string ObjectPath = "/org/freedesktop/portal/desktop";
