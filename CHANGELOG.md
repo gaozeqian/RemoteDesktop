@@ -2,7 +2,7 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [未发布]
+## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 
 ### Security
 
@@ -678,6 +678,35 @@
   （会话崩溃后遗留的 `DBUS_SESSION_BUS_ADDRESS`）会原样透传 D-Bus 库的 `DBusConnectFailedException`。按 `PortalException`
   判断"这台机器没有门户"的调用点因此漏掉它——`--self-check` 在那种机器上直接崩溃，而不是报告门户不可用。摄像头授权的
   错误映射保持 `InvalidOperationException`（文案改为"桌面没有接受摄像头的授权/撤销"），窗口与主机控制通道继续把它显示给用户。
+
+**三平台打包与 CI：从"每个 job 都红"到九个安装包全部构建通过**
+
+这一轮把发布流水线本身修通了：`ci.yml` 的五个 job 在同一个提交上全绿，`release.yml` 的四个打包 job 才有意义。
+
+- **Windows 安装包的自定义动作在 Linux/macOS 上必然还原失败**：两个 `net48` 的 CustomActions 工程只靠 SDK 隐式加
+  `Microsoft.NETFramework.ReferenceAssemblies`，而 SDK 只在没有 .NET Framework targeting pack 的机器上加——Windows
+  生成的 `packages.lock.json` 因此缺这一项，Linux/macOS 的 locked restore 以 NU1004 失败。显式引用该包后包图三平台一致。
+- **`THIRD-PARTY-NOTICES.md` 随 runner 的运行时版本漂移**：脚本读 `dotnet --list-runtimes`（机器上装了什么就是什么），
+  runner 镜像升到 10.0.15 后文件在没有任何依赖变化的提交上被改写。改读 SDK 的 `BundledNETCoreAppPackageVersion`
+  （SDK 由 `global.json` 锁定），与自包含发布实际带走的版本一致。
+- **容器构建的 SDK 镜像与 `global.json` 脱节**：四个 Dockerfile 钉在 `sdk:10.0` 的同一个 digest 上，而该镜像已升到
+  10.0.403，`rollForward: disable` 让镜像里的还原直接报 "A compatible .NET SDK was not found"。改用带版本号的 10.0.402。
+- **健康检查断言与服务端的实际响应不符**：中转与监控台的 `/health` 返回 JSON（监控台还带探测到的数据库类型），只有
+  信令服务器回答纯文本 `Healthy`；同时 Linux 的 deb 包默认在 TLS 问题里选"生成自签名证书"，信令监听的是 https。
+  三平台 CI 与 Windows 安装后自检都按纯文本 + http 比较，于是分别在中转与信令上失败。断言改为两种形状都认，Linux 走 https。
+- **macOS 服务端安装在中途中止**：postinstall 的"专用账号能否读到服务器需要的东西"探针调用 `/usr/bin/test`，而 macOS
+  把 test 放在 `/bin`——`sudo` 回一句 `command not found`，每条探针都以失败告终，安装报 "could not prepare the
+  unprivileged _remotedesktop account"。安装失败现在还会打印 `/var/log/install.log` 尾部，`installer` 本身只说一句
+  "an error occurred while running scripts"。
+- **`osx-arm64` 的锁文件缺失**：`.pkg` 的 locked restore 与 `.deb` 一样需要按 RID 分开的锁文件。
+- **macOS 的空摄像头 id 报成"摄像头未连接"**：调用方传了空 id 时按硬件问题报错，排查会找错方向；改为与 Linux 工厂
+  一致地抛 `ArgumentException`。
+- **过长的控制管道名会让客户端崩溃**：`LinkActivation.TryForward` 没有接住"名字超出套接字路径上限"的
+  `ArgumentOutOfRangeException`（macOS 的临时目录很长），一次转发尝试就终止进程；现在与其它几种情况一样按"没有运行中的
+  客户端"处理，正常启动。
+- **测试侧**：本机控制管道的授权判定拆成 `IsAuthorizedHostControl` 并用六条用例覆盖（管理员账号的 runner 走不到拒绝分支）；
+  汇总用例改用当前分钟对齐的时间戳（2023 年的固定时间戳会被 30 天保留策略在写入途中删掉）；伪终端的 shell 交互用例
+  限定在 Linux（托管 macOS 的登录 shell 启动期会丢弃输入行，ioctl 往返等确定性用例在两个系统上仍运行）。
 
 ## [1.0.0] - 2026-10-23 · 跨平台正式版：三平台九个安装包与运维控制台
 
