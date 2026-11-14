@@ -1,4 +1,5 @@
 using RemoteDesktop.Features.Camera;
+using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -73,5 +74,15 @@ public sealed class CameraViewerDecoderTests : ViewerDecoderTests
         // The shared watchdog waits for the stall timeout of silence before asking again, as the desktop one does.
         await rig.TickAsync(PastStallTimeout);
         await rig.ExpectKeyFrameRequestsAsync(2);
+    }
+
+    [Fact]
+    public void Opening_a_camera_waits_longer_than_a_generic_request()
+    {
+        // Opening can block on a TCC prompt on the controlled end, which only the person at that machine can answer.
+        // The generic 30-second deadline expired while the prompt was still up and turned a denial into a timeout.
+        Assert.True(
+            CameraViewer.OpenTimeout > RequestTimeout.Default,
+            $"Camera open waits {CameraViewer.OpenTimeout}, which is not longer than the generic {RequestTimeout.Default}.");
     }
 }

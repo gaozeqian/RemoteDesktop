@@ -533,6 +533,55 @@ public sealed class ServerSetupTests : IDisposable
     }
 
     /// <summary>
+    /// Switching from a PEM pair or the Windows store to a PKCS#12 file has to remove the old key reference.
+    /// </summary>
+    /// <remarks>
+    /// A PEM install writes <c>KeyPath</c>; the Windows generated certificate writes Subject/Store/Location. If a
+    /// later <c>--tls-certificate&lt;file.pfx&gt;</c> leaves any of them behind, Kestrel loads the certificate from
+    /// the PFX and the private key from the old PEM file, then refuses to start with "the provided key file is
+    /// missing or invalid" — an installation that succeeds and a server that will not boot.
+    /// </remarks>
+    [Fact]
+    public void A_certificate_file_replaces_the_key_and_store_settings_of_the_previous_one()
+    {
+        var path = Path.Combine(_folder, ServerSetup.RendezvousFolder, ServerSetup.SettingsFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """
+            {
+              "Kestrel": {
+                "Certificates": {
+                  "Default": {
+                    "Path": "/tmp/previous.crt",
+                    "KeyPath": "/tmp/previous.key",
+                    "Subject": "previous",
+                    "Store": "My",
+                    "Location": "LocalMachine",
+                    "AllowInvalid": "true"
+                  }
+                }
+              }
+            }
+            """);
+
+        var certificate = WriteCertificate();
+        ServerSetup.Configure(_folder, new ServerSetupOptions
+        {
+            Urls = "https://0.0.0.0:5080",
+            TlsCertificatePath = certificate,
+            TlsCertificatePassword = "pfx-password",
+        });
+
+        var certificates = Configuration(ServerSetup.RendezvousFolder).GetSection("Kestrel:Certificates:Default");
+        Assert.Equal(certificate, certificates["Path"]);
+        Assert.Equal("pfx-password", certificates["Password"]);
+        Assert.Null(certificates["KeyPath"]);
+        Assert.Null(certificates["Subject"]);
+        Assert.Null(certificates["Store"]);
+        Assert.Null(certificates["Location"]);
+        Assert.Null(certificates["AllowInvalid"]);
+    }
+
+    /// <summary>
     /// The console cannot trust a self-signed signaling certificate through the System keychain (macOS refuses the
     /// trust change from a package postinstall), so it pins the certificate file instead.
     /// </summary>

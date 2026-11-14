@@ -48,6 +48,17 @@ public sealed partial class CameraViewer : IAsyncDisposable
 {
     private const int MaxEventBytes = 256 * 1024;
 
+    /// <summary>
+    /// How long the host has to answer the open request.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately longer than <see cref="RequestTimeout.Default"/>: opening a camera on the controlled end can be
+    /// blocked on a TCC prompt that only a person standing at that machine can answer. The generic 30 seconds expired
+    /// while the prompt was still up, so a denial arrived — or was about to arrive — as a misleading timeout instead
+    /// of the host's own reason.
+    /// </remarks>
+    public static readonly TimeSpan OpenTimeout = TimeSpan.FromMinutes(2);
+
     private readonly IChannel _channel;
     private readonly VideoDecoderSupervisor _supervisor;
     private readonly TimeProvider _time;
@@ -141,8 +152,8 @@ public sealed partial class CameraViewer : IAsyncDisposable
     /// <summary>Starts streaming a camera and returns once the host has confirmed it and announced the picture size.</summary>
     /// <exception cref="CameraException">The host refused or could not open the camera.</exception>
     /// <exception cref="TimeoutException">
-    /// The host did not answer within <see cref="RequestTimeout.Default"/> — an unanswered permission prompt on the host
-    /// is the ordinary way to get here, so the window turns this into advice rather than an error.
+    /// The host did not answer within <see cref="OpenTimeout"/> — an unanswered permission prompt on the host is the
+    /// ordinary way to get here, so the window turns this into advice rather than an error.
     /// </exception>
     public static async Task<CameraViewer> StartAsync(
         IPeerConnection connection,
@@ -168,7 +179,7 @@ public sealed partial class CameraViewer : IAsyncDisposable
             // The first answer is the stream description, or the reason there is none. Opening a camera can take a moment
             // on the host — a permission prompt may be waiting for somebody to walk up to it — so the deadline is the
             // shared one-shot one rather than anything tighter.
-            var first = await RequestTimeout.RunAsync(token => ReadEventAsync(channel.Stream, token), cancellationToken).ConfigureAwait(false);
+            var first = await RequestTimeout.RunAsync(token => ReadEventAsync(channel.Stream, token), cancellationToken, OpenTimeout).ConfigureAwait(false);
             switch (first.BodyCase)
             {
                 case CameraEvent.BodyOneofCase.StreamInfo:

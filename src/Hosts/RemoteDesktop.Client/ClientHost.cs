@@ -11,6 +11,7 @@ using RemoteDesktop.Client.Storage;
 using RemoteDesktop.Client.ViewModels;
 using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.Media;
+using RemoteDesktop.Platform.MacOS;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Identity;
 
@@ -127,6 +128,14 @@ internal static class ClientHost
         }
         else
         {
+            // This process is the controlled end, exactly as the packaged host is, so it needs the same two grants.
+            // Without the request the fallback silently dropped input until Accessibility was granted by hand, and a
+            // first launch captured nothing with no prompt.
+            if (OperatingSystem.IsMacOS())
+            {
+                MacHostPermissions.Request(dataDirectory);
+            }
+
             builder.Services
                 .AddQuicTransport(transport)
                 .AddRemoteDesktopApplication(telemetry)

@@ -386,6 +386,15 @@ public static partial class ServerSetup
             }
             else
             {
+                // A certificate file replaces whatever the previous run used: a PEM pair's KeyPath, or the Windows
+                // store's Subject/Store/Location/AllowInvalid. Leaving the old KeyPath behind makes Kestrel load the
+                // new certificate from Path but its private key from the old file, and the server dies at startup
+                // with "the provided key file is missing or invalid". Only the keys that are re-added below survive.
+                foreach (var stale in (string[])["KeyPath", "Subject", "Store", "Location", "AllowInvalid"])
+                {
+                    certificates.Remove(stale);
+                }
+
                 // Not "auto" here, but the compiler cannot know it across the IsAuto call above.
                 var certificatePath = options.TlsCertificatePath!;
                 certificates["Path"] = certificatePath;

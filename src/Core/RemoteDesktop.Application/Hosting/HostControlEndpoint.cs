@@ -34,8 +34,15 @@ public static class HostControlEndpoint
         }
 
         var runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+
+        // The fallback name is deliberately short. A Unix domain socket path is limited to roughly a hundred bytes,
+        // and macOS's per-user $TMPDIR is already most of that; the old "remotedesktop-<user>" plus the socket name
+        // landed exactly on the limit, which .NET tolerated but every non-.NET tool refused. "/tmp" plus a short
+        // prefix leaves room for the name. The directory is still created 0700 and owned by this user, which is what
+        // makes a shared /tmp safe for it (see EnsureSocketDirectory).
+        var fallbackRoot = OperatingSystem.IsMacOS() ? "/tmp" : Path.GetTempPath();
         var directory = string.IsNullOrEmpty(runtime)
-            ? Path.Combine(Path.GetTempPath(), $"remotedesktop-{Environment.UserName}")
+            ? Path.Combine(fallbackRoot, $"rd-{Environment.UserName}")
             : Path.Combine(runtime, "remotedesktop");
 
         return Path.Combine(directory, name + ".sock");
