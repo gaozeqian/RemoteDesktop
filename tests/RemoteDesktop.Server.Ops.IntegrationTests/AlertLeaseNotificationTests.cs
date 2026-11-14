@@ -92,6 +92,85 @@ public sealed class AlertLeaseNotificationTests
         Assert.Empty(await db.Store.ListOpenAlertsAsync(Ct));
     }
 
+    /// <summary>
+    /// A pass may retry only a couple of deliveries per channel: each send can wait out a channel timeout, and a
+    /// backlog must not hold the alert lease for minutes. The third one stays owed for the next pass.
+    /// </summary>
+    [Fact]
+    public async Task One_pass_retries_at_most_two_notifications_per_channel()
+    {
+        await using var db = await TempDatabase.CreateAsync();
+        var rule = new AlertRule(
+            "rule-batch",
+            "节点抓取失败",
+            AlertRuleKinds.Scrape,
+            Metric: null,
+            Numerator: null,
+            Denominator: null,
+            Aggregation: "avg",
+            Comparator: AlertComparators.GreaterThan,
+            Threshold: 0.5,
+            WindowSeconds: 60,
+            ForSeconds: 0,
+            Severity: "P1",
+            Enabled: true);
+        await db.Store.UpsertAlertRuleAsync(rule, Ct);
+
+        var now = DateTimeOffset.UtcNow;
+        var channel = new CountingChannel();
+        for (var i = 0; i < 3; i++)
+        {
+            var node = new OpsNode(
+                $"node-batch-{i}",
+                $"batch-{i}",
+                "rendezvous",
+                "http://127.0.0.1:1",
+                Region: null,
+                Enabled: true,
+                LastScrapeAt: null,
+                LastScrapeOk: null,
+                CreatedAt: now.ToUnixTimeMilliseconds());
+            await db.Store.CreateNodeAsync(node, Ct);
+            await db.Store.RecordScrapeAsync(node.Id, now.ToUnixTimeMilliseconds(), ok: false, Ct);
+
+            var alert = new OpsAlertRow(
+                $"alert-batch-{i}",
+                rule.Id,
+                "P1",
+                AlertDedupeKeys.ForNode(rule.Id, node.Name),
+                "open",
+                1,
+                "{}",
+                now.AddHours(-1).ToUnixTimeMilliseconds(),
+                null,
+                null,
+                null);
+            await db.Store.OpenAlertAsync(alert, Ct);
+            await db.Store.RecordNotificationAttemptAsync(
+                alert.Id,
+                channel.Id,
+                "opened",
+                sent: false,
+                "the first delivery failed",
+                now.AddHours(-1).ToUnixTimeMilliseconds(),
+                Ct);
+        }
+
+        var alerts = new AlertService(
+            db.Store,
+            new AlertStateMachine(TimeProvider.System),
+            [channel],
+            TimeProvider.System,
+            NullLogger<AlertService>.Instance);
+
+        await alerts.EvaluateOnceAsync(Ct);
+        Assert.Equal(2, channel.Sends);
+
+        // The two that were sent are no longer owed; the third is, and the next pass delivers it.
+        await alerts.EvaluateOnceAsync(Ct);
+        Assert.Equal(3, channel.Sends);
+    }
+
     private static (AlertEvaluationService Service, OpsLease Lease) CreateEvaluation(
         OpsStore store,
         INotificationChannel channel,
@@ -112,6 +191,29 @@ public sealed class AlertLeaseNotificationTests
             time,
             NullLogger<AlertEvaluationService>.Instance);
         return (service, lease);
+    }
+
+    /// <summary>Counts deliveries without delaying them.</summary>
+    private sealed class CountingChannel : INotificationChannel
+    {
+        private int _sends;
+
+        public string Id => "counting";
+
+        public bool IsConfigured => true;
+
+        public int Sends => Volatile.Read(ref _sends);
+
+        public Task<string?> SendAsync(
+            OpsAlertRow alert,
+            string ruleName,
+            string severity,
+            string transition,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _sends);
+            return Task.FromResult<string?>(null);
+        }
     }
 
     /// <summary>A channel whose first send blocks until the test has run its second instance.</summary>

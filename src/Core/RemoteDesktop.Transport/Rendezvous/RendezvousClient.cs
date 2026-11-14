@@ -164,9 +164,16 @@ public sealed partial class RendezvousClient(TransportOptions options, DeviceIde
     public IAsyncEnumerable<AdminCommand> ReadAdminCommandsAsync(CancellationToken cancellationToken) =>
         _admin.Reader.ReadAllAsync(cancellationToken);
 
-    public async Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken)
+    public Task<ConnectReady> RequestConnectionAsync(DeviceId target, IEnumerable<PeerEndpoint> candidates, CancellationToken cancellationToken) =>
+        RequestConnectionAsync(Guid.NewGuid().ToString("N"), target, candidates, cancellationToken);
+
+    /// <summary>Test seam: the same request with a caller-chosen id, so the server's id validation has a direct test.</summary>
+    internal async Task<ConnectReady> RequestConnectionAsync(
+        string requestId,
+        DeviceId target,
+        IEnumerable<PeerEndpoint> candidates,
+        CancellationToken cancellationToken)
     {
-        var requestId = Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<ConnectReady>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[requestId] = completion;
         try

@@ -7,6 +7,7 @@ using RemoteDesktop.Server.Rendezvous;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Identity;
+using RemoteDesktop.Transport.Rendezvous;
 using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
@@ -309,6 +310,32 @@ public class RendezvousLimitTests
         // The second one never reaches that decision — the budget is what refuses it now.
         var second = await Assert.ThrowsAsync<PeerConnectException>(() => device.Rendezvous.RequestConnectionAsync(offline, [], Ct));
         Assert.Equal(PeerConnectFailure.Rejected, second.Failure);
+    }
+
+    /// <summary>
+    /// The request id is a client-chosen string kept as a dictionary key and echoed back; clients mint a 32-character
+    /// GUID, and anything else is refused before it can enter the pending table.
+    /// </summary>
+    [Fact]
+    public Task A_request_id_that_is_not_a_guid_is_refused() => AssertInvalidRequestIdAsync("not-a-guid");
+
+    [Fact]
+    public Task A_request_id_that_is_longer_than_128_characters_is_refused() =>
+        AssertInvalidRequestIdAsync(new string('a', 129));
+
+    private static async Task AssertInvalidRequestIdAsync(string requestId)
+    {
+        await using var server = await TestRendezvous.StartAsync();
+        await using var host = await TestDevice.StartAsync(TestRendezvous.SignalingUri(server));
+        await using var controller = await TestDevice.StartAsync(TestRendezvous.SignalingUri(server));
+
+        // The host is online, so the only reason left to refuse is the id itself. The concrete client exposes the
+        // caller-chosen-id overload; the interface deliberately does not.
+        var client = Assert.IsType<RendezvousClient>(controller.Rendezvous);
+        var error = await Assert.ThrowsAsync<PeerConnectException>(
+            () => client.RequestConnectionAsync(requestId, host.Id, [], Ct));
+
+        Assert.Equal(PeerConnectFailure.Rejected, error.Failure);
     }
 }
 

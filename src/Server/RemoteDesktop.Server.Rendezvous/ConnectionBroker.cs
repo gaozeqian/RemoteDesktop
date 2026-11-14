@@ -165,7 +165,7 @@ public sealed partial class ConnectionBroker
     }
 
     private static bool IsValidRequestId(string? requestId) =>
-        !string.IsNullOrEmpty(requestId) && requestId.Length <= MaxRequestIdLength;
+        requestId is { Length: <= MaxRequestIdLength } && Guid.TryParseExact(requestId, "N", out _);
 
     // Only the targeted host may answer a request.
     private bool TryComplete(DeviceSession host, string requestId, out PendingRequest pending)

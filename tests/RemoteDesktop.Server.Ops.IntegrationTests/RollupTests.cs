@@ -38,6 +38,28 @@ public class RollupTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
         Assert.True(second <= 2, $"The incremental pass rolled {second} buckets.");
     }
 
+    /// <summary>
+    /// A pass with no new samples must not rewrite the buckets it re-read: the incremental design exists because the
+    /// full pass rewrote history every ten minutes. One sample in the current bucket is one changed row.
+    /// </summary>
+    [Fact]
+    public async Task A_quiet_incremental_pass_writes_no_rows_and_one_new_sample_writes_one()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var nodeId = "node-rollup-quiet-" + Guid.NewGuid().ToString("N");
+        var metric = "cpu_rollup_quiet";
+        var now = fixture.Now.ToUnixTimeMilliseconds();
+        var bucketStart = now / 60_000 * 60_000;
+
+        await store.WriteSamplesAsync(nodeId, bucketStart + 10_000, [new PrometheusSample(metric, metric, 1.0)], Ct);
+
+        Assert.True(await store.RollupSamplesIncrementallyAsync(now, 60, Ct) > 0, "the first pass has to write the bucket");
+        Assert.Equal(0, await store.RollupSamplesIncrementallyAsync(now, 60, Ct));
+
+        await store.WriteSamplesAsync(nodeId, bucketStart + 20_000, [new PrometheusSample(metric, metric, 2.0)], Ct);
+        Assert.Equal(1, await store.RollupSamplesIncrementallyAsync(now, 60, Ct));
+    }
+
     [Fact]
     public async Task Rollup_aggregates_metric_samples_into_time_buckets()
     {

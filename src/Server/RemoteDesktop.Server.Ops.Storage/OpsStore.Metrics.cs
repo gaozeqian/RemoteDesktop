@@ -427,7 +427,13 @@ public sealed partial class OpsStore
             return 0;
         }
 
+        // A pass re-reads the newest bucket (to absorb a late sample) and the one before it. Most of the time
+        // nothing in them changed, and writing identical rows every ten minutes is exactly the unbounded rewrite the
+        // incremental pass exists to avoid. The predicate leaves an unchanged row untouched, so the return value is
+        // the number of rows that actually changed: zero on a quiet pass, one when a sample landed in the current
+        // bucket. Both providers report the affected-row count from this form.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var written = 0;
         foreach (var row in rows)
         {
             await using var upsertCommand = connection.CreateCommand();
@@ -441,7 +447,13 @@ public sealed partial class OpsStore
                     min_value = excluded.min_value,
                     max_value = excluded.max_value,
                     avg_value = excluded.avg_value,
-                    sample_count = excluded.sample_count;
+                    sample_count = excluded.sample_count
+                WHERE ops_metric_rollup.first_value <> excluded.first_value
+                   OR ops_metric_rollup.last_value <> excluded.last_value
+                   OR ops_metric_rollup.min_value <> excluded.min_value
+                   OR ops_metric_rollup.max_value <> excluded.max_value
+                   OR ops_metric_rollup.avg_value <> excluded.avg_value
+                   OR ops_metric_rollup.sample_count <> excluded.sample_count;
                 """;
             Bind(
                 upsertCommand,
@@ -456,11 +468,11 @@ public sealed partial class OpsStore
                 ("@maxVal", row.MaxVal),
                 ("@count", row.Count));
 
-            await upsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            written += await upsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return rows.Count;
+        return written;
     }
 
     /// <summary>The newest bucket already rolled up for a step, or null when this database has none.</summary>
