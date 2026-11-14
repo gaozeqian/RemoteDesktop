@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.MacOS.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.MacOS.Camera;
 
@@ -53,7 +54,7 @@ internal sealed class MacCameraFrameSink : IDisposable
         MemoryVideoFrame delivered;
         try
         {
-            delivered = new MemoryVideoFrame(width, height, PixelFormat.Bgra32, ToTimestamp(frame->HostTimeNanoseconds));
+            delivered = new MemoryVideoFrame(width, height, PixelFormat.Bgra32, HostTime.ToTimestamp(frame->HostTimeNanoseconds));
         }
         catch (ArgumentException)
         {
@@ -69,12 +70,7 @@ internal sealed class MacCameraFrameSink : IDisposable
 
         // The source rows are padded to a hardware alignment that is usually wider than the visible width, so this
         // is a row-by-row copy rather than one memcpy over the whole buffer.
-        var rowBytes = Math.Min(sourceStride, destinationStride);
-        for (var y = 0; y < height; y++)
-        {
-            new ReadOnlySpan<byte>(sourceRow + (y * sourceStride), rowBytes)
-                .CopyTo(destination[(y * destinationStride)..]);
-        }
+        BgraRowCopy.Copy(sourceRow, sourceStride, destination, destinationStride, height);
 
         // A write into a completed channel is a no-op that reports false, which is what happens for a picture that
         // was in flight while the capture was being torn down. The frame has to be released by hand in that case.
@@ -104,10 +100,4 @@ internal sealed class MacCameraFrameSink : IDisposable
         }
     }
 
-    /// <summary>
-    /// The sample's stamp is on the host clock, which is the same clock the display capture reports on — so a
-    /// controller can compare a camera timestamp with a screen timestamp without knowing where either came from.
-    /// </summary>
-    private static TimeSpan ToTimestamp(ulong hostTimeNanoseconds) =>
-        hostTimeNanoseconds == 0 ? TimeSpan.Zero : TimeSpan.FromTicks((long)(hostTimeNanoseconds / 100));
 }

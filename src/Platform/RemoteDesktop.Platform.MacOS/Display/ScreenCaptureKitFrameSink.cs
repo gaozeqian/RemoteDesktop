@@ -1,6 +1,7 @@
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.MacOS.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.MacOS.Display;
 
@@ -45,7 +46,7 @@ internal sealed class ScreenCaptureKitFrameSink : IDisposable
         MemoryVideoFrame delivered;
         try
         {
-            delivered = new MemoryVideoFrame(width, height, PixelFormat.Bgra32, ToTimestamp(frame->HostTimeNanoseconds))
+            delivered = new MemoryVideoFrame(width, height, PixelFormat.Bgra32, HostTime.ToTimestamp(frame->HostTimeNanoseconds))
             {
                 DirtyRects = ReadDirtyRects(frame),
             };
@@ -64,12 +65,7 @@ internal sealed class ScreenCaptureKitFrameSink : IDisposable
 
         // The source rows are padded to a hardware alignment that is usually wider than the visible width, so this
         // is a row-by-row copy rather than one memcpy over the whole buffer.
-        var rowBytes = Math.Min(sourceStride, destinationStride);
-        for (var y = 0; y < height; y++)
-        {
-            new ReadOnlySpan<byte>(sourceRow + (y * sourceStride), rowBytes)
-                .CopyTo(destination[(y * destinationStride)..]);
-        }
+        BgraRowCopy.Copy(sourceRow, sourceStride, destination, destinationStride, height);
 
         MemoryVideoFrame? replaced;
         lock (_gate)
@@ -133,14 +129,6 @@ internal sealed class ScreenCaptureKitFrameSink : IDisposable
         pending?.Dispose();
         _available.Dispose();
     }
-
-    /// <summary>
-    /// The frame's presentation stamp is on the stream's clock, which for a display stream is host time — a
-    /// monotonic count, not a wall-clock date. Converting the same way the Windows capturer uses a
-    /// <see cref="System.Diagnostics.Stopwatch"/> keeps timestamps comparable in meaning across the two.
-    /// </summary>
-    private static TimeSpan ToTimestamp(ulong hostTimeNanoseconds) =>
-        hostTimeNanoseconds == 0 ? TimeSpan.Zero : TimeSpan.FromTicks((long)(hostTimeNanoseconds / 100));
 
     private static unsafe PixelRect[] ReadDirtyRects(RdFrame* frame)
     {
