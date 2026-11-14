@@ -507,6 +507,37 @@ public class ScreenCaptureKitCapturerTests
         Assert.False(capturer.IsFaulted);
     }
 
+    [Fact]
+    public async Task An_unexpected_stop_is_reported_as_a_fault_and_reset_rebuilds_the_stream()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "ScreenCaptureKit is macOS only.");
+        Assert.SkipUnless(
+            TccGrants.IsGranted(TccGrant.ScreenRecording),
+            "Screen Recording is not granted to this process, so no capture can start.");
+
+        var display = PrimaryDisplay();
+        var capturer = (ScreenCaptureKitCapturer)new ScreenCaptureKitCapturerFactory().Create(display);
+        await using (capturer)
+        {
+            using (var first = await Capture(capturer))
+            {
+                Assert.SkipWhen(first is null, "ScreenCaptureKit delivered no frame; the display is probably unchanged.");
+            }
+
+            Assert.False(capturer.IsFaulted);
+
+            // This sets the flag ScreenCaptureKit's own didStopWithError would set. The stream keeps running, so the
+            // only thing under test is the managed path the capture loop follows: fault reported, then rebuilt.
+            capturer.SimulateUnexpectedStopForTest("the test stopped the stream");
+            Assert.True(capturer.IsFaulted, "The native stop flag did not reach IsFaulted; the loop would never recover.");
+
+            capturer.Reset();
+            Assert.False(capturer.IsFaulted, "Reset did not rebuild the stream after an unexpected stop.");
+
+            using var second = await capturer.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        }
+    }
+
     private static DisplayInfo PrimaryDisplay()
     {
         var displays = new CoreGraphicsDisplays().GetDisplays();

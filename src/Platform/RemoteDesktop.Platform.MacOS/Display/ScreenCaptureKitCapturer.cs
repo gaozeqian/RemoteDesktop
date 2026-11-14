@@ -135,6 +135,28 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
         }
     }
 
+    /// <summary>Test seam: makes the native capture report the stop a real ScreenCaptureKit failure would.</summary>
+    /// <remarks>
+    /// The stream keeps running; only the flag read by <see cref="IsFaulted"/> is set. That is the state the capture
+    /// loop acts on, and the only way to reach it deterministically — a real failure needs a revoked permission or a
+    /// removed display in the middle of a live stream.
+    /// </remarks>
+    internal void SimulateUnexpectedStopForTest(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_capture == 0)
+        {
+            throw new InvalidOperationException("The capture is not running.");
+        }
+
+        var status = MacNativeInterop.rd_capture_simulate_unexpected_stop(_capture, reason);
+        if (status != MacNativeInterop.Ok)
+        {
+            throw new InvalidOperationException(MacNativeInterop.DescribeStatus(status));
+        }
+    }
+
     /// <summary>Throws the stopped stream away and starts a fresh one on the same sink.</summary>
     /// <remarks>
     /// ScreenCaptureKit's stream cannot be resumed after it stops, so retrying on the same object is not enough:

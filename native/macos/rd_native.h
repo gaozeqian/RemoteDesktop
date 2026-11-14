@@ -120,6 +120,12 @@ RD_EXPORT void rd_capture_stop(rd_capture_ref capture);
 /// The reason, when present, is copied into the caller's buffer; both buffers may be NULL/0.
 RD_EXPORT int rd_capture_stopped(rd_capture_ref capture, char *reason, size_t reason_size);
 
+/// Test-only: marks the capture as if ScreenCaptureKit had stopped its stream unexpectedly, so the managed recovery
+/// path can be exercised without waiting for a real permission or display failure. The stream itself keeps running;
+/// only the flag that `rd_capture_stopped` reads is set. Never called by production code.
+/// Returns RD_OK, or RD_ERROR_ARGUMENT when the handle or its output has already gone.
+RD_EXPORT int rd_capture_simulate_unexpected_stop(rd_capture_ref capture, const char *reason);
+
 /// Stops if needed, releases everything, and invalidates the handle. No frames arrive after this returns.
 RD_EXPORT void rd_capture_destroy(rd_capture_ref capture);
 
