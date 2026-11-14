@@ -8,24 +8,24 @@
     <!-- Hosting / infrastructure -->
     <!-- Platform tests build a real container so that a port whose constructor throws cannot pass as registered, and
          a port that takes a logger needs a provider to build one. -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="11.0.0" />
     <!-- The server hosts run under systemd on Linux; the same binary still runs from a console. -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Systemd" Version="11.0.0" />
     <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
     <!-- The person's own settings file is layered into configuration; see UserSettings. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="11.0.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
     <!-- The setup command restarts the installed service (ServiceController) -->
-    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.14" />
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="11.0.0" />
     <!-- Windows platform: DXGI capture, Media Foundation codecs -->
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
@@ -58,7 +58,7 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <!-- The storage layer reads its own settings section and registers itself; it is a plain class library, so both
          abstractions are referenced rather than coming in with a framework reference. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="11.0.0" />
     <!-- Reads streams out of a built .msi. The tests use it for the custom action DLL inside the package: the
          automation API cannot hand back binary (it returns a string, which stops at the first zero byte), and the
          installer's own DLL starts with "MZ", 0x90, 0x00. Same version as the custom action project. -->
