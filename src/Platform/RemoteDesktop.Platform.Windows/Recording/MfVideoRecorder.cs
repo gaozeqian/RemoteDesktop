@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
-using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.Shared;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
@@ -26,12 +25,9 @@ internal sealed class MfVideoRecorder : IVideoRecorder
     private int _frameRate;
     private long _frameDurationTicks;
     private long _lastTimestampTicks = -1;
-    private Channel<RecordSample>? _channel;
-    private Task? _worker;
+    private RecorderFrameQueue<RecordSample>? _queue;
     private volatile bool _isRecording;
     private string? _filePath;
-    private long _writtenFrames;
-    private int _failure;
 
     public bool IsRecording => _isRecording;
 
@@ -39,9 +35,9 @@ internal sealed class MfVideoRecorder : IVideoRecorder
 
     public TimeSpan Duration => _clock.Elapsed;
 
-    public long WrittenFrames => Interlocked.Read(ref _writtenFrames);
+    public long WrittenFrames => _queue?.WrittenFrames ?? 0;
 
-    public VideoRecorderFailure Failure => (VideoRecorderFailure)Volatile.Read(ref _failure);
+    public VideoRecorderFailure Failure => _queue?.Failure ?? VideoRecorderFailure.None;
 
     public void Start(string filePath, int width, int height, int frameRate = 30, int bitrateKbps = 4000)
     {
@@ -58,6 +54,9 @@ internal sealed class MfVideoRecorder : IVideoRecorder
                 throw new InvalidOperationException("Recording is already in progress.");
             }
 
+            // A start that fails must report no failure from the previous, already-stopped recording.
+            _queue = null;
+
             var dir = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(dir))
             {
@@ -72,8 +71,6 @@ internal sealed class MfVideoRecorder : IVideoRecorder
             _frameRate = Math.Clamp(frameRate, 1, 60);
             _frameDurationTicks = TimeSpan.TicksPerSecond / _frameRate;
             _lastTimestampTicks = -1;
-            Interlocked.Exchange(ref _writtenFrames, 0);
-            Volatile.Write(ref _failure, (int)VideoRecorderFailure.None);
 
             var writer = MediaFactory.MFCreateSinkWriterFromURL(filePath, null, null);
             try
@@ -94,19 +91,16 @@ internal sealed class MfVideoRecorder : IVideoRecorder
                 throw;
             }
 
-            var channel = Channel.CreateBounded<RecordSample>(new BoundedChannelOptions(30)
+            // The worker captures the writer it started with, not the field: a stop clears the field, and the
+            // frames still queued must drain into the sink that was opened for them.
+            _queue = new RecorderFrameQueue<RecordSample>(sample =>
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
+                using var mfSample = MfRuntime.CreateSample(sample.Pixels, sample.TimestampTicks, sample.DurationTicks);
+                writer.WriteSample(_streamIndex, mfSample);
+                return null;
             });
-            _channel = channel;
-
             _isRecording = true;
             _clock.Restart();
-            // Both are handed over explicitly: the fields are cleared the moment a stop begins, and the worker must
-            // keep draining into the writer it started with rather than see them disappear under it.
-            _worker = Task.Run(() => ProcessQueueAsync(channel, writer));
         }
     }
 
@@ -114,8 +108,8 @@ internal sealed class MfVideoRecorder : IVideoRecorder
     {
         // A stop on another thread clears the channel: hold on to the one this frame belongs to. Writing into a
         // completed channel is a no-op, which is the right outcome for a frame that arrived as the recording ended.
-        var channel = _channel;
-        if (!_isRecording || channel is null)
+        var queue = _queue;
+        if (!_isRecording || queue is null)
         {
             return;
         }
@@ -156,13 +150,12 @@ internal sealed class MfVideoRecorder : IVideoRecorder
             _lastTimestampTicks = ticks;
         }
 
-        channel.Writer.TryWrite(new RecordSample(buffer, ticks, _frameDurationTicks));
+        queue.TryEnqueue(new RecordSample(buffer, ticks, _frameDurationTicks));
     }
 
     public async Task<string> StopAsync()
     {
-        Channel<RecordSample>? channel;
-        Task? worker;
+        RecorderFrameQueue<RecordSample>? queue;
         IMFSinkWriter? writer;
         var resultPath = _filePath ?? string.Empty;
 
@@ -175,36 +168,22 @@ internal sealed class MfVideoRecorder : IVideoRecorder
 
             _isRecording = false;
             _clock.Stop();
-            channel = _channel;
-            _channel = null;
-            worker = _worker;
-            _worker = null;
+            queue = _queue;
             writer = _writer;
             _writer = null;
         }
 
-        // Drain before finalizing. The worker holds its own references to the channel and the writer, so the frames
-        // still queued here are the last moments of the recording — discarding them would silently truncate it.
-        if (channel is not null)
+        // Drain before finalizing. The frames still queued are the last moments of the recording — discarding them
+        // would silently truncate it. The queue is kept after the stop so WrittenFrames and Failure still answer.
+        if (queue is not null)
         {
-            channel.Writer.TryComplete();
-        }
-
-        if (worker is not null)
-        {
-            try
-            {
-                await worker.ConfigureAwait(false);
-            }
-            catch
-            {
-                // Ignore worker drain errors on shutdown
-            }
+            queue.Complete();
+            await queue.DrainAsync().ConfigureAwait(false);
         }
 
         if (writer is not null)
         {
-            var frames = WrittenFrames;
+            var frames = queue?.WrittenFrames ?? 0;
             try
             {
                 // Media Foundation refuses to finalize a sink that never saw a sample (MF_E_SINK_NO_SAMPLES_PROCESSED),
@@ -225,7 +204,7 @@ internal sealed class MfVideoRecorder : IVideoRecorder
                 // Whatever the writer left behind is not a recording. Taking it away beats telling the user an MP4
                 // was saved that no player will open. Failure says so, because a caller that catches this has
                 // nothing else to tell the two cases apart.
-                Fail(VideoRecorderFailure.NothingRecorded);
+                queue?.Fail(VideoRecorderFailure.NothingRecorded);
                 RecorderFile.TryDelete(resultPath);
                 throw new InvalidOperationException("No frame reached the encoder, so there is no recording to save.");
             }
@@ -252,33 +231,9 @@ internal sealed class MfVideoRecorder : IVideoRecorder
         }
     }
 
-    private async Task ProcessQueueAsync(Channel<RecordSample> channel, IMFSinkWriter writer)
-    {
-        var reader = channel.Reader;
-        while (await reader.WaitToReadAsync().ConfigureAwait(false))
-        {
-            while (reader.TryRead(out var sample))
-            {
-                try
-                {
-                    using var mfSample = MfRuntime.CreateSample(sample.Pixels, sample.TimestampTicks, sample.DurationTicks);
-                    writer.WriteSample(_streamIndex, mfSample);
-                    Interlocked.Increment(ref _writtenFrames);
-                }
-                catch (Exception)
-                {
-                    // Disk full, encoder error: the recording cannot go on. The caller finds out through Failure
-                    // rather than by noticing later that the file stopped growing.
-                    Fail(VideoRecorderFailure.WriteFailed);
-                    return;
-                }
-            }
-        }
-    }
 
     /// <summary>The first reason wins: it is the one that explains where the file ends.</summary>
-    private void Fail(VideoRecorderFailure failure) =>
-        Interlocked.CompareExchange(ref _failure, (int)failure, (int)VideoRecorderFailure.None);
+    private void Fail(VideoRecorderFailure failure) => _queue?.Fail(failure);
 
     private sealed record RecordSample(byte[] Pixels, long TimestampTicks, long DurationTicks);
 }
