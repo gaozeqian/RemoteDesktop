@@ -110,6 +110,12 @@ internal sealed partial class GdiScreenCapturer : IScreenCapturer
 
     public DisplayInfo Display => _display;
 
+    /// <summary>
+    /// Test seam: when set, stands in for the two <c>BitBlt</c> attempts. A desktop whose blit fails is otherwise only
+    /// reachable on a wedged or disconnected session, which is exactly the state the fault flag exists for.
+    /// </summary>
+    internal Func<bool>? BitBltOverride { get; set; }
+
     /// <summary>True after a BitBlt that failed; cleared by the next successful capture.</summary>
     public bool IsFaulted => _faulted;
 
@@ -133,8 +139,10 @@ internal sealed partial class GdiScreenCapturer : IScreenCapturer
             return ValueTask.FromResult<VideoFrame?>(null);
         }
 
-        if (!BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy | CaptureLayered)
-            && !BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy))
+        var copied = BitBltOverride?.Invoke()
+            ?? (BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy | CaptureLayered)
+                || BitBlt(_memoryDc, 0, 0, _width, _height, _screenDc, _sourceX, _sourceY, SourceCopy));
+        if (!copied)
         {
             _faulted = true;
             Thread.Sleep(timeout);
