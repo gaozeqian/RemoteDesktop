@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.MacOS.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.MacOS.Recording;
 
@@ -211,13 +212,13 @@ internal sealed class MacVideoRecorder : IVideoRecorder
                 // Nothing ever reached the writer: there is no recording, so take the file away rather than leave an
                 // unplayable stub behind.
                 Fail(VideoRecorderFailure.NothingRecorded);
-                TryDeleteFile(resultPath);
+                RecorderFile.TryDelete(resultPath);
                 throw new InvalidOperationException("No frame reached the encoder, so there is no recording to save.");
             }
 
             if (status != MacNativeInterop.Ok)
             {
-                TryDeleteFile(resultPath);
+                RecorderFile.TryDelete(resultPath);
                 string? detail = null;
                 unsafe
                 {
@@ -252,20 +253,6 @@ internal sealed class MacVideoRecorder : IVideoRecorder
         }
     }
 
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (!string.IsNullOrEmpty(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Leaving an unplayable file behind is better than throwing while closing one that never started.
-        }
-    }
 
     private async Task ProcessQueueAsync(Channel<QueuedFrame> channel, nint recorder)
     {

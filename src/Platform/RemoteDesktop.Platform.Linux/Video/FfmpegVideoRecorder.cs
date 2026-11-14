@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.Linux.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.Linux.Video;
 
@@ -462,9 +463,9 @@ internal sealed class FfmpegVideoRecorder : IVideoRecorder
                 _format = null;
             }
 
-            if (!keepFile && _outputPath is { Length: > 0 } path && File.Exists(path))
+            if (!keepFile)
             {
-                File.Delete(path);
+                RecorderFile.TryDelete(_outputPath);
             }
         }
     }

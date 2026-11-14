@@ -299,6 +299,12 @@
           "RemoteDesktop.Abstractions": "[1.0.1, )"
         }
       },
+      "remotedesktop.platform.shared": {
+        "type": "Project",
+        "dependencies": {
+          "RemoteDesktop.Abstractions": "[1.0.1, )"
+        }
+      },
       "remotedesktop.protocol": {
         "type": "Project",
         "dependencies": {

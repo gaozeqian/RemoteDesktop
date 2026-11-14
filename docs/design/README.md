@@ -24,7 +24,8 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features 
 ```
 
 *说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 依赖 `Abstractions` 提供的接口以及 `Domain` 的实体；`Media`
-只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`。
+只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`，
+三个平台还共用与本机 API 无关的 `Platform.Shared`。
 `Features.Desktop` 与 `Features.Camera` 引用 `Media`；宿主（`Client`、`HostService`、`SessionAgent`）除了
 `Application` 与各 `Features.*`，还直接引用 `Media` 和 `Platform.*`，在启动时把它们接起来。`Signaling` 为了保证
 服务端不引入任何客户端依赖，是一个完全独立的协议包——`Transport` 与 `Server.Shared` 引用它，它不引用任何人。*
@@ -84,6 +85,10 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
   音频走 PulseAudio，防休眠走 logind，密钥是 0600 文件。
 * **`RemoteDesktop.Platform.Posix`**: 两个类 Unix 系统语义相同的部分——PTY（`posix_spawn`，不用 `fork`
   ——多线程 .NET 进程里 fork 会死锁）、0600 文件密钥库、Unix 用户上下文守卫。
+* **`RemoteDesktop.Platform.Shared`**: 与具体操作系统 API 无关、三个平台实现原本各抄一份的代码。目前是显示
+  查找缓存（Windows/macOS 2 秒、Linux 5 秒，生命周期由调用方传入）；录制队列、编码输入校验与“只保留最新帧”
+  的 sink 会按同样方式逐步迁入。它只引用 `Abstractions`，因此 `DependencyRuleTests` 的 `Platform` 规则同样
+  覆盖它。
 
 ### 宿主与程序入口 (Hosts)
 

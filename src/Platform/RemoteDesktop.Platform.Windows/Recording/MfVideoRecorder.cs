@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Platform.Shared;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using Vortice.MediaFoundation;
 
@@ -225,27 +226,12 @@ internal sealed class MfVideoRecorder : IVideoRecorder
                 // was saved that no player will open. Failure says so, because a caller that catches this has
                 // nothing else to tell the two cases apart.
                 Fail(VideoRecorderFailure.NothingRecorded);
-                TryDeleteFile(resultPath);
+                RecorderFile.TryDelete(resultPath);
                 throw new InvalidOperationException("No frame reached the encoder, so there is no recording to save.");
             }
         }
 
         return resultPath;
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (!string.IsNullOrEmpty(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Leaving an unplayable file behind is better than throwing while closing one that never started.
-        }
     }
 
     /// <summary>

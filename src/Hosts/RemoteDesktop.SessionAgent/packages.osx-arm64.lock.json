@@ -367,6 +367,12 @@
           "RemoteDesktop.Abstractions": "[1.0.1, )"
         }
       },
+      "remotedesktop.platform.shared": {
+        "type": "Project",
+        "dependencies": {
+          "RemoteDesktop.Abstractions": "[1.0.1, )"
+        }
+      },
       "remotedesktop.platform.windows": {
         "type": "Project",
         "dependencies": {
@@ -376,6 +382,7 @@
           "NAudio.Wasapi": "[3.3.0, )",
           "RemoteDesktop.Abstractions": "[1.0.1, )",
           "RemoteDesktop.Domain": "[1.0.1, )",
+          "RemoteDesktop.Platform.Shared": "[1.0.1, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.14, )",
           "Vortice.DXGI": "[3.8.3, )",
           "Vortice.Direct3D11": "[3.8.3, )",

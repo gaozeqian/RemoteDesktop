@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.Windows.Input;
 
@@ -18,8 +19,7 @@ internal sealed partial class SendInputInjector(IDisplayEnumerator displays) : I
 {
     private static readonly TimeSpan DisplayCacheLifetime = TimeSpan.FromSeconds(2);
 
-    private IReadOnlyList<DisplayInfo> _displays = [];
-    private DateTime _displaysLoadedAt;
+    private readonly DisplayLookupCache _displayCache = new(displays, DisplayCacheLifetime);
 
     public void Inject(InputEvent inputEvent)
     {
@@ -109,16 +109,8 @@ internal sealed partial class SendInputInjector(IDisplayEnumerator displays) : I
         _ => throw new ArgumentOutOfRangeException(nameof(button)),
     };
 
-    private DisplayInfo FindDisplay(string displayId)
-    {
-        if (DateTime.UtcNow - _displaysLoadedAt > DisplayCacheLifetime || _displays.Count == 0)
-        {
-            _displays = displays.GetDisplays();
-            _displaysLoadedAt = DateTime.UtcNow;
-        }
-
-        return SendInputCoordinates.SelectDisplay(_displays, displayId);
-    }
+    private DisplayInfo FindDisplay(string displayId) =>
+        SendInputCoordinates.SelectDisplay(_displayCache.GetDisplays(), displayId);
 
     private static void Send(params ReadOnlySpan<Input> inputs)
     {

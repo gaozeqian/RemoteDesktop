@@ -15,6 +15,7 @@
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.FileTransfer\RemoteDesktop.Features.FileTransfer.csproj" />
     <ProjectReference Include="..\..\src\Features\RemoteDesktop.Features.Terminal\RemoteDesktop.Features.Terminal.csproj" />
     <ProjectReference Include="..\..\src\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <ProjectReference Include="..\..\src\Platform\RemoteDesktop.Platform.Shared\RemoteDesktop.Platform.Shared.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>
   <ItemGroup>

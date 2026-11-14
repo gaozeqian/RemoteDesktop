@@ -12,6 +12,7 @@
          O_NOCTTY, POSIX_SPAWN_SETSID, Darwin's non-variadic open/ioctl stubs) are confined to the shared interop
          layer rather than copied into a second implementation of the session logic. -->
     <ProjectReference Include="..\RemoteDesktop.Platform.Posix\RemoteDesktop.Platform.Posix.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Platform.Shared\RemoteDesktop.Platform.Shared.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />

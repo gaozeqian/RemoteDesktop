@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Platform.MacOS.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.MacOS.Input;
 
@@ -32,12 +33,10 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
     private const int ButtonRight = 2;
     private const int ButtonOther = 4;
 
-    private readonly IDisplayEnumerator _displays;
     private readonly nint _source;
     private readonly Lock _gate = new();
+    private readonly DisplayLookupCache _displayCache;
 
-    private IReadOnlyList<DisplayInfo> _cached = [];
-    private DateTime _cachedAt;
     private int _pressedButtons;
     private ulong _modifierFlags;
     private readonly InputSessionArbitrator _sessions = new();
@@ -45,7 +44,7 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
     public CGEventInputInjector(IDisplayEnumerator displays)
     {
         ArgumentNullException.ThrowIfNull(displays);
-        _displays = displays;
+        _displayCache = new DisplayLookupCache(displays, DisplayCacheLifetime);
         _source = CoreGraphics.CGEventSourceCreate(CoreGraphics.EventSourceStateHidSystemState);
     }
 
@@ -314,14 +313,10 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
 
     private DisplayInfo FindDisplay(string displayId)
     {
-        if (DateTime.UtcNow - _cachedAt > DisplayCacheLifetime || _cached.Count == 0)
-        {
-            _cached = _displays.GetDisplays();
-            _cachedAt = DateTime.UtcNow;
-        }
+        var displays = _displayCache.GetDisplays();
 
         DisplayInfo? primary = null;
-        foreach (var display in _cached)
+        foreach (var display in displays)
         {
             if (display.Id == displayId)
             {
@@ -331,6 +326,6 @@ public sealed class CGEventInputInjector : IInputInjector, IDisposable
             primary ??= display.IsPrimary ? display : null;
         }
 
-        return primary ?? (_cached.Count > 0 ? _cached[0] : throw new InvalidOperationException("No display to inject input into."));
+        return primary ?? (displays.Count > 0 ? displays[0] : throw new InvalidOperationException("No display to inject input into."));
     }
 }
