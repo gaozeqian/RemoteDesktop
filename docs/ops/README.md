@@ -936,7 +936,8 @@ RemoteDesktop.Server.Ops --reset-totp <用户名> [--config-directory <目录>]
 | `Ops:Notifications:Smtp:From` / `To` | 空 | 信封与头部的发件人；收件人可用逗号或分号分隔多个 |
 | `Ops:Notifications:Smtp:Username` / `Password` | 空 | 中继需要认证时填写；支持 AUTH PLAIN 与 AUTH LOGIN。**口令只写进 AUTH 交换**，不进日志、不进审计、不进投递记录 |
 | `Ops:TrustedProxies` | 空 | 可信反向代理的 IP 或 CIDR 列表；只有这里的代理写来的 `X-Forwarded-For` / `X-Forwarded-Proto` 会被采信。见“反向代理” |
-| `Ops:Retention:SampleDays` / `RollupDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `365` / `30` / `90` / `180` | 原始指标样本、1 分钟/1 小时降采样指标桶、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。`RollupDays` 默认比原始样本长，以较低粒度保留趋势；审计日志不自动删除（见"数据保留"） |
+| `Ops:RollupEnabled` | `false` | 是否每 10 分钟写 1 分钟/1 小时降采样指标桶。默认关闭：目前没有读取端，写入是纯成本；有趋势图后再打开，并同时设置 `Ops:Retention:RollupDays` |
+| `Ops:Retention:SampleDays` / `RollupDays` / `EventDays` / `SessionDays` / `AlertDays` | `30` / `0` / `30` / `90` / `180` | 原始指标样本、1 分钟/1 小时降采样指标桶、事件、会话、已恢复告警的保留天数；`0` 关闭对应清理。`RollupDays` 默认 0（rollup 任务默认关闭）；开启 rollup 时通常设为 365，以较低粒度保留趋势；审计日志不自动删除（见"数据保留"） |
 | `Ops:Retention:IntervalMinutes` | `60` | 清理任务间隔 |
 | `Ops:Ingest:Keys:<id>` | 空 | 节点推事件的 HMAC 密钥（Base64）；见下 |
 
@@ -1073,7 +1074,9 @@ sudo security add-trusted-cert -d -r trustRoot \
 #### 数据保留
 
 监控台每小时清理一次过期历史（保留天数和关闭方式见上面配置表里的 `Ops:Retention:*`）：原始指标样本默认 30 天，
-1 分钟/1 小时降采样指标桶默认 365 天，事件、会话与已恢复告警按各自配置清理；并同时删除过期的管理员会话。
+事件、会话与已恢复告警按各自配置清理；并同时删除过期的管理员会话。**1 分钟/1 小时降采样指标桶默认不生成**
+（`Ops:RollupEnabled=false`），其保留期默认 0（不删除）；需要长期趋势时把两者一起打开，例如
+`"Ops": { "RollupEnabled": true, "Retention": { "RollupDays": 365 } }`。
 打开中的告警永远不会被删除。
 **审计日志（`ops_audit_log`）是有哈希链的，不自动删除**——需要更长的保留期就备份数据库，或定期整库归档。
 
