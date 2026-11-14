@@ -648,7 +648,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.1, )"
+          "RemoteDesktop.Domain": "[1.0.2, )"
         }
       },
       "remotedesktop.application": {
@@ -660,7 +660,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Transport": "[1.0.1, )"
+          "RemoteDesktop.Transport": "[1.0.2, )"
         }
       },
       "remotedesktop.client": {
@@ -672,16 +672,16 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.14, )",
           "Microsoft.Extensions.Hosting": "[10.0.14, )",
-          "RemoteDesktop.Application": "[1.0.1, )",
-          "RemoteDesktop.Features.Camera": "[1.0.1, )",
-          "RemoteDesktop.Features.Desktop": "[1.0.1, )",
-          "RemoteDesktop.Features.FileTransfer": "[1.0.1, )",
-          "RemoteDesktop.Features.Terminal": "[1.0.1, )",
-          "RemoteDesktop.Hosts.Composition": "[1.0.1, )",
-          "RemoteDesktop.Media": "[1.0.1, )",
-          "RemoteDesktop.Platform.Linux": "[1.0.1, )",
-          "RemoteDesktop.Platform.MacOS": "[1.0.1, )",
-          "RemoteDesktop.Platform.Windows": "[1.0.1, )"
+          "RemoteDesktop.Application": "[1.0.2, )",
+          "RemoteDesktop.Features.Camera": "[1.0.2, )",
+          "RemoteDesktop.Features.Desktop": "[1.0.2, )",
+          "RemoteDesktop.Features.FileTransfer": "[1.0.2, )",
+          "RemoteDesktop.Features.Terminal": "[1.0.2, )",
+          "RemoteDesktop.Hosts.Composition": "[1.0.2, )",
+          "RemoteDesktop.Media": "[1.0.2, )",
+          "RemoteDesktop.Platform.Linux": "[1.0.2, )",
+          "RemoteDesktop.Platform.MacOS": "[1.0.2, )",
+          "RemoteDesktop.Platform.Windows": "[1.0.2, )"
         }
       },
       "remotedesktop.domain": {
@@ -690,23 +690,23 @@
       "remotedesktop.features.camera": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Application": "[1.0.1, )",
-          "RemoteDesktop.Features.Shared": "[1.0.1, )",
-          "RemoteDesktop.Media": "[1.0.1, )"
+          "RemoteDesktop.Application": "[1.0.2, )",
+          "RemoteDesktop.Features.Shared": "[1.0.2, )",
+          "RemoteDesktop.Media": "[1.0.2, )"
         }
       },
       "remotedesktop.features.desktop": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Application": "[1.0.1, )",
-          "RemoteDesktop.Features.Shared": "[1.0.1, )",
-          "RemoteDesktop.Media": "[1.0.1, )"
+          "RemoteDesktop.Application": "[1.0.2, )",
+          "RemoteDesktop.Features.Shared": "[1.0.2, )",
+          "RemoteDesktop.Media": "[1.0.2, )"
         }
       },
       "remotedesktop.features.filetransfer": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Application": "[1.0.1, )",
+          "RemoteDesktop.Application": "[1.0.2, )",
           "System.IO.Hashing": "[10.0.14, )"
         }
       },
@@ -714,23 +714,23 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Media": "[1.0.1, )",
-          "RemoteDesktop.Protocol": "[1.0.1, )"
+          "RemoteDesktop.Media": "[1.0.2, )",
+          "RemoteDesktop.Protocol": "[1.0.2, )"
         }
       },
       "remotedesktop.features.terminal": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Application": "[1.0.1, )"
+          "RemoteDesktop.Application": "[1.0.2, )"
         }
       },
       "remotedesktop.hosts.composition": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Features.Camera": "[1.0.1, )",
-          "RemoteDesktop.Features.Desktop": "[1.0.1, )",
-          "RemoteDesktop.Features.FileTransfer": "[1.0.1, )",
-          "RemoteDesktop.Features.Terminal": "[1.0.1, )"
+          "RemoteDesktop.Features.Camera": "[1.0.2, )",
+          "RemoteDesktop.Features.Desktop": "[1.0.2, )",
+          "RemoteDesktop.Features.FileTransfer": "[1.0.2, )",
+          "RemoteDesktop.Features.Terminal": "[1.0.2, )"
         }
       },
       "remotedesktop.media": {
@@ -738,7 +738,7 @@
         "dependencies": {
           "Concentus": "[2.2.2, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.linux": {
@@ -748,10 +748,10 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )",
-          "RemoteDesktop.Domain": "[1.0.1, )",
-          "RemoteDesktop.Platform.Posix": "[1.0.1, )",
-          "RemoteDesktop.Platform.Shared": "[1.0.1, )",
+          "RemoteDesktop.Abstractions": "[1.0.2, )",
+          "RemoteDesktop.Domain": "[1.0.2, )",
+          "RemoteDesktop.Platform.Posix": "[1.0.2, )",
+          "RemoteDesktop.Platform.Shared": "[1.0.2, )",
           "Tmds.DBus.Protocol": "[0.95.2, )"
         }
       },
@@ -761,9 +761,9 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )",
-          "RemoteDesktop.Platform.Posix": "[1.0.1, )",
-          "RemoteDesktop.Platform.Shared": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )",
+          "RemoteDesktop.Platform.Posix": "[1.0.2, )",
+          "RemoteDesktop.Platform.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.posix": {
@@ -771,13 +771,13 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.shared": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.windows": {
@@ -787,9 +787,9 @@
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
           "NAudio.Wasapi": "[3.3.0, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )",
-          "RemoteDesktop.Domain": "[1.0.1, )",
-          "RemoteDesktop.Platform.Shared": "[1.0.1, )",
+          "RemoteDesktop.Abstractions": "[1.0.2, )",
+          "RemoteDesktop.Domain": "[1.0.2, )",
+          "RemoteDesktop.Platform.Shared": "[1.0.2, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.14, )",
           "Vortice.DXGI": "[3.8.3, )",
           "Vortice.Direct3D11": "[3.8.3, )",
@@ -800,7 +800,7 @@
         "type": "Project",
         "dependencies": {
           "Google.Protobuf": "[3.36.2, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.server.hosting": {
@@ -808,22 +808,22 @@
         "dependencies": {
           "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.14, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.relay": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Hosting": "[1.0.2, )",
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.rendezvous": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )",
-          "RemoteDesktop.Server.Storage": "[1.0.1, )"
+          "RemoteDesktop.Server.Hosting": "[1.0.2, )",
+          "RemoteDesktop.Server.Shared": "[1.0.2, )",
+          "RemoteDesktop.Server.Storage": "[1.0.2, )"
         }
       },
       "remotedesktop.server.shared": {
@@ -835,7 +835,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "remotedesktop.server.storage": {
@@ -859,8 +859,8 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Protocol": "[1.0.1, )",
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Protocol": "[1.0.2, )",
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "Avalonia.Themes.Fluent": {

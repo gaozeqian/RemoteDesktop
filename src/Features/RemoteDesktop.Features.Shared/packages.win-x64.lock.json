@@ -14,7 +14,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.1, )"
+          "RemoteDesktop.Domain": "[1.0.2, )"
         }
       },
       "remotedesktop.domain": {
@@ -25,14 +25,14 @@
         "dependencies": {
           "Concentus": "[2.2.2, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.protocol": {
         "type": "Project",
         "dependencies": {
           "Google.Protobuf": "[3.36.2, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "Concentus": {

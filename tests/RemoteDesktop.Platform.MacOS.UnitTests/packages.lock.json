@@ -221,7 +221,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.1, )"
+          "RemoteDesktop.Domain": "[1.0.2, )"
         }
       },
       "remotedesktop.domain": {
@@ -232,7 +232,7 @@
         "dependencies": {
           "Concentus": "[2.2.2, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.macos": {
@@ -241,9 +241,9 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )",
-          "RemoteDesktop.Platform.Posix": "[1.0.1, )",
-          "RemoteDesktop.Platform.Shared": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )",
+          "RemoteDesktop.Platform.Posix": "[1.0.2, )",
+          "RemoteDesktop.Platform.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.posix": {
@@ -251,13 +251,13 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "remotedesktop.platform.shared": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Abstractions": "[1.0.1, )"
+          "RemoteDesktop.Abstractions": "[1.0.2, )"
         }
       },
       "Concentus": {

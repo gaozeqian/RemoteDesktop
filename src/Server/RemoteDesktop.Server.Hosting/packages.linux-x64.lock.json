@@ -20,7 +20,7 @@
       "remotedesktop.server.shared": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "remotedesktop.signaling": {

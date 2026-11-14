@@ -20,7 +20,7 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.1, )"
+          "RemoteDesktop.Domain": "[1.0.2, )"
         }
       },
       "remotedesktop.domain": {

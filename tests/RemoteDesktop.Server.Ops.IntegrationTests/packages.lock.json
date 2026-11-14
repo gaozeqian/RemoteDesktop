@@ -459,8 +459,8 @@
       "remotedesktop.server.gateway": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )",
+          "RemoteDesktop.Server.Hosting": "[1.0.2, )",
+          "RemoteDesktop.Server.Shared": "[1.0.2, )",
           "Yarp.ReverseProxy": "[2.3.0, )"
         }
       },
@@ -469,22 +469,22 @@
         "dependencies": {
           "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.14, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.ops": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Hosting": "[1.0.1, )",
-          "RemoteDesktop.Server.Ops.Core": "[1.0.1, )",
-          "RemoteDesktop.Server.Ops.Storage": "[1.0.1, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Hosting": "[1.0.2, )",
+          "RemoteDesktop.Server.Ops.Core": "[1.0.2, )",
+          "RemoteDesktop.Server.Ops.Storage": "[1.0.2, )",
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.ops.core": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.ops.storage": {
@@ -492,7 +492,7 @@
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.14, )",
           "Npgsql": "[10.0.3, )",
-          "RemoteDesktop.Server.Ops.Core": "[1.0.1, )"
+          "RemoteDesktop.Server.Ops.Core": "[1.0.2, )"
         }
       },
       "remotedesktop.server.shared": {
@@ -504,7 +504,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "remotedesktop.signaling": {

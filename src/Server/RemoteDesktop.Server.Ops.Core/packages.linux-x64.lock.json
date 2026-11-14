@@ -69,7 +69,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.14, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "remotedesktop.signaling": {

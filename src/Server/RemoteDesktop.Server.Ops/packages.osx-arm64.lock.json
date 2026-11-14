@@ -42,13 +42,13 @@
         "dependencies": {
           "Microsoft.Extensions.Hosting.Systemd": "[10.0.14, )",
           "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.14, )",
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.ops.core": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Server.Shared": "[1.0.1, )"
+          "RemoteDesktop.Server.Shared": "[1.0.2, )"
         }
       },
       "remotedesktop.server.ops.storage": {
@@ -56,13 +56,13 @@
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.14, )",
           "Npgsql": "[10.0.3, )",
-          "RemoteDesktop.Server.Ops.Core": "[1.0.1, )"
+          "RemoteDesktop.Server.Ops.Core": "[1.0.2, )"
         }
       },
       "remotedesktop.server.shared": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Signaling": "[1.0.1, )"
+          "RemoteDesktop.Signaling": "[1.0.2, )"
         }
       },
       "remotedesktop.signaling": {
