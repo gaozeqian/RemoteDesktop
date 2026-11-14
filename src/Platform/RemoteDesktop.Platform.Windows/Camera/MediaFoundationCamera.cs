@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
-using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Platform.Shared;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using SharpGen.Runtime;
 using Vortice.MediaFoundation;
@@ -138,16 +138,14 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
         // Only the newest picture is kept; the ones it replaces are released right away.
-        var frames = Channel.CreateBounded<MemoryVideoFrame>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = true },
-            dropped => dropped.Dispose());
+        using var frames = new LatestFrameSink<MemoryVideoFrame>();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Its own token: leaving the loop (dispose, break) has to stop the camera even when the caller never
         // cancels. Linked to the source's token so disposing the source also ends a running enumeration.
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
         var reader = Task.Factory.StartNew(
-            () => ReadLoop(mode, frames.Writer, started, stop.Token),
+            () => ReadLoop(mode, frames, started, stop.Token),
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
@@ -155,9 +153,12 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         {
             // A camera that cannot be opened fails here, before the caller has set anything up.
             await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
-            await foreach (var frame in frames.Reader.ReadAllAsync(stop.Token).ConfigureAwait(false))
+            while (await frames.WaitAsync(Timeout.InfiniteTimeSpan, stop.Token).ConfigureAwait(false))
             {
-                yield return frame;
+                if (frames.TryTake(out var frame) && frame is not null)
+                {
+                    yield return frame;
+                }
             }
         }
         finally
@@ -175,23 +176,14 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
                 // End this capture within the stop budget. A driver thread that returns later still owns and releases
                 // the native objects; observe a late failure so it cannot become an unobserved-task crash.
                 _ = reader.ContinueWith(
-                    task =>
-                    {
-                        _ = task.Exception;
-                        while (frames.Reader.TryRead(out var late))
-                        {
-                            late.Dispose();
-                        }
-                    },
+                    task => _ = task.Exception,
                     CancellationToken.None,
                     TaskContinuationOptions.None,
                     TaskScheduler.Default);
             }
 
-            while (frames.Reader.TryRead(out var left))
-            {
-                left.Dispose();
-            }
+            // The `using` on the sink releases the waiting picture; a reader thread that returns after this point
+            // finds the sink disposed, and TryWrite hands the frame back to it to dispose.
         }
     }
 
@@ -207,7 +199,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         return ValueTask.CompletedTask;
     }
 
-    private void ReadLoop(CameraMode mode, ChannelWriter<MemoryVideoFrame> writer, TaskCompletionSource started, CancellationToken cancellationToken)
+    private void ReadLoop(CameraMode mode, LatestFrameSink<MemoryVideoFrame> frames, TaskCompletionSource started, CancellationToken cancellationToken)
     {
         IMFMediaSource? source = null;
         IMFSourceReader? reader = null;
@@ -249,7 +241,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
                 }
 
                 var frame = ToFrame(sample, width, height, yuy2, clock.Elapsed);
-                if (!writer.TryWrite(frame))
+                if (!frames.TryWrite(frame))
                 {
                     frame.Dispose();
                 }
@@ -257,12 +249,12 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         }
         catch (CameraUnavailableException ex)
         {
-            Fail(ex, started, writer);
+            Fail(ex, started, frames);
             return;
         }
         catch (SharpGenException ex)
         {
-            Fail(Describe(ex), started, writer);
+            Fail(Describe(ex), started, frames);
             return;
         }
         finally
@@ -288,7 +280,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
             }
 
             // Also complete on an unexpected conversion/argument failure; otherwise the consumer would wait forever.
-            writer.TryComplete();
+            frames.Complete();
         }
     }
 
@@ -308,11 +300,11 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
     }
 
     // Before the first picture the caller is still waiting to start; afterwards the stream just ends with the error.
-    private static void Fail(CameraUnavailableException failure, TaskCompletionSource started, ChannelWriter<MemoryVideoFrame> writer)
+    private static void Fail(CameraUnavailableException failure, TaskCompletionSource started, LatestFrameSink<MemoryVideoFrame> frames)
     {
         if (!started.TrySetException(failure))
         {
-            writer.TryComplete(failure);
+            frames.Complete(failure);
         }
     }
 

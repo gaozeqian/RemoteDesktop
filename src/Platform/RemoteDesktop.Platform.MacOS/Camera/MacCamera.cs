@@ -173,9 +173,14 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
             // set anything up.
             await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
 
-            await foreach (var frame in sink.Reader.ReadAllAsync(stop.Token).ConfigureAwait(false))
+            // The sink holds at most one picture: wait for one, take it, repeat. A completion ends the loop; the
+            // source only completes it in the finally below, so in practice cancellation is what ends this.
+            while (await sink.WaitAsync(Timeout.InfiniteTimeSpan, stop.Token).ConfigureAwait(false))
             {
-                yield return frame;
+                if (sink.TryTake(out var frame) && frame is not null)
+                {
+                    yield return frame;
+                }
             }
         }
         finally

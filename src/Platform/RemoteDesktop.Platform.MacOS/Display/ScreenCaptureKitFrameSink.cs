@@ -27,10 +27,7 @@ namespace RemoteDesktop.Platform.MacOS.Display;
 /// </remarks>
 internal sealed class ScreenCaptureKitFrameSink : IDisposable
 {
-    private readonly Lock _gate = new();
-    private readonly SemaphoreSlim _available = new(0, 1);
-    private MemoryVideoFrame? _pending;
-    private bool _disposed;
+    private readonly LatestFrameSink<MemoryVideoFrame> _frames = new();
 
     /// <summary>Called from the helper's queue. Must not throw: it is reached through a reverse P/Invoke.</summary>
     public unsafe void Deliver(RdFrame* frame)
@@ -67,68 +64,27 @@ internal sealed class ScreenCaptureKitFrameSink : IDisposable
         // is a row-by-row copy rather than one memcpy over the whole buffer.
         BgraRowCopy.Copy(sourceRow, sourceStride, destination, destinationStride, height);
 
-        MemoryVideoFrame? replaced;
-        lock (_gate)
+        // A write into a completed sink is refused; the frame has to be released by hand in that case.
+        if (!_frames.TryWrite(delivered))
         {
-            if (_disposed)
-            {
-                delivered.Dispose();
-                return;
-            }
-
-            replaced = _pending;
-            _pending = delivered;
-        }
-
-        replaced?.Dispose();
-
-        // Release only when nothing is already signalled: the semaphore is capped at one, so a second release
-        // would throw, and a second signal would be meaningless anyway since only one frame is ever held.
-        if (_available.CurrentCount == 0)
-        {
-            _available.Release();
+            delivered.Dispose();
         }
     }
 
     /// <summary>Waits for a frame to be delivered, or gives up after <paramref name="timeout"/>.</summary>
     /// <returns><c>true</c> when a frame is waiting to be taken; <c>false</c> on timeout.</returns>
     /// <remarks>
-    /// The result of the wait is the answer: <see cref="SemaphoreSlim.WaitAsync(TimeSpan, CancellationToken)"/>
-    /// reports a timeout by returning <c>false</c>, not by throwing, so discarding it would turn every timeout into
-    /// a reported frame — and the pipeline would then see an empty slot where it expected a picture.
+    /// The result of the wait is the answer: a timeout is reported as <c>false</c>, not thrown, so discarding it
+    /// would turn every timeout into a reported frame — and the pipeline would then see an empty slot where it
+    /// expected a picture.
     /// </remarks>
-    public async Task<bool> WaitForFrameAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
-        await _available.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+    public Task<bool> WaitForFrameAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+        _frames.WaitAsync(timeout, cancellationToken);
 
     /// <summary>Takes the waiting frame, or returns <c>null</c> when there is none.</summary>
-    public VideoFrame? TryTake()
-    {
-        lock (_gate)
-        {
-            var frame = _pending;
-            _pending = null;
-            return frame;
-        }
-    }
+    public VideoFrame? TryTake() => _frames.TryTake(out var frame) ? frame : null;
 
-    public void Dispose()
-    {
-        MemoryVideoFrame? pending;
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            pending = _pending;
-            _pending = null;
-        }
-
-        pending?.Dispose();
-        _available.Dispose();
-    }
+    public void Dispose() => _frames.Dispose();
 
     private static unsafe PixelRect[] ReadDirtyRects(RdFrame* frame)
     {

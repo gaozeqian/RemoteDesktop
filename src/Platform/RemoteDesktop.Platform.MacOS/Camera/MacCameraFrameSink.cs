@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.MacOS.Interop;
 using RemoteDesktop.Platform.Shared;
@@ -27,18 +26,7 @@ namespace RemoteDesktop.Platform.MacOS.Camera;
 /// </remarks>
 internal sealed class MacCameraFrameSink : IDisposable
 {
-    private readonly Channel<MemoryVideoFrame> _frames = Channel.CreateBounded<MemoryVideoFrame>(
-        new BoundedChannelOptions(1)
-        {
-            FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = true,
-            SingleWriter = true,
-        },
-        dropped => dropped.Dispose());
-
-    private bool _disposed;
-
-    public ChannelReader<MemoryVideoFrame> Reader => _frames.Reader;
+    private readonly LatestFrameSink<MemoryVideoFrame> _frames = new();
 
     /// <summary>Called from the helper's queue. Must not throw: it is reached through a reverse P/Invoke.</summary>
     public unsafe void Deliver(RdCameraFrame* frame)
@@ -72,32 +60,23 @@ internal sealed class MacCameraFrameSink : IDisposable
         // is a row-by-row copy rather than one memcpy over the whole buffer.
         BgraRowCopy.Copy(sourceRow, sourceStride, destination, destinationStride, height);
 
-        // A write into a completed channel is a no-op that reports false, which is what happens for a picture that
-        // was in flight while the capture was being torn down. The frame has to be released by hand in that case.
-        if (!_frames.Writer.TryWrite(delivered))
+        // A write into a completed sink is refused, which is what happens for a picture that was in flight while
+        // the capture was being torn down. The frame has to be released by hand in that case.
+        if (!_frames.TryWrite(delivered))
         {
             delivered.Dispose();
         }
     }
 
-    /// <summary>Ends the stream. A pending failure is handed to the consumer through the channel.</summary>
-    public void Complete(Exception? error = null) => _frames.Writer.TryComplete(error);
+    /// <summary>Waits for a picture, or reports a timeout or the end of the stream.</summary>
+    public Task<bool> WaitAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+        _frames.WaitAsync(timeout, cancellationToken);
 
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
+    /// <summary>Takes the waiting picture, or returns false when there is none.</summary>
+    public bool TryTake(out MemoryVideoFrame? frame) => _frames.TryTake(out frame);
 
-        _disposed = true;
-        Complete();
+    /// <summary>Ends the stream. A pending failure is handed to the consumer through the wait.</summary>
+    public void Complete(Exception? error = null) => _frames.Complete(error);
 
-        // Anything still queued is released here; the channel does not own its items.
-        while (_frames.Reader.TryRead(out var left))
-        {
-            left.Dispose();
-        }
-    }
-
+    public void Dispose() => _frames.Dispose();
 }
