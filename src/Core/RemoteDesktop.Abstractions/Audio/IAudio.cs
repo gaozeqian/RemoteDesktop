@@ -15,6 +15,11 @@ public interface IAudioCapturerFactory
 /// Captures what the host is playing (loopback). Implementations convert whatever the device delivers to
 /// <see cref="AudioFormat.Standard"/>, so the rest of the pipeline never deals with device formats.
 /// </summary>
+/// <remarks>
+/// Disposal is final: it cancels every capture the capturer is running and a later <see cref="CaptureAsync"/> throws
+/// <see cref="ObjectDisposedException"/>. The device is opened and released inside each enumeration, so ending the
+/// enumeration releases it; <see cref="IAsyncDisposable.DisposeAsync"/> only has to stop the ones still in flight.
+/// </remarks>
 public interface IAudioCapturer : IAsyncDisposable
 {
     AudioFormat Format { get; }

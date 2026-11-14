@@ -208,4 +208,24 @@ public class CameraTests
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
         Assert.Throws<CameraUnavailableException>(() => new MediaFoundationCameraSourceFactory(Enumerator).Open("not-a-camera"));
     }
+
+    /// <summary>
+    /// Disposal is final on every platform: after it, a capture is refused before Media Foundation is touched. The
+    /// device is released by the enumeration that opened it, so no camera is needed for this test.
+    /// </summary>
+    [Fact]
+    public async Task A_disposed_source_refuses_a_later_capture()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        var source = new MediaFoundationCameraSource(new CameraInfo("camera-1", "Test", []));
+        await source.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+        {
+            await foreach (var _ in source.CaptureAsync(new CameraMode(640, 480, 30), Ct))
+            {
+            }
+        });
+    }
 }

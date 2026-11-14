@@ -64,4 +64,24 @@ public class MacCameraTests
         var factory = new MacCameraSourceFactory(enumerator);
         Assert.Throws<ArgumentException>(() => factory.Open(invalidId));
     }
+
+    /// <summary>
+    /// Disposal is final on every platform: after it, a capture is refused before the camera is touched. The device
+    /// itself is released by the enumeration that opened it, so no hardware or permission is needed for this test.
+    /// </summary>
+    [Fact]
+    public async Task A_disposed_source_refuses_a_later_capture()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), MacOnly);
+
+        var source = new MacCameraSource(new CameraInfo("camera-1", "Test", []));
+        await source.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+        {
+            await foreach (var _ in source.CaptureAsync(new CameraMode(640, 480, 30), TestContext.Current.CancellationToken))
+            {
+            }
+        });
+    }
 }

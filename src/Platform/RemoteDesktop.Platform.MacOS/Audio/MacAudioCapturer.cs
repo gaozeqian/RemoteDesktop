@@ -39,16 +39,21 @@ internal sealed class MacAudioCapturerFactory : IAudioCapturerFactory
 [SupportedOSPlatform("macos")]
 internal sealed class MacAudioCapturer : IAudioCapturer
 {
+    private readonly CancellationTokenSource _dispose = new();
+    private int _disposed;
+
     public AudioFormat Format => AudioFormat.Standard;
 
     public async IAsyncEnumerable<ReadOnlyMemory<float>> CaptureAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         using var sink = new MacAudioChunkSink();
 
         // Its own token, as in the display and camera capturers: leaving the loop has to stop the stream even when
-        // the caller never cancels.
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // the caller never cancels. Disposing the capturer cancels it too.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = Task.Factory.StartNew(
@@ -60,9 +65,9 @@ internal sealed class MacAudioCapturer : IAudioCapturer
         try
         {
             // Fails here, before the caller has set anything up, when Screen Recording has not been granted.
-            await started.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
 
-            await foreach (var chunk in sink.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var chunk in sink.Reader.ReadAllAsync(stop.Token).ConfigureAwait(false))
             {
                 yield return chunk;
             }
@@ -75,7 +80,17 @@ internal sealed class MacAudioCapturer : IAudioCapturer
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>Stops every running enumeration; a later <see cref="CaptureAsync"/> is refused.</summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            // The iteration's finally stops the ScreenCaptureKit stream and waits for its thread.
+            _dispose.Cancel();
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     /// <summary>
     /// Opens the stream, starts it, and then holds it open. A dedicated thread because both native calls block —

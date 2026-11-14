@@ -143,18 +143,22 @@ internal sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICamer
 [SupportedOSPlatform("macos")]
 internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
 {
+    private readonly CancellationTokenSource _dispose = new();
+    private int _disposed;
+
     public CameraInfo Camera { get; } = camera;
 
     public async IAsyncEnumerable<VideoFrame> CaptureAsync(
         CameraMode mode, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mode);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
         using var sink = new MacCameraFrameSink();
 
         // Its own token: leaving the loop (dispose, break) has to stop the camera even when the caller never
-        // cancels. The same arrangement the Windows source uses.
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // cancels. Linked to the source's token so disposing the source also ends an enumeration that is running.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = Task.Factory.StartNew(
@@ -167,9 +171,9 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
         {
             // A camera that cannot be opened — no permission, in use, unplugged — fails here, before the caller has
             // set anything up.
-            await started.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
 
-            await foreach (var frame in sink.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var frame in sink.Reader.ReadAllAsync(stop.Token).ConfigureAwait(false))
             {
                 yield return frame;
             }
@@ -182,7 +186,17 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>Stops every running enumeration; a later <see cref="CaptureAsync"/> is refused.</summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            // The iteration's finally cancels the native session and waits for the AVFoundation thread.
+            _dispose.Cancel();
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     /// <summary>
     /// Runs on a dedicated thread: it opens the camera, starts the session, and then does nothing but hold it open.

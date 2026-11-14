@@ -97,7 +97,9 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
     private static readonly TimeSpan ReaderStopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Lock _resourceGate = new();
+    private readonly CancellationTokenSource _dispose = new();
     private IMFMediaSource? _source;
+    private int _disposed;
 
     public CameraInfo Camera { get; } = camera;
 
@@ -133,6 +135,7 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
     public async IAsyncEnumerable<VideoFrame> CaptureAsync(CameraMode mode, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mode);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
         // Only the newest picture is kept; the ones it replaces are released right away.
         var frames = Channel.CreateBounded<MemoryVideoFrame>(
@@ -140,8 +143,9 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
             dropped => dropped.Dispose());
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Its own token: leaving the loop (dispose, break) has to stop the camera even when the caller never cancels.
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // Its own token: leaving the loop (dispose, break) has to stop the camera even when the caller never
+        // cancels. Linked to the source's token so disposing the source also ends a running enumeration.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
         var reader = Task.Factory.StartNew(
             () => ReadLoop(mode, frames.Writer, started, stop.Token),
             CancellationToken.None,
@@ -150,8 +154,8 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         try
         {
             // A camera that cannot be opened fails here, before the caller has set anything up.
-            await started.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            await foreach (var frame in frames.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
+            await foreach (var frame in frames.Reader.ReadAllAsync(stop.Token).ConfigureAwait(false))
             {
                 yield return frame;
             }
@@ -191,7 +195,17 @@ internal sealed class MediaFoundationCameraSource(CameraInfo camera) : ICameraSo
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>Stops every running enumeration; a later <see cref="CaptureAsync"/> is refused.</summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            // The iteration's finally shuts the source down and waits for the reader thread.
+            _dispose.Cancel();
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     private void ReadLoop(CameraMode mode, ChannelWriter<MemoryVideoFrame> writer, TaskCompletionSource started, CancellationToken cancellationToken)
     {
