@@ -231,7 +231,7 @@ public class AgentForwardingModuleTests
 
         public void OfferFailure() => _opens.Writer.TryWrite(() => throw new AgentUnavailableException("still starting"));
 
-        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
+        public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, AccessGrant grant, CancellationToken cancellationToken)
         {
             var open = await _opens.Reader.ReadAsync(cancellationToken);
             _taken.TrySetResult();

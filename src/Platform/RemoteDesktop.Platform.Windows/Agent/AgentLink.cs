@@ -1,13 +1,18 @@
-using RemoteDesktop.Domain;
+using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Agent;
+using RemoteDesktop.Domain;
 
 namespace RemoteDesktop.Platform.Windows.Agent;
 
 /// <summary>A feature channel the service wants the agent to serve.</summary>
-public readonly record struct AgentChannelRequest(AgentChannelKind Kind, Guid ChannelId, SessionId Session);
+/// <param name="Grant">
+/// The session's effective grant when the service opened the channel. The agent builds its own session from it and
+/// refuses the channel when the grant does not include the module's required permission.
+/// </param>
+public readonly record struct AgentChannelRequest(AgentChannelKind Kind, Guid ChannelId, SessionId Session, AccessGrant Grant);
 
 /// <summary>
 /// Agent side of the pipes to the host service: one control connection, plus one data connection per feature channel.
@@ -44,9 +49,25 @@ internal sealed class AgentLink : IAsyncDisposable
                 yield break;
             }
 
-            if (message.Type == AgentPipeMessage.OpenChannel && message.Payload.Length == AgentPipeMessages.OpenChannelPayloadLength && Enum.IsDefined((AgentChannelKind)message.Payload[16]))
+            if (message.Type == AgentPipeMessage.OpenChannel &&
+                message.Payload.Length == AgentPipeMessages.OpenChannelPayloadLength &&
+                Enum.IsDefined((AgentChannelKind)message.Payload[16]))
             {
-                yield return new AgentChannelRequest((AgentChannelKind)message.Payload[16], new Guid(message.Payload.AsSpan(0, 16), bigEndian: true), new SessionId(new Guid(message.Payload.AsSpan(17, 16), bigEndian: true)));
+                var mode = (SessionMode)message.Payload[33];
+                var permissions = (Permissions)BinaryPrimitives.ReadUInt32BigEndian(message.Payload.AsSpan(34));
+                if (!AgentPipeMessages.IsValidGrant(mode, (uint)permissions))
+                {
+                    continue;
+                }
+
+                // The service sends effective permissions; creating the grant again applies the same invariants the
+                // service applied (watch mode has no input, permissions without the screen have no input or clipboard).
+                var grant = AccessGrant.Create(mode, permissions, permissions);
+                yield return new AgentChannelRequest(
+                    (AgentChannelKind)message.Payload[16],
+                    new Guid(message.Payload.AsSpan(0, 16), bigEndian: true),
+                    new SessionId(new Guid(message.Payload.AsSpan(17, 16), bigEndian: true)),
+                    grant);
             }
         }
     }
@@ -54,6 +75,14 @@ internal sealed class AgentLink : IAsyncDisposable
     /// <summary>Connects the data pipe of a requested channel; the stream is the channel's byte stream.</summary>
     public async Task<Stream> OpenChannelAsync(AgentChannelRequest request, CancellationToken cancellationToken) =>
         await ConnectPipeAsync(_pipeName, AgentPipeRole.Data, request.ChannelId, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Tells the service not to wait for a data pipe this agent will not open.</summary>
+    public Task RefuseChannelAsync(Guid channelId, CancellationToken cancellationToken)
+    {
+        var payload = new byte[16];
+        channelId.TryWriteBytes(payload, bigEndian: true, out _);
+        return SendAsync(AgentPipeMessage.ChannelRefused, payload, cancellationToken);
+    }
 
     public Task ReportDesktopAsync(DesktopKind desktop, CancellationToken cancellationToken) =>
         SendAsync(AgentPipeMessage.DesktopChanged, new[] { (byte)desktop }, cancellationToken);
