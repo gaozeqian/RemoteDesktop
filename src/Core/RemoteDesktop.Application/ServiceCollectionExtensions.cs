@@ -10,6 +10,8 @@ using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.Protocol.Clipboard;
+using RemoteDesktop.Protocol.Framing;
 using RemoteDesktop.Transport;
 using RemoteDesktop.Transport.Rendezvous;
 
@@ -73,47 +75,61 @@ public static class ServiceCollectionExtensions
                 : Permissions.All & ~Permissions.SecureAttention;
 
     /// <summary>
+    /// The channels a background service forwards to the agent, in the order the dispatcher sees them.
+    /// </summary>
+    /// <remarks>
+    /// One table rather than seven registrations, because the host-feature helper and this one have to serve the same
+    /// channels: a feature added to only one of them used to be invisible until a controller asked for it. The limits
+    /// are the protocol's own constants, not slack copied into the registration.
+    /// </remarks>
+    private static readonly ForwardedChannel[] ForwardedChannels =
+    [
+        new(ChannelType.Video, Permissions.ViewScreen, AgentChannelKind.Video, ReplayFirstFrame: true),
+        new(ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, ReplayFirstFrame: false, Lossless: true),
+        new(ChannelType.Clipboard, Permissions.Clipboard, AgentChannelKind.Clipboard, ReplayFirstFrame: false,
+            MaxInboundFrame: ClipboardFrame.MaxFrameBytes),
+        new(ChannelType.Audio, Permissions.Audio, AgentChannelKind.Audio, ReplayFirstFrame: true),
+        // Files are handled as the signed-in user, which only the agent can be. A chunk plus its frame header is the
+        // largest thing the controller sends on this channel.
+        new(ChannelType.FileTransfer, Permissions.FileTransfer, AgentChannelKind.File, ReplayFirstFrame: false,
+            MaxInboundFrame: FileChunkFrame.ChunkSize + FrameCodec.HeaderSize, Lossless: true),
+        // Shells are the signed-in user's too. Keystrokes must not be dropped or replayed, so the channel is lossless
+        // and simply ends if the agent is replaced (for example by the lock screen).
+        new(ChannelType.Terminal, Permissions.Terminal, AgentChannelKind.Terminal, ReplayFirstFrame: false, Lossless: true),
+        // The camera belongs to the signed-in user as well. Lossless: a stream silently moved to another agent would
+        // not decode, and the viewer simply opens the camera again.
+        new(ChannelType.Camera, Permissions.Camera, AgentChannelKind.Camera, ReplayFirstFrame: false, Lossless: true),
+    ];
+
+    /// <summary>
     /// Serves the desktop channels (screen, input, clipboard, audio) through the session agent instead of in this process. Used by
     /// the background service, which cannot touch the interactive desktop itself. Requires an <see cref="IAgentGateway"/>.
     /// </summary>
     public static IServiceCollection AddAgentForwardedDesktop(this IServiceCollection services)
     {
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Video, Permissions.ViewScreen, AgentChannelKind.Video, replayFirstFrame: true,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
-            lossless: true));
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Clipboard, Permissions.Clipboard, AgentChannelKind.Clipboard, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
-            maxInboundFrame: 16 * 1024 * 1024));
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Audio, Permissions.Audio, AgentChannelKind.Audio, replayFirstFrame: true,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>()));
+        foreach (var channel in ForwardedChannels)
+        {
+            services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
+                channel.Type,
+                channel.Permission,
+                channel.AgentKind,
+                channel.ReplayFirstFrame,
+                sp.GetRequiredService<IAgentGateway>(),
+                sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
+                maxInboundFrame: channel.MaxInboundFrame,
+                lossless: channel.Lossless));
+        }
 
-        // Files are handled as the signed-in user, which only the agent can be. Chunks are up to 1 MiB plus framing.
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.FileTransfer, Permissions.FileTransfer, AgentChannelKind.File, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
-            maxInboundFrame: 2 * 1024 * 1024, lossless: true));
-
-        // Shells are the signed-in user's too. Keystrokes must not be dropped or replayed, so the channel is lossless and
-        // simply ends if the agent is replaced (for example by the lock screen).
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Terminal, Permissions.Terminal, AgentChannelKind.Terminal, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
-            lossless: true));
-
-        // The camera belongs to the signed-in user as well. Lossless: a stream silently moved to another agent would not
-        // decode, and the viewer simply opens the camera again.
-        services.AddSingleton<IFeatureModule>(sp => new AgentForwardingModule(
-            ChannelType.Camera, Permissions.Camera, AgentChannelKind.Camera, replayFirstFrame: false,
-            sp.GetRequiredService<IAgentGateway>(), sp.GetRequiredService<ILogger<AgentForwardingModule>>(),
-            lossless: true));
         return services;
     }
+
+    private sealed record ForwardedChannel(
+        ChannelType Type,
+        Permissions Permission,
+        AgentChannelKind AgentKind,
+        bool ReplayFirstFrame,
+        int MaxInboundFrame = AgentForwardingModule.DefaultMaxInboundFrame,
+        bool Lossless = false);
 
     /// <summary>Lets the UI (or the service's control pipe) read and change this process's host state.</summary>
     /// <param name="isService">True in the background service, so clients can tell where the host lives.</param>

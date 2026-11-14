@@ -19,12 +19,6 @@ namespace RemoteDesktop.Features.Desktop;
 /// </remarks>
 public sealed partial class ClipboardSynchronizer(IClipboard clipboard, ILogger<ClipboardSynchronizer> logger)
 {
-    /// <summary>Largest frame accepted from the other side; a PNG plus protobuf overhead fits.</summary>
-    public const int MaxFrameBytes = MaxImageBytes + (64 * 1024);
-
-    private const int MaxTextBytes = 4 * 1024 * 1024;
-    private const int MaxImageBytes = 8 * 1024 * 1024;
-
     // Copying often fires several change notifications in a row (one per clipboard format being set).
     private static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(150);
 
@@ -103,7 +97,7 @@ public sealed partial class ClipboardSynchronizer(IClipboard clipboard, ILogger<
     {
         try
         {
-            while (await ProtobufFrames.ReadAsync(stream, ClipboardMessage.Parser, MaxFrameBytes, cancellationToken).ConfigureAwait(false) is { } message)
+            while (await ProtobufFrames.ReadAsync(stream, ClipboardMessage.Parser, ClipboardFrame.MaxFrameBytes, cancellationToken).ConfigureAwait(false) is { } message)
             {
                 if (Decode(message) is not var (content, hash))
                 {
@@ -138,11 +132,11 @@ public sealed partial class ClipboardSynchronizer(IClipboard clipboard, ILogger<
         {
             case TextClipboardContent text:
                 var bytes = System.Text.Encoding.UTF8.GetBytes(text.Text);
-                return bytes.Length is > 0 and <= MaxTextBytes
+                return bytes.Length is > 0 and <= ClipboardFrame.MaxTextBytes
                     ? (new ClipboardMessage { Text = new ClipboardText { Text = text.Text } }, HashOf(0, bytes))
                     : null;
             case ImageClipboardContent image:
-                return image.Png.Length is > 0 and <= MaxImageBytes
+                return image.Png.Length is > 0 and <= ClipboardFrame.MaxImageBytes
                     ? (new ClipboardMessage { Image = new ClipboardImage { Png = UnsafeByteOperations.UnsafeWrap(image.Png) } }, HashOf(1, image.Png.Span))
                     : null;
             default:
@@ -158,10 +152,10 @@ public sealed partial class ClipboardSynchronizer(IClipboard clipboard, ILogger<
             case ClipboardMessage.BodyOneofCase.Text:
                 var text = message.Text.Text;
                 var bytes = System.Text.Encoding.UTF8.GetBytes(text);
-                return bytes.Length is > 0 and <= MaxTextBytes ? (new TextClipboardContent(text), HashOf(0, bytes)) : null;
+                return bytes.Length is > 0 and <= ClipboardFrame.MaxTextBytes ? (new TextClipboardContent(text), HashOf(0, bytes)) : null;
             case ClipboardMessage.BodyOneofCase.Image:
                 var png = message.Image.Png;
-                return png.Length is > 0 and <= MaxImageBytes && IsPng(png.Span)
+                return png.Length is > 0 and <= ClipboardFrame.MaxImageBytes && IsPng(png.Span)
                     ? (new ImageClipboardContent(png.ToByteArray()), HashOf(1, png.Span))
                     : null;
             default:

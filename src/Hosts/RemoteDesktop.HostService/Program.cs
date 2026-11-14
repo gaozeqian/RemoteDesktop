@@ -174,33 +174,37 @@ if (OperatingSystem.IsWindows())
 }
 else if (OperatingSystem.IsLinux())
 {
-    // The features are registered directly rather than forwarded through an agent, which is what AddDesktopFeature
-    // and its siblings do here — the same list the client uses when it hosts incoming sessions itself.
-    builder.Services
-        .AddLinuxPlatform(dataDirectory)
-        .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication(telemetry)
-        .AddRemoteDesktopMedia()
-        .AddRemoteDesktopHostFeatures(dataDirectory)
-        .AddLocalHostControl(isService: true)
-        .AddHostedService<HostControlServer>();
+    // No service/agent split on these platforms: the host process itself serves the features in the user's graphical
+    // session, the same list the client uses when it hosts incoming sessions itself. Here that process is the systemd
+    // user service.
+    builder.Services.AddLinuxPlatform(dataDirectory);
+    AddInProcessHost();
 }
 else if (OperatingSystem.IsMacOS())
 {
-    // No service/agent split: TCC gives screen recording and input to an app running in the user's graphical session,
-    // so this process is the whole host. It is packaged as a bundle (RemoteDesktop Host.app) with LSUIElement, which
-    // is what gives macOS a stable identity to remember the grants by.
+    // TCC gives screen recording and input to an app in the user's graphical session, which is why the host is a
+    // bundle (RemoteDesktop Host.app) with LSUIElement — the stable identity the grants are remembered by.
     MacHostPermissions.Request(dataDirectory);
-
-    builder.Services
-        .AddMacOSPlatform(dataDirectory)
-        .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication(telemetry)
-        .AddRemoteDesktopMedia()
-        .AddRemoteDesktopHostFeatures(dataDirectory)
-        .AddLocalHostControl(isService: true)
-        .AddHostedService<HostControlServer>();
+    builder.Services.AddMacOSPlatform(dataDirectory);
+    AddInProcessHost();
 }
 
 await builder.Build().RunAsync().ConfigureAwait(false);
 return 0;
+
+// Shared by the two platforms that serve the features in this process rather than forwarding them to an agent.
+void AddInProcessHost()
+{
+    if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+    {
+        return;
+    }
+
+    builder.Services
+        .AddQuicTransport(transport)
+        .AddRemoteDesktopApplication(telemetry)
+        .AddRemoteDesktopMedia()
+        .AddRemoteDesktopHostFeatures(dataDirectory)
+        .AddLocalHostControl(isService: true)
+        .AddHostedService<HostControlServer>();
+}

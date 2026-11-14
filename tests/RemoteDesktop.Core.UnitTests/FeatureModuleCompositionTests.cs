@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using RemoteDesktop.Abstractions.Agent;
 using RemoteDesktop.Abstractions.Audio;
 using RemoteDesktop.Abstractions.Camera;
 using RemoteDesktop.Abstractions.Clipboard;
@@ -8,6 +9,7 @@ using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Abstractions.Terminal;
+using RemoteDesktop.Application;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Camera;
@@ -119,6 +121,30 @@ public class FeatureModuleCompositionTests
     }
 
     /// <summary>
+    /// The background service forwards the channels to the session agent instead of serving them itself. Both hosts
+    /// have to offer the same set under the same permissions: a feature added to only one leaves the service unable
+    /// to serve a channel the in-process host can, and nothing else in the test suite would notice.
+    /// </summary>
+    [Fact]
+    public void The_forwarded_host_serves_the_same_channels_as_the_in_process_host()
+    {
+        using var forwarded = ComposeForwardedHostFeatures();
+        using var inProcess = ComposeHostFeatures();
+
+        var forwardedModules = forwarded.GetServices<IFeatureModule>().ToDictionary(module => module.ChannelType);
+        var inProcessModules = inProcess.GetServices<IFeatureModule>().ToDictionary(module => module.ChannelType);
+
+        Assert.Equal(inProcessModules.Count, forwardedModules.Count);
+        foreach (var (channel, module) in inProcessModules)
+        {
+            Assert.True(
+                forwardedModules.TryGetValue(channel, out var forwardedModule),
+                $"The forwarded host does not serve {channel}.");
+            Assert.Equal(module.RequiredPermission, forwardedModule!.RequiredPermission);
+        }
+    }
+
+    /// <summary>
     /// Composes the four feature calls with the platform ports stubbed, then builds the provider so every module's
     /// own dependencies are validated — a module that lost a constructor dependency fails here, not at first use.
     /// </summary>
@@ -217,5 +243,36 @@ public class FeatureModuleCompositionTests
         public IReadOnlyList<string> GetAvailableShells() => [];
 
         public IPtySession Start(PtyStartOptions options) => throw new NotSupportedException();
+    }
+
+    /// <summary>Composes the background-service host: only the gateway is needed to build the forwarding modules.</summary>
+    private static ServiceProvider ComposeForwardedHostFeatures()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddSingleton<IAgentGateway>(new UnusedAgentGateway());
+
+        return services
+            .AddAgentForwardedDesktop()
+            .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
+    /// <summary>Never called: only ChannelType and RequiredPermission are read in this test.</summary>
+    private sealed class UnusedAgentGateway : IAgentGateway
+    {
+        public AgentState State => new(AgentStatus.Running, DesktopKind.User);
+
+        public event EventHandler? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<Stream> OpenChannelAsync(
+            AgentChannelKind kind,
+            SessionId session,
+            AccessGrant grant,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
