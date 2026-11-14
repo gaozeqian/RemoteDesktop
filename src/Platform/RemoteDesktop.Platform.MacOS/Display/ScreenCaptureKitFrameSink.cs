@@ -84,6 +84,9 @@ internal sealed class ScreenCaptureKitFrameSink : IDisposable
     /// <summary>Takes the waiting frame, or returns <c>null</c> when there is none.</summary>
     public VideoFrame? TryTake() => _frames.TryTake(out var frame) ? frame : null;
 
+    /// <summary>Drops a frame left over from a stream that has been replaced.</summary>
+    public void Clear() => _frames.Clear();
+
     public void Dispose() => _frames.Dispose();
 
     private static unsafe PixelRect[] ReadDirtyRects(RdFrame* frame)

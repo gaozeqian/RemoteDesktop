@@ -81,6 +81,22 @@ public sealed class LatestFrameSinkTests
     }
 
     [Fact]
+    public async Task Clear_drops_the_waiting_frame_and_its_wake_up()
+    {
+        using var sink = new LatestFrameSink<Item>();
+        var item = new Item();
+        Assert.True(sink.TryWrite(item));
+
+        sink.Clear();
+
+        Assert.True(item.Disposed);
+        Assert.False(sink.TryTake(out _));
+
+        // The wake-up the write left behind must be gone too, or the next wait would report a frame Clear released.
+        Assert.False(await sink.WaitAsync(TimeSpan.FromMilliseconds(50), Ct));
+    }
+
+    [Fact]
     public void Disposing_releases_the_waiting_frame()
     {
         var sink = new LatestFrameSink<Item>();

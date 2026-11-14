@@ -109,6 +109,28 @@ internal sealed class LatestFrameSink<T> : IDisposable
         }
     }
 
+    /// <summary>Drops the waiting frame and its wake-up without completing the sink.</summary>
+    /// <remarks>
+    /// A capture that is rebuilt keeps its sink, and the picture queued by the dead stream is not a picture of the
+    /// new one. Consuming the semaphore too matters: otherwise the next wait would report a frame that Clear has
+    /// just released.
+    /// </remarks>
+    public void Clear()
+    {
+        T? pending;
+        lock (_gate)
+        {
+            pending = _pending;
+            _pending = null;
+        }
+
+        pending?.Dispose();
+
+        while (_available.Wait(0))
+        {
+        }
+    }
+
     /// <summary>Stops accepting frames; the waiting frame, if any, can still be taken before the wait reports the end.</summary>
     public void Complete(Exception? error = null)
     {

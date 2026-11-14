@@ -155,6 +155,9 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
             _capture = 0;
         }
 
+        // A picture the dead stream queued is not a picture of the new one; the sink outlives the reset.
+        _sink.Clear();
+
         try
         {
             OpenCapture(ownsSinkOnTimeout: false);
