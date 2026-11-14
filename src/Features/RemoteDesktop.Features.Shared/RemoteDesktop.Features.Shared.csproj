@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- The receive loop both viewers run: it decodes wire frames with the Media supervisors and buffers, so it
+         belongs to the feature layer rather than to either feature. Media cannot host it because Media may not
+         reference the wire protocol; Application cannot because it may not reference Media. -->
+    <ProjectReference Include="..\..\Core\RemoteDesktop.Protocol\RemoteDesktop.Protocol.csproj" />
+    <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

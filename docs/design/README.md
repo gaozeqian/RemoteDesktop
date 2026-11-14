@@ -26,7 +26,7 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features 
 *说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 依赖 `Abstractions` 提供的接口以及 `Domain` 的实体；`Media`
 只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`，
 三个平台还共用与本机 API 无关的 `Platform.Shared`。
-`Features.Desktop` 与 `Features.Camera` 引用 `Media`；宿主（`Client`、`HostService`、`SessionAgent`）除了
+`Features.Desktop` 与 `Features.Camera` 引用 `Media`，并共用 `Features.Shared` 的接收循环；宿主（`Client`、`HostService`、`SessionAgent`）除了
 `Application` 与各 `Features.*`，还直接引用 `Media` 和 `Platform.*`，在启动时把它们接起来。`Signaling` 为了保证
 服务端不引入任何客户端依赖，是一个完全独立的协议包——`Transport` 与 `Server.Shared` 引用它，它不引用任何人。*
 
@@ -67,6 +67,8 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
 * **`Terminal`**: 远程终端（纯文本交互和 VT 序列解析；终端本身由平台层提供——Windows 是 ConPTY，
   macOS 与 Linux 是共享 `Posix` 层的 PTY）。
 * **`Camera`**: 摄像头采集与推送（经被控端授权，使用中被控端有提示）。
+* **`Shared`**: Desktop 与 Camera 共用的接收循环——读线帧、把控制信封交给各自的 viewer、解码、保留最新帧、
+  统计与键帧/停滞恢复。放在 Feature 层而不是 `Media`：`Media` 不能引用线协议，`Application` 不能引用 `Media`。
 
 ### 具体实现层 (Implementations & Platforms)
 

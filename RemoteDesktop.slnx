@@ -16,6 +16,7 @@
   </Folder>
   <Folder Name="/src/Features/">
     <Project Path="src/Features/RemoteDesktop.Features.Desktop/RemoteDesktop.Features.Desktop.csproj" />
+    <Project Path="src/Features/RemoteDesktop.Features.Shared/RemoteDesktop.Features.Shared.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.FileTransfer/RemoteDesktop.Features.FileTransfer.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.Terminal/RemoteDesktop.Features.Terminal.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.Camera/RemoteDesktop.Features.Camera.csproj" />

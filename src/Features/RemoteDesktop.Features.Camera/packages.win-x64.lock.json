@@ -81,6 +81,14 @@
       "remotedesktop.domain": {
         "type": "Project"
       },
+      "remotedesktop.features.shared": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
+          "RemoteDesktop.Media": "[1.0.1, )",
+          "RemoteDesktop.Protocol": "[1.0.1, )"
+        }
+      },
       "remotedesktop.media": {
         "type": "Project",
         "dependencies": {

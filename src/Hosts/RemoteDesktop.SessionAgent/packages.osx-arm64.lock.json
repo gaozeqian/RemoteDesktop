@@ -327,6 +327,7 @@
         "type": "Project",
         "dependencies": {
           "RemoteDesktop.Application": "[1.0.1, )",
+          "RemoteDesktop.Features.Shared": "[1.0.1, )",
           "RemoteDesktop.Media": "[1.0.1, )"
         }
       },
@@ -334,6 +335,7 @@
         "type": "Project",
         "dependencies": {
           "RemoteDesktop.Application": "[1.0.1, )",
+          "RemoteDesktop.Features.Shared": "[1.0.1, )",
           "RemoteDesktop.Media": "[1.0.1, )"
         }
       },
@@ -342,6 +344,14 @@
         "dependencies": {
           "RemoteDesktop.Application": "[1.0.1, )",
           "System.IO.Hashing": "[10.0.14, )"
+        }
+      },
+      "remotedesktop.features.shared": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.14, )",
+          "RemoteDesktop.Media": "[1.0.1, )",
+          "RemoteDesktop.Protocol": "[1.0.1, )"
         }
       },
       "remotedesktop.features.terminal": {
