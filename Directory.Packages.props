@@ -69,7 +69,7 @@
     <!-- The TRX reporter is an MTP extension, not part of the platform: without it the test executables reject the
          TRX-report switch (exit code 5). CI's test summary is built from the TRX files, so every test project needs
          it. Its version tracks Microsoft.Testing.Platform, which xunit.v3 4.x brings in at the same 2.5.x. -->
-    <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.2" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.3" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
   </ItemGroup>
 </Project>
