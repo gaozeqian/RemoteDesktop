@@ -148,7 +148,7 @@ internal sealed class PulseAudioPlayer : IAudioPlayer
                 throw new InvalidOperationException($"Could not reach PulseAudio: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
             }
 
-            WaitForContext();
+            PulseWait.ForContext(_mainloop, _context);
 
             var spec = new Pulse.SampleSpec
             {
@@ -178,53 +178,7 @@ internal sealed class PulseAudioPlayer : IAudioPlayer
                 throw new InvalidOperationException($"Could not start playing: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
             }
 
-            WaitForStream();
+            PulseWait.ForStream(_mainloop, _context, _stream, "playback");
         }
-    }
-
-    private void WaitForContext()
-    {
-        for (var attempt = 0; attempt < 10_000; attempt++)
-        {
-            if (Pulse.Iterate(_mainloop, 0, out _) < 0)
-            {
-                throw new InvalidOperationException($"PulseAudio refused the connection: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
-            }
-
-            switch (Pulse.ContextGetState(_context))
-            {
-                case Pulse.ContextReady:
-                    return;
-                case Pulse.ContextFailed or Pulse.ContextTerminated:
-                    throw new InvalidOperationException($"PulseAudio refused the connection: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
-            }
-
-            Thread.Sleep(1);
-        }
-
-        throw new InvalidOperationException("PulseAudio did not become ready.");
-    }
-
-    private void WaitForStream()
-    {
-        for (var attempt = 0; attempt < 10_000; attempt++)
-        {
-            if (Pulse.Iterate(_mainloop, 0, out _) < 0)
-            {
-                throw new InvalidOperationException($"The playback stream failed: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
-            }
-
-            switch (Pulse.StreamGetState(_stream))
-            {
-                case Pulse.StreamReady:
-                    return;
-                case Pulse.StreamFailed or Pulse.StreamTerminated:
-                    throw new InvalidOperationException($"The playback stream failed: {Pulse.Describe(Pulse.ContextErrno(_context))}.");
-            }
-
-            Thread.Sleep(1);
-        }
-
-        throw new InvalidOperationException($"The playback stream did not become ready; its state stayed {Pulse.StreamGetState(_stream)} ({Pulse.Describe(Pulse.ContextErrno(_context))}).");
     }
 }
