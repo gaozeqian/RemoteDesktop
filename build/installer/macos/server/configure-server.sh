@@ -113,6 +113,15 @@ apply_service_group() {
 
     # A certificate the operator named may live outside the install directory, where this script changes nothing.
     # Root used to be able to read it anywhere; the service account cannot, and Kestrel would restart forever.
+    #
+    # macOS keeps test in /bin; /usr/bin/test is where the GNU systems put it and does not exist here, so naming that
+    # path made sudo answer "command not found" and every probe fail for a reason that had nothing to do with the
+    # account. The postinstall has known this for a while; this copy of the check did not.
+    local test_binary=/bin/test
+    if [ ! -x "$test_binary" ]; then
+        test_binary=/usr/bin/test
+    fi
+
     if [ -x /usr/bin/sudo ]; then
         local settings key path
         for settings in "$INSTALL_DIR/Rendezvous/appsettings.json" "$INSTALL_DIR/Gateway/appsettings.json"; do
@@ -121,7 +130,7 @@ apply_service_group() {
                 path="$(plutil -extract "Kestrel.Certificates.Default.$key" raw "$settings" 2>/dev/null || true)"
                 case "$path" in
                     /*)
-                        if ! /usr/bin/sudo -u "_remotedesktop" /usr/bin/test -r "$path" >/dev/null 2>&1; then
+                        if ! /usr/bin/sudo -u "_remotedesktop" "$test_binary" -r "$path" >/dev/null 2>&1; then
                             echo "  warning: _remotedesktop cannot read $path; give it group read or move the file under $INSTALL_DIR" >&2
                         fi
                         ;;
