@@ -83,6 +83,7 @@ internal sealed partial class WaylandClipboard(
     private ClipboardContent? _owned;
     private IReadOnlyList<string> _available = [];
     private string? _watchedSession;
+    private IDisposable? _subscription;
     private bool _isOwner;
     private bool _disposed;
     private int _listeners;
@@ -253,9 +254,13 @@ internal sealed partial class WaylandClipboard(
     {
         _transfers.Writer.TryComplete();
 
+        IDisposable? subscription;
         lock (_gate)
         {
             _disposed = true;
+            subscription = _subscription;
+            _subscription = null;
+            _watchedSession = null;
             _owned = null;
             _available = [];
             _changed = null;
@@ -264,6 +269,9 @@ internal sealed partial class WaylandClipboard(
             _primed = false;
             _primedSignal.TrySetCanceled();
         }
+
+        // Withdraw the two match rules; the connection is not ours to close, and it may serve the rest of the session.
+        subscription?.Dispose();
     }
 
     /// <summary>
@@ -325,7 +333,7 @@ internal sealed partial class WaylandClipboard(
         }
 
         // Not under the lock: this awaits, and the callbacks it installs take the lock themselves.
-        connection.WatchClipboardAsync(
+        var subscription = connection.WatchClipboardAsync(
             session,
             onOwnerChanged: (types, isOwner) =>
             {
@@ -362,6 +370,22 @@ internal sealed partial class WaylandClipboard(
             // Queued, not answered here — see the note on the queue. This runs on the connection's dispatch thread.
             onTransfer: (mimeType, serial) => _transfers.Writer.TryWrite((mimeType, serial)),
             CancellationToken.None).GetAwaiter().GetResult();
+
+        IDisposable? previous;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                subscription.Dispose();
+                return;
+            }
+
+            previous = _subscription;
+            _subscription = subscription;
+        }
+
+        // A new session replaces the old one's match rules; the old session's signals are no longer read.
+        previous?.Dispose();
     }
 
     /// <summary>Starts the poll that notices selections the portal did not announce.</summary>

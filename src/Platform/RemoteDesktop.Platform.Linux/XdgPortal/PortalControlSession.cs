@@ -46,6 +46,11 @@ internal sealed partial class PortalControlSession(ILoggerFactory loggerFactory,
     private DateTime _nextAttempt;
     private DateTime _lastExplicitRequest;
     private InputAccessStatus _status = new(InputAccessState.NotRequested);
+    private bool _requesting;
+    private bool _disposed;
+
+    /// <summary>Bumped by <see cref="Forget"/>, so an answer that arrives after the grant was dropped is discarded.</summary>
+    private int _generation;
 
     /// <summary>Where the desktop's permission for control stands. Safe to read from any thread.</summary>
     public InputAccessStatus AccessStatus => Volatile.Read(ref _status);
@@ -93,12 +98,26 @@ internal sealed partial class PortalControlSession(ILoggerFactory loggerFactory,
 
     private bool EnsureReady(bool force)
     {
+        int generation;
         lock (_gate)
         {
+            if (_disposed)
+            {
+                return false;
+            }
+
             if (_connection is not null && _session is not null)
             {
                 Publish(InputAccessState.Granted);
                 return true;
+            }
+
+            // One question at a time, and nobody waits behind it. The portal call below does not return until the
+            // person at this machine answers, which can take minutes; holding _gate for that would freeze Forget,
+            // Current and every other input path for the whole time the dialog is up.
+            if (_requesting)
+            {
+                return false;
             }
 
             if (!force && DateTime.UtcNow < _nextAttempt)
@@ -106,47 +125,85 @@ internal sealed partial class PortalControlSession(ILoggerFactory loggerFactory,
                 return false;
             }
 
+            _requesting = true;
+            generation = _generation;
             Publish(InputAccessState.Requesting);
+        }
 
-            try
+        PortalConnection? connection = null;
+        try
+        {
+            LogWillAsk(logger);
+
+            connection = new PortalConnection(loggerFactory.CreateLogger<PortalConnection>());
+            var session = connection
+                .OpenRemoteDesktopAsync(withClipboard: true, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+
+            bool discard;
+            lock (_gate)
             {
-                LogWillAsk(logger);
+                _requesting = false;
 
-                var connection = new PortalConnection(loggerFactory.CreateLogger<PortalConnection>());
-                var session = connection
-                    .OpenRemoteDesktopAsync(withClipboard: true, CancellationToken.None)
-                    .GetAwaiter()
-                    .GetResult();
-
-                _connection = connection;
-                _session = session;
-                _nextAttempt = default;
-                LogGranted(logger);
-                Publish(InputAccessState.Granted);
-                return true;
+                // Forgotten or disposed while the dialog was up: the grant it produced is no longer wanted, and
+                // installing it would resurrect a session the host decided to end.
+                discard = _disposed || generation != _generation;
+                if (!discard)
+                {
+                    _connection = connection;
+                    _session = session;
+                    _nextAttempt = default;
+                    LogGranted(logger);
+                    Publish(InputAccessState.Granted);
+                }
             }
-            catch (PortalException error)
+
+            if (discard)
             {
-                // The desktop answered and said no (or could not show its question). This is an authorization
-                // answer rather than a broken mechanism: retrying is meaningful.
-                //
-                // The backoff starts when the answer arrives, not when the question was asked. A dialog can stay up
-                // for minutes; with the deadline measured from the start, the next input after a late refusal would
-                // immediately ask again and the controller would never see the refusal it is supposed to report.
-                _nextAttempt = DateTime.UtcNow + RetryDelay;
-                LogRefused(logger, error.Message);
-                Publish(InputAccessState.Denied, error.Message);
+                // Outside the lock: closing a D-Bus connection waits for its read loop.
+                connection.Dispose();
                 return false;
             }
-            catch (InvalidOperationException error)
+
+            return true;
+        }
+        catch (PortalException error)
+        {
+            // The desktop answered and said no (or could not show its question). This is an authorization answer
+            // rather than a broken mechanism: retrying is meaningful.
+            return Failed(connection, generation, InputAccessState.Denied, error.Message);
+        }
+        catch (InvalidOperationException error)
+        {
+            // There is no session bus, no app id or no portal to ask. Retrying the same thing will not help until the
+            // environment changes, but the controller is told what is missing rather than nothing.
+            return Failed(connection, generation, InputAccessState.Unavailable, error.Message);
+        }
+    }
+
+    /// <summary>Records a refusal and releases the connection that never became a grant.</summary>
+    /// <remarks>
+    /// The backoff starts when the answer arrives, not when the question was asked. A dialog can stay up for
+    /// minutes; with the deadline measured from the start, the next input after a late refusal would immediately ask
+    /// again and the controller would never see the refusal it is supposed to report.
+    /// </remarks>
+    private bool Failed(PortalConnection? connection, int generation, InputAccessState state, string reason)
+    {
+        connection?.Dispose();
+
+        lock (_gate)
+        {
+            _requesting = false;
+            if (_disposed || generation != _generation)
             {
-                // There is no session bus, no app id or no portal to ask. Retrying the same thing will not help until
-                // the environment changes, but the controller is told what is missing rather than nothing.
-                _nextAttempt = DateTime.UtcNow + RetryDelay;
-                LogRefused(logger, error.Message);
-                Publish(InputAccessState.Unavailable, error.Message);
                 return false;
             }
+
+            _nextAttempt = DateTime.UtcNow + RetryDelay;
+            LogRefused(logger, reason);
+            Publish(state, reason);
+            return false;
         }
     }
 
@@ -185,19 +242,34 @@ internal sealed partial class PortalControlSession(ILoggerFactory loggerFactory,
     /// <summary>Throws the grant away, so the next request asks the desktop again.</summary>
     public void Forget()
     {
+        PortalConnection? connection;
         lock (_gate)
         {
+            // Invalidate an answer that may still be on its way; EnsureReady checks the generation after the dialog.
+            _generation++;
             _session = null;
-            _connection?.Dispose();
+            connection = _connection;
             _connection = null;
             _nextAttempt = default;
 
             // The next input asks the desktop again, and the controller is told that the old answer no longer holds.
             Publish(InputAccessState.NotRequested);
         }
+
+        // Outside the lock: a D-Bus dispose waits for the connection's read loop, and a callback on that loop may
+        // read AccessStatus (which is lock-free) but must never be made to wait for this lock.
+        connection?.Dispose();
     }
 
-    public void Dispose() => Forget();
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            _disposed = true;
+        }
+
+        Forget();
+    }
 
     private PortalConnection ConnectionFor() =>
         _connection ?? throw new InvalidOperationException("Control has not been granted.");
