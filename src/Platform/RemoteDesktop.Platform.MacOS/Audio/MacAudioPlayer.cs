@@ -6,7 +6,7 @@ namespace RemoteDesktop.Platform.MacOS.Audio;
 
 /// <summary>Creates players for the default output device.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class MacAudioPlayerFactory : IAudioPlayerFactory
+internal sealed class MacAudioPlayerFactory : IAudioPlayerFactory
 {
     public IAudioPlayer Create() => new MacAudioPlayer();
 }

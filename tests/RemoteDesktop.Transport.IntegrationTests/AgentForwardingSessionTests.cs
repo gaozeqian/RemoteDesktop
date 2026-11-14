@@ -8,6 +8,7 @@ using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -106,19 +107,37 @@ public sealed class AgentForwardingSessionTests(ServerFixture server) : IClassFi
         Assert.Equal(1, gateway.Generations);
     }
 
+    /// <summary>
+    /// The service refuses a watch-mode input channel before asking the agent; this bypasses the service-side
+    /// dispatcher and asks the agent directly, as a regression there would.
+    /// </summary>
+    [Fact]
+    public async Task The_agent_refuses_a_channel_the_grant_does_not_allow()
+    {
+        using var injector = new RecordingInjector();
+        using var gateway = new InProcessAgentGateway([new InputChannelModule(injector, NullLogger<InputChannelModule>.Instance)]);
+
+        var watch = AccessGrant.Create(SessionMode.View, Permissions.All, Permissions.All);
+        await Assert.ThrowsAsync<AgentRefusedException>(
+            () => gateway.OpenChannelAsync(AgentChannelKind.Input, SessionId.New(), watch, Ct));
+        Assert.Empty(injector.Events);
+
+        // The same request is served when the grant allows it, so the refusal is about the permission and not the channel.
+        await using var stream = await gateway.OpenChannelAsync(
+            AgentChannelKind.Input,
+            SessionId.New(),
+            AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All),
+            Ct);
+        await stream.WriteAsync(new byte[] { 0, 1, 2 }, Ct);
+        await stream.FlushAsync(Ct);
+    }
+
     private static IFeatureModule[] ServiceModules(IAgentGateway gateway) =>
     [
         new AgentForwardingModule(ChannelType.Video, Permissions.ViewScreen, AgentChannelKind.Video, replayFirstFrame: true, gateway, NullLogger<AgentForwardingModule>.Instance),
         new AgentForwardingModule(ChannelType.Input, Permissions.ControlInput, AgentChannelKind.Input, replayFirstFrame: false, gateway, NullLogger<AgentForwardingModule>.Instance),
     ];
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(100, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(30));
 }

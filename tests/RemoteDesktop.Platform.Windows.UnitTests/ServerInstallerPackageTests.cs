@@ -18,36 +18,18 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 [SupportedOSPlatform("windows")]
 public sealed class ServerInstallerPackageTests
 {
-    private static readonly string? Msi = FindInstaller();
+    private static readonly InstallerCandidate Found = InstallerLocator.Find(
+        "RemoteDesktop-Server-Windows-*.msi",
+        "RD_SERVER_INSTALLER_MSI",
+        "No server installer has been built (run build\\installer\\windows\\server\\Build-ServerInstaller.ps1).");
 
-    private static string? FindInstaller()
-    {
-        var given = Environment.GetEnvironmentVariable("RD_SERVER_INSTALLER_MSI");
-        if (!string.IsNullOrEmpty(given))
-        {
-            return File.Exists(given) ? given : null;
-        }
-
-        // The repository root is the folder with the solution file; installers land under its single artifacts/ root
-        // (see CONTRIBUTING.md, "构建产物布局"). The server shares that directory with the client, so the file name is
-        // what tells them apart — hence the prefix rather than a bare "*.msi".
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
-        return artifacts is null || !Directory.Exists(artifacts)
-            ? null
-            : Directory.GetFiles(artifacts, "RemoteDesktop-Server-Windows-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-    }
+    private static string? Msi => Found.Path;
 
     [Fact]
     public void The_package_installs_both_servers_the_ports_they_need_and_the_settings_they_share()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\windows\\server\\Build-ServerInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
 
         using var package = new MsiPackage(Msi!);
 
@@ -426,7 +408,7 @@ public sealed class ServerInstallerPackageTests
     public void The_settings_page_custom_action_is_packed_for_the_installer_that_runs_it()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No server installer has been built (run build\\installer\\server\\Build-ServerInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
 
         using var database = new Database(Msi!, DatabaseOpenMode.ReadOnly);
 

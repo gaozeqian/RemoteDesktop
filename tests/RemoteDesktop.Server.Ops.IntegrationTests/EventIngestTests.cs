@@ -114,6 +114,35 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    /// <summary>
+    /// A JSON array can contain null elements. The old code dereferenced every element while validating, so a signed
+    /// batch of <c>[null]</c> answered 500; it is a bad request, not a server fault.
+    /// </summary>
+    [Fact]
+    public async Task A_null_element_in_a_signed_batch_is_refused()
+    {
+        var response = await SendRawAsync(Encoding.UTF8.GetBytes("[null]"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_overlong_event_id_is_refused()
+    {
+        var correlation = Guid.NewGuid();
+        var batch = new List<OpsEventEnvelope>
+        {
+            Event(OpsEventKinds.SessionRequested, fixture.Now, new { controllerDeviceId = 1u }, correlation) with
+            {
+                EventId = new string('x', 200),
+            },
+        };
+
+        var response = await SendAsync(batch);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     [Fact]
     public async Task A_body_that_does_not_match_its_signature_is_refused()
     {
@@ -184,9 +213,11 @@ public class EventIngestTests(OpsHostFixture fixture) : IClassFixture<OpsHostFix
         Payload = JsonSerializer.Serialize(payload, OpsEventJson.Options),
     };
 
-    private async Task<HttpResponseMessage> SendAsync(List<OpsEventEnvelope> batch)
+    private Task<HttpResponseMessage> SendAsync(List<OpsEventEnvelope> batch) =>
+        SendRawAsync(JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options));
+
+    private async Task<HttpResponseMessage> SendRawAsync(byte[] body)
     {
-        var body = JsonSerializer.SerializeToUtf8Bytes(batch, OpsEventJson.Options);
         var timestamp = fixture.Now.ToUnixTimeSeconds();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest/events")

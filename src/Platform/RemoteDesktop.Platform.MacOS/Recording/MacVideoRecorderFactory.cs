@@ -7,7 +7,7 @@ namespace RemoteDesktop.Platform.MacOS.Recording;
 /// Builds the macOS video recorder, which encodes BGRA frames to an H.264 MP4 through AVAssetWriter.
 /// </summary>
 [SupportedOSPlatform("macos")]
-public sealed class MacVideoRecorderFactory : IVideoRecorderFactory
+internal sealed class MacVideoRecorderFactory : IVideoRecorderFactory
 {
     public IVideoRecorder Create() => new MacVideoRecorder();
 }

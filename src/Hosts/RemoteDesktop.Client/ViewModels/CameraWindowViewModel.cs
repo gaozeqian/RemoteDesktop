@@ -203,7 +203,7 @@ public sealed partial class CameraWindowViewModel : ObservableObject, IAsyncDisp
             // UI thread — an unobserved exception there used to take the whole client down.
             Message = string.Create(
                 CultureInfo.InvariantCulture,
-                $"被控端没有在 {RequestTimeout.Default.TotalSeconds:0} 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。");
+                $"被控端没有在 {CameraViewer.OpenTimeout.TotalSeconds:0} 秒内响应。请在被控端「高级设置 → 安全 → 摄像头权限」中允许后重试。");
             IsStreaming = false;
         }
     }

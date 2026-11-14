@@ -8,7 +8,7 @@ namespace RemoteDesktop.Platform.Windows.Agent;
 /// host service through the agent link, because only a service may raise it.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class AgentInputInjector(IInputInjector inner, AgentLink link) : IInputInjector
+internal sealed class AgentInputInjector(IInputInjector inner, AgentLink link) : IInputInjector
 {
     public void Inject(InputEvent inputEvent)
     {

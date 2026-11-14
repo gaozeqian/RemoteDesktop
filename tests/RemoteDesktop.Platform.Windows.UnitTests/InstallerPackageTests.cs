@@ -28,30 +28,12 @@ public sealed class InstallerPackageTests
     /// <summary>The components that carry a certificate into a machine's trusted roots, in the order they are described above.</summary>
     private static readonly string[] CertificateComponents = ["TrustedRootCert", "TrustedServerCert"];
 
-    private static readonly string? Msi = FindInstaller();
+    private static readonly InstallerCandidate Found = InstallerLocator.Find(
+        "RemoteDesktop-Client-Windows-*.msi",
+        "RD_INSTALLER_MSI",
+        "No client installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
 
-    private static string? FindInstaller()
-    {
-        var given = Environment.GetEnvironmentVariable("RD_INSTALLER_MSI");
-        if (!string.IsNullOrEmpty(given))
-        {
-            return File.Exists(given) ? given : null;
-        }
-
-        // The repository root is the folder with the solution file; installers land under its single artifacts/ root
-        // (see CONTRIBUTING.md, "构建产物布局"). The client and the server share one directory because the role is
-        // already in the file name.
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
-        return artifacts is null || !Directory.Exists(artifacts)
-            ? null
-            : Directory.GetFiles(artifacts, "RemoteDesktop-Client-Windows-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-    }
+    private static string? Msi => Found.Path;
 
     /// <summary>
     /// Settings > Apps reads ARPPRODUCTICON, and the shortcut names the same icon rather than relying on the target
@@ -62,7 +44,7 @@ public sealed class InstallerPackageTests
     public void The_package_carries_the_product_icon()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
         using var package = new MsiPackage(Msi!);
 
         Assert.Contains(package.Rows("SELECT `Name` FROM `Icon`", 1), row => row[0] == "AppIcon");
@@ -78,7 +60,7 @@ public sealed class InstallerPackageTests
     public void The_package_registers_the_connection_scheme()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
         using var package = new MsiPackage(Msi!);
 
         // The Registry table's Root column is 0 = HKCR, 1 = HKCU, 2 = HKLM: the scheme belongs to the installed
@@ -101,7 +83,7 @@ public sealed class InstallerPackageTests
     public void The_package_version_is_the_product_version_in_four_parts()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
         using var package = new MsiPackage(Msi!);
 
         var productVersion = Assert.Single(
@@ -114,7 +96,7 @@ public sealed class InstallerPackageTests
     public void The_package_contains_the_payload_the_service_and_the_machine_setup_actions()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
         using var package = new MsiPackage(Msi!);
 
         // --- payload ---------------------------------------------------------------------------------------------
@@ -373,7 +355,7 @@ public sealed class InstallerPackageTests
     public void The_client_custom_action_is_packed_for_the_installer_that_runs_it()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No installer has been built (run build\\installer\\windows\\client\\Build-ClientInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
 
         using var database = new Database(Msi!, DatabaseOpenMode.ReadOnly);
 

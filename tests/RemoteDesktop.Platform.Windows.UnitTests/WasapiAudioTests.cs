@@ -68,4 +68,21 @@ public class WasapiAudioTests
         await capturer.DisposeAsync();
         await capturer.DisposeAsync();
     }
+
+    /// <summary>Disposal is final; the check runs before the default endpoint is opened.</summary>
+    [Fact]
+    public async Task A_disposed_capturer_refuses_a_later_capture()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), WindowsOnly);
+
+        var capturer = new WasapiLoopbackAudioCapturer();
+        await capturer.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+        {
+            await foreach (var _ in capturer.CaptureAsync(TestContext.Current.CancellationToken))
+            {
+            }
+        });
+    }
 }

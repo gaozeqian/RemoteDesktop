@@ -2,6 +2,7 @@ using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Transport;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.E2E.IntegrationTests;
 
@@ -277,13 +278,6 @@ public sealed class SessionE2ETests(EndToEndClusterFixture cluster) : IClassFixt
             "the host to register the controller's session",
             cancellationToken);
 
-    private static async Task WaitForAsync(Func<bool> condition, string what, CancellationToken cancellationToken)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, cancellationToken);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what, CancellationToken cancellationToken) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(50), cancellationToken);
 }

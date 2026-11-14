@@ -8,7 +8,7 @@ namespace RemoteDesktop.Platform.Windows.MediaFoundation;
 /// AMF), the other the software ones (Microsoft H.264 encoder), giving hardware first with a built-in fallback.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class MediaFoundationH264EncoderFactory : IVideoEncoderFactory
+internal sealed class MediaFoundationH264EncoderFactory : IVideoEncoderFactory
 {
     private readonly uint _flags;
     private readonly Lazy<List<MftDescriptor>> _transforms;
@@ -73,7 +73,7 @@ public sealed class MediaFoundationH264EncoderFactory : IVideoEncoderFactory
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class MediaFoundationH264DecoderFactory : IVideoDecoderFactory
+internal sealed class MediaFoundationH264DecoderFactory : IVideoDecoderFactory
 {
     private const uint Flags = MfGuids.EnumSyncMft | MfGuids.EnumSortAndFilter;
 

@@ -31,7 +31,7 @@ namespace RemoteDesktop.Platform.Linux.Display;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PipeWireScreenCapturer : IScreenCapturer
+internal sealed partial class PipeWireScreenCapturer : IScreenCapturer
 {
     /// <summary>One frame. Two would be a backlog on a link that is already behind.</summary>
     private const int QueueLength = 1;

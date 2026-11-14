@@ -38,6 +38,14 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     private readonly Func<uint> _allocateId;
     private readonly ConcurrentDictionary<string, uint> _cache = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The most fingerprints kept in <see cref="_cache"/>. A public server sees a different device every time one is
+    /// installed, and without a ceiling the cache would grow for the life of the process. When the cap is reached the
+    /// cache is dropped wholesale: it is an optimisation, and re-reading a fingerprint from the database costs one
+    /// query, while unbounded memory costs the process.
+    /// </summary>
+    internal int CacheCapacity { get; set; } = 100_000;
+
     /// <summary>When (Unix milliseconds) each fingerprint's <c>last_seen_at</c> was last written, to throttle the touches.</summary>
     private readonly ConcurrentDictionary<string, long> _lastTouched = new(StringComparer.Ordinal);
     private readonly TimeProvider _time;
@@ -82,13 +90,12 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
             return;
         }
 
+        _disposed = true;
         if (disposing)
         {
             _writeLock.Dispose();
             _dataSource.Dispose();
         }
-
-        _disposed = true;
     }
 
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
@@ -249,7 +256,7 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         // 1. The device may already have an id from an earlier run — this is the reconnect after a restart.
         if (await SelectDeviceIdAsync(fingerprint, cancellationToken).ConfigureAwait(false) is { } known)
         {
-            _cache[fingerprint] = known;
+            Remember(fingerprint, known);
             Touch(fingerprint);
             return new DeviceRegistration(known, Created: false);
         }
@@ -263,7 +270,7 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
             {
                 if (await InsertAsync(fingerprint, allocated, cancellationToken).ConfigureAwait(false))
                 {
-                    _cache[fingerprint] = allocated;
+                    Remember(fingerprint, allocated);
                     LogAllocated(_logger, allocated, fingerprint);
                     return new DeviceRegistration(allocated, Created: true);
                 }
@@ -273,7 +280,7 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
                 // so reading it back is the answer rather than another attempt.
                 if (await SelectDeviceIdAsync(fingerprint, cancellationToken).ConfigureAwait(false) is { } raced)
                 {
-                    _cache[fingerprint] = raced;
+                    Remember(fingerprint, raced);
                     return new DeviceRegistration(raced, Created: false);
                 }
             }
@@ -285,6 +292,20 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         }
 
         throw new InvalidOperationException("Failed to allocate a unique device id after maximum attempts.");
+    }
+
+    /// <summary>How many fingerprints the cache holds. Exposed so the cap can be asserted without reflection.</summary>
+    internal int CachedDeviceCount => _cache.Count;
+
+    private void Remember(string fingerprint, uint deviceId)
+    {
+        if (_cache.Count >= CacheCapacity)
+        {
+            _cache.Clear();
+            _lastTouched.Clear();
+        }
+
+        _cache[fingerprint] = deviceId;
     }
 
     private async Task<uint?> SelectDeviceIdAsync(string fingerprint, CancellationToken cancellationToken)
@@ -340,6 +361,11 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
     /// </remarks>
     private void Touch(string fingerprint)
     {
+        if (Volatile.Read(ref _disposed))
+        {
+            return;
+        }
+
         var now = _time.GetUtcNow().ToUnixTimeMilliseconds();
         if (!ReserveTouch(fingerprint, now))
         {
@@ -408,7 +434,14 @@ public abstract partial class RelationalDeviceRegistry : IDeviceRegistryStore, I
         {
             if (holdsLock)
             {
-                _writeLock.Release();
+                try
+                {
+                    _writeLock.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The registry was disposed while this best-effort touch was in flight.
+                }
             }
         }
     }

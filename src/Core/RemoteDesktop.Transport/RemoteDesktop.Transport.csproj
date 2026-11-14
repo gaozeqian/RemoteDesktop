@@ -7,6 +7,10 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The request-id validation test sends a caller-chosen id through the real client rather than a raw socket. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
+  </ItemGroup>
   <!-- MsQuic is what System.Net.Quic talks to. Windows gets msquic.dll from the .NET runtime pack; macOS gets
        nothing, so the application carries its own. native/macos/fetch-libmsquic.sh stages a self-contained set into
        artifacts/lib/macos, and putting it here means every project that references this one — the hosts and the

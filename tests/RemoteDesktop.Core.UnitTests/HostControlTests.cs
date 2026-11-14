@@ -149,7 +149,7 @@ public class HostControlTests
     }
 
     [Fact]
-    public async Task Garbage_and_oversized_requests_are_ignored_without_hurting_the_server()
+    public async Task Garbage_is_dropped_and_an_unknown_command_is_answered_with_an_error_without_hurting_the_server()
     {
         var control = new FakeHostControl();
         var pipeName = $"rd-hostcontrol-{Guid.NewGuid():N}";
@@ -159,8 +159,9 @@ public class HostControlTests
         // No newline and too long: the server hangs up (possibly while the client is still writing).
         Assert.False(await GetsAnswerAsync(pipeName, new byte[HostControlProtocol.MaxLineBytes + 10].Select(_ => (byte)'x').ToArray()));
 
-        // A command nobody defined: no answer either.
-        Assert.False(await GetsAnswerAsync(pipeName, "{\"command\":\"format-disk\"}\n"u8.ToArray()));
+        // A command nobody defined: an error answer, not silence. Silence would leave the caller waiting for
+        // its own timeout and would make a no-op indistinguishable from success.
+        Assert.True(await GetsAnswerAsync(pipeName, "{\"command\":\"format-disk\"}\n"u8.ToArray()));
 
         Assert.Equal(123456789, (await new PipeHostControl(pipeName, Environment.ProcessPath).GetStatusAsync(Ct)).DeviceId); // still serving
         Assert.Equal(0, control.Rotations);

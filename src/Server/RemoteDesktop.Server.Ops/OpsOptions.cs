@@ -91,6 +91,17 @@ public sealed class OpsOptions
     /// <summary>How much history the console keeps in its own database.</summary>
     public RetentionSettings Retention { get; set; } = new();
 
+    /// <summary>
+    /// Whether the 10-minute rollup task runs.
+    /// </summary>
+    /// <remarks>
+    /// Off by default because nothing in the product reads <c>ops_metric_rollup</c> yet: writing 1-minute and 1-hour
+    /// buckets every ten minutes is pure cost until a trend view consumes them. The code stays; a deployment that
+    /// adds such a view turns this on together with <see cref="RetentionSettings.RollupDays"/> (for example 365) so
+    /// the buckets are retained long enough to be read.
+    /// </remarks>
+    public bool RollupEnabled { get; set; }
+
     /// <summary>Refuses settings that cannot work, before the host starts serving.</summary>
     /// <exception cref="InvalidOperationException">A value cannot be used; the message names the key.</exception>
     public void Validate()
@@ -178,10 +189,11 @@ public sealed class RetentionSettings
     public int SampleDays { get; set; } = 30;
 
     /// <summary>
-    /// Downsampled one-minute and one-hour metric buckets. This is intentionally longer than raw samples so future
-    /// trend views can retain useful history without retaining every ten-second scrape.
+    /// Downsampled one-minute and one-hour metric buckets. Zero by default: <see cref="OpsOptions.RollupEnabled"/> is
+    /// also off, so there is nothing new to retain. Enable both together when a trend view reads the buckets; the
+    /// window is then usually longer than raw samples so useful history survives without every ten-second scrape.
     /// </summary>
-    public int RollupDays { get; set; } = 365;
+    public int RollupDays { get; set; }
 
     /// <summary>Ingested events. A session's timeline is useful while the session list still shows it.</summary>
     public int EventDays { get; set; } = 30;

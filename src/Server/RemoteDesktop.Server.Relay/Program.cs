@@ -1,23 +1,12 @@
 using System.Net;
 using Microsoft.Extensions.Options;
+using RemoteDesktop.Server.Hosting;
 using RemoteDesktop.Server.Relay;
 using RemoteDesktop.Server.Shared;
 
 // Relay server: pairs peers by relay ticket and forwards their UDP datagrams without decrypting them. The HTTP face
 // exists only for monitoring — a relay that could not be scraped was the one blind spot in the console's first plan.
-var builder = WebApplication.CreateBuilder(args);
-
-// See the note in the rendezvous entry point: ProgramData carries the live settings on Windows.
-ServerSetup.AddConfigurationSource(builder.Configuration, ServerSetup.RelayFolder);
-
-if (OperatingSystem.IsWindows())
-{
-    builder.Host.UseWindowsService(options => options.ServiceName = "RemoteDesktopRelay");
-}
-else if (OperatingSystem.IsLinux())
-{
-    builder.Host.UseSystemd();
-}
+var builder = ServerHost.CreateBuilder(args, ServerSetup.RelayFolder, "RemoteDesktopRelay");
 
 builder.Services.Configure<RelayOptions>(builder.Configuration.GetSection(RelayOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -56,21 +45,14 @@ var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-app.MapGet("/metrics", (HttpContext context, UdpRelay relay, IOptions<RelayOptions> options) =>
-    NodeTokenGuard.IsAuthorized(
-        context.Request.Headers.Authorization.ToString(),
-        options.Value.NodeToken,
-        context.Connection.RemoteIpAddress)
-        ? Results.Text(RelayMetrics.Render(relay.Snapshot()), RelayMetrics.ContentType)
-        : Results.Unauthorized());
+app.MapGet("/metrics", (UdpRelay relay) =>
+        Results.Text(RelayMetrics.Render(relay.Snapshot()), RelayMetrics.ContentType))
+    .RequireNodeToken(context =>
+        context.RequestServices.GetRequiredService<IOptions<RelayOptions>>().Value.NodeToken);
 
-app.MapGet("/internal/v1/info", (HttpContext context, NodeInfo info, IOptions<RelayOptions> options) =>
-    NodeTokenGuard.IsAuthorized(
-        context.Request.Headers.Authorization.ToString(),
-        options.Value.NodeToken,
-        context.Connection.RemoteIpAddress)
-        ? Results.Ok(info)
-        : Results.Unauthorized());
+app.MapGet("/internal/v1/info", (NodeInfo info) => Results.Ok(info))
+    .RequireNodeToken(context =>
+        context.RequestServices.GetRequiredService<IOptions<RelayOptions>>().Value.NodeToken);
 
 await app.RunAsync().ConfigureAwait(false);
 

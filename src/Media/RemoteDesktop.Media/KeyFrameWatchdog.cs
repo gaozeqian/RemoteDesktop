@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace RemoteDesktop.Media;
 
 /// <summary>
@@ -54,7 +52,7 @@ public static class KeyFrameWatchdog
                     continue;
                 }
 
-                var now = Stopwatch.GetTimestamp();
+                var now = time.GetTimestamp();
                 var quiet = quietFor(now);
                 if (quiet < VideoDecoderSupervisor.StallTimeout)
                 {
@@ -72,7 +70,7 @@ public static class KeyFrameWatchdog
                 if (waitingForKeyFrame())
                 {
                     // Nothing decodable has ever arrived: ask at a steady rate, there is no picture to lose.
-                    if (askedAt == 0 || Stopwatch.GetElapsedTime(askedAt, now) >= KeyFrameRetry)
+                    if (askedAt == 0 || time.GetElapsedTime(askedAt, now) >= KeyFrameRetry)
                     {
                         await requestKeyFrame(cancellationToken).ConfigureAwait(false);
                         askedAt = now;
@@ -83,13 +81,13 @@ public static class KeyFrameWatchdog
                 }
 
                 var answered = frameNumber() != framesWhenAsked;
-                if (!answered && askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) >= StallAlarm)
+                if (!answered && askedAt != 0 && time.GetElapsedTime(askedAt, now) >= StallAlarm)
                 {
                     // Asked and unanswered: the host has nothing to send, so what is on screen is stale.
                     stalled(true);
                 }
 
-                if (askedAt != 0 && Stopwatch.GetElapsedTime(askedAt, now) < backoff)
+                if (askedAt != 0 && time.GetElapsedTime(askedAt, now) < backoff)
                 {
                     continue;
                 }

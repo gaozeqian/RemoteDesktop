@@ -5,7 +5,8 @@ namespace RemoteDesktop.Application.Hosting;
 /// <summary>UI side of the background service's control pipe.</summary>
 public sealed class PipeHostControl(
     string pipeName = HostControlProtocol.PipeName,
-    string? windowsServicePath = null) : IHostControl
+    string? windowsServicePath = null,
+    string? windowsServiceName = null) : IHostControl
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(800);
 
@@ -23,11 +24,13 @@ public sealed class PipeHostControl(
     public static async Task<bool> IsAvailableAsync(
         string pipeName,
         CancellationToken cancellationToken,
-        string? windowsServicePath = null)
+        string? windowsServicePath = null,
+        string? windowsServiceName = null)
     {
         try
         {
-            await new PipeHostControl(pipeName, windowsServicePath).GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            await new PipeHostControl(pipeName, windowsServicePath, windowsServiceName)
+                .GetStatusAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
         // A probe answers a question and must not take the caller down with it: the identity check needs the
@@ -95,17 +98,17 @@ public sealed class PipeHostControl(
         await RequestAsync<HostStatus>(HostControlProtocol.StatusCommand, argument: null, cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidDataException("The host service sent no status.");
 
-    public async Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.RotateCommand, argument: null, cancellationToken).ConfigureAwait(false);
+    public Task RotateTemporaryPasswordAsync(CancellationToken cancellationToken) =>
+        RunAsync(HostControlProtocol.RotateCommand, argument: null, cancellationToken);
 
-    public async Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.DowngradeCommand, sessionId, cancellationToken).ConfigureAwait(false);
+    public Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        RunAsync(HostControlProtocol.DowngradeCommand, sessionId, cancellationToken);
 
-    public async Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.DisconnectCommand, sessionId, cancellationToken).ConfigureAwait(false);
+    public Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        RunAsync(HostControlProtocol.DisconnectCommand, sessionId, cancellationToken);
 
-    public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) =>
-        _ = await RequestAsync<HostControlRequest>(HostControlProtocol.CameraStopCommand, sessionId, cancellationToken).ConfigureAwait(false);
+    public Task StopCameraAsync(string sessionId, CancellationToken cancellationToken) =>
+        RunAsync(HostControlProtocol.CameraStopCommand, sessionId, cancellationToken);
 
     public async Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
     {
@@ -144,6 +147,24 @@ public sealed class PipeHostControl(
         }
     }
 
+    /// <summary>
+    /// Sends a command and treats the service's answer as part of the operation: a missing answer or an "error"
+    /// answer is a failure, not a successful no-op.
+    /// </summary>
+    private async Task RunAsync(string command, string? argument, CancellationToken cancellationToken)
+    {
+        var answer = await RequestAsync<HostControlRequest>(command, argument, cancellationToken).ConfigureAwait(false);
+        if (answer is null)
+        {
+            throw new InvalidDataException($"The host service sent no answer to the {command} command.");
+        }
+
+        if (string.Equals(answer.Command, HostControlProtocol.ErrorCommand, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(answer.Argument ?? $"The host service refused the {command} command.");
+        }
+    }
+
     private async Task<T?> RequestAsync<T>(string command, string? argument, CancellationToken cancellationToken)
     {
         // The address is a named pipe on Windows and a Unix domain socket elsewhere; see HostControlEndpoint for why
@@ -158,7 +179,8 @@ public sealed class PipeHostControl(
             {
                 WindowsPipeServerIdentity.EnsureExpected(
                     pipe,
-                    windowsServicePath ?? Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe"));
+                    windowsServicePath ?? Path.Combine(AppContext.BaseDirectory, "RemoteDesktop.HostService.exe"),
+                    windowsServiceName);
             }
 
             await HostControlProtocol.WriteLineAsync(stream, new HostControlRequest(command, argument), cancellationToken).ConfigureAwait(false);

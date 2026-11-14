@@ -46,7 +46,7 @@ public readonly record struct CompositorMonitor(
 /// Conversions between the two coordinate systems above, kept in one place so that the arithmetic is done once and
 /// can be checked against numbers measured on a real desktop.
 /// </summary>
-public static class DisplayGeometry
+internal static class DisplayGeometry
 {
     /// <summary>
     /// The rectangle enclosing every monitor, in compositor coordinates.

@@ -96,5 +96,19 @@ public static class OpsMigrations
         // deployment-wide Ops:NodeToken, which is what every existing row gets: an upgrade must not silently stop
         // authenticating against machines nobody has touched.
         new(7, "ALTER TABLE ops_node ADD COLUMN token TEXT;"),
+
+        // 8 — the incremental rollup filters by ts and looks up the newest bucket by (step_seconds, bucket). Neither
+        // predicate is served by the baseline indexes: the sample table's primary key starts with node_id/metric, and
+        // the rollup table's starts with node_id/metric/step_seconds. Without these the range filter scans the whole
+        // retention window, which is the cost the incremental pass exists to avoid.
+        new(8, """
+            CREATE INDEX IF NOT EXISTS ix_ops_metric_sample_ts ON ops_metric_sample (ts);
+            CREATE INDEX IF NOT EXISTS ix_ops_metric_rollup_step_bucket ON ops_metric_rollup (step_seconds, bucket);
+            """),
+
+        // 9 — retention deletes resolved alerts by state and resolve time. The baseline index leads with opened_at,
+        // so the resolved_at branch of that predicate had no index of its own; the OR the query now uses is served
+        // by this index and by the existing (state, opened_at) one.
+        new(9, "CREATE INDEX IF NOT EXISTS ix_ops_alert_resolved ON ops_alert (state, resolved_at);"),
     ];
 }

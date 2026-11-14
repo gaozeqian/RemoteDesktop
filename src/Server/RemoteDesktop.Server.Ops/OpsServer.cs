@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using RemoteDesktop.Server.Ops.Auth;
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.Server.Ops.Core.Security;
 using RemoteDesktop.Server.Ops.Storage;
 using RemoteDesktop.Server.Shared;
 
@@ -55,6 +56,9 @@ public static class OpsServer
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(OpsStore.Open(options.Database));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton(sp => new OpsHealthProbe(
+            sp.GetRequiredService<OpsStore>().ProbeAsync,
+            sp.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton<LoginThrottle>();
         builder.Services.AddSingleton<AddressThrottle>();
         builder.Services.AddSingleton<ChallengeStore>();
@@ -98,7 +102,13 @@ public static class OpsServer
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricScraper>());
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddHostedService<ActionRecoveryService>();
-        builder.Services.AddHostedService<RollupMaintenanceService>();
+
+        // Off unless a deployment turns it on: nothing reads ops_metric_rollup yet, so the default run is pure
+        // cost. The service and its tests stay; the switch is what keeps a new console from writing buckets forever.
+        if (options.RollupEnabled)
+        {
+            builder.Services.AddHostedService<RollupMaintenanceService>();
+        }
 
         builder.Services
             .AddAuthentication(OpsAuth.Scheme)

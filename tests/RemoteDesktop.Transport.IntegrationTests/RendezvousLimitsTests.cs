@@ -7,6 +7,8 @@ using RemoteDesktop.Server.Rendezvous;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Identity;
+using RemoteDesktop.Transport.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -21,7 +23,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void A_burst_is_spent_and_then_refused()
     {
-        var bucket = new KeyedTokenBucket<string>(3, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(3, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.True(bucket.TryTake("one"));
@@ -35,7 +37,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Tokens_come_back_one_refill_at_a_time()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var bucket = new KeyedTokenBucket<string>(2, Refill, time);
 
         Assert.True(bucket.TryTake("one"));
@@ -54,7 +56,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void A_refunded_token_can_be_spent_again()
     {
-        var bucket = new KeyedTokenBucket<string>(1, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(1, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.False(bucket.TryTake("one"));
@@ -66,7 +68,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Refunding_cannot_bank_credit_beyond_a_full_burst()
     {
-        var bucket = new KeyedTokenBucket<string>(2, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(2, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         bucket.Refund("one");
         bucket.Refund("one");
@@ -79,7 +81,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Forgetting_a_key_gives_it_a_full_burst_back()
     {
-        var bucket = new KeyedTokenBucket<string>(1, Refill, new FakeTimeProvider());
+        var bucket = new KeyedTokenBucket<string>(1, Refill, new TestClock(DateTimeOffset.UnixEpoch));
 
         Assert.True(bucket.TryTake("one"));
         Assert.False(bucket.TryTake("one"));
@@ -94,7 +96,7 @@ public class KeyedTokenBucketTests
     [Fact]
     public void Keys_nobody_has_touched_for_a_while_are_dropped()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var bucket = new KeyedTokenBucket<string>(1, Refill, time);
 
         for (var i = 0; i < 100; i++)
@@ -309,4 +311,45 @@ public class RendezvousLimitTests
         var second = await Assert.ThrowsAsync<PeerConnectException>(() => device.Rendezvous.RequestConnectionAsync(offline, [], Ct));
         Assert.Equal(PeerConnectFailure.Rejected, second.Failure);
     }
+
+    /// <summary>
+    /// The request id is a client-chosen string kept as a dictionary key and echoed back; clients mint a 32-character
+    /// GUID, and anything else is refused before it can enter the pending table.
+    /// </summary>
+    [Fact]
+    public Task A_request_id_that_is_not_a_guid_is_refused() => AssertInvalidRequestIdAsync("not-a-guid");
+
+    [Fact]
+    public Task A_request_id_that_is_longer_than_128_characters_is_refused() =>
+        AssertInvalidRequestIdAsync(new string('a', 129));
+
+    private static async Task AssertInvalidRequestIdAsync(string requestId)
+    {
+        await using var server = await TestRendezvous.StartAsync();
+        await using var host = await TestDevice.StartAsync(TestRendezvous.SignalingUri(server));
+        await using var controller = await TestDevice.StartAsync(TestRendezvous.SignalingUri(server));
+
+        // The host is online, so the only reason left to refuse is the id itself. The concrete client exposes the
+        // caller-chosen-id overload; the interface deliberately does not.
+        var client = Assert.IsType<RendezvousClient>(controller.Rendezvous);
+        var error = await Assert.ThrowsAsync<PeerConnectException>(
+            () => client.RequestConnectionAsync(requestId, host.Id, [], Ct));
+
+        Assert.Equal(PeerConnectFailure.Rejected, error.Failure);
+    }
+}
+
+/// <summary>
+/// The two values that are not collection limits but cause the same class of failure when they are not positive:
+/// the fire-and-forget expiry task, and every relay ticket.
+/// </summary>
+public class RendezvousOptionsValidationTests
+{
+    [Fact]
+    public void A_zero_connect_timeout_is_refused() =>
+        Assert.Throws<InvalidOperationException>(() => new RendezvousOptions { ConnectTimeout = TimeSpan.Zero }.Validate());
+
+    [Fact]
+    public void A_negative_ticket_lifetime_is_refused() =>
+        Assert.Throws<InvalidOperationException>(() => new RendezvousOptions { RelayTicketLifetime = TimeSpan.FromSeconds(-1) }.Validate());
 }

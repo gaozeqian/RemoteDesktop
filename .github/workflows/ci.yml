@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# A push to an open pull request starts a new run whose predecessor is already obsolete. Cancel the old one; never
+# cancel a run for a branch (a release branch or master) where the result is the record of what was tested.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
 
   build-windows:
@@ -22,6 +28,8 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
       - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
       # THIRD-PARTY-NOTICES.md is generated from the dependency graph and then committed, because it ships inside the
@@ -37,6 +45,11 @@ jobs:
         shell: pwsh
         run: |
           pwsh -File build/tools/Export-ThirdPartyNotices.ps1
+          # A generator that failed (NuGet unavailable, a script error) must fail the step even when the committed
+          # file happens to be unchanged; the git diff below would otherwise return 0 and hide it.
+          if ($LASTEXITCODE -ne 0) {
+              throw 'Export-ThirdPartyNotices.ps1 failed; the notices were not verified.'
+          }
 
           # Test $LASTEXITCODE rather than the command's output: --quiet writes nothing, so PowerShell would evaluate
           # the call to an empty value and this step would fail on every pull request instead of on a stale file.
@@ -49,7 +62,8 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File build/tools/Export-ServerConfigurationGuides.ps1 -Check
       # The build reports what is wrong with the packages a project references directly; this walks the whole graph,
-      # including everything those packages drag in. A known-vulnerable dependency fails the build.
+      # including everything those packages drag in. A known-vulnerable dependency fails the build. It reads the same
+      # dependency graph on every platform, so one job is enough; every platform job still restores in locked mode.
       - uses: ./.github/actions/audit-packages
       - uses: ./.github/actions/run-test-suite
         with:
@@ -111,12 +125,13 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
       # libmsquic, the FFmpeg and PulseAudio libraries the platform bindings load by soname, and a sound server with
       # a sink for the audio tests to talk to. Shared with release.yml's Linux job; the action says why each is there.
       - uses: ./.github/actions/prepare-linux-tests
       - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
-      - uses: ./.github/actions/audit-packages
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-linux
@@ -175,6 +190,8 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
       # macOS gets no MsQuic from the .NET runtime pack, so nothing that touches the transport can even load without
       # this. It stages artifacts/lib/macos, and RemoteDesktop.Transport copies that directory next to every
       # executable that references it -- the test hosts included. It has to run before the build, because that copy is
@@ -183,7 +200,6 @@ jobs:
         run: ./native/macos/fetch-libmsquic.sh
       - run: dotnet restore RemoteDesktop.slnx --locked-mode
       - run: dotnet build RemoteDesktop.slnx --no-restore -c Release
-      - uses: ./.github/actions/audit-packages
       - uses: ./.github/actions/run-test-suite
         with:
           artifact-name: test-results-macos
@@ -258,10 +274,7 @@ jobs:
       TLS_CERT_PASSWORD: ci-not-a-secret
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
-        with:
-          global-json-file: global.json
-      - uses: ./.github/actions/audit-packages
+      # No .NET SDK: the compose files, the images, the Caddyfile and the PowerShell audit script do not need one.
       - name: Check the compose files parse
         run: |
           docker compose -f build/docker/docker-compose.yml config >/dev/null
@@ -409,6 +422,21 @@ jobs:
           docker rm -f rd-rendezvous rd-relay rd-ops rd-gateway || true
           docker network rm rd-ops-ci || true
           docker volume rm rd-gateway-ci || true
+
+  lock-files:
+    # Every dependency change has to update packages.<rid>.lock.json for win-x64, linux-x64 and osx-arm64.
+    # The packaging jobs restore in locked mode, so a stale RID lock only fails after the long package build;
+    # this job runs the same restore across the whole src/ tree without building or writing anything.
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
+      - name: Check the per-RID lock files are current
+        run: pwsh -NoProfile -File build/tools/Update-LockFiles.ps1 -Check
 
   docs:
     # Documentation *formatting*: blank lines around headings and lists, indentation, ``` fences tagged with a

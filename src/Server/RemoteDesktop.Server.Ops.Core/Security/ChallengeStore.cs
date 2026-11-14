@@ -1,6 +1,4 @@
-using RemoteDesktop.Server.Ops.Core;
-
-namespace RemoteDesktop.Server.Ops.Auth;
+namespace RemoteDesktop.Server.Ops.Core.Security;
 
 /// <summary>
 /// Password-verified, TOTP-pending challenges. In memory: they live five minutes, and a restart cancelling every
@@ -25,6 +23,10 @@ public sealed class ChallengeStore(TimeProvider time)
             var id = SessionToken.Create();
             expiresAt = time.GetUtcNow() + Lifetime;
             _byId[id] = new Entry { UserId = userId, ExpiresAt = expiresAt };
+
+            // Prune only sees the old count; adding this one may put the store one over. Trim after the insert and
+            // keep the challenge that was just created: it is the one the caller is about to return an id for.
+            TrimToCapacity(keep: id);
             return id;
         }
     }
@@ -77,6 +79,18 @@ public sealed class ChallengeStore(TimeProvider time)
         }
     }
 
+    /// <summary>How many challenges are pending. For diagnostics and tests; the cap is the observable invariant.</summary>
+    internal int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _byId.Count;
+            }
+        }
+    }
+
     /// <summary>Consumes a challenge after a successful code.</summary>
     public void Remove(string id)
     {
@@ -113,11 +127,21 @@ public sealed class ChallengeStore(TimeProvider time)
             }
         }
 
-        // An attacker who can start sign-ins faster than they expire should not grow this without bound. Dropping the
-        // oldest pending challenges only penalises sign-ins already half-finished, never a completed one.
+        TrimToCapacity();
+    }
+
+    /// <summary>
+    /// An attacker who can start sign-ins faster than they expire should not grow this without bound. Dropping the
+    /// oldest pending challenges only penalises sign-ins already half-finished, never a completed one.
+    /// </summary>
+    /// <param name="keep">The challenge just created, which must survive the trim so its id can be handed back.</param>
+    private void TrimToCapacity(string? keep = null)
+    {
         while (_byId.Count > MaxChallenges)
         {
-            var oldest = _byId.MinBy(pair => pair.Value.ExpiresAt).Key;
+            var oldest = _byId.Where(pair => !string.Equals(pair.Key, keep, StringComparison.Ordinal))
+                .MinBy(pair => pair.Value.ExpiresAt)
+                .Key;
             _byId.Remove(oldest);
         }
     }

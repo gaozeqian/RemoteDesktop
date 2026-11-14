@@ -25,6 +25,13 @@ public static partial class IngestEndpoints
     private const int MaxEvents = 500;
     private const int MaxSkewSeconds = 60;
 
+    // The envelope is signed by a node, but a compromised or buggy node can still send arbitrarily long strings.
+    // These are the fields that become dictionary keys, labels and indexes; the payload is deliberately not parsed.
+    private const int MaxEventIdLength = 128;
+    private const int MaxNodeLength = 128;
+    private const int MaxKindLength = 64;
+    private const int MaxCorrelationIdLength = 128;
+
     /// <summary>How old an event may be. A retrying node is minutes behind, not a week.</summary>
     private static readonly TimeSpan MaxEventAge = TimeSpan.FromDays(7);
 
@@ -119,9 +126,15 @@ public static partial class IngestEndpoints
             var earliest = now - MaxEventAge;
             var latest = now + MaxEventFuture;
             var invalid = events.FindIndex(envelope =>
-                string.IsNullOrWhiteSpace(envelope.EventId)
+                envelope is null
+                || string.IsNullOrWhiteSpace(envelope.EventId)
+                || envelope.EventId.Length > MaxEventIdLength
+                || string.IsNullOrWhiteSpace(envelope.Node)
+                || envelope.Node.Length > MaxNodeLength
                 || string.IsNullOrWhiteSpace(envelope.Kind)
+                || envelope.Kind.Length > MaxKindLength
                 || string.IsNullOrWhiteSpace(envelope.CorrelationId)
+                || envelope.CorrelationId.Length > MaxCorrelationIdLength
                 || envelope.V != 1
                 || envelope.OccurredAt < earliest
                 || envelope.OccurredAt > latest);

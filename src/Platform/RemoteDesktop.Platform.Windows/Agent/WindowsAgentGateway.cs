@@ -45,7 +45,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
 
     public event EventHandler? StateChanged;
 
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, AccessGrant grant, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + options.ChannelWait;
         while (true)
@@ -54,7 +54,7 @@ public sealed partial class WindowsAgentGateway(AgentGatewayOptions options, ILo
             {
                 try
                 {
-                    return await connection.OpenChannelAsync(kind, session, cancellationToken).ConfigureAwait(false);
+                    return await connection.OpenChannelAsync(kind, session, grant, cancellationToken).ConfigureAwait(false);
                 }
                 catch (AgentUnavailableException) when (DateTime.UtcNow < deadline)
                 {

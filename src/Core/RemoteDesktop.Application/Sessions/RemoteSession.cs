@@ -133,10 +133,14 @@ public sealed class RemoteSession : IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
-
-        RaiseClosed();
-        _stop.Dispose();
-        _writeLock.Dispose();
+        finally
+        {
+            // The handles are released even when a loop faulted: a session that ends must not keep its stop source
+            // and write lock alive, and its subscribers must still be told that it closed.
+            RaiseClosed();
+            _stop.Dispose();
+            _writeLock.Dispose();
+        }
     }
 
     private async Task ReadLoopAsync()
@@ -149,14 +153,14 @@ public sealed class RemoteSession : IAsyncDisposable
                 {
                     var sent = message.Pong.Timestamp;
                     RoundTripTime = _time.GetElapsedTime(sent);
-                    RoundTripTimeChanged?.Invoke(this, EventArgs.Empty);
+                    Raise(RoundTripTimeChanged);
                 }
                 else if (message.BodyCase == ControlMessage.BodyOneofCase.GrantChanged)
                 {
                     // The host decides; this only mirrors it so the UI stops offering what is no longer allowed.
                     var granted = ControlMessages.FromWire(message.GrantChanged.GrantedPermissions);
                     Context.Grant = AccessGrant.Create(ControlMessages.FromMessage(message.GrantChanged.Mode), granted, granted);
-                    GrantChanged?.Invoke(this, EventArgs.Empty);
+                    Raise(GrantChanged);
                 }
                 else if (message.BodyCase == ControlMessage.BodyOneofCase.InputAccessChanged)
                 {
@@ -173,7 +177,7 @@ public sealed class RemoteSession : IAsyncDisposable
                     _inputAccess = new InputAccessStatus(
                         ControlMessages.FromMessage(change.State),
                         string.IsNullOrEmpty(change.Reason) ? null : change.Reason);
-                    InputAccessChanged?.Invoke(this, EventArgs.Empty);
+                    Raise(InputAccessChanged);
                 }
             }
         }
@@ -210,6 +214,28 @@ public sealed class RemoteSession : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
         }
+    }
+
+    /// <summary>
+    /// Raises a per-message event without letting a subscriber end the read loop: the session still has to close
+    /// cleanly, and a UI handler's exception is not a transport failure.
+    /// </summary>
+    private void Raise(EventHandler? handler)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+#pragma warning disable CA1031 // A subscriber's failure must not end the session.
+        try
+        {
+            handler(this, EventArgs.Empty);
+        }
+        catch (Exception)
+        {
+        }
+#pragma warning restore CA1031
     }
 
     private void RaiseClosed()

@@ -40,7 +40,7 @@ public sealed class AuthAttemptLimiter(TimeProvider time)
     /// Handshakes that hold a reservation and have not settled it yet, across all devices. Exposed so that tests can
     /// prove that no path leaks a reservation; a leaked one would occupy a device's budget until the process ends.
     /// </summary>
-    public int PendingReservations
+    internal int PendingReservations
     {
         get
         {
@@ -96,7 +96,7 @@ public sealed class AuthAttemptLimiter(TimeProvider time)
         }
     }
 
-    public bool IsBlocked(DeviceId device)
+    internal bool IsBlocked(DeviceId device)
     {
         var now = time.GetUtcNow();
         lock (_lock)
@@ -118,7 +118,7 @@ public sealed class AuthAttemptLimiter(TimeProvider time)
         }
     }
 
-    public void RecordFailure(DeviceId device)
+    internal void RecordFailure(DeviceId device)
     {
         var now = time.GetUtcNow();
         lock (_lock)
@@ -194,7 +194,7 @@ public sealed class AuthAttemptLimiter(TimeProvider time)
         }
     }
 
-    public void RecordSuccess(DeviceId device)
+    internal void RecordSuccess(DeviceId device)
     {
         lock (_lock)
         {

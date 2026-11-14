@@ -36,7 +36,7 @@ namespace RemoteDesktop.Platform.Linux.Camera;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandCameraSource : ICameraSource
+internal sealed partial class WaylandCameraSource : ICameraSource
 {
     /// <summary>Room for a <c>spa_hook</c>, which is opaque and 48 bytes on PipeWire 1.6. Over-allocating is free.</summary>
     private const int HookSize = 64;

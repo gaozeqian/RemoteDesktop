@@ -67,6 +67,14 @@ public sealed partial class AgentForwardingModule(
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(session);
 
+        // The dispatcher checks this before calling any module. Repeating it here means a caller that bypassed the
+        // dispatcher still cannot reach the agent. The agent repeats the check once more on its side of the pipe.
+        if (!session.Grant.Allows(requiredPermission))
+        {
+            LogPermissionMissing(logger, channelType, requiredPermission);
+            return;
+        }
+
         var queue = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(Lossless ? LosslessQueueCapacity : QueueCapacity)
         {
             FullMode = Lossless ? BoundedChannelFullMode.Wait : BoundedChannelFullMode.DropOldest,
@@ -84,7 +92,16 @@ public sealed partial class AgentForwardingModule(
                 Stream agentStream;
                 try
                 {
-                    agentStream = await gateway.OpenChannelAsync(agentKind, session.Id, cancellationToken).ConfigureAwait(false);
+                    // The grant is read per open, not captured before the loop: after a downgrade the replacement
+                    // agent must see the current grant, not the one the channel started with.
+                    agentStream = await gateway.OpenChannelAsync(agentKind, session.Id, session.Grant, cancellationToken).ConfigureAwait(false);
+                }
+                catch (AgentRefusedException ex)
+                {
+                    // The agent's grant check is monotonic (it only follows SessionContext grants, which only lose
+                    // permissions), so another attempt would be refused too.
+                    LogAgentRefused(logger, agentKind, ex.Message);
+                    break;
                 }
                 catch (AgentUnavailableException ex)
                 {
@@ -265,6 +282,12 @@ public sealed partial class AgentForwardingModule(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "No agent for the {Kind} channel yet: {Reason}")]
     private static partial void LogAgentUnavailable(ILogger logger, AgentChannelKind kind, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The agent refused the {Kind} channel: {Reason}")]
+    private static partial void LogAgentRefused(ILogger logger, AgentChannelKind kind, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The session's grant does not include {Permission}, so the {Kind} channel was not opened.")]
+    private static partial void LogPermissionMissing(ILogger logger, ChannelType kind, Permissions permission);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "The agent of the {Kind} channel went away; reconnecting to its replacement.")]
     private static partial void LogAgentReplaced(ILogger logger, AgentChannelKind kind);

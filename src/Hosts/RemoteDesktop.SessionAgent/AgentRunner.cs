@@ -101,13 +101,23 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
                 return;
             }
 
+            // Second line of defense: the service-side dispatcher already checked the grant, but the agent must not
+            // run a module on the strength of "the service asked". A bug or a bypass there must not turn a watch
+            // session into input or file transfer.
+            if (!request.Grant.Allows(module.RequiredPermission))
+            {
+                LogChannelRefused(logger, request.Kind, module.RequiredPermission);
+                await link.RefuseChannelAsync(request.ChannelId, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             var stream = await link.OpenChannelAsync(request, cancellationToken).ConfigureAwait(false);
             await using var channel = new PipeChannel(type, stream);
             var session = new SessionContext(
                 request.Session,
                 SessionRole.Host,
                 new DetachedPeerConnection(),
-                AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
+                request.Grant);
             await module.HandleAsync(channel, session, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -149,6 +159,9 @@ internal sealed partial class AgentRunner(AgentLink link, IEnumerable<IFeatureMo
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No module serves the {Kind} channel.")]
     private static partial void LogNoModule(ILogger logger, AgentChannelKind kind);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused the {Kind} channel: the session's grant does not include {Permission}.")]
+    private static partial void LogChannelRefused(ILogger logger, AgentChannelKind kind, Permissions permission);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Some channels did not stop within {Seconds} s of the agent shutting down; abandoning them.")]
     private static partial void LogChannelsStuck(ILogger logger, double seconds);

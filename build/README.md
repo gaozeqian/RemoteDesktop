@@ -83,6 +83,12 @@ debconf、systemd、launchctl、账户和健康检查 stub 验证真实控制流
 `installer/` 与 `signing/` 看起来是"脚本和子目录混在一层"，其实不是混放：**本层 = 共用，子目录 = 专属**。
 判断标准只有一句——这个文件是被两个以上的角色/平台用到，还是只被一个用到。
 
+`installer/windows/Directory.Packages.props` 是 Windows 安装器工程的中央包版本清单。这些工程故意不导入根
+`Directory.Build.props`（产物不走 `artifacts/`），所以也需要自己的一份 `Directory.Packages.props`；它导入根清单
+以共享 `WixToolset.Dtf.WindowsInstaller`，再补安装器专用的扩展包。`WixToolset.Sdk` 本身的版本在根 `global.json`
+的 `msbuild-sdks` 里，两个 `.wixproj` 只写 `Sdk="WixToolset.Sdk"`。升级 WiX 时改 `global.json` 的
+`msbuild-sdks` 与 `Directory.Packages.props` 里的 WiX 包版本，而不是在四个工程里分别找版本号。
+
 `installer/version.sh` 就是这条规则的一个例子：它只有一份，打包脚本与 CI（`release.yml` 的 `check-version` 与 `verify-packages` 这个复合 action）都 source 它。
 版本本身仍来自根 `Directory.Build.props` 的 `<Version>`；这个脚本负责空值、三段数字与 MSI 数值上限的检查，
 让 macOS/Linux 在本地打包时也得到与 Windows 相同的失败，而不是各自回退到 `0.0.0` 或用另一种解释接受它。
@@ -153,6 +159,7 @@ Windows 的脚本直接读 XML 并在 MSI 里补第四段 `.0`；三个平台的
 | `Export-ThirdPartyNotices.ps1` | 从 NuGet 元数据生成根目录的 `THIRD-PARTY-NOTICES.md` | **三平台**（`pwsh`） |
 | `Export-ServerConfigurationGuides.ps1` | 从统一源生成三个服务端包内的 `how-to-configure.txt`；`-Check` 验证副本未漂移 | **三平台**（`pwsh`） |
 | `Invoke-SecurityAudit.ps1` | 检查一份生产部署的配置是否还停在"开发默认"的不安全状态 | **三平台**（`pwsh`） |
+| `Update-LockFiles.ps1` | 按 `win-x64` / `linux-x64` / `osx-arm64` 检查或更新 `src/` 下的 NuGet 锁文件；`-Check` 只还原不写 | **三平台**（`pwsh`） |
 
 ```powershell
 # 依赖变化后重新生成第三方许可清单（写入仓库根，不要手改生成物）

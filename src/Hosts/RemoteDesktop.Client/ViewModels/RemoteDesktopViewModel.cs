@@ -421,6 +421,12 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not start recording the screen to {FileName}.")]
     private static partial void LogRecordingStartFailed(ILogger logger, Exception ex, string fileName);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Disposing one part of the remote desktop session failed.")]
+    private static partial void LogDisposeStepFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A Closed handler threw while closing the remote desktop session.")]
+    private static partial void LogCloseHandlerFailed(ILogger logger, Exception exception);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Stopping the screen recording failed ({Failure}).")]
     private static partial void LogRecordingStopFailed(ILogger logger, Exception ex, VideoRecorderFailure failure);
 
@@ -508,7 +514,17 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
         }
 
         _statusTimer.Stop();
-        Closed?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            Closed?.Invoke(this, EventArgs.Empty);
+        }
+#pragma warning disable CA1031 // A subscriber must not prevent the session below from being released.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogCloseHandlerFailed(_logger, ex);
+        }
+
         await DisposeAsync();
     }
 
@@ -531,26 +547,48 @@ public sealed partial class RemoteDesktopViewModel : ObservableObject, IAsyncDis
             _recorder = null;
         }
 
-        await ReleaseFileManagerAsync();
-        await ReleaseTerminalAsync();
-        await ReleaseCameraAsync();
+        // Each step is isolated: a failed clipboard/input/audio teardown must not leave the QUIC session and the
+        // host's session slot alive. Exceptions are logged instead of escaping into the fire-and-forget caller.
+        await DisposeStepAsync(ReleaseFileManagerAsync);
+        await DisposeStepAsync(ReleaseTerminalAsync);
+        await DisposeStepAsync(ReleaseCameraAsync);
         if (_input is not null)
         {
-            await _input.DisposeAsync();
+            await DisposeStepAsync(() => _input.DisposeAsync().AsTask());
         }
 
         if (_clipboard is not null)
         {
-            await _clipboard.DisposeAsync();
+            await DisposeStepAsync(() => _clipboard.DisposeAsync().AsTask());
         }
 
         if (_audio is not null)
         {
-            await _audio.DisposeAsync();
+            await DisposeStepAsync(() => _audio.DisposeAsync().AsTask());
         }
 
-        await Viewer.DisposeAsync();
-        await _session.DisposeAsync();
+        try
+        {
+            await DisposeStepAsync(() => Viewer.DisposeAsync().AsTask());
+        }
+        finally
+        {
+            await DisposeStepAsync(() => _session.DisposeAsync().AsTask());
+        }
+    }
+
+    private async Task DisposeStepAsync(Func<Task> dispose)
+    {
+        try
+        {
+            await dispose().ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // One failed step must not skip the rest, least of all the session.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogDisposeStepFailed(_logger, ex);
+        }
     }
 
     /// <summary>Mirrors the host's input authorization into the banner and into whether input is captured at all.</summary>

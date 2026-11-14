@@ -79,7 +79,8 @@ public sealed partial class OpsStore : IDisposable
     /// On PostgreSQL the whole run holds an advisory lock. <c>CREATE TABLE IF NOT EXISTS</c> is not safe against a second
     /// process creating the same table at the same moment (it fails with a unique violation on the catalog), and two
     /// processes that both read an old schema version would both try to apply the same migration. SQLite serialises
-    /// both by itself, with its file lock.
+    /// individual writers, but not the read-then-write sequence, so the migration half runs under
+    /// <c>BEGIN IMMEDIATE</c> (see <see cref="ApplySqliteMigrationsAsync"/>).
     /// </remarks>
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
     {
@@ -133,9 +134,37 @@ public sealed partial class OpsStore : IDisposable
             await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        // Everything above is the baseline, which a fresh database and an old one both have. What follows only runs
-        // on a database that has not seen it yet, one transaction per step, so a half-applied migration is not left
-        // behind for the next start-up to trip over.
+        if (!string.Equals(_provider, OpsDatabaseSettings.Postgres, StringComparison.Ordinal))
+        {
+            // SQLite serialises writers, but reading the version and then applying migrations is a read-then-write
+            // sequence: two processes can both read version N before either commits. BEGIN IMMEDIATE takes the
+            // database write lock before the read, so the second process blocks, then sees the first one's version.
+            // All pending steps run in that one transaction; a failure leaves none of them applied.
+            await ExecuteSqlAsync(connection, "BEGIN IMMEDIATE;", cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ApplySqliteMigrationsAsync(connection, cancellationToken).ConfigureAwait(false);
+                await ExecuteSqlAsync(connection, "COMMIT;", cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                try
+                {
+                    await ExecuteSqlAsync(connection, "ROLLBACK;", CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (DbException)
+                {
+                    // The failed statement may already have ended the transaction.
+                }
+
+                throw;
+            }
+
+            return;
+        }
+
+        // PostgreSQL holds the advisory lock from EnsureSchemaAsync. What follows only runs on a database that has
+        // not seen it yet, one transaction per step, so a half-applied migration is not left behind.
         var applied = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
         foreach (var migration in OpsMigrations.All.Where(migration => migration.Version > applied).OrderBy(migration => migration.Version))
         {
@@ -167,6 +196,42 @@ public sealed partial class OpsStore : IDisposable
             "INSERT INTO ops_schema_version (version, applied_at) VALUES (@version, @appliedAt) ON CONFLICT (version) DO NOTHING;";
         Bind(version, ("@version", OpsSchema.Version), ("@appliedAt", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Applies every pending migration on SQLite inside the caller's <c>BEGIN IMMEDIATE</c> transaction.
+    /// </summary>
+    private static async Task ApplySqliteMigrationsAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        var applied = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
+        foreach (var migration in OpsMigrations.All.Where(migration => migration.Version > applied).OrderBy(migration => migration.Version))
+        {
+            await using (var step = connection.CreateCommand())
+            {
+                step.CommandText = migration.Sql;
+                await step.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await using (var record = connection.CreateCommand())
+            {
+                record.CommandText = "INSERT INTO ops_schema_version (version, applied_at) VALUES (@version, @appliedAt);";
+                Bind(record, ("@version", migration.Version), ("@appliedAt", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+                await record.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        await using var version = connection.CreateCommand();
+        version.CommandText =
+            "INSERT INTO ops_schema_version (version, applied_at) VALUES (@version, @appliedAt) ON CONFLICT (version) DO NOTHING;";
+        Bind(version, ("@version", OpsSchema.Version), ("@appliedAt", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task ExecuteSqlAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>The highest schema version this database has recorded; 0 when it has none.</summary>

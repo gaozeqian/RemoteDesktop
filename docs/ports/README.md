@@ -254,8 +254,8 @@ Linux 没有存储可用，**私钥只能是一个文件**，于是文件权限�
 | `--self-check`（补做） | ✅ |
 | P2 密钥、身份、传输、guard、防休眠（D-Bus 桥） | ✅ |
 | P3 Wayland 采集与输入 | ✅ portal 会话流程 + libei 注入都在真机跑通 |
-| P4 视频编解码 | ✅ 三个工厂都走 libavcodec（**硬件路径待真 GPU 机器验证**） |
-| P5 剪贴板 | ✅ portal 路径可用，两个方向都端到端验证过 |
+| P4 视频编解码 | ✅ 三个工厂都走 libavcodec（NVENC 已在 RTX A4000 上端到端验证；**VA-API 待真 GPU 机器验证**） |
+| P5 剪贴板 | ✅ portal 路径可用；GNOME 不为外部选区发送 `SelectionOwnerChanged`，`WaylandClipboard` 以 1 秒轮询回退，两个方向都已端到端验证 |
 | P6 终端（PTY 落在共享 `Platform.Posix`） | ✅ |
 | P7 文件传输 | ✅ XDG 目录 + 挂载点过滤 |
 | P8 摄像头（PipeWire 节点，不是 V4L2） | ✅ 真机验证（Ubuntu 26.04 + 4K USB 摄像头，MJPEG/YUY2 → NV12 → NVENC） |

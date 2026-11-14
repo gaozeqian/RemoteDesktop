@@ -17,23 +17,39 @@ namespace RemoteDesktop.Platform.MacOS.Camera;
 /// not a mode a remote viewer would choose, and virtual cameras advertise a long tail of such sizes.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacCameraEnumerator : ICameraEnumerator
+internal sealed class MacCameraEnumerator : ICameraEnumerator
 {
+    /// <summary>
+    /// Serializes every enumeration in this process, because the helper's list storage is one buffer per process.
+    /// </summary>
+    /// <remarks>
+    /// The helper hands out library-owned memory that the next listing call frees. Its own lock covers each call, not
+    /// the managed code reading the result: a second caller entering <c>rd_camera_list</c> between the first caller's
+    /// return and its <see cref="Marshal.PtrToStringUTF8"/> frees the array it is about to read. That is a real crash
+    /// (<c>AccessViolationException</c> inside <c>PtrToStringUTF8</c>) whenever two tests — or two sessions — enumerate
+    /// cameras at once. A static lock is the right scope: the buffer is static in the helper, so per-instance
+    /// exclusion does not protect it.
+    /// </remarks>
+    private static readonly Lock Gate = new();
+
     public IReadOnlyList<CameraInfo> GetCameras()
     {
-        // Every id and name is copied out of the helper's storage before the first mode query. That is not
-        // defensive style: rd_camera_modes is itself a listing call, and a listing call resets the storage the
-        // previous one handed out — so a loop that read a camera's name after asking for its modes would be reading
-        // freed memory from the second camera onwards.
-        var listed = ReadCameras();
-
-        var cameras = new List<CameraInfo>(listed.Count);
-        foreach (var (id, name) in listed)
+        lock (Gate)
         {
-            cameras.Add(new CameraInfo(id, name, ReadModes(id)));
-        }
+            // Every id and name is copied out of the helper's storage before the first mode query. That is not
+            // defensive style: rd_camera_modes is itself a listing call, and a listing call resets the storage the
+            // previous one handed out — so a loop that read a camera's name after asking for its modes would be
+            // reading freed memory from the second camera onwards.
+            var listed = ReadCameras();
 
-        return cameras;
+            var cameras = new List<CameraInfo>(listed.Count);
+            foreach (var (id, name) in listed)
+            {
+                cameras.Add(new CameraInfo(id, name, ReadModes(id)));
+            }
+
+            return cameras;
+        }
     }
 
     private static unsafe List<(string Id, string Name)> ReadCameras()
@@ -94,7 +110,7 @@ public sealed class MacCameraEnumerator : ICameraEnumerator
 
 /// <summary>Opens one of the cameras the enumerator found.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
+internal sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraSourceFactory
 {
     public ICameraSource Open(string cameraId)
     {
@@ -127,18 +143,22 @@ public sealed class MacCameraSourceFactory(ICameraEnumerator cameras) : ICameraS
 [SupportedOSPlatform("macos")]
 internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
 {
+    private readonly CancellationTokenSource _dispose = new();
+    private int _disposed;
+
     public CameraInfo Camera { get; } = camera;
 
     public async IAsyncEnumerable<VideoFrame> CaptureAsync(
         CameraMode mode, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mode);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
         using var sink = new MacCameraFrameSink();
 
         // Its own token: leaving the loop (dispose, break) has to stop the camera even when the caller never
-        // cancels. The same arrangement the Windows source uses.
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // cancels. Linked to the source's token so disposing the source also ends an enumeration that is running.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = Task.Factory.StartNew(
@@ -151,11 +171,16 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
         {
             // A camera that cannot be opened — no permission, in use, unplugged — fails here, before the caller has
             // set anything up.
-            await started.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await started.Task.WaitAsync(stop.Token).ConfigureAwait(false);
 
-            await foreach (var frame in sink.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            // The sink holds at most one picture: wait for one, take it, repeat. A completion ends the loop; the
+            // source only completes it in the finally below, so in practice cancellation is what ends this.
+            while (await sink.WaitAsync(Timeout.InfiniteTimeSpan, stop.Token).ConfigureAwait(false))
             {
-                yield return frame;
+                if (sink.TryTake(out var frame) && frame is not null)
+                {
+                    yield return frame;
+                }
             }
         }
         finally
@@ -166,7 +191,17 @@ internal sealed class MacCameraSource(CameraInfo camera) : ICameraSource
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>Stops every running enumeration; a later <see cref="CaptureAsync"/> is refused.</summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            // The iteration's finally cancels the native session and waits for the AVFoundation thread.
+            _dispose.Cancel();
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     /// <summary>
     /// Runs on a dedicated thread: it opens the camera, starts the session, and then does nothing but hold it open.

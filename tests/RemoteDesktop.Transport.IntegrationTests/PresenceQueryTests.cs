@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Server.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -75,7 +76,7 @@ public class PresenceRateLimiterTests
     [Fact]
     public void A_burst_is_spent_and_then_queries_are_refused()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var limiter = new PresenceRateLimiter(time);
         using var session = Session(100_000_001);
 
@@ -90,7 +91,7 @@ public class PresenceRateLimiterTests
     [Fact]
     public void The_bucket_refills_over_time()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var limiter = new PresenceRateLimiter(time);
         using var session = Session(100_000_002);
 
@@ -108,7 +109,7 @@ public class PresenceRateLimiterTests
     [Fact]
     public void Forgetting_another_session_leaves_this_ones_budget_alone()
     {
-        var time = new FakeTimeProvider();
+        var time = new TestClock(DateTimeOffset.UnixEpoch);
         var limiter = new PresenceRateLimiter(time);
         using var old = Session(100_000_003);
         using var current = Session(100_000_003);

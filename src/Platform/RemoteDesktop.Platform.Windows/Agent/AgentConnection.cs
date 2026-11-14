@@ -58,9 +58,11 @@ internal sealed partial class AgentConnection : IAsyncDisposable
     /// <summary>Tells the connection which process is the agent; call right after launching it.</summary>
     public void ExpectProcess(int processId) => _expectedProcess.TrySetResult(processId);
 
-    /// <exception cref="AgentUnavailableException">The agent is not connected or went away.</exception>
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken)
+    /// <exception cref="AgentUnavailableException">The agent is not connected, went away, or refused the grant.</exception>
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, AccessGrant grant, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(grant);
+
         var control = _control ?? throw new AgentUnavailableException("The agent is not connected.");
         var id = Guid.NewGuid();
         var completion = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,7 +72,7 @@ internal sealed partial class AgentConnection : IAsyncDisposable
             await _controlWrite.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await AgentPipeMessages.WriteMessageAsync(control, AgentPipeMessage.OpenChannel, AgentPipeMessages.OpenChannelPayload(id, kind, session), cancellationToken)
+                await AgentPipeMessages.WriteMessageAsync(control, AgentPipeMessage.OpenChannel, AgentPipeMessages.OpenChannelPayload(id, kind, session, grant), cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)
@@ -213,6 +215,9 @@ internal sealed partial class AgentConnection : IAsyncDisposable
                     case AgentPipeMessage.SecureAttention:
                         SecureAttentionRequested?.Invoke(this, EventArgs.Empty);
                         break;
+                    case AgentPipeMessage.ChannelRefused when message.Payload.Length == 16:
+                        Refuse(new Guid(message.Payload, bigEndian: true));
+                        break;
                     default:
                         break;
                 }
@@ -225,6 +230,16 @@ internal sealed partial class AgentConnection : IAsyncDisposable
         {
             FailPending();
             _closed.TrySetResult();
+        }
+    }
+
+    /// <summary>Fails one pending channel with the agent's refusal, not with a timeout ten seconds later.</summary>
+    private void Refuse(Guid channelId)
+    {
+        if (_pending.TryGetValue(channelId, out var completion))
+        {
+            completion.TrySetException(new AgentRefusedException(
+                "The agent refused the channel: the session's grant does not include the required permission."));
         }
     }
 

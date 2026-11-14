@@ -1,5 +1,6 @@
 using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -38,13 +39,51 @@ public sealed class HostSessionLimitTests(ServerFixture server) : IClassFixture<
         await WaitForAsync(() => host.HostSessions.ActiveSessions.Count == 2, "the replacement session to appear on the host");
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
+    /// <summary>
+    /// Handshakes that pass authentication at the same moment must not all be told "accepted" and then have the
+    /// losers dropped: the reservation is taken before AuthResult, so the refusal is part of the handshake.
+    /// </summary>
+    [Fact]
+    public async Task Simultaneous_handshakes_over_the_limit_are_refused_in_the_handshake()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!condition())
+        await using var host = await TestDevice.StartAsync(server);
+        host.HostSessions.MaxSessions = 2;
+        await using var controller = await TestDevice.StartAsync(server);
+        var password = host.Credentials.TemporaryPassword;
+
+        var attempts = Enumerable.Range(0, 3)
+            .Select(async _ =>
+            {
+                try
+                {
+                    var session = await controller.Controller.ConnectAsync(host.Id, password, SessionMode.Control, Ct);
+                    return (Session: session, Failure: (SessionFailure?)null);
+                }
+                catch (SessionException ex)
+                {
+                    return (Session: (RemoteSession?)null, Failure: (SessionFailure?)ex.Failure);
+                }
+            })
+            .ToArray();
+
+        var results = await Task.WhenAll(attempts);
+        var accepted = results.Where(result => result.Session is not null).Select(result => result.Session!).ToArray();
+        try
         {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
+            Assert.Equal(2, accepted.Length);
+            var refused = Assert.Single(results, result => result.Session is null);
+            Assert.Equal(SessionFailure.TooManySessions, refused.Failure);
+            await WaitForAsync(() => host.HostSessions.ActiveSessions.Count == 2, "both accepted sessions to appear on the host");
+        }
+        finally
+        {
+            foreach (var session in accepted)
+            {
+                await session.DisposeAsync();
+            }
         }
     }
+
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(20));
 }

@@ -8,6 +8,7 @@
     <ProjectReference Include="..\..\Core\RemoteDesktop.Abstractions\RemoteDesktop.Abstractions.csproj" />
     <ProjectReference Include="..\..\Core\RemoteDesktop.Domain\RemoteDesktop.Domain.csproj" />
     <ProjectReference Include="..\RemoteDesktop.Platform.Posix\RemoteDesktop.Platform.Posix.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Platform.Shared\RemoteDesktop.Platform.Shared.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
@@ -18,5 +19,9 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteDesktop.Platform.Linux.UnitTests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The transport suite composes the platform's codecs to exercise real encode/decode paths. -->
+    <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
   </ItemGroup>
 </Project>

@@ -89,7 +89,11 @@ public sealed class AgentRunnerTests : IDisposable
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var run = runner.RunAsync(stop.Token);
-        await using var channel = await connection.OpenChannelAsync(AgentChannelKind.Input, SessionId.New(), Ct);
+        await using var channel = await connection.OpenChannelAsync(
+            AgentChannelKind.Input,
+            SessionId.New(),
+            AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All),
+            Ct);
         await module.Entered.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         var clock = Stopwatch.StartNew();
@@ -101,6 +105,46 @@ public sealed class AgentRunnerTests : IDisposable
         module.Release();
     }
 
+    /// <summary>
+    /// The service-side dispatcher refuses these channels first; this test bypasses it on purpose and asks the agent
+    /// directly, which is what a regression or a bypass on the service side would look like from the agent's end.
+    /// </summary>
+    [Theory]
+    [InlineData(AgentChannelKind.Input, ChannelType.Input, Permissions.ControlInput)]
+    [InlineData(AgentChannelKind.File, ChannelType.FileTransfer, Permissions.FileTransfer)]
+    [InlineData(AgentChannelKind.Terminal, ChannelType.Terminal, Permissions.Terminal)]
+    public async Task The_agent_refuses_a_channel_the_session_grant_does_not_allow(
+        AgentChannelKind kind,
+        ChannelType type,
+        Permissions permission)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Named pipe ACLs are Windows only.");
+        await using var connection = new AgentConnection(NewPipeName(), CurrentUser(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        connection.ExpectProcess(Environment.ProcessId);
+        await using var link = await AgentLink.ConnectAsync(connection.PipeName, Ct);
+        var module = new RecordingModule(type, permission);
+        var runner = new AgentRunner(link, [module], new CapturingLogger());
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var run = runner.RunAsync(stop.Token);
+
+        var watch = AccessGrant.Create(SessionMode.View, Permissions.All, Permissions.All);
+        await Assert.ThrowsAsync<AgentRefusedException>(
+            () => connection.OpenChannelAsync(kind, SessionId.New(), watch, Ct));
+        Assert.False(module.Entered.IsCompleted, "The module ran for a channel the grant did not allow.");
+
+        // A normal control session is unaffected: the same request with the full grant reaches the module.
+        await using var channel = await connection.OpenChannelAsync(
+            kind,
+            SessionId.New(),
+            AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All),
+            Ct);
+        await module.Entered.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        await stop.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = Stopwatch.StartNew();
@@ -108,11 +152,37 @@ public sealed class AgentRunnerTests : IDisposable
         {
             await Task.Delay(50, Ct);
         }
+
+        Assert.True(condition(), $"Timed out after {timeout} waiting for the condition.");
     }
 
     private sealed class AllowEverything : IUserContextGuard
     {
         public string? GetRefusalReason() => null;
+    }
+
+    /// <summary>Records that it was entered, then waits until the test stops the agent.</summary>
+    private sealed class RecordingModule(ChannelType type, Permissions permission) : IFeatureModule
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ChannelType ChannelType => type;
+
+        public Permissions RequiredPermission => permission;
+
+        public Task Entered => _entered.Task;
+
+        public async Task HandleAsync(IChannel channel, SessionContext session, CancellationToken cancellationToken)
+        {
+            _entered.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
     }
 
     /// <summary>Takes a channel and never lets go of it, whatever it is told.</summary>

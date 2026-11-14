@@ -188,6 +188,11 @@ public sealed class RendezvousOptions
         Positive(MaxPendingRequestsPerDevice, nameof(MaxPendingRequestsPerDevice));
         Positive(RegistrationRefill, nameof(RegistrationRefill));
         Positive(ConnectRequestRefill, nameof(ConnectRequestRefill));
+        // Not a limit on a collection, but the same class of mistake: a non-positive delay makes the fire-and-forget
+        // expiry task throw before it can remove the entry, and a non-positive ticket lifetime makes every relay
+        // ticket expire the moment it is signed.
+        Positive(ConnectTimeout, nameof(ConnectTimeout));
+        Positive(RelayTicketLifetime, nameof(RelayTicketLifetime));
     }
 
     private void ValidateTrustedProxies()

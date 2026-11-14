@@ -114,29 +114,26 @@ public sealed class LocalHostControl(
 
     public async Task DowngradeSessionAsync(string sessionId, CancellationToken cancellationToken)
     {
-        if (SessionId.TryParse(sessionId, out var id))
-        {
-            await sessions.DowngradeToViewAsync(id, cancellationToken).ConfigureAwait(false);
-        }
+        var id = ParseSessionId(sessionId);
+        await sessions.DowngradeToViewAsync(id, cancellationToken).ConfigureAwait(false);
     }
 
     public Task DisconnectSessionAsync(string sessionId, CancellationToken cancellationToken)
     {
-        if (SessionId.TryParse(sessionId, out var id))
-        {
-            sessions.Disconnect(id);
-        }
-
+        sessions.Disconnect(ParseSessionId(sessionId));
         return Task.CompletedTask;
     }
 
     public async Task StopCameraAsync(string sessionId, CancellationToken cancellationToken)
     {
-        if (SessionId.TryParse(sessionId, out var id))
-        {
-            await sessions.RevokeAsync(id, Permissions.Camera, cancellationToken).ConfigureAwait(false);
-        }
+        await sessions.RevokeAsync(ParseSessionId(sessionId), Permissions.Camera, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>A malformed id is the caller's mistake, not "no such session": say so instead of answering ok.</summary>
+    private static SessionId ParseSessionId(string sessionId) =>
+        SessionId.TryParse(sessionId, out var id)
+            ? id
+            : throw new ArgumentException($"'{sessionId}' is not a session id.", nameof(sessionId));
 
     /// <exception cref="ArgumentException">The password is too short to be one; nothing is changed.</exception>
     public Task SetFixedPasswordAsync(string? password, CancellationToken cancellationToken)
@@ -166,5 +163,14 @@ public sealed class LocalHostControl(
         }
 
         await cameraAccess.SetAllowedAsync(allowed, cancellationToken).ConfigureAwait(false);
+
+        // The portal grant only decides whether the *next* camera source may open. Revoking it while a stream is
+        // already running would leave the controller seeing "denied" in the UI and receiving frames at the same time,
+        // so take the permission away from the running sessions as well. Re-allowing deliberately does not restore it
+        // to those sessions: the new grant applies to the next connection, and the UI says so.
+        if (!allowed)
+        {
+            await sessions.RevokeFromAllAsync(Permissions.Camera, cancellationToken).ConfigureAwait(false);
+        }
     }
 }

@@ -168,6 +168,48 @@ public sealed class FileTransferModuleTests : IDisposable
         Assert.Contains(Names(), name => name.EndsWith(PartialFile.Extension, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A sender that goes wrong after UploadAccepted must still receive a verdict. Before the module caught
+    /// IOException/InvalidDataException here, the channel just closed and the controller waited for its finish
+    /// timeout (up to an hour) instead of showing the error.
+    /// </summary>
+    [Fact]
+    public async Task A_malformed_finish_is_answered_with_an_error_instead_of_an_eternal_transfer()
+    {
+        var content = Bytes(100);
+        var (moduleEnd, controller) = await PipePair.CreateAsync();
+        var module = new FileTransferModule(new AllowEverything(), new FileAccessPolicy(), NullLogger<FileTransferModule>.Instance);
+        var run = module.HandleAsync(new TestChannel(moduleEnd), TestSession, Ct);
+        try
+        {
+            await ProtobufFrames.WriteAsync(
+                controller,
+                new FileRequest { Upload = Request("bad-finish.bin", (ulong)content.Length, ConflictPolicy.Overwrite) },
+                Ct);
+            var accepted = await ProtobufFrames.ReadAsync(controller, FileResponse.Parser, cancellationToken: Ct);
+            Assert.Equal(FileResponse.BodyOneofCase.UploadAccepted, accepted?.BodyCase);
+            Assert.Equal(FileError.None, accepted!.UploadAccepted.Status.Error);
+
+            await FileChunkFrame.WriteAsync(controller, content, Ct);
+
+            // The wrong body where Finish belongs: the module reads it, rejects the upload and answers.
+            await ProtobufFrames.WriteAsync(
+                controller,
+                new FileRequest { List = new ListRequest { Path = _folder } },
+                Ct);
+
+            var complete = await ProtobufFrames.ReadAsync(controller, FileResponse.Parser, cancellationToken: Ct);
+            Assert.NotNull(complete);
+            Assert.Equal(FileResponse.BodyOneofCase.Complete, complete!.BodyCase);
+            Assert.Equal(FileError.Io, complete.Complete.Status.Error);
+        }
+        finally
+        {
+            await controller.DisposeAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        }
+    }
+
     private UploadRequest Request(string name, ulong size, ConflictPolicy policy) => new()
     {
         Directory = _folder,

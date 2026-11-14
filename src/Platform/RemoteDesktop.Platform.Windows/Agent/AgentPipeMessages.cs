@@ -18,7 +18,10 @@ internal enum AgentPipeMessage : byte
     /// <summary>Service → agent, answer to the hello; payload is one byte, 1 = accepted.</summary>
     HelloAck = 1,
 
-    /// <summary>Service → agent: connect a data pipe for a channel. Payload: channel id (16), kind (1).</summary>
+    /// <summary>
+    /// Service → agent: connect a data pipe for a channel. Payload: channel id (16), kind (1), session id (16),
+    /// mode (1) and the session's effective permissions (4).
+    /// </summary>
     OpenChannel = 2,
 
     /// <summary>Service → agent: exit.</summary>
@@ -29,6 +32,12 @@ internal enum AgentPipeMessage : byte
 
     /// <summary>Agent → service: raise Ctrl+Alt+Del.</summary>
     SecureAttention = 5,
+
+    /// <summary>
+    /// Agent → service: the session's grant does not include the permission the channel needs. Payload: channel id (16).
+    /// Without this the service would wait for a data pipe that is never going to be opened.
+    /// </summary>
+    ChannelRefused = 6,
 }
 
 internal readonly record struct AgentHello(AgentPipeRole Role, int ProcessId, Guid ChannelId);
@@ -126,15 +135,23 @@ internal static class AgentPipeMessages
         return ((AgentPipeMessage)header[0], payload);
     }
 
-    /// <summary>Channel id (16), kind (1), id of the session the channel serves (16).</summary>
-    public const int OpenChannelPayloadLength = 33;
+    /// <summary>Channel id (16), kind (1), session id (16), mode (1), permissions (4).</summary>
+    public const int OpenChannelPayloadLength = 38;
 
-    public static byte[] OpenChannelPayload(Guid channelId, AgentChannelKind kind, SessionId session)
+    public static byte[] OpenChannelPayload(Guid channelId, AgentChannelKind kind, SessionId session, AccessGrant grant)
     {
+        ArgumentNullException.ThrowIfNull(grant);
+
         var payload = new byte[OpenChannelPayloadLength];
         channelId.TryWriteBytes(payload, bigEndian: true, out _);
         payload[16] = (byte)kind;
         session.Value.TryWriteBytes(payload.AsSpan(17), bigEndian: true, out _);
+        payload[33] = (byte)grant.Mode;
+        BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(34), (uint)grant.Permissions);
         return payload;
     }
+
+    /// <summary>Only a known mode and known permission bits cross the pipe; anything else is a protocol error.</summary>
+    public static bool IsValidGrant(SessionMode mode, uint permissions) =>
+        Enum.IsDefined(mode) && (permissions & ~(uint)Permissions.All) == 0;
 }

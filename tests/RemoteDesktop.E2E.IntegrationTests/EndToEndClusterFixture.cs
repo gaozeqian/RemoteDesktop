@@ -1,13 +1,10 @@
 using System.Net;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Relay;
-using RemoteDesktop.Server.Rendezvous;
 using RemoteDesktop.Server.Shared;
+using RemoteDesktop.Transport.IntegrationTests;
 
 namespace RemoteDesktop.E2E.IntegrationTests;
 
@@ -38,28 +35,14 @@ public sealed class EndToEndClusterFixture : IAsyncLifetime
             NullLogger<UdpRelay>.Instance);
         _relayLoop = Relay.RunAsync(_stop.Token);
 
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseKestrel(options => options.Listen(IPAddress.Loopback, 0));
+        _rendezvous = await TestRendezvous.StartAsync(
+            ("Rendezvous:RelayEndpoint", Relay.LocalEndPoint.ToString()),
+            ("Rendezvous:RelaySharedKey", Convert.ToBase64String(key)),
+            ("Rendezvous:RegistrationBurst", "1000000"),
+            ("Rendezvous:MaxConnectionsPerAddress", "100000"),
+            ("Rendezvous:MaxConnections", "100000"));
 
-        var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Rendezvous:ReflectorPort"] = "0",
-            ["Rendezvous:RelayEndpoint"] = Relay.LocalEndPoint.ToString(),
-            ["Rendezvous:RelaySharedKey"] = Convert.ToBase64String(key),
-            ["Rendezvous:RegistrationBurst"] = "1000000",
-            ["Rendezvous:MaxConnectionsPerAddress"] = "100000",
-            ["Rendezvous:MaxConnections"] = "100000",
-        };
-
-        builder.Configuration.AddInMemoryCollection(configuration);
-        builder.Services.AddRendezvous(builder.Configuration);
-
-        _rendezvous = builder.Build();
-        _rendezvous.MapRendezvous();
-        await _rendezvous.StartAsync();
-
-        var rendezvousPort = new Uri(_rendezvous.Urls.First()).Port;
-        RendezvousUri = new Uri($"ws://127.0.0.1:{rendezvousPort}{RendezvousServer.SignalingPath}");
+        RendezvousUri = TestRendezvous.SignalingUri(_rendezvous);
     }
 
     public Task<EndToEndNode> StartNodeAsync(

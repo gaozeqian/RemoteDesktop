@@ -52,6 +52,8 @@ public static class ServiceCollectionExtensions
     [SupportedOSPlatform("linux")]
     public static IServiceCollection AddLinuxPlatform(this IServiceCollection services, string dataDirectory)
     {
+        services.AddSingleton<IPlatformIdentity>(new PlatformIdentity("linux"));
+        services.AddSingleton<IHostInstallation>(new LinuxHostInstallation());
         services.AddSingleton<ISecretStore>(new FileSecretStore(Path.Combine(dataDirectory, "secrets")));
         services.AddSingleton<IUserContextGuard, UnixUserContextGuard>();
         services.AddSingleton<ISystemKeepAwake, LogindKeepAwake>();

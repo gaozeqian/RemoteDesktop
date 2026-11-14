@@ -47,7 +47,7 @@ public readonly record struct SharedScreen(uint NodeId, int X, int Y, int Width,
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class PortalConnection : IDisposable
+internal sealed partial class PortalConnection : IDisposable
 {
     private const string Destination = "org.freedesktop.portal.Desktop";
     private const string ObjectPath = "/org/freedesktop/portal/desktop";
@@ -483,13 +483,17 @@ public sealed partial class PortalConnection : IDisposable
     /// first argument rather than being emitted on the session's own path, so there is nothing narrower to match on
     /// — and the alternative, a match rule per session, would have to be torn down by hand every time one closed.
     /// </remarks>
-    public async Task WatchClipboardAsync(
+    /// <returns>
+    /// The two match rules, so the clipboard can withdraw them when it stops watching. The connection owns them too,
+    /// but a clipboard that is disposed while the grant lives would otherwise keep receiving signals.
+    /// </returns>
+    public async Task<IDisposable> WatchClipboardAsync(
         string session,
         Action<IReadOnlyList<string>, bool> onOwnerChanged,
         Action<string, uint> onTransfer,
         CancellationToken cancellationToken)
     {
-        await _connection.AddMatchAsync(
+        var ownerChanged = await _connection.AddMatchAsync(
             new MatchRule { Type = MessageType.Signal, Interface = Clipboard, Member = "SelectionOwnerChanged" },
             static (Message m, object? _) => ReadOwnerChanged(m),
             (Notification<(string Session, IReadOnlyList<string> Types, bool IsOwner)> notification) =>
@@ -501,19 +505,46 @@ public sealed partial class PortalConnection : IDisposable
             },
             emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
 
-        await _connection.AddMatchAsync(
-            new MatchRule { Type = MessageType.Signal, Interface = Clipboard, Member = "SelectionTransfer" },
-            static (Message m, object? _) => ReadTransfer(m),
-            (Notification<(string Session, string MimeType, uint Serial)> notification) =>
-            {
-                if (notification.HasValue && notification.Value.Session == session)
+        IDisposable transfer;
+        try
+        {
+            transfer = await _connection.AddMatchAsync(
+                new MatchRule { Type = MessageType.Signal, Interface = Clipboard, Member = "SelectionTransfer" },
+                static (Message m, object? _) => ReadTransfer(m),
+                (Notification<(string Session, string MimeType, uint Serial)> notification) =>
                 {
-                    onTransfer(notification.Value.MimeType, notification.Value.Serial);
-                }
-            },
-            emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+                    if (notification.HasValue && notification.Value.Session == session)
+                    {
+                        onTransfer(notification.Value.MimeType, notification.Value.Serial);
+                    }
+                },
+                emitOnCapturedContext: false, ObserverFlags.None, null).ConfigureAwait(false);
+        }
+        catch
+        {
+            ownerChanged.Dispose();
+            throw;
+        }
 
         _ = cancellationToken;
+        return new ClipboardSubscription(ownerChanged, transfer);
+    }
+
+    /// <summary>Withdraws both clipboard subscriptions; disposing twice is harmless.</summary>
+    private sealed class ClipboardSubscription(IDisposable ownerChanged, IDisposable transfer) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            ownerChanged.Dispose();
+            transfer.Dispose();
+        }
     }
 
     private static (string Session, IReadOnlyList<string> Types, bool IsOwner) ReadOwnerChanged(Message message)
@@ -873,7 +904,7 @@ public sealed partial class PortalConnection : IDisposable
 }
 
 /// <summary>Why a portal request did not succeed.</summary>
-public sealed class PortalException : Exception
+internal sealed class PortalException : Exception
 {
     /// <summary>The portal's own answer: 0 agreed, 1 cancelled, 2 refused.</summary>
     public uint Response { get; }

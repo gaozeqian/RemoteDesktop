@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Changes what the installed servers are configured with, after the installation.
 

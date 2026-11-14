@@ -2,6 +2,94 @@
 
 本项目所有的显著变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [未发布]
+
+### Fixed
+
+- **Windows 被控端防休眠**：`SetThreadExecutionState` 的调用现在固定在一条专用线程上。此前会话开始与结束时
+  常落在不同线程池线程，`Release` 清不掉 `Acquire` 设下的状态，机器在第一次会话后不再自动睡眠。
+- **并发握手不再“Accepted 后断开”**：会话上限在发送 `AuthResult` 之前预留名额，超限的控制端在握手内收到
+  `TOO_MANY_SESSIONS`，而不是先被接受再看到连接关闭。
+- **全局拒绝摄像头会停止现有流**：本机设置“拒绝”后，运行中的会话立刻失去 `Camera` 权限并关闭摄像头通道；
+  重新允许只影响新会话。
+- **异常断线不再中断特性循环与关闭链**：QUIC 的 `QuicException` 在传输层翻译为 `IOException`；关闭远程桌面窗口
+  时每一步都会执行，即使剪贴板/音频/输入的释放失败，QUIC 会话也会被释放。
+- **上传失败会回执**：被控端在接收阶段遇到 IO/协议错误时发送 `Complete{FileError.Io}`，控制端不再挂到
+  finish 超时（最长 1 小时）。
+- **主机控制管道错误语义**：未知命令、无效的会话 id、非法的摄像头参数返回 `error`，不再静默回答 `ok`。
+- **设备注册表缓存有界**：超过上限时整体丢弃并回读数据库，长期运行的服务不再随累计设备数增长内存。
+- **Ops 摄取校验**：签名批次中的 `null` 元素返回 400 而不是 500；事件 id/node/kind/correlation id 有长度上限；
+  SQLite schema 迁移在 `BEGIN IMMEDIATE` 下读取版本并应用，两个进程同时启动不再可能重复应用同一迁移。
+- **SRP 挑战单次使用**：`HostPasswordChallenge` 增加消费标志，同一个挑战第二次 `VerifyHost` 直接拒绝，兑现文档里的
+  “exactly one call”。
+- **macOS 编码失败与句柄**：VideoToolbox 编码失败保留原生错误文本；解码器工厂在 `Open` 失败时释放已构造的解码器
+  （包括其 GCHandle）。
+- **采集故障可观测**：ScreenCaptureKit 的启动等待现在受 15 秒上限约束；原生层暴露“流被系统停止”的状态，
+  采集器的 `IsFaulted` 据此返回；GDI 回退在 `BitBlt` 失败时也报告故障，恢复逻辑不再把死流当成静态桌面。
+- **信令会话目录清理有界**：`SessionDirectory.Register` 不再每次扫描全部 7 天会话；每次注册只检查固定 256 条，
+  存活的轮转到队尾，清理成本与表大小无关。`LastReport` 改用 ticks 原子读写，多线程上报不再可能读到撕裂值。
+- **`/health` 不再按请求打库**：控制台把数据库探活结果缓存 2 秒，并发探活共享同一次查询；数据库恢复后
+  最多 2 秒反映，未认证请求无法再按请求驱动数据库连接。
+- **控制台登录挑战上限差一**：`ChallengeStore` 在已有 10,000 条时创建第 10,001 条，要等下一次调用才裁剪；现在
+  插入后立即裁剪，并保证刚创建、即将返回给调用方的挑战不会被裁掉。
+- **保留清理可索引**：会话与已解决告警的删除谓词改成能分别命中索引的 OR 形式，迁移 9 为
+  `(state, resolved_at)` 增加索引；通知尝试的删除与告警删除受同一个批次上限约束；滚动桶删除通过
+  `step_seconds` 等值加 `bucket` 范围走 `(step_seconds, bucket)` 索引，不再每批全表扫描。
+- **Linux 门户剪贴板不跟随外部改动**：GNOME 不会为其他程序取得选区发送 `SelectionOwnerChanged`，
+  被控端只监听信号时收不到真实的双机剪贴板。`WaylandClipboard` 增加 1 秒轮询作为回退，按内容哈希去重，
+  并忽略门户重复播报的同格式信号；双机两方向的手工复测与真实门户回归测试已覆盖。
+
+### Changed
+
+- **Linux NVENC 探测**：只检查 `h264_nvenc` 是否存在，不再要求 NVIDIA 的 DRM render node；无 `/dev/dri` 的
+  headless/容器机器也能尝试 NVENC，打开失败仍由选择器回退。
+- **音频帧上限**：控制端音频通道以 64 KiB 为单帧上限，而不是默认的 16 MiB。
+
+### Build
+
+- 新增 `build/tools/Update-LockFiles.ps1`（`-Check` 只验证），CI 的 `lock-files` job 对 `win-x64`、
+  `linux-x64`、`osx-arm64` 三个 RID 检查锁文件，不再等到打包阶段才发现漂移。
+- **发布可重入**：Release 已存在时用 `gh release upload --clobber` 补资产并更新说明，不再因
+  `gh release create` 拒绝已存在的 Release 而中断；上传后回读资产列表，按精确的九个（或六个）角色名校验。
+- **CI 成本**：漏洞审计只在 Windows job 跑一次；setup-dotnet 启用 NuGet 缓存；PR 上的旧运行会被 concurrency
+  取消；第三方声明生成器的失败不再被后续 `git diff` 掩盖。
+- **打包版本来源**：WiX SDK 固定到 `global.json` 的 `msbuild-sdks`，安装器包版本集中到
+  `build/installer/windows/Directory.Packages.props`；`Set-ServerConfiguration.ps1` 改为 UTF-8 带 BOM，
+  Windows PowerShell 5.1 读取中文提示不再乱码。
+- **Ops 指标降采样增量执行**：每轮从最新桶继续（并重算该桶），不再把 30 天历史全部重算并逐行重写；首次运行
+  只回看 24 小时，迁移 8 增加 `(ts)` 与 `(step_seconds, bucket)` 索引。
+- **删除孤立 E2E 脚本**：`build/tools/run-e2e-automated-tests.sh` 没有任何调用方，且依赖 Linux 的
+  `/etc/os-release`；同类场景已由 `E2E.IntegrationTests` 覆盖。
+- **锁文件同步**：项目依赖版本范围更新到 1.0.1，并为新组合项目补齐四个 `packages*.lock.json`。
+- **告警评估租约续期**：一次 pass 时间较长时按租期一半续租；租约被另一个副本拿走时取消本次 pass，避免同一批
+  通知被两个实例各发一次。
+- **组合根收敛**：新增 `RemoteDesktop.Hosts.Composition`，客户端独立托管、HostService 的 Linux/macOS 分支与
+  SessionAgent 都调用同一个 `AddRemoteDesktopHostFeatures(dataDirectory)`，新增特性只改一处。
+- **`ServerSetup` 按职责拆分**：原来的 1,485 行单文件拆成 `Database`、`Tls`、`OpsEvents`、`Gateway`、`Ops`、
+  `Io` 六个 partial，`Configure` 仍只负责编排；只是移动代码，行为不变。
+- **测试时钟与通道收敛**：共享 `TestClock` 与 `TestChannel`，删除 4 份手写时钟和重复的流通道桩；
+  定时器型时钟与带行为断言的通道保留。
+- **`MainWindowViewModel` 拆分**：约 1,400 行的单文件拆成 `.Connection`、`.Settings`、`.RecentDevices`、
+  `.HostStatus` 四个 partial，方法体未改。
+- **服务端宿主收敛**：新增 `RemoteDesktop.Server.Hosting`，四个宿主共用配置分层、Windows 服务/systemd 注册与
+  节点令牌端点过滤器；`Server.Shared` 继续保持不含 ASP.NET，`Ops.Core` 的依赖闭包不变。Hosting 使用类库 SDK +
+  ASP.NET 框架引用，避免 Web SDK 把锁文件当作发布内容而与宿主重名（验收中发现的发布失败已修复）。
+- **平台实现继续收窄**：Windows/macOS/Linux/Posix 的六十余个只被测试或同程序集使用的实现类型改为 `internal`；
+  宿主真正使用的 setup、self-check 与控制管道 API 仍为 public。
+- **测试脚手架收敛**：E2E 与 Transport 集成测试共用 `TestSupport`（节点宿主组合、在线等待、`TestRendezvous`
+  与 `TestWait`）；约 20 份 `WaitForAsync`/`WaitUntilAsync` 改为同一实现，超时抛 `TimeoutException`，不再静默返回。
+- **文档规范收敛**：`CLAUDE.md` 改为最短上手与易踩坑清单，规范、索引与细节分别指向 `CONTRIBUTING.md` 与 `docs/`；
+  `docs/ops` 中与 `build/README.md` 重复的打包脚本分层段落改为链接。
+- **观看端时钟统一**：解码器监管与关键帧看门狗改用注入的 `TimeProvider`（生产仍是系统单调时钟）；停滞判定不再
+  需要测试真实等待两秒，观看端测试从约 32 秒缩短到数秒。
+- **平台实现收窄与坐标纯函数**：`SendInputInjector`、`MediaFoundationH264EncoderFactory`、`PipeWireScreenCapturer`、
+  `PortalConnection` 改为 `internal`；显示选择与归一化坐标到虚拟桌面的映射抽成 `SendInputCoordinates` 纯函数，
+  并补齐边界/回退单测。
+- **平台能力接口**：新增 `IHostInstallation` 与 `IPlatformIdentity`，由各平台层注册；客户端不再用
+  `OperatingSystem.Is*` 判断宿主安装形态、摄像头授权或遥测平台。摄像头授权节只在注册了 `ICameraAccess` 时显示；
+  Windows 服务名、Linux unit 与 macOS 宿主路径常量从 `HostControlProtocol` 移到平台层，遥测平台名缺失时
+  报告 `unknown` 而不是默认成 Linux。
+
 ## [1.0.1] - 2026-11-13 · 安装与发布流水线：三平台 CI 全绿、macOS 服务端安装修复
 
 ### Security

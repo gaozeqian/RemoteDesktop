@@ -150,11 +150,17 @@
       "remotedesktop.abstractions": {
         "type": "Project",
         "dependencies": {
-          "RemoteDesktop.Domain": "[1.0.0, )"
+          "RemoteDesktop.Domain": "[1.0.1, )"
         }
       },
       "remotedesktop.domain": {
         "type": "Project"
+      },
+      "remotedesktop.platform.shared": {
+        "type": "Project",
+        "dependencies": {
+          "RemoteDesktop.Abstractions": "[1.0.1, )"
+        }
       },
       "Microsoft.Extensions.Configuration.Abstractions": {
         "type": "CentralTransitive",

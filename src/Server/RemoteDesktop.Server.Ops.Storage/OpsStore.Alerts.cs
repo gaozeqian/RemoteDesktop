@@ -365,16 +365,21 @@ public sealed partial class OpsStore
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var batch = Math.Clamp(limit, 1, 20_000);
 
         await using (var attempts = connection.CreateCommand())
         {
             attempts.Transaction = transaction;
             attempts.CommandText = """
                 DELETE FROM ops_notification_attempt WHERE alert_id IN (
-                    SELECT id FROM ops_alert WHERE state = 'resolved' AND COALESCE(resolved_at, opened_at) < @before
+                    SELECT id FROM ops_alert
+                    WHERE state = 'resolved'
+                      AND (resolved_at < @before OR (resolved_at IS NULL AND opened_at < @before))
+                    ORDER BY id
+                    LIMIT @limit
                 );
                 """;
-            Bind(attempts, ("@before", beforeUnixMilliseconds));
+            Bind(attempts, ("@before", beforeUnixMilliseconds), ("@limit", batch));
             await attempts.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -385,11 +390,13 @@ public sealed partial class OpsStore
             alerts.CommandText = """
                 DELETE FROM ops_alert WHERE id IN (
                     SELECT id FROM ops_alert
-                    WHERE state = 'resolved' AND COALESCE(resolved_at, opened_at) < @before
+                    WHERE state = 'resolved'
+                      AND (resolved_at < @before OR (resolved_at IS NULL AND opened_at < @before))
+                    ORDER BY id
                     LIMIT @limit
                 );
                 """;
-            Bind(alerts, ("@before", beforeUnixMilliseconds), ("@limit", Math.Clamp(limit, 1, 20_000)));
+            Bind(alerts, ("@before", beforeUnixMilliseconds), ("@limit", batch));
             deleted = await alerts.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 

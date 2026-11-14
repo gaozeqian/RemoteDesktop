@@ -4,11 +4,8 @@ using System.Security.Cryptography;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Hosting;
 using RemoteDesktop.Application.Sessions;
+using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.HostService;
-using RemoteDesktop.Features.Camera;
-using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Features.FileTransfer;
-using RemoteDesktop.Features.Terminal;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Linux;
 using RemoteDesktop.Platform.MacOS;
@@ -177,78 +174,37 @@ if (OperatingSystem.IsWindows())
 }
 else if (OperatingSystem.IsLinux())
 {
-    // The features are registered directly rather than forwarded through an agent, which is what AddDesktopFeature
-    // and its siblings do here — the same list the client uses when it hosts incoming sessions itself.
-    builder.Services
-        .AddLinuxPlatform(dataDirectory)
-        .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication(telemetry)
-        .AddRemoteDesktopMedia()
-        .AddDesktopFeature()
-        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-        .AddTerminalFeature()
-        .AddCameraFeature()
-        .AddLocalHostControl(isService: true)
-        .AddHostedService<HostControlServer>();
+    // No service/agent split on these platforms: the host process itself serves the features in the user's graphical
+    // session, the same list the client uses when it hosts incoming sessions itself. Here that process is the systemd
+    // user service.
+    builder.Services.AddLinuxPlatform(dataDirectory);
+    AddInProcessHost();
 }
 else if (OperatingSystem.IsMacOS())
 {
-    // No service/agent split: TCC gives screen recording and input to an app running in the user's graphical session,
-    // so this process is the whole host. It is packaged as a bundle (RemoteDesktop Host.app) with LSUIElement, which
-    // is what gives macOS a stable identity to remember the grants by.
-    RequestMacPermissions(dataDirectory);
-
-    builder.Services
-        .AddMacOSPlatform(dataDirectory)
-        .AddQuicTransport(transport)
-        .AddRemoteDesktopApplication(telemetry)
-        .AddRemoteDesktopMedia()
-        .AddDesktopFeature()
-        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-        .AddTerminalFeature()
-        .AddCameraFeature()
-        .AddLocalHostControl(isService: true)
-        .AddHostedService<HostControlServer>();
+    // TCC gives screen recording and input to an app in the user's graphical session, which is why the host is a
+    // bundle (RemoteDesktop Host.app) with LSUIElement — the stable identity the grants are remembered by.
+    MacHostPermissions.Request(dataDirectory);
+    builder.Services.AddMacOSPlatform(dataDirectory);
+    AddInProcessHost();
 }
 
 await builder.Build().RunAsync().ConfigureAwait(false);
 return 0;
 
-/// <summary>
-/// Asks for the two grants a host cannot work without, and says what to do when macOS will not ask again.
-/// </summary>
-/// <remarks>
-/// A package cannot grant these: they are per-bundle decisions the person makes in System Settings. Requesting them
-/// here means the first login after installation shows the system prompt instead of the host silently capturing
-/// nothing. Screen Recording is only read when a process starts, so the grant is followed by a restart.
-/// </remarks>
-[SupportedOSPlatform("macos")]
-static void RequestMacPermissions(string dataDirectory)
+// Shared by the two platforms that serve the features in this process rather than forwarding them to an agent.
+void AddInProcessHost()
 {
-    foreach (var grant in new[] { TccGrant.ScreenRecording, TccGrant.Accessibility })
+    if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
     {
-        if (TccGrants.IsGranted(grant))
-        {
-            continue;
-        }
-
-        _ = TccGrants.Request(grant);
-        var message = TccGrants.Describe(grant);
-        Console.Error.WriteLine(message);
-
-        // A LaunchAgent has no terminal. The same sentence goes next to the other logs, which is where the installer
-        // and the documentation tell an operator to look when a host is online but captures nothing.
-        try
-        {
-            var directory = Path.Combine(dataDirectory, "logs");
-            Directory.CreateDirectory(directory);
-            File.AppendAllText(
-                Path.Combine(directory, "permissions.log"),
-                $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // The system prompt is still the primary signal; failing to write the note must not stop the host.
-        }
+        return;
     }
+
+    builder.Services
+        .AddQuicTransport(transport)
+        .AddRemoteDesktopApplication(telemetry)
+        .AddRemoteDesktopMedia()
+        .AddRemoteDesktopHostFeatures(dataDirectory)
+        .AddLocalHostControl(isService: true)
+        .AddHostedService<HostControlServer>();
 }

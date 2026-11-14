@@ -13,7 +13,7 @@ namespace RemoteDesktop.Platform.MacOS;
 /// acquires are counted here so that two sessions do not have the second release cancel the first one's assertion.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class IOPMAssertionKeepAwake : ISystemKeepAwake
+internal sealed class IOPMAssertionKeepAwake : ISystemKeepAwake
 {
     private readonly Lock _gate = new();
     private uint _assertionId;

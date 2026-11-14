@@ -38,6 +38,16 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
     /// <summary>A picture older than this is not handed to a subscriber that has just arrived.</summary>
     public static readonly TimeSpan MaxStaleness = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How often a newly arriving subscriber may force a rebuild of a running share.
+    /// </summary>
+    /// <remarks>
+    /// One rebuild gives every viewer that joins around the same time a fresh frame. Without the throttle, a burst of
+    /// controllers on a static desktop would recreate the duplication for each of them and interrupt the sessions
+    /// that were already watching.
+    /// </remarks>
+    private static readonly TimeSpan SubscriberResetInterval = TimeSpan.FromSeconds(5);
+
     private readonly Func<DisplayInfo, IScreenCapturer> _createCapturer;
     private readonly ILogger _logger;
     private readonly TimeSpan _idleGrace;
@@ -54,6 +64,7 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
     private bool _reset;
     private bool _faulted;
     private long _lastFaultLog;
+    private long _lastSubscriberReset;
 
     private SharedFrame? _latest;
     private long _version;
@@ -128,6 +139,18 @@ internal sealed partial class SharedDisplayCapture : IAsyncDisposable
                         // The loop is starting again after an idle gap; the loop itself marked the backend for a
                         // rebuild when it went away, so nothing from before the gap is replayed here.
                         StartLoopLocked();
+                    }
+                    else if (_latest is { } latest
+                             && Stopwatch.GetElapsedTime(latest.PublishedAt) >= MaxStaleness
+                             && (_lastSubscriberReset == 0
+                                 || Stopwatch.GetElapsedTime(_lastSubscriberReset) >= SubscriberResetInterval))
+                    {
+                        // The loop is already running, but its only picture is too old for a subscriber that just
+                        // arrived (see MaxStaleness), and a static desktop will not produce a new one. Rebuild the
+                        // backend so this arrival gets the desktop as it is now. Throttled, because a burst of
+                        // viewers must not make the sessions already watching pay for a rebuild each time.
+                        _lastSubscriberReset = Stopwatch.GetTimestamp();
+                        _reset = true;
                     }
 
                     return new SharedScreenCapturer(this);

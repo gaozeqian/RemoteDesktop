@@ -15,7 +15,7 @@ namespace RemoteDesktop.Platform.MacOS.Display;
 /// never has to be reconciled downstream.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class CoreGraphicsDisplays : IDisplayEnumerator
+internal sealed class CoreGraphicsDisplays : IDisplayEnumerator
 {
     public IReadOnlyList<DisplayInfo> GetDisplays()
     {

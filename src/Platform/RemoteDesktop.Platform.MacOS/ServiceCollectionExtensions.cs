@@ -41,6 +41,8 @@ public static class ServiceCollectionExtensions
     [SupportedOSPlatform("macos")]
     public static IServiceCollection AddMacOSPlatform(this IServiceCollection services, string dataDirectory)
     {
+        services.AddSingleton<IPlatformIdentity>(new PlatformIdentity("macos"));
+        services.AddSingleton<IHostInstallation>(new MacOSHostInstallation());
         services.AddSingleton<ISecretStore>(new KeychainSecretStore(dataDirectory));
         services.AddSingleton<IDisplayEnumerator, CoreGraphicsDisplays>();
         services.AddSingleton<IScreenCapturerFactory, ScreenCaptureKitCapturerFactory>();

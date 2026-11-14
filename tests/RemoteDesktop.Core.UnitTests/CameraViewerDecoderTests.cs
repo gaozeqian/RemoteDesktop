@@ -1,4 +1,5 @@
 using RemoteDesktop.Features.Camera;
+using RemoteDesktop.Transport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -34,27 +35,29 @@ public sealed class CameraViewerDecoderTests : ViewerDecoderTests
         await rig.TickAsync(TimeSpan.FromSeconds(1));
         await rig.ExpectKeyFrameRequestsAsync(0);
 
-        await Task.Delay(PastStallTimeout, Ct);
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(PastStallTimeout);
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the first pass asks");
 
-        // The retry rate while no picture can be shown is one request per two seconds of real time.
+        // The retry rate while no picture can be shown is one request per two seconds of clock time.
         await rig.TickAsync(TimeSpan.FromSeconds(1));
         await rig.ExpectKeyFrameRequestsAsync(1);
     }
 
     [Fact]
-    public async Task The_watchdog_stays_quiet_once_a_picture_is_showing()
+    public async Task A_picture_that_stops_arriving_is_checked_with_one_key_frame_and_no_immediate_repeat()
     {
         await using var rig = await CameraViewerRig.StartAsync();
         rig.Factory.ProducePictures = true;
         await rig.SendKeyFrameAsync();
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.FrameNumber == 1), "a picture is showing");
 
+        // A static scene produces nothing on its own; after the stall timeout the watchdog asks once to prove the
+        // path is alive. The next two seconds back off instead of asking again.
         await rig.TickAsync(TimeSpan.FromSeconds(2));
+        Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the quiet picture is checked");
         await rig.TickAsync(TimeSpan.FromSeconds(2));
 
-        await rig.ExpectKeyFrameRequestsAsync(0);
+        await rig.ExpectKeyFrameRequestsAsync(1);
     }
 
     [Fact]
@@ -69,8 +72,17 @@ public sealed class CameraViewerDecoderTests : ViewerDecoderTests
         Assert.True(await ViewerRig.WaitUntilAsync(() => rig.KeyFrameRequests == 1), "the bad frame is answered with a request");
 
         // The shared watchdog waits for the stall timeout of silence before asking again, as the desktop one does.
-        await Task.Delay(PastStallTimeout, Ct);
-        await rig.TickAsync(TimeSpan.FromSeconds(1));
+        await rig.TickAsync(PastStallTimeout);
         await rig.ExpectKeyFrameRequestsAsync(2);
+    }
+
+    [Fact]
+    public void Opening_a_camera_waits_longer_than_a_generic_request()
+    {
+        // Opening can block on a TCC prompt on the controlled end, which only the person at that machine can answer.
+        // The generic 30-second deadline expired while the prompt was still up and turned a denial into a timeout.
+        Assert.True(
+            CameraViewer.OpenTimeout > RequestTimeout.Default,
+            $"Camera open waits {CameraViewer.OpenTimeout}, which is not longer than the generic {RequestTimeout.Default}.");
     }
 }

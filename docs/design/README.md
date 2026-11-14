@@ -24,8 +24,9 @@ Domain ← Abstractions ← Protocol ← Transport ← Application ← Features 
 ```
 
 *说明：箭头方向是"被依赖 ← 依赖者"。`Platform.*` 依赖 `Abstractions` 提供的接口以及 `Domain` 的实体；`Media`
-只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`。
-`Features.Desktop` 与 `Features.Camera` 引用 `Media`；宿主（`Client`、`HostService`、`SessionAgent`）除了
+只依赖 `Abstractions`，不依赖 `Domain` 或其他业务逻辑层；`Platform.Linux` 与 `Platform.MacOS` 另外共用 `Platform.Posix`，
+三个平台还共用与本机 API 无关的 `Platform.Shared`。
+`Features.Desktop` 与 `Features.Camera` 引用 `Media`，并共用 `Features.Shared` 的接收循环；宿主（`Client`、`HostService`、`SessionAgent`）除了
 `Application` 与各 `Features.*`，还直接引用 `Media` 和 `Platform.*`，在启动时把它们接起来。`Signaling` 为了保证
 服务端不引入任何客户端依赖，是一个完全独立的协议包——`Transport` 与 `Server.Shared` 引用它，它不引用任何人。*
 
@@ -66,6 +67,8 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
 * **`Terminal`**: 远程终端（纯文本交互和 VT 序列解析；终端本身由平台层提供——Windows 是 ConPTY，
   macOS 与 Linux 是共享 `Posix` 层的 PTY）。
 * **`Camera`**: 摄像头采集与推送（经被控端授权，使用中被控端有提示）。
+* **`Shared`**: Desktop 与 Camera 共用的接收循环——读线帧、把控制信封交给各自的 viewer、解码、保留最新帧、
+  统计与键帧/停滞恢复。放在 Feature 层而不是 `Media`：`Media` 不能引用线协议，`Application` 不能引用 `Media`。
 
 ### 具体实现层 (Implementations & Platforms)
 
@@ -84,6 +87,10 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
   音频走 PulseAudio，防休眠走 logind，密钥是 0600 文件。
 * **`RemoteDesktop.Platform.Posix`**: 两个类 Unix 系统语义相同的部分——PTY（`posix_spawn`，不用 `fork`
   ——多线程 .NET 进程里 fork 会死锁）、0600 文件密钥库、Unix 用户上下文守卫。
+* **`RemoteDesktop.Platform.Shared`**: 与具体操作系统 API 无关、三个平台实现原本各抄一份的代码。目前是显示
+  查找缓存（Windows/macOS 2 秒、Linux 5 秒，生命周期由调用方传入）；录制队列、编码输入校验与“只保留最新帧”
+  的 sink 会按同样方式逐步迁入。它只引用 `Abstractions`，因此 `DependencyRuleTests` 的 `Platform` 规则同样
+  覆盖它。
 
 ### 宿主与程序入口 (Hosts)
 
@@ -96,18 +103,24 @@ macOS 共用 `Platform.Posix`（各层的职责见下）。宿主在启动时按
 * **`RemoteDesktop.SessionAgent`**: **仅 Windows。** 由 HostService 在当前激活的用户桌面（或登录界面）
   创建的工作子进程，真正执行截屏和操作，保证权限安全（防止 SYSTEM 权限滥用）。Linux 与 macOS 没有
   Session 0——portal 与 TCC 都只在用户会话里应答——所以没有需要拆出去的那一半：不是没做，是不需要。
+* **`RemoteDesktop.Hosts.Composition`**: 不是可执行文件，只把被控端要提供的四个特性收成一份
+  `AddRemoteDesktopHostFeatures(dataDirectory)`；客户端独立托管、HostService 的非 Windows 分支与
+  SessionAgent 都调用它，新增特性时不必在四个组合根里各改一遍。
 * **`RemoteDesktop.Server.*`**: 服务端，可以部署在 Windows、Linux（含 Docker）和 macOS 上。它不引用
   `Abstractions`、`Protocol`、`Transport`、`Application`、`Features`、`Media`、`Platform` 和各宿主（架构测试保证），
   与客户端只共享 `Signaling` 契约。项目分工如下：
   * `Server.Shared`：服务端公共契约与配置步骤——`RelayTicket`、`RelayCookie`、`OpsEventEnvelope` / `OpsEventKinds` / `OpsEventSigner`、`NodeTokenGuard`、
     `ServerSetup` 等；引用 `Signaling`。
-  * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared`；Rendezvous 还引用
-    `Server.Storage`（见下）。
+  * `Server.Hosting`：四个宿主共用的启动路径——实机设置分层、Windows 服务 / systemd 注册与节点令牌端点过滤器；
+    引用 `Server.Shared`，被四个宿主引用。它**不能**放进 `Server.Shared`：`Ops.Core` 引用 Shared，而 Hosting 带
+    ASP.NET 与宿主包，放进去会让“控制台策略层不含 ASP.NET”的契约静默失效。
+  * `Server.Rendezvous`（信令协调）和 `Server.Relay`（UDP 流量中继）：引用 `Server.Shared` 与 `Server.Hosting`；
+    Rendezvous 还引用 `Server.Storage`（见下）。
   * `Server.Storage`：设备注册表的持久化，没有项目依赖。
   * `Server.Ops.Core` / `Server.Ops.Storage` / `Server.Ops`：运维监控台的三层，见“运维监控台”一节。依赖只向内：`Ops.Core` →
-    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared`；三者都**不**引用
-    `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
-  * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared`。
+    `Shared`，`Ops.Storage` → `Ops.Core`，`Ops`（Web 宿主）→ 两者，另外还引用 `Server.Shared` 与
+    `Server.Hosting`；三者都**不**引用 `Server.Storage`（`The_console_layers_only_point_inwards` 断言）。
+  * `Server.Gateway`：监控台的 HTTPS 入口（YARP 反向代理），引用 `Server.Shared` 与 `Server.Hosting`。
 
 > **macOS 采用单进程宿主模型**：macOS 没有 Session 0，以 root 运行的 LaunchDaemon 拿不到屏幕录制权限，
 > 因此 Windows 的"服务 + 会话 Agent"模型在 macOS 上不成立。macOS 被控端 = 运行在用户图形会话里的一个
@@ -177,8 +190,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 
 **已经验证到什么程度。** 契约测试同时跑内存与 SQLite（同一指纹并发、32 路并发、撞车重试、跨实例持久化、
 删文件后探活失败、`CHECK` 约束），`/health` 有 SQLite 起服务的用例，三个 RID 的自包含发布都带
-`e_sqlite3`。**没验证的**：三平台安装包的真机安装（CI 只构建、不安装），以及真 PostgreSQL 上的往返
-（CI 没有 PG，PG 的 DDL 与 upsert 只由文本断言钉住）。动这两处时，别把"测试通过"当成"装过一遍"。
+`e_sqlite3`。**验证边界**：三平台安装包在 CI 的一次性 runner 上真实安装并检查服务（Windows 还做升级/卸载）；
+Linux job 用 PostgreSQL 18 跑设备注册表与监控台存储的契约测试，Windows/macOS job 只跑内存与 SQLite。
+真机长期运行、生产数据库迁移与跨机器安装仍由人工验收。动这些地方时，别把"测试通过"当成"在生产上装过一遍"。
 
 ## 2. 通信协议
 
@@ -596,7 +610,8 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   `correlationId` 合并（取最早的结束时间，原因保留第一次）。它**不受 `Telemetry:Enabled` 影响**——直连会话没有
   中继记录，这是它唯一的结束事实；少了它，行会一直显示"进行中"。服务端按设备限流后转成 `session.ended`。
   被控端无论会话怎么结束（本机点断开、控制端正常离开、断网）都会上报，心跳也随之停止。结束报告描述的是 QUIC 会话，
-  与信令 WebSocket 无关，所以信令断开时尚未发出（或发送失败）的报告会留在队列里，重连后补发（队列上限 32，满则丢最旧）；
+  与信令 WebSocket 无关，所以信令断开时尚未发出（或发送失败）的报告会留在队列里，重连后补发（按会话去重，
+  发送成功即移除；队列不设固定上限，也不淘汰别的会话的结束事实）；
   心跳则相反，断开即丢弃。服务端按设备限流，重连后一次冲出多条时可能丢一部分，这是已接受的取舍。
 
 ### 数据模型
@@ -606,7 +621,7 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
 以那个文件为准。即使一列"感觉上属于 CREATE TABLE"，也写成迁移而不是改基线——改基线只帮得了新库，帮不了已有的库。
 时间统一存 Unix 毫秒，SQLite 与 PostgreSQL 共用一份 DDL（个别迁移按方言分写）。
 
-核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；后台任务每 10 分钟将原始样本聚合为 1 分钟与 1 小时桶，并按较长保留期保存长期趋势数据）、
+核心表：`ops_node`（节点）、`ops_metric_sample` / `ops_metric_catalog` / `ops_metric_rollup`（指标；降采样任务默认关闭，打开后每 10 分钟从最新桶继续增量聚合为 1 分钟与 1 小时桶，首次只回看 24 小时，并按较长保留期保存趋势数据）、
 `ops_event` / `ops_session`（事实与投影）、`ops_alert_rule` / `ops_alert`（规则与告警）、`ops_notification_channel`
 （预留，当前未使用：通道是代码里的常量 `webhook` / `smtp`，不是表）/ `ops_notification_attempt`（投递记录）、
 `ops_silence`（静默）、`ops_admin_user` / `_session`（账号）、
@@ -651,8 +666,9 @@ SQLite 的三个细节都有原因：WAL（读不等那一个写者）、写串�
   服务正常停止时会主动释放租约，所以单实例重启后新进程立刻接手，只有进程被强杀时才需要等租约过期。
 * **历史靠清理任务收敛，不是无限保留**：原始指标样本、降采样指标桶、事件、会话与已恢复告警按
   `Ops:Retention:*` 每小时删除一次（见 [部署与运维](../ops/README.md) 的"数据保留"），过期管理员会话每轮都删；
-  **打开中的告警与审计哈希链不动**。原始样本默认只留 30 天（`SampleDays`），1 分钟/1 小时的
-  `ops_metric_rollup` 桶默认留 365 天（`RollupDays`），以较低粒度保留长期趋势；各自设为 `0` 会关闭对应清理。
+  **打开中的告警与审计哈希链不动**。原始样本默认只留 30 天（`SampleDays`）；1 分钟/1 小时的
+  `ops_metric_rollup` 桶默认不生成（`Ops:RollupEnabled=false`），保留期默认 0（不删除）。需要长期趋势时
+  同时打开 rollup 与 `RollupDays`（例如 365），以较低粒度保留历史；各保留项设为 `0` 会关闭对应清理。
   清理不覆盖 `ops_admin_action`（管理动作记录）、已过期的 `ops_silence` 和 `ops_audit_log`，它们会随使用缓慢增长。
   备份、归档与磁盘容量仍是运维自己的事。
 * Windows 侧监控台是服务端 MSI 的一部分（`RemoteDesktopOps` 服务，自动启动、崩溃重启）；单独拿可执行文件

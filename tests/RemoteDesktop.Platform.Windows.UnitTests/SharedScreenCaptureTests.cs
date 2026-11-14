@@ -110,6 +110,37 @@ public class SharedScreenCaptureTests
     }
 
     /// <summary>
+    /// A second viewer joining a running share while the desktop is static used to wait forever: the only picture was
+    /// older than <see cref="SharedDisplayCapture.MaxStaleness"/> and got rejected, and no new frame would ever arrive.
+    /// A new subscriber now asks the share to rebuild, so the capture delivers the desktop as it is now.
+    /// </summary>
+    [Fact]
+    public async Task A_new_subscriber_on_a_static_screen_forces_a_fresh_capture()
+    {
+        var fakes = new List<FakeCapturer>();
+        await using var capture = new SharedDisplayCapture(TestDisplay, Collect(fakes), NullLogger.Instance, TimeSpan.FromMilliseconds(50));
+        await using var first = capture.Subscribe();
+
+        fakes[0].Push();
+        using (await first.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken))
+        {
+        }
+
+        // The fake pushes nothing else, exactly like a desktop nobody is touching. Wait for the only picture to age
+        // past the limit a new subscriber will accept.
+        await Task.Delay(SharedDisplayCapture.MaxStaleness + TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken);
+
+        await using var second = capture.Subscribe();
+
+        // The share had to rebuild the backend for the new subscriber; once it has, the frame the new backend
+        // produces is accepted within the second the plan allows.
+        await WaitForAsync(() => fakes.Count >= 2);
+        fakes[^1].Push();
+        using var fresh = await second.CaptureAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        Assert.NotNull(fresh);
+    }
+
+    /// <summary>
     /// A capture object that throws once is what a lost graphics device looks like. Ending the loop on it left every
     /// controller of that display frozen until the host process restarted, because nothing else would start it again.
     /// </summary>

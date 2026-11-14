@@ -31,7 +31,7 @@ namespace RemoteDesktop.Platform.Linux.Camera;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandCameraEnumerator(
+internal sealed partial class WaylandCameraEnumerator(
     ILoggerFactory loggerFactory,
     ILogger<WaylandCameraEnumerator> logger) : ICameraEnumerator
 {
@@ -415,7 +415,7 @@ public sealed partial class WaylandCameraEnumerator(
 /// open since the list was drawn would be one more thing to keep alive for no gain.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandCameraSourceFactory(
+internal sealed partial class WaylandCameraSourceFactory(
     WaylandCameraEnumerator enumerator,
     ILoggerFactory loggerFactory,
     ILogger<WaylandCameraSourceFactory> logger) : ICameraSourceFactory

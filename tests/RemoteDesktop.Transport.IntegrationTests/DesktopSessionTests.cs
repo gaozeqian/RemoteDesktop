@@ -9,6 +9,7 @@ using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Linux.Video;
 using RemoteDesktop.Platform.MacOS.Video;
 using RemoteDesktop.Platform.Windows.MediaFoundation;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -193,13 +194,6 @@ public sealed class DesktopSessionTests(ServerFixture server) : IClassFixture<Se
     private static VideoChannelModule CreateVideoModule(VideoCodecSelector codecs, FakeDisplays? displays = null) =>
         new(displays ?? new FakeDisplays(), new FakeCapturerFactory(), codecs, TimeProvider.System, NullLogger<VideoChannelModule>.Instance);
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(30));
 }

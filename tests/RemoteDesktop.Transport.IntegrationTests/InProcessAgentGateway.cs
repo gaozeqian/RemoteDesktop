@@ -28,8 +28,10 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
     /// <summary>How many agents have existed, starting at 1.</summary>
     public int Generations { get; private set; } = 1;
 
-    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId sessionId, CancellationToken cancellationToken)
+    public async Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId sessionId, AccessGrant grant, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(grant);
+
         var type = kind switch
         {
             AgentChannelKind.Video => ChannelType.Video,
@@ -42,6 +44,14 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
         };
         var module = _modules.First(m => m.ChannelType == type);
 
+        // The real agent refuses before it opens the data pipe; doing the same here keeps the sessions in these
+        // tests honest about what a grant allows.
+        if (!grant.Allows(module.RequiredPermission))
+        {
+            throw new AgentRefusedException(
+                $"The agent refused the {kind} channel: the session's grant does not include {module.RequiredPermission}.");
+        }
+
         var name = $"rd-agent-{Guid.NewGuid():N}";
         var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -53,7 +63,7 @@ internal sealed class InProcessAgentGateway(IEnumerable<IFeatureModule> agentMod
             token = _generation.Token;
         }
 
-        var session = new SessionContext(sessionId, SessionRole.Host, null!, AccessGrant.Create(SessionMode.Control, Permissions.All, Permissions.All));
+        var session = new SessionContext(sessionId, SessionRole.Host, null!, grant);
         var task = Task.Run(async () =>
         {
             try

@@ -5,6 +5,7 @@ using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Features.Desktop;
 using RemoteDesktop.Protocol;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -100,13 +101,6 @@ public sealed class HostRevocationTests(ServerFixture server) : IClassFixture<Se
         Assert.False(host.HostSessions.Disconnect(SessionId.New()));
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(20));
 }

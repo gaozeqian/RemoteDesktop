@@ -1,4 +1,5 @@
 using RemoteDesktop.Server.Ops.Core;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.UnitTests;
 
@@ -10,7 +11,7 @@ public class LoginThrottleTests
     [Fact]
     public void The_key_locks_after_the_budget_and_opens_again_after_the_window()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var throttle = new LoginThrottle(time, maxFailures: 3, lockSeconds: 60);
 
         throttle.RecordFailure("key");
@@ -28,7 +29,7 @@ public class LoginThrottleTests
     [Fact]
     public void A_successful_sign_in_forgets_the_failures()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var throttle = new LoginThrottle(time, maxFailures: 2, lockSeconds: 60);
 
         throttle.RecordFailure("key");
@@ -41,7 +42,7 @@ public class LoginThrottleTests
     [Fact]
     public void Keys_do_not_share_a_budget()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var throttle = new LoginThrottle(time, maxFailures: 1, lockSeconds: 60);
 
         throttle.RecordFailure(LoginThrottle.KeyFor("10.0.0.1", "alice"));
@@ -56,7 +57,7 @@ public class LoginThrottleTests
     {
         // The old behaviour made every unknown key locked once the table was full. An unauthenticated attacker could
         // fill it with ten thousand names and stop the administrator from signing in.
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var throttle = new LoginThrottle(time, maxFailures: 2, lockSeconds: 60, maxTrackedKeys: 2);
 
         throttle.RecordFailure("a");
@@ -70,7 +71,7 @@ public class LoginThrottleTests
     [Fact]
     public void Making_room_evicts_an_unlocked_key_before_a_locked_one()
     {
-        var time = new ManualTimeProvider(Start);
+        var time = new TestClock(Start);
         var throttle = new LoginThrottle(time, maxFailures: 2, lockSeconds: 60, maxTrackedKeys: 2);
 
         throttle.RecordFailure("locked");

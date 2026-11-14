@@ -14,7 +14,7 @@ namespace RemoteDesktop.Platform.Linux.Video;
 /// on a server, in a virtual machine, or on a card whose driver there is no way to reach.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class SoftwareH264EncoderFactory : IVideoEncoderFactory
+internal sealed class SoftwareH264EncoderFactory : IVideoEncoderFactory
 {
     public string Name => "libavcodec software H.264 (x264)";
 
@@ -61,7 +61,7 @@ public sealed class SoftwareH264EncoderFactory : IVideoEncoderFactory
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class VaapiH264EncoderFactory : IVideoEncoderFactory
+internal sealed class VaapiH264EncoderFactory : IVideoEncoderFactory
 {
     private readonly Lazy<IReadOnlyList<string>> _nodes = new(ProbeRenderNodes);
 
@@ -140,7 +140,7 @@ public sealed class VaapiH264EncoderFactory : IVideoEncoderFactory
 /// whether it accepts the settings is left to <see cref="Create"/> — which is what the selector's fallback is for.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class NvencH264EncoderFactory : IVideoEncoderFactory
+internal sealed class NvencH264EncoderFactory : IVideoEncoderFactory
 {
     private readonly Lazy<bool> _available = new(() =>
     {
@@ -148,9 +148,9 @@ public sealed class NvencH264EncoderFactory : IVideoEncoderFactory
         unsafe
         {
             // No render node of NVIDIA's is looked at: NVENC is reached through CUDA, not through /dev/dri, and a
-            // machine whose driver exposes no render node can still encode perfectly well.
-            return ffmpeg.avcodec_find_encoder_by_name("h264_nvenc") is not null
-                && DrmRenderNodes.Enumerate().Any(node => node.IsNvidia);
+            // machine whose driver exposes no render node (a container, a headless box) can still encode perfectly
+            // well. Whether the settings can actually be opened is left to Create and the selector's fallback.
+            return ffmpeg.avcodec_find_encoder_by_name("h264_nvenc") is not null;
         }
     });
 
@@ -170,7 +170,7 @@ public sealed class NvencH264EncoderFactory : IVideoEncoderFactory
 
 /// <summary>The H.264 decoder, which needs no hardware and no device.</summary>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegVideoDecoderFactory : IVideoDecoderFactory
+internal sealed class FfmpegVideoDecoderFactory : IVideoDecoderFactory
 {
     private readonly Lazy<bool> _available = new(() =>
     {

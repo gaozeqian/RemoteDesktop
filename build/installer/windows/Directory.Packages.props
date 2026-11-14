@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    The installer tree deliberately blocks the repository-wide Directory.Build.props (to keep WiX and net48
+    intermediate output out of artifacts/), so it also needs its own central package versions. Import the root list
+    for packages shared with the tests (WixToolset.Dtf.WindowsInstaller) and add the installer-only ones here.
+    WixToolset.Sdk itself is pinned in global.json under "msbuild-sdks".
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../../Directory.Packages.props" />
+
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
+    <PackageVersion Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Iis.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>

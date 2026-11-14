@@ -221,11 +221,17 @@ public sealed partial class OpsStore
     {
         await using var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        // A bucket is comparable to a timestamp only after multiplying by the step, and the step differs per row. The
+        // join turns that expression into an equality on step_seconds plus a range on bucket — the shape of
+        // ix_ops_metric_rollup_step_bucket — so a batch no longer scans the whole rollup table.
         command.CommandText = """
             DELETE FROM ops_metric_rollup
             WHERE (node_id, metric, step_seconds, bucket) IN (
-                SELECT node_id, metric, step_seconds, bucket FROM ops_metric_rollup
-                WHERE (bucket + 1) * step_seconds * 1000 <= @before
+                SELECT r.node_id, r.metric, r.step_seconds, r.bucket
+                FROM (SELECT DISTINCT step_seconds FROM ops_metric_rollup) AS s
+                JOIN ops_metric_rollup AS r
+                  ON r.step_seconds = s.step_seconds
+                 AND r.bucket < (@before / (s.step_seconds * 1000))
                 LIMIT @limit
             );
             """;
@@ -309,14 +315,51 @@ public sealed partial class OpsStore
     }
 
     /// <summary>
-    /// Aggregates raw samples up to <paramref name="beforeTimestamp"/> into <paramref name="stepSeconds"/> buckets
-    /// in <c>ops_metric_rollup</c>.
+    /// Aggregates every raw sample up to <paramref name="beforeTimestamp"/> into <paramref name="stepSeconds"/>
+    /// buckets in <c>ops_metric_rollup</c>. This is the full-range form used by tests and a deliberate backfill.
     /// </summary>
     /// <returns>Number of rollup buckets upserted.</returns>
-    public async Task<int> RollupSamplesAsync(
+    public Task<int> RollupSamplesAsync(
+        long beforeTimestamp,
+        int stepSeconds,
+        CancellationToken cancellationToken = default) =>
+        RollupCoreAsync(beforeTimestamp, stepSeconds, afterTimestamp: 0, cancellationToken);
+
+    /// <summary>
+    /// The scheduled pass: continues from the newest bucket already written, re-rolling that bucket so samples that
+    /// arrived after the previous pass are folded in. Without a lower bound every pass re-aggregated and rewrote the
+    /// whole retention window (30 days by default), growing with history rather than with new samples. A database
+    /// that has never been rolled up gets one day, not the whole history: the old samples expire on their own, and
+    /// the alternative is a first pass that holds the SQLite writer for minutes.
+    /// </summary>
+    public async Task<int> RollupSamplesIncrementallyAsync(
         long beforeTimestamp,
         int stepSeconds,
         CancellationToken cancellationToken = default)
+    {
+        if (stepSeconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stepSeconds), "stepSeconds must be greater than zero.");
+        }
+
+        var stepMillis = (long)stepSeconds * 1000;
+        long afterTimestamp;
+        await using (var connection = await ConnectAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var latestBucket = await ReadLatestRollupBucketAsync(connection, stepSeconds, cancellationToken).ConfigureAwait(false);
+            afterTimestamp = latestBucket is { } bucket
+                ? Math.Max(0, (bucket - 1) * stepMillis)
+                : Math.Max(0, beforeTimestamp - (long)TimeSpan.FromHours(24).TotalMilliseconds);
+        }
+
+        return await RollupCoreAsync(beforeTimestamp, stepSeconds, afterTimestamp, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<int> RollupCoreAsync(
+        long beforeTimestamp,
+        int stepSeconds,
+        long afterTimestamp,
+        CancellationToken cancellationToken)
     {
         if (stepSeconds <= 0)
         {
@@ -334,7 +377,7 @@ public sealed partial class OpsStore
             WITH bucketed AS (
                 SELECT node_id, metric, ts, value, (ts / @stepMillis) AS bucket
                 FROM ops_metric_sample
-                WHERE ts <= @beforeTs
+                WHERE ts >= @afterTs AND ts <= @beforeTs
             ), aggregates AS (
                 SELECT node_id, metric, bucket,
                        MIN(value) AS min_val, MAX(value) AS max_val, AVG(value) AS avg_val, COUNT(*) AS cnt
@@ -355,7 +398,11 @@ public sealed partial class OpsStore
                    aggregates.min_val, aggregates.max_val, aggregates.avg_val, aggregates.cnt
             FROM aggregates;
             """;
-        Bind(selectCommand, ("@stepMillis", stepMillis), ("@beforeTs", beforeTimestamp));
+        Bind(
+            selectCommand,
+            ("@stepMillis", stepMillis),
+            ("@afterTs", afterTimestamp),
+            ("@beforeTs", beforeTimestamp));
 
         var rows = new List<(string NodeId, string Metric, long Bucket, double FirstVal, double LastVal, double MinVal, double MaxVal, double AvgVal, int Count)>();
         await using (var reader = await selectCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -380,7 +427,13 @@ public sealed partial class OpsStore
             return 0;
         }
 
+        // A pass re-reads the newest bucket (to absorb a late sample) and the one before it. Most of the time
+        // nothing in them changed, and writing identical rows every ten minutes is exactly the unbounded rewrite the
+        // incremental pass exists to avoid. The predicate leaves an unchanged row untouched, so the return value is
+        // the number of rows that actually changed: zero on a quiet pass, one when a sample landed in the current
+        // bucket. Both providers report the affected-row count from this form.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var written = 0;
         foreach (var row in rows)
         {
             await using var upsertCommand = connection.CreateCommand();
@@ -394,7 +447,13 @@ public sealed partial class OpsStore
                     min_value = excluded.min_value,
                     max_value = excluded.max_value,
                     avg_value = excluded.avg_value,
-                    sample_count = excluded.sample_count;
+                    sample_count = excluded.sample_count
+                WHERE ops_metric_rollup.first_value <> excluded.first_value
+                   OR ops_metric_rollup.last_value <> excluded.last_value
+                   OR ops_metric_rollup.min_value <> excluded.min_value
+                   OR ops_metric_rollup.max_value <> excluded.max_value
+                   OR ops_metric_rollup.avg_value <> excluded.avg_value
+                   OR ops_metric_rollup.sample_count <> excluded.sample_count;
                 """;
             Bind(
                 upsertCommand,
@@ -409,11 +468,24 @@ public sealed partial class OpsStore
                 ("@maxVal", row.MaxVal),
                 ("@count", row.Count));
 
-            await upsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            written += await upsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return rows.Count;
+        return written;
+    }
+
+    /// <summary>The newest bucket already rolled up for a step, or null when this database has none.</summary>
+    private static async Task<long?> ReadLatestRollupBucketAsync(
+        DbConnection connection,
+        int stepSeconds,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT MAX(bucket) FROM ops_metric_rollup WHERE step_seconds = @stepSeconds;";
+        Bind(command, ("@stepSeconds", stepSeconds));
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
     /// <summary>

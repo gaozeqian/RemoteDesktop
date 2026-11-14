@@ -355,6 +355,32 @@ void rd_capture_stop(rd_capture_ref handle)
     dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
 }
 
+int rd_capture_stopped(rd_capture_ref handle, char *reason, size_t reason_size)
+{
+    RDCapture *capture = (__bridge RDCapture *)handle;
+    if (capture == nil || capture.output == nil || !capture.output.stoppedUnexpectedly) {
+        return 0;
+    }
+
+    RDSetError(reason, reason_size, capture.output.stopReason ?: @"The stream stopped.");
+    return 1;
+}
+
+int rd_capture_simulate_unexpected_stop(rd_capture_ref handle, const char *reason)
+{
+    RDCapture *capture = (__bridge RDCapture *)handle;
+    if (capture == nil || capture.output == nil) {
+        return RD_ERROR_ARGUMENT;
+    }
+
+    // The same two fields -[RDStreamOutput stream:didStopWithError:] sets. The stream is deliberately left
+    // running: the test is about the managed side noticing the flag and rebuilding, not about reproducing a
+    // ScreenCaptureKit failure.
+    capture.output.stoppedUnexpectedly = YES;
+    capture.output.stopReason = reason != NULL ? [NSString stringWithUTF8String:reason] : @"The stream stopped.";
+    return RD_OK;
+}
+
 void rd_capture_destroy(rd_capture_ref handle)
 {
     if (handle == NULL) {

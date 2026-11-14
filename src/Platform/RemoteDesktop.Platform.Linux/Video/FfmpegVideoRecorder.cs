@@ -1,9 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.Linux.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.Linux.Video;
 
@@ -22,15 +22,10 @@ namespace RemoteDesktop.Platform.Linux.Video;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegVideoRecorder : IVideoRecorder
+internal sealed class FfmpegVideoRecorder : IVideoRecorder
 {
-    /// <summary>A second of frames at the usual rate. Beyond that the recording is behind live and dropping is kind.</summary>
-    private const int QueueLength = 30;
-
     private readonly Lock _gate = new();
 
-    private Channel<RecordSample>? _channel;
-    private Task? _worker;
     private unsafe AVFormatContext* _format;
     private unsafe AVCodecContext* _encoder;
     private unsafe AVStream* _stream;
@@ -39,22 +34,24 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
     private unsafe AVPacket* _packet;
     private unsafe byte*[]? _destinationData;
     private int[]? _destinationStride;
-    private long _written;
+    private readonly System.Diagnostics.Stopwatch _clock = new();
+    private RecorderFrameQueue<RecordSample>? _queue;
+    private long _pts;
     private int _width;
     private int _height;
-    private int _failure;
-    private DateTime _started;
+    private bool _isRecording;
     private string? _outputPath;
 
-    public bool IsRecording => _channel is not null;
+    public bool IsRecording => _isRecording;
 
     public string? OutputFilePath => _outputPath;
 
-    public TimeSpan Duration => _channel is null ? TimeSpan.Zero : DateTime.UtcNow - _started;
+    /// <summary>The length of this recording, kept after the stop so the caller can report it.</summary>
+    public TimeSpan Duration => _clock.Elapsed;
 
-    public long WrittenFrames => Interlocked.Read(ref _written);
+    public long WrittenFrames => _queue?.WrittenFrames ?? 0;
 
-    public VideoRecorderFailure Failure => (VideoRecorderFailure)Volatile.Read(ref _failure);
+    public VideoRecorderFailure Failure => _queue?.Failure ?? VideoRecorderFailure.None;
 
     public void Start(string filePath, int width, int height, int frameRate = 30, int bitrateKbps = 4000)
     {
@@ -64,19 +61,19 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
         lock (_gate)
         {
-            if (_channel is not null)
+            if (_isRecording)
             {
                 throw new InvalidOperationException("A recording is already running.");
             }
 
+            // A start that fails must report no failure from the previous, already-stopped recording.
+            _queue = null;
+
             FfmpegLibraries.EnsureResolved();
 
-            // The reason the recording is not being written is the first one, and stays that way: a later frame that
-            // also fails says nothing about where the file actually ends.
-            Volatile.Write(ref _failure, (int)VideoRecorderFailure.None);
-            Interlocked.Exchange(ref _written, 0);
             _outputPath = filePath;
-            _started = DateTime.UtcNow;
+            _clock.Restart();
+            Interlocked.Exchange(ref _pts, 0);
 
             // Kept as plain numbers: RecordFrame runs on the caller's thread and must not read the native encoder
             // context, which Close frees when a stop on another thread finishes.
@@ -85,22 +82,15 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
             Open(filePath, width, height, frameRate, bitrateKbps);
 
-            var channel = Channel.CreateBounded<RecordSample>(new BoundedChannelOptions(QueueLength)
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                FullMode = BoundedChannelFullMode.DropOldest,
-            });
-
-            _channel = channel;
-            _worker = Task.Run(() => ProcessQueueAsync(channel));
+            _queue = new RecorderFrameQueue<RecordSample>(Write);
+            _isRecording = true;
         }
     }
 
     public void RecordFrame(ReadOnlySpan<byte> bgraPixels, int stride, int width, int height)
     {
-        var channel = _channel;
-        if (channel is null)
+        var queue = _queue;
+        if (!_isRecording || queue is null)
         {
             return;
         }
@@ -113,11 +103,13 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
             return;
         }
 
-        // The last row needs only its visible bytes, not the padding after it, which is all the other recorders ask for.
+        // The last row needs only its visible bytes, not the padding after it, which is all the other recorders ask
+        // for. A buffer shorter than that is a malformed frame, not an encoder failure: drop it and keep recording,
+        // which is what the Windows and macOS recorders do. Reporting WriteFailed would tell the caller the file is
+        // broken when the next well-formed frame still goes in.
         var required = ((height - 1) * stride) + (width * 4);
         if (stride < width * 4 || bgraPixels.Length < required)
         {
-            Fail(VideoRecorderFailure.WriteFailed);
             return;
         }
 
@@ -125,39 +117,38 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
         // the full stride * height size so the converter's view of the last row is the same as with a padded frame.
         var pixels = new byte[stride * height];
         bgraPixels[..required].CopyTo(pixels);
-        channel.Writer.TryWrite(new RecordSample(pixels, stride, width, height));
+        queue.TryEnqueue(new RecordSample(pixels, stride, width, height));
     }
 
     public async Task<string> StopAsync()
     {
-        Channel<RecordSample>? channel;
-        Task? worker;
+        RecorderFrameQueue<RecordSample>? queue;
 
         lock (_gate)
         {
-            channel = _channel;
-            worker = _worker;
-            _channel = null;
-            _worker = null;
+            queue = _queue;
+            _isRecording = false;
+            _clock.Stop();
         }
 
-        if (channel is null || worker is null)
+        if (queue is null)
         {
             // Nothing is running (never started, or already stopped): same answer as the Windows and macOS recorders
             // give, the path of the latest recording, or an empty string when there has been none.
             return _outputPath ?? string.Empty;
         }
 
-        channel.Writer.TryComplete();
-        await worker.ConfigureAwait(false);
+        queue.Complete();
+        await queue.DrainAsync().ConfigureAwait(false);
 
         var path = _outputPath!;
 
         // Nothing reached the encoder: there is no picture to finalize, and a file holding no frames is removed
-        // rather than left behind as something a person would try to play.
-        if (Interlocked.Read(ref _written) == 0)
+        // rather than left behind as something a person would try to play. The queue is kept after the stop so
+        // WrittenFrames and Failure still answer.
+        if (queue.WrittenFrames == 0)
         {
-            Fail(VideoRecorderFailure.NothingRecorded);
+            queue.Fail(VideoRecorderFailure.NothingRecorded);
             Close(keepFile: false);
             throw new InvalidOperationException("No frame was recorded, so there is nothing to finalize.");
         }
@@ -168,7 +159,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
     public async ValueTask DisposeAsync()
     {
-        if (_channel is not null)
+        if (_isRecording)
         {
             try
             {
@@ -182,8 +173,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
     }
 
     /// <summary>Records the first reason and keeps it.</summary>
-    private void Fail(VideoRecorderFailure failure) =>
-        Interlocked.CompareExchange(ref _failure, (int)failure, (int)VideoRecorderFailure.None);
+    private void Fail(VideoRecorderFailure failure) => _queue?.Fail(failure);
 
     private unsafe void Open(string filePath, int width, int height, int frameRate, int bitrateKbps)
     {
@@ -307,43 +297,17 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
         }
     }
 
-    private async Task ProcessQueueAsync(Channel<RecordSample> channel)
-    {
-        try
-        {
-            await foreach (var sample in channel.Reader.ReadAllAsync().ConfigureAwait(false))
-            {
-                try
-                {
-                    Write(sample);
-                }
-#pragma warning disable CA1031 // A failed recording must not end the session that is being recorded.
-                catch (Exception)
-#pragma warning restore CA1031
-                {
-                    Fail(VideoRecorderFailure.WriteFailed);
-                }
-            }
-        }
-#pragma warning disable CA1031 // Same: the worker ending must not take the process with it.
-        catch (Exception)
-#pragma warning restore CA1031
-        {
-            Fail(VideoRecorderFailure.WriteFailed);
-        }
-    }
 
-    private unsafe void Write(RecordSample sample)
+    private unsafe VideoRecorderFailure? Write(RecordSample sample)
     {
         if (_frame->data[0] is null)
         {
-            return;
+            return null;
         }
 
         if (ffmpeg.av_frame_make_writable(_frame) < 0)
         {
-            Fail(VideoRecorderFailure.WriteFailed);
-            return;
+            return VideoRecorderFailure.WriteFailed;
         }
 
         fixed (byte* source = sample.Pixels)
@@ -356,19 +320,17 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
             if (converted <= 0)
             {
-                Fail(VideoRecorderFailure.WriteFailed);
-                return;
+                return VideoRecorderFailure.WriteFailed;
             }
         }
 
         // Timed by the recorder rather than by the caller: a recording's timeline is its own, and a caller that drops
         // frames must not make it run fast.
-        _frame->pts = Interlocked.Read(ref _written);
+        _frame->pts = Interlocked.Read(ref _pts);
 
         if (ffmpeg.avcodec_send_frame(_encoder, _frame) < 0)
         {
-            Fail(VideoRecorderFailure.WriteFailed);
-            return;
+            return VideoRecorderFailure.WriteFailed;
         }
 
         while (true)
@@ -381,8 +343,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
             if (received < 0)
             {
-                Fail(VideoRecorderFailure.WriteFailed);
-                return;
+                return VideoRecorderFailure.WriteFailed;
             }
 
             _packet->stream_index = _stream->index;
@@ -393,12 +354,12 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
             if (written < 0)
             {
-                Fail(VideoRecorderFailure.WriteFailed);
-                return;
+                return VideoRecorderFailure.WriteFailed;
             }
         }
 
-        Interlocked.Increment(ref _written);
+        Interlocked.Increment(ref _pts);
+        return null;
     }
 
     /// <summary>Flushes what is left and closes everything, optionally taking the file with it.</summary>
@@ -458,9 +419,9 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
                 _format = null;
             }
 
-            if (!keepFile && _outputPath is { Length: > 0 } path && File.Exists(path))
+            if (!keepFile)
             {
-                File.Delete(path);
+                RecorderFile.TryDelete(_outputPath);
             }
         }
     }
@@ -482,7 +443,7 @@ public sealed class FfmpegVideoRecorder : IVideoRecorder
 
 /// <summary>Creates a recorder per recording, which is how the callers use it.</summary>
 [SupportedOSPlatform("linux")]
-public sealed class FfmpegVideoRecorderFactory : IVideoRecorderFactory
+internal sealed class FfmpegVideoRecorderFactory : IVideoRecorderFactory
 {
     public IVideoRecorder Create() => new FfmpegVideoRecorder();
 }

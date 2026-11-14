@@ -16,6 +16,7 @@
   </Folder>
   <Folder Name="/src/Features/">
     <Project Path="src/Features/RemoteDesktop.Features.Desktop/RemoteDesktop.Features.Desktop.csproj" />
+    <Project Path="src/Features/RemoteDesktop.Features.Shared/RemoteDesktop.Features.Shared.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.FileTransfer/RemoteDesktop.Features.FileTransfer.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.Terminal/RemoteDesktop.Features.Terminal.csproj" />
     <Project Path="src/Features/RemoteDesktop.Features.Camera/RemoteDesktop.Features.Camera.csproj" />
@@ -25,17 +26,20 @@
   </Folder>
   <Folder Name="/src/Platform/">
     <Project Path="src/Platform/RemoteDesktop.Platform.Windows/RemoteDesktop.Platform.Windows.csproj" />
+    <Project Path="src/Platform/RemoteDesktop.Platform.Shared/RemoteDesktop.Platform.Shared.csproj" />
     <Project Path="src/Platform/RemoteDesktop.Platform.Posix/RemoteDesktop.Platform.Posix.csproj" />
     <Project Path="src/Platform/RemoteDesktop.Platform.Linux/RemoteDesktop.Platform.Linux.csproj" />
     <Project Path="src/Platform/RemoteDesktop.Platform.MacOS/RemoteDesktop.Platform.MacOS.csproj" />
   </Folder>
   <Folder Name="/src/Hosts/">
     <Project Path="src/Hosts/RemoteDesktop.Client/RemoteDesktop.Client.csproj" />
+    <Project Path="src/Hosts/RemoteDesktop.Hosts.Composition/RemoteDesktop.Hosts.Composition.csproj" />
     <Project Path="src/Hosts/RemoteDesktop.HostService/RemoteDesktop.HostService.csproj" />
     <Project Path="src/Hosts/RemoteDesktop.SessionAgent/RemoteDesktop.SessionAgent.csproj" />
   </Folder>
   <Folder Name="/src/Server/">
     <Project Path="src/Server/RemoteDesktop.Server.Shared/RemoteDesktop.Server.Shared.csproj" />
+    <Project Path="src/Server/RemoteDesktop.Server.Hosting/RemoteDesktop.Server.Hosting.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Storage/RemoteDesktop.Server.Storage.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Ops.Core/RemoteDesktop.Server.Ops.Core.csproj" />
     <Project Path="src/Server/RemoteDesktop.Server.Ops.Storage/RemoteDesktop.Server.Ops.Storage.csproj" />

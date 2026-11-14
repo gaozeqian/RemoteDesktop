@@ -57,6 +57,12 @@ public sealed class AgentUnavailableException : Exception
 }
 
 /// <summary>
+/// The agent is running but refused the channel because the grant it was given does not allow it. Distinct from
+/// <see cref="AgentUnavailableException"/> so a gateway does not wait for another agent that would refuse the same grant.
+/// </summary>
+public sealed class AgentRefusedException(string message) : Exception(message);
+
+/// <summary>
 /// The privileged host service cannot capture the screen or inject input itself (Session 0 on Windows, a daemon
 /// elsewhere). It supervises an agent process inside the interactive session and reaches it through this port.
 /// The agent is replaced when the input desktop changes (user ↔ login screen / UAC), which the gateway hides:
@@ -75,6 +81,11 @@ public interface IAgentGateway
     /// Opens a byte stream to the agent's implementation of a feature channel. Waits a short while for an agent that is
     /// starting; the stream ends when that agent exits. <paramref name="session"/> is the session the channel serves; the agent uses it to tell its log entries apart.
     /// </summary>
+    /// <param name="grant">
+    /// The session's effective grant when the channel is opened. The agent uses it to build its own session, so a
+    /// channel the service was not allowed to open is refused even if the service-side authorization is bypassed.
+    /// </param>
     /// <exception cref="AgentUnavailableException">No agent became ready in time.</exception>
-    Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, CancellationToken cancellationToken);
+    /// <exception cref="AgentRefusedException">The agent refused the grant; another agent would refuse it too.</exception>
+    Task<Stream> OpenChannelAsync(AgentChannelKind kind, SessionId session, AccessGrant grant, CancellationToken cancellationToken);
 }

@@ -4,8 +4,8 @@
 
 ## 🛠 开发环境准备
 
-1. **SDK 要求**: .NET 10 SDK，**不低于 10.0.112**。版本由根目录的 `global.json` 固定（`rollForward: latestFeature`，
-   同一 主.次 版本（10.0）内更新的功能带也可以），测试运行器也在那里指定为 Microsoft.Testing.Platform。
+1. **SDK 要求**: .NET 10 SDK，版本由根目录的 `global.json` 固定为 `10.0.402`，`rollForward: disable`——必须安装
+   这个 SDK，不能依赖前滚到同一 主.次 版本内的其它功能带；测试运行器也在那里指定为 Microsoft.Testing.Platform。
 2. **IDE 推荐**: Visual Studio 2022 (Preview) / JetBrains Rider / VS Code (配合 C# Dev Kit)。
 3. **构建系统**: 本项目使用较新的 `.slnx` 解决方案格式，请确保您的 IDE 支持。
 
@@ -23,8 +23,14 @@ dotnet test --solution RemoteDesktop.slnx --no-build
 ```
 
 所有项目提交 `packages.lock.json`；生产项目另提交 `packages.win-x64.lock.json`、`packages.linux-x64.lock.json` 与
-`packages.osx-arm64.lock.json`。CI、Release、Docker 和打包脚本均使用 locked mode。变更依赖时按对应 RID 用
-`dotnet restore ... --force-evaluate` 更新锁文件，并重新生成 `THIRD-PARTY-NOTICES.md`。
+`packages.osx-arm64.lock.json`。CI、Release、Docker 和打包脚本均使用 locked mode。变更依赖后运行
+
+```bash
+pwsh -File build/tools/Update-LockFiles.ps1
+```
+
+按三个 RID 更新锁文件（不要手改），再重新生成 `THIRD-PARTY-NOTICES.md`。CI 的 `lock-files` job 用同一脚本的
+`-Check` 只验证不写，漏掉某个 RID 会在 PR 上变红，而不是等到打包阶段。
 
 > `dotnet test` 不带 `--results-directory` 时会在当前目录建一个**空的** `TestResults/`，这是
 > Microsoft.Testing.Platform（`global.json` 指定的测试运行器）的默认值，不是本仓库的约定——仓库自己的脚本与 CI 都把报告写进 `artifacts/test-results/<平台>/`（见下文"构建产物布局"）。
@@ -154,7 +160,8 @@ dotnet run --project src/Hosts/RemoteDesktop.Client -- --DataDirectory /tmp/rd1 
 | macOS | `RemoteDesktop-Client-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Host-macOS-arm64-<tag>.pkg` | `RemoteDesktop-Server-macOS-arm64-<tag>.pkg` |
 | Linux | `RemoteDesktop-Client-Linux-amd64-<tag>.deb` | `RemoteDesktop-Host-Linux-amd64-<tag>.deb` | `RemoteDesktop-Server-Linux-amd64-<tag>.deb` |
 
-**九个资产一个形状**。角色词一律写上——三个平台都出三个包，下载列表里每一行都要能直接看出它是哪一端。
+**最多九个资产一个形状**。角色词一律写上——三个平台各出三个包，下载列表里每一行都要能直接看出它是哪一端。
+缺少 macOS 签名/公证凭据时该平台整组不发布，其余六个仍遵循同一形状（见 `docs/ops/README.md` 的发布一节）。
 三平台的打包脚本产出的名字也是同一个形状（Windows 的 `OutputName`、macOS 的 `PKG_NAME`、Linux 的 `$package`），
 发布时只把 `<版本>` 换成 `<tag>`，所以 `artifacts/installer/` 里的文件名可以直接照发布资产名去找。
 
@@ -177,7 +184,7 @@ dpkg 的词，与包内 `Architecture` 字段（`build/installer/linux/*/control
 `TestResults/` 在当前目录（通常是仓库根），只有不带 `--results-directory` 手跑时才会出现，所以
 `.gitignore` 里留着这条规则。
 
-所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 38 个：`src/` 下 26 个，`tests/` 下 12 个）
+所以项目目录里**没有** `bin/` 和 `obj/` 了：`RemoteDesktop.slnx` 里的每个项目（目前 40 个：`src/` 下 28 个，`tests/` 下 12 个）
 不再各长出两个目录。要清空构建产物，删 `artifacts/bin` 与 `artifacts/obj` 即可，不必逐个项目找。
 
 **唯一的例外**是 `build/installer/windows/` 下的四个安装器工程（`client/` 与 `server/` 各一个 WiX 工程，以及各自目录下 net48 的 `CustomActions`）：它们

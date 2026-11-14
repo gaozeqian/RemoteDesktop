@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Hosts.Composition\RemoteDesktop.Hosts.Composition.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Windows\RemoteDesktop.Platform.Windows.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.Linux\RemoteDesktop.Platform.Linux.csproj" />
     <ProjectReference Include="..\..\Platform\RemoteDesktop.Platform.MacOS\RemoteDesktop.Platform.MacOS.csproj" />

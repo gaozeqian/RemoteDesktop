@@ -21,11 +21,14 @@ public class ClipboardSynchronizerTests
         await using var rig = await Rig.StartAsync();
 
         rig.A.Copy(new TextClipboardContent("hello 你好"));
-
         await rig.B.WaitForAsync(c => c is TextClipboardContent { Text: "hello 你好" });
-        await Task.Delay(600, Ct); // long enough for an echo to show up, if there were one
+
+        // The pipe is ordered, so once a later copy has arrived an echo of the first one would already have been set.
+        rig.A.Copy(new TextClipboardContent("sentinel"));
+        await rig.B.WaitForAsync(c => c is TextClipboardContent { Text: "sentinel" });
+
         Assert.Equal(0, rig.A.SetCalls);
-        Assert.Equal(1, rig.B.SetCalls);
+        Assert.Equal(2, rig.B.SetCalls);
     }
 
     [Fact]
@@ -48,9 +51,11 @@ public class ClipboardSynchronizerTests
         a.Copy(new TextClipboardContent("my private note"));
         await using var rig = await Rig.StartAsync(a, b);
 
-        await Task.Delay(700, Ct);
+        // A later copy goes through; if the pre-session note had been sent, it would have been set first.
+        a.Copy(new TextClipboardContent("after the session started"));
+        await b.WaitForAsync(c => c is TextClipboardContent { Text: "after the session started" });
 
-        Assert.Equal(0, b.SetCalls);
+        Assert.Equal(1, b.SetCalls);
     }
 
     [Fact]
@@ -59,9 +64,9 @@ public class ClipboardSynchronizerTests
         await using var rig = await Rig.StartAsync();
 
         rig.A.Copy(new TextClipboardContent(new string('x', (4 * 1024 * 1024) + 1)));
-        await Task.Delay(700, Ct);
         rig.A.Copy(new TextClipboardContent("small"));
 
+        // Ordered: had the oversized text been sent, it would have been set before "small".
         await rig.B.WaitForAsync(c => c is TextClipboardContent { Text: "small" });
         Assert.Equal(1, rig.B.SetCalls);
     }

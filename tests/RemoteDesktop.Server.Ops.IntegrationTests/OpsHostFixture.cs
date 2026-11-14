@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using RemoteDesktop.Server.Ops;
 using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Ops.IntegrationTests;
 
@@ -31,7 +32,7 @@ public sealed class OpsHostFixture : IAsyncLifetime
     public IServiceProvider Services => _app!.Services;
 
     /// <summary>The clock every service in the host reads.</summary>
-    public TestTimeProvider Time { get; } = new();
+    internal TestClock Time { get; } = new(DateTimeOffset.UtcNow);
 
     /// <summary>The host's current time, for events and signatures that must agree with it.</summary>
     public DateTimeOffset Now => Time.GetUtcNow();

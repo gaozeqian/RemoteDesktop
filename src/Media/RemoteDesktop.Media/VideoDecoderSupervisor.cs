@@ -43,8 +43,8 @@ public sealed class VideoDecoderSupervisor : IDisposable
 
     /// <param name="codecs">Where decoders come from.</param>
     /// <param name="clock">
-    /// The monotonic clock the stall time is measured with (<see cref="TimeProvider.System"/> in production). The
-    /// viewers' own injectable clock is deliberately not this one: it drives their watchdog tick and latency figures.
+    /// The monotonic clock the stall time is measured with. The viewers pass their own injectable clock, so a test can
+    /// step silence forward; in production that is <see cref="TimeProvider.System"/>.
     /// </param>
     /// <param name="onRebuildFailed">Told why a rebuild could not create the new decoder; the old one stays in place.</param>
     public VideoDecoderSupervisor(VideoCodecSelector codecs, TimeProvider clock, Action<Exception> onRebuildFailed)

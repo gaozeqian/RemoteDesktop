@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.Windows.Input;
 
@@ -14,12 +15,11 @@ namespace RemoteDesktop.Platform.Windows.Input;
 /// session agent started by the host service.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IInputInjector
+internal sealed partial class SendInputInjector(IDisplayEnumerator displays) : IInputInjector
 {
     private static readonly TimeSpan DisplayCacheLifetime = TimeSpan.FromSeconds(2);
 
-    private IReadOnlyList<DisplayInfo> _displays = [];
-    private DateTime _displaysLoadedAt;
+    private readonly DisplayLookupCache _displayCache = new(displays, DisplayCacheLifetime);
 
     public void Inject(InputEvent inputEvent)
     {
@@ -73,21 +73,20 @@ public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IIn
     private Input Mouse(string displayId, double x, double y, uint flags, uint data)
     {
         var display = FindDisplay(displayId);
-        var px = display.Bounds.X + (Math.Clamp(x, 0, 1) * (display.Bounds.Width - 1));
-        var py = display.Bounds.Y + (Math.Clamp(y, 0, 1) * (display.Bounds.Height - 1));
-
-        var left = GetSystemMetrics(SmXVirtualScreen);
-        var top = GetSystemMetrics(SmYVirtualScreen);
-        var width = Math.Max(2, GetSystemMetrics(SmCxVirtualScreen));
-        var height = Math.Max(2, GetSystemMetrics(SmCyVirtualScreen));
+        var screen = new VirtualScreen(
+            GetSystemMetrics(SmXVirtualScreen),
+            GetSystemMetrics(SmYVirtualScreen),
+            GetSystemMetrics(SmCxVirtualScreen),
+            GetSystemMetrics(SmCyVirtualScreen));
+        var (dx, dy) = SendInputCoordinates.ToVirtualDesktop(x, y, display, screen);
 
         return new Input
         {
             Type = InputMouse,
             Mouse = new MouseInput
             {
-                Dx = (int)Math.Round((px - left) * 65535.0 / (width - 1)),
-                Dy = (int)Math.Round((py - top) * 65535.0 / (height - 1)),
+                Dx = dx,
+                Dy = dy,
                 MouseData = data,
                 Flags = flags | MouseMove | MouseAbsolute | MouseVirtualDesk,
             },
@@ -110,27 +109,8 @@ public sealed partial class SendInputInjector(IDisplayEnumerator displays) : IIn
         _ => throw new ArgumentOutOfRangeException(nameof(button)),
     };
 
-    private DisplayInfo FindDisplay(string displayId)
-    {
-        if (DateTime.UtcNow - _displaysLoadedAt > DisplayCacheLifetime || _displays.Count == 0)
-        {
-            _displays = displays.GetDisplays();
-            _displaysLoadedAt = DateTime.UtcNow;
-        }
-
-        DisplayInfo? primary = null;
-        foreach (var display in _displays)
-        {
-            if (display.Id == displayId)
-            {
-                return display;
-            }
-
-            primary ??= display.IsPrimary ? display : null;
-        }
-
-        return primary ?? (_displays.Count > 0 ? _displays[0] : throw new InvalidOperationException("No display to inject input into."));
-    }
+    private DisplayInfo FindDisplay(string displayId) =>
+        SendInputCoordinates.SelectDisplay(_displayCache.GetDisplays(), displayId);
 
     private static void Send(params ReadOnlySpan<Input> inputs)
     {

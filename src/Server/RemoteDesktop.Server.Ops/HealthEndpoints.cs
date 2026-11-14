@@ -1,5 +1,5 @@
-using System.Data.Common;
 using System.Net;
+using RemoteDesktop.Server.Ops.Core;
 using RemoteDesktop.Server.Ops.Storage;
 
 namespace RemoteDesktop.Server.Ops;
@@ -15,7 +15,7 @@ public static class HealthEndpoints
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
-        endpoints.MapGet("/health", async (HttpContext context, OpsStore store, CancellationToken cancellationToken) =>
+        endpoints.MapGet("/health", async (HttpContext context, OpsHealthProbe probe, OpsStore store, CancellationToken cancellationToken) =>
         {
             if (context.Connection.RemoteIpAddress is not { } address || !IPAddress.IsLoopback(address))
             {
@@ -32,15 +32,9 @@ public static class HealthEndpoints
                 return Results.NotFound();
             }
 
-            try
-            {
-                await store.ProbeAsync(cancellationToken).ConfigureAwait(false);
-                return Results.Ok(new { status = "healthy", database = store.Provider });
-            }
-            catch (DbException)
-            {
-                return Results.Json(new { status = "unhealthy", database = store.Provider }, statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+            return await probe.IsHealthyAsync(cancellationToken).ConfigureAwait(false)
+                ? Results.Ok(new { status = "healthy", database = store.Provider })
+                : Results.Json(new { status = "unhealthy", database = store.Provider }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }).AllowAnonymous();
     }
 }

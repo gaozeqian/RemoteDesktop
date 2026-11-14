@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
@@ -27,9 +28,15 @@ namespace RemoteDesktop.Platform.Linux.Clipboard;
 /// which is what the synchroniser listens for. Our own <c>Set</c> deliberately does not raise it: the portal reports
 /// it back as an owner change, and passing that on would have each side send the other its own copy back.
 /// </para>
+/// <para>
+/// The portal does not send the owner-change signal for every external copy — GNOME's did not send it at all when
+/// another application took the selection, which the two-machine acceptance run showed. A poll therefore reads the
+/// selection once a second and reports content the signal did not. It is primed with whatever was already there
+/// when the session opened, so the rule that the initial clipboard is never sent still holds.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class WaylandClipboard(
+internal sealed partial class WaylandClipboard(
     PortalControlSession control,
     ILogger<WaylandClipboard> logger) : IClipboard, IDisposable
 {
@@ -42,6 +49,18 @@ public sealed partial class WaylandClipboard(
 
     /// <summary>How long to wait before looking again at a control session that has not been granted yet.</summary>
     private static readonly TimeSpan WatchRetryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How often to read the selection when the portal has not told us it changed.
+    /// </summary>
+    /// <remarks>
+    /// GNOME's portal does not send <c>SelectionOwnerChanged</c> when another application takes the selection; it was
+    /// missing on the machine this was written on and confirmed with <c>dbus-monitor</c> during the two-machine
+    /// acceptance run. Without a poll, a copy made by any other program is never read and never reaches the other
+    /// side. One second is well below a person's perception of a stale clipboard and cheap: a read of an unchanged
+    /// selection is one short round trip, and the synchroniser discards a repeated hash without sending anything.
+    /// </remarks>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>The largest selection read or written in one go. This is the synchroniser's image ceiling (8 MB); it caps text lower, at 4 MB, on its own.</summary>
     private const int MaxBytes = 8 * 1024 * 1024;
@@ -64,10 +83,35 @@ public sealed partial class WaylandClipboard(
     private ClipboardContent? _owned;
     private IReadOnlyList<string> _available = [];
     private string? _watchedSession;
+    private IDisposable? _subscription;
     private bool _isOwner;
     private bool _disposed;
     private int _listeners;
     private Task? _worker;
+    private Task? _poll;
+
+    /// <summary>The hash of the last content the poll saw, or <see langword="null"/> before the first read.</summary>
+    private string? _pollHash;
+
+    /// <summary>The hash of the content this side last published; the poll must not report it as a change.</summary>
+    private string? _ownedHash;
+
+    /// <summary>
+    /// Whether the first poll has run for the current session.
+    /// </summary>
+    /// <remarks>
+    /// The first poll only records what is on the clipboard. Sending what was already there when the session began
+    /// would hand the other side something private that nobody copied during the session, which is the rule the
+    /// class documents; the owner-change signal can arrive before the first poll, so it waits for the same priming.
+    /// </remarks>
+    private bool _primed;
+
+    /// <summary>Completes after the poll has recorded the selection that was present when the session opened.</summary>
+    /// <remarks>
+    /// Internal rather than private so the real-portal regression test can wait for the prime instead of sleeping
+    /// for a guessed interval; a fixed delay either makes the test slow or races its first external copy.
+    /// </remarks>
+    private readonly TaskCompletionSource _primedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Raised when somebody else takes the clipboard.</summary>
     /// <remarks>
@@ -111,6 +155,9 @@ public sealed partial class WaylandClipboard(
         }
     }
 
+    /// <summary>Completes after the first poll recorded the current selection (or the first programmatic Set).</summary>
+    internal Task Primed => _primedSignal.Task;
+
     /// <summary>Answers transfers for as long as the object lives.</summary>
     private async Task AnswerTransfersAsync(CancellationToken cancellationToken)
     {
@@ -135,6 +182,11 @@ public sealed partial class WaylandClipboard(
         var (connection, session) = control.Current();
         Watch(connection, session);
 
+        // The lock is only taken to read the owner flag and the last advertised formats. The portal call itself is
+        // made outside it: reading our own selection makes the portal ask us to answer the transfer, and the answer
+        // worker needs this lock briefly to copy _owned. Holding it while waiting for the pipe would deadlock until
+        // the transfer deadline.
+        IReadOnlyList<string> available;
         lock (_gate)
         {
             // Our own copy is the authoritative one while we own the selection: asking the portal for content it
@@ -144,22 +196,10 @@ public sealed partial class WaylandClipboard(
                 return _owned;
             }
 
-            // What the portal says is on offer, when it has said. It does not always: the owner-change signal is
-            // not sent for every transition, and it was not sent at all on the machine this was written on. So the
-            // formats are tried in order of preference rather than only when advertised — asking for one nobody has
-            // costs an error the portal answers immediately, which is cheaper than never reading anything.
-            //
-            // Text first, because it is the common case and a fraction of the size. An image is only read when there
-            // is no text at all, which is what a screenshot looks like.
-            var text = Pick(_available, TextTypes) ?? (_available.Count == 0 ? TextTypes[0] : null);
-            if (text is not null)
-            {
-                return ReadText(connection, session, text);
-            }
-
-            var image = Pick(_available, ImageTypes) ?? (_available.Count == 0 ? ImageTypes[0] : null);
-            return image is null ? null : ReadImage(connection, session, image);
+            available = _available;
         }
+
+        return ReadCurrent(connection, session, available);
     }
 
     /// <inheritdoc />
@@ -176,10 +216,19 @@ public sealed partial class WaylandClipboard(
         var (connection, session) = control.Current();
         Watch(connection, session);
 
+        var ownedHash = HashOf(content);
         lock (_gate)
         {
             _owned = content;
             _isOwner = true;
+
+            // The poll must not report our own publication as somebody else's change, and the first poll must not
+            // send it back to the side it came from. Recording the hash here makes both true immediately; waiting for
+            // the portal's owner signal would open a window in which the poll could see our own content as external.
+            _ownedHash = ownedHash;
+            _pollHash = ownedHash;
+            _primed = true;
+            _primedSignal.TrySetResult();
         }
 
         // Advertised with the format it is in and nothing else. Offering both and then failing to answer one of them
@@ -205,13 +254,24 @@ public sealed partial class WaylandClipboard(
     {
         _transfers.Writer.TryComplete();
 
+        IDisposable? subscription;
         lock (_gate)
         {
             _disposed = true;
+            subscription = _subscription;
+            _subscription = null;
+            _watchedSession = null;
             _owned = null;
             _available = [];
             _changed = null;
+            _pollHash = null;
+            _ownedHash = null;
+            _primed = false;
+            _primedSignal.TrySetCanceled();
         }
+
+        // Withdraw the two match rules; the connection is not ours to close, and it may serve the rest of the session.
+        subscription?.Dispose();
     }
 
     /// <summary>
@@ -233,6 +293,7 @@ public sealed partial class WaylandClipboard(
                 {
                     var (connection, session) = control.Current();
                     Watch(connection, session);
+                    StartPolling();
                     return;
                 }
 
@@ -262,47 +323,196 @@ public sealed partial class WaylandClipboard(
             _watchedSession = session;
             _isOwner = false;
             _available = [];
+            _owned = null;
+            _ownedHash = null;
+            _pollHash = null;
+            _primed = false;
+
+            // _primedSignal is deliberately not reset: it is the "the first poll has run" fact for the lifetime of
+            // the object, and a test waiting on it must not be holding the previous session's task.
         }
 
         // Not under the lock: this awaits, and the callbacks it installs take the lock themselves.
-        connection.WatchClipboardAsync(
+        var subscription = connection.WatchClipboardAsync(
             session,
             onOwnerChanged: (types, isOwner) =>
             {
+                var raise = false;
                 lock (_gate)
                 {
+                    // GNOME re-announces the selection every time it is read, not only when its owner changes:
+                    // the same formats then arrive once per poll. Counting those repeats as changes would send
+                    // the clipboard to the other side every second. A change that keeps the formats is left to
+                    // the poll, which compares the content itself within PollInterval.
+                    var sameTypes = types.Count == _available.Count
+                        && types.All(type => _available.Contains(type, StringComparer.Ordinal));
+
                     _available = types;
                     _isOwner = isOwner;
+
+                    // Before the first poll, the current selection is what was already there when the session
+                    // began. It is recorded, not sent: see _primed. The signal can arrive before that first read.
+                    raise = !isOwner && _primed && !sameTypes;
                 }
 
                 // Ours does not count as a change, or each side would send the other its own copy back.
-                if (!isOwner)
+                if (!raise)
                 {
-                    LogOwnerChanged(logger, types.Count);
-
-                    // The field, not the event: raising it through the accessor would run the subscription side of
-                    // it, and this is the one place that must not.
-                    EventHandler? changed;
-                    lock (_gate)
-                    {
-                        changed = _changed;
-                    }
-
-                    try
-                    {
-                        changed?.Invoke(this, EventArgs.Empty);
-                    }
-                    catch (Exception ex)
-                    {
-                        // This runs on the portal connection's dispatch thread: an exception escaping here would take
-                        // down the process (or stop the dispatch loop), and the next change would never be seen.
-                        LogHandlerFailed(logger, ex);
-                    }
+                    return;
                 }
+
+                LogOwnerChanged(logger, types.Count);
+
+                // This runs on the portal connection's dispatch thread; RaiseChanged keeps an exception from taking
+                // the dispatch loop (and the next change) with it.
+                RaiseChanged();
             },
             // Queued, not answered here — see the note on the queue. This runs on the connection's dispatch thread.
             onTransfer: (mimeType, serial) => _transfers.Writer.TryWrite((mimeType, serial)),
             CancellationToken.None).GetAwaiter().GetResult();
+
+        IDisposable? previous;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                subscription.Dispose();
+                return;
+            }
+
+            previous = _subscription;
+            _subscription = subscription;
+        }
+
+        // A new session replaces the old one's match rules; the old session's signals are no longer read.
+        previous?.Dispose();
+    }
+
+    /// <summary>Starts the poll that notices selections the portal did not announce.</summary>
+    private void StartPolling()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _poll is not null)
+            {
+                return;
+            }
+
+            _poll = Task.Run(PollLoopAsync);
+        }
+    }
+
+    /// <summary>
+    /// Reads the selection once a second and reports content the owner signal did not.
+    /// </summary>
+    /// <remarks>
+    /// The first read only primes <see cref="_pollHash"/>; see <see cref="_primed"/>. A failure is logged and the next
+    /// tick tries again rather than stopping the worker — a clipboard that is momentarily busy must not make the rest
+    /// of the session stop seeing changes.
+    /// </remarks>
+    private async Task PollLoopAsync()
+    {
+        while (!_disposed)
+        {
+            if (Volatile.Read(ref _listeners) > 0)
+            {
+                try
+                {
+                    Poll();
+                }
+#pragma warning disable CA1031 // One failed read must not stop a worker that exists to keep retrying.
+                catch (Exception ex)
+#pragma warning restore CA1031
+                {
+                    LogPollFailed(logger, ex.Message);
+                }
+            }
+
+            await Task.Delay(PollInterval).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>One poll: read the selection, compare hashes, and report a change the portal kept to itself.</summary>
+    private void Poll()
+    {
+        if (!control.EnsureReady())
+        {
+            return;
+        }
+
+        var (connection, session) = control.Current();
+        Watch(connection, session);
+
+        IReadOnlyList<string> available;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            available = _available;
+        }
+
+        // Outside the lock, for the same reason as Get: reading our own selection needs the answer worker to take
+        // this lock briefly to copy _owned.
+        var content = ReadCurrent(connection, session, available);
+        var hash = content is null ? null : HashOf(content);
+
+        var raise = false;
+        lock (_gate)
+        {
+            if (!_primed)
+            {
+                _primed = true;
+                _pollHash = hash;
+                _primedSignal.TrySetResult();
+                return;
+            }
+
+            if (string.Equals(hash, _pollHash, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _pollHash = hash;
+
+            // Nothing was copied, or this is the content we published ourselves. Neither is a change to send.
+            if (hash is null || string.Equals(hash, _ownedHash, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _isOwner = false;
+            raise = true;
+        }
+
+        if (raise)
+        {
+            LogOwnerChanged(logger, available.Count);
+            RaiseChanged();
+        }
+    }
+
+    /// <summary>Raises <see cref="Changed"/> without letting a handler take the caller's thread with it.</summary>
+    private void RaiseChanged()
+    {
+        EventHandler? changed;
+        lock (_gate)
+        {
+            changed = _changed;
+        }
+
+        try
+        {
+            changed?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            // The signal path runs on the portal connection's dispatch thread and the poll on its worker: an
+            // exception escaping here would stop either of them, and the next change would never be seen.
+            LogHandlerFailed(logger, ex);
+        }
     }
 
     /// <summary>
@@ -373,6 +583,28 @@ public sealed partial class WaylandClipboard(
         {
             return _owned;
         }
+    }
+
+    /// <summary>
+    /// Reads whatever the current selection holds, trying text before an image.
+    /// </summary>
+    /// <remarks>
+    /// The advertised formats are a hint, not a guarantee: the owner-change signal can be missing, which is the reason
+    /// the poll exists, and the formats kept from the last signal can then be stale. Asking for a format nobody has
+    /// costs an error the portal answers immediately, so trying the image after a failed text read is cheaper than
+    /// never reading a screenshot.
+    /// </remarks>
+    private ClipboardContent? ReadCurrent(PortalConnection connection, string session, IReadOnlyList<string> available)
+    {
+        var text = Pick(available, TextTypes) ?? TextTypes[0];
+        var textContent = ReadText(connection, session, text);
+        if (textContent is not null)
+        {
+            return textContent;
+        }
+
+        var image = Pick(available, ImageTypes) ?? ImageTypes[0];
+        return ReadImage(connection, session, image);
     }
 
     private TextClipboardContent? ReadText(PortalConnection connection, string session, string mimeType)
@@ -484,6 +716,30 @@ public sealed partial class WaylandClipboard(
         return null;
     }
 
+    /// <summary>
+    /// A stable fingerprint of what a poll read, so the same selection is not reported twice.
+    /// </summary>
+    /// <remarks>
+    /// A kind byte keeps a text selection and an image whose PNG bytes happen to be the same from colliding; unknown
+    /// content gets the empty hash, which can never match a real one but is still compared consistently.
+    /// </remarks>
+    private static string HashOf(ClipboardContent content) => content switch
+    {
+        TextClipboardContent text => HashOf(0, System.Text.Encoding.UTF8.GetBytes(text.Text)),
+        ImageClipboardContent image => HashOf(1, image.Png.Span),
+        _ => string.Empty,
+    };
+
+    private static string HashOf(byte kind, ReadOnlySpan<byte> data)
+    {
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        sha.AppendData([kind]);
+        sha.AppendData(data);
+        sha.GetHashAndReset(hash);
+        return Convert.ToHexString(hash);
+    }
+
     private static string Describe(ClipboardContent content) => content switch
     {
         TextClipboardContent text => $"{text.Text.Length} characters",
@@ -520,4 +776,7 @@ public sealed partial class WaylandClipboard(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The clipboard is not available, so {Kind} was not copied.")]
     private static partial void LogUnavailable(ILogger logger, string kind);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The clipboard poll failed; the next tick tries again: {Reason}")]
+    private static partial void LogPollFailed(ILogger logger, string reason);
 }

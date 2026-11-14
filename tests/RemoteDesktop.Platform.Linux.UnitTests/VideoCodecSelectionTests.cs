@@ -50,13 +50,19 @@ public sealed class VideoCodecSelectionTests
 
         var selector = new VideoCodecSelector([hardware, software], []);
 
-        // Whichever way this machine answers, a session must get an encoder — and it must be a working one.
-        using var encoder = selector.CreateEncoder(Options);
+        // Whichever way this machine answers, a session must get an encoder. The old assertion was true whenever
+        // the hardware probe said yes, even if the selector had handed back something else, so it now checks the
+        // candidate list and (on a machine without hardware support) the returned encoder itself.
+        var candidates = selector.GetEncoderCandidates(Options).ToArray();
+        Assert.NotEmpty(candidates);
+        Assert.Equal(hardware.IsSupported(Options), candidates.Contains(hardware));
 
+        using var encoder = selector.CreateEncoder(Options);
         Assert.NotNull(encoder);
-        Assert.True(
-            hardware.IsSupported(Options) || !encoder.IsHardware,
-            "A machine with no hardware encoder handed back one anyway.");
+        if (!hardware.IsSupported(Options))
+        {
+            Assert.False(encoder.IsHardware, "A machine with no hardware encoder handed back one anyway.");
+        }
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Platform.Linux.Interop;
 using RemoteDesktop.Platform.Linux.XdgPortal;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.Linux.Input;
 
@@ -32,7 +33,7 @@ namespace RemoteDesktop.Platform.Linux.Input;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, IDisposable
+internal sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, IDisposable
 {
     /// <summary>BTN_LEFT and the four to its right, from linux/input-event-codes.h.</summary>
     private const uint ButtonLeft = 0x110;
@@ -46,7 +47,7 @@ public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, I
 
     private readonly PortalControlSession _control;
     private readonly ILogger _logger;
-    private readonly IDisplayEnumerator _displays;
+    private readonly DisplayLookupCache _displayCache;
     private readonly Lock _gate = new();
     private nint _ei;
     // One per capability, because the desktop hands out separate devices rather than one that can do everything:
@@ -60,8 +61,6 @@ public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, I
     private Thread? _pump;
     private volatile bool _running;
     private uint _sequence;
-    private IReadOnlyList<DisplayInfo> _cachedDisplays = [];
-    private DateTime _cachedAt;
 
     /// <summary>Set when libei itself fails after the portal has answered; overrides the portal's status.</summary>
     private InputAccessStatus? _injectorFailure;
@@ -69,7 +68,9 @@ public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, I
 
     public LibEiInputInjector(IDisplayEnumerator displays, PortalControlSession control, ILogger<LibEiInputInjector> logger)
     {
-        _displays = displays;
+        // libei's enumeration is a portal round trip, which is why this cache lives longer than the Windows and
+        // macOS ones; the shared cache makes the difference a parameter instead of a fourth copy of the loop.
+        _displayCache = new DisplayLookupCache(displays, TimeSpan.FromSeconds(5));
         _control = control;
         _logger = logger;
         _control.AccessStatusChanged += OnControlAccessStatusChanged;
@@ -469,14 +470,10 @@ public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, I
 
     private DisplayInfo FindDisplay(string displayId)
     {
-        if (DateTime.UtcNow - _cachedAt > TimeSpan.FromSeconds(5) || _cachedDisplays.Count == 0)
-        {
-            _cachedDisplays = _displays.GetDisplays();
-            _cachedAt = DateTime.UtcNow;
-        }
+        var displays = _displayCache.GetDisplays();
 
         DisplayInfo? primary = null;
-        foreach (var display in _cachedDisplays)
+        foreach (var display in displays)
         {
             if (string.Equals(display.Id, displayId, StringComparison.Ordinal))
             {
@@ -487,8 +484,8 @@ public sealed partial class LibEiInputInjector : IInputInjector, IInputAccess, I
         }
 
         return primary
-            ?? (_cachedDisplays.Count > 0
-                ? _cachedDisplays[0]
+            ?? (displays.Count > 0
+                ? displays[0]
                 : throw new InvalidOperationException("No screen to put the pointer on."));
     }
 

@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Server.Storage;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Server.Storage.UnitTests;
 
@@ -21,6 +22,30 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     public SqliteDeviceRegistryTests() => Directory.CreateDirectory(_folder);
 
     protected override IDeviceRegistry CreateEmptyRegistry() => new SqliteDeviceRegistry(NewPath(), Logger);
+
+    /// <summary>
+    /// The cache is an optimisation, not a registry: a public server meets a new device on every install, so it has
+    /// to stay bounded. Dropping it must still answer from the database with the same id.
+    /// </summary>
+    [Fact]
+    public async Task The_device_cache_is_bounded_and_falls_back_to_the_database()
+    {
+        var path = NewPath();
+        using var registry = new SqliteDeviceRegistry(path, Logger);
+        await registry.EnsureSchemaAsync(Ct);
+        registry.CacheCapacity = 2;
+
+        var ids = new List<uint>();
+        for (var index = 0; index < 4; index++)
+        {
+            ids.Add((await registry.GetOrAllocateAsync($"fingerprint-{index}", Ct)).DeviceId);
+            Assert.True(registry.CachedDeviceCount <= registry.CacheCapacity);
+        }
+
+        var again = await registry.GetOrAllocateAsync("fingerprint-0", Ct);
+        Assert.Equal(ids[0], again.DeviceId);
+        Assert.False(again.Created);
+    }
 
     /// <summary>
     /// The point of a file: a new process — here, a new registry with an empty cache — finds the same id. Without
@@ -134,7 +159,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task A_cached_device_that_registers_again_refreshes_last_seen_once_the_throttle_window_has_passed()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -160,7 +185,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task A_device_that_registers_again_inside_the_throttle_window_does_not_cause_a_write()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -187,7 +212,7 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     [Fact]
     public async Task The_throttle_is_per_device()
     {
-        var time = new ManualTimeProvider();
+        var time = new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         using var registry = new SqliteDeviceRegistry(NewPath(), Logger, allocateId: null, time);
         await registry.EnsureSchemaAsync(Ct);
 
@@ -239,16 +264,6 @@ public sealed class SqliteDeviceRegistryTests : DeviceRegistryContractTests, IDi
     }
 
     private string NewPath() => Path.Combine(_folder, $"{Guid.NewGuid():N}.db");
-
-    /// <summary>A clock the test moves by hand.</summary>
-    private sealed class ManualTimeProvider : TimeProvider
-    {
-        private DateTimeOffset _now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
 
     public void Dispose()
     {

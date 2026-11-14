@@ -1,5 +1,6 @@
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Domain;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -85,19 +86,12 @@ public sealed class InputAccessSessionTests(ServerFixture server) : IClassFixtur
         Assert.Equal(0, access.StatusReads);
     }
 
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                throw new TimeoutException("The expected input-authorization state did not arrive.");
-            }
-
-            await Task.Delay(20, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition) =>
+        TestWait.UntilAsync(
+            condition,
+            "the expected input-authorization state",
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(20));
 
     private sealed class FakeInputAccess(InputAccessStatus initial) : IInputAccess
     {

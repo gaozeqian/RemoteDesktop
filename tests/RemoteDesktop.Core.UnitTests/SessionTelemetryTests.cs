@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Application.Sessions;
@@ -221,9 +222,29 @@ public sealed class SessionTelemetryTests
         Assert.Equal("0f8fad5b-d9cb-469f-a165-70867728950e", report.RelaySessionId);
         Assert.Equal(ProductVersion.Full, report.Version);
         Assert.Equal(0u, report.RttMillis);
-        Assert.Equal(
-            OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux",
-            report.Platform);
+        Assert.Equal("test-platform", report.Platform);
+    }
+
+    /// <summary>
+    /// A host composed without a platform layer used to report <c>linux</c>. That was a wrong answer, not a missing
+    /// one: the console groups by this field, so an unknown machine must say so instead of joining a platform.
+    /// </summary>
+    [Fact]
+    public async Task A_host_with_no_registered_platform_identity_reports_unknown()
+    {
+        var time = new SteppedTime();
+        var rendezvous = new RecordingRendezvous();
+        var telemetry = new SessionTelemetry(
+            new TelemetryOptions { Enabled = true, IntervalSeconds = 30 }, rendezvous, time);
+        using var end = new CancellationTokenSource();
+
+        telemetry.Track(Context(), end.Token);
+        await Rig.WaitUntilAsync(() => time.PendingTimers >= 1);
+        time.Advance(TimeSpan.FromSeconds(5));
+        await Rig.WaitUntilAsync(() => rendezvous.Heartbeats.Count == 1);
+
+        var report = Assert.Single(rendezvous.Heartbeats);
+        Assert.Equal("unknown", report.Platform);
     }
 
     [Fact]
@@ -254,7 +275,10 @@ public sealed class SessionTelemetryTests
         {
             Time = new SteppedTime();
             Telemetry = new SessionTelemetry(
-                new TelemetryOptions { Enabled = enabled, IntervalSeconds = intervalSeconds }, _rendezvous, Time);
+                new TelemetryOptions { Enabled = enabled, IntervalSeconds = intervalSeconds },
+                _rendezvous,
+                Time,
+                new PlatformIdentity("test-platform"));
         }
 
         public SteppedTime Time { get; }

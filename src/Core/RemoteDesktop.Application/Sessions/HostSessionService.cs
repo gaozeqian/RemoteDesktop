@@ -56,6 +56,13 @@ public sealed partial class HostSessionService(
     private readonly ConcurrentDictionary<SessionId, HostedSession> _hosted = [];
 
     /// <summary>
+    /// Sessions that passed authentication and hold a slot but have not been inserted into <see cref="_hosted"/> yet.
+    /// The reservation is what makes the ceiling decision before <c>AuthResult.Accepted</c> goes out; without it two
+    /// simultaneous handshakes can both pass the courtesy check and the loser is accepted and then dropped.
+    /// </summary>
+    private int _reservedSessions;
+
+    /// <summary>
     /// Makes "is there room?" and "reserve this id" one step. Without it two connections that passed authentication at
     /// the same moment could both see space, both adopt the same announced id, and the second insert replaced the
     /// first - leaving a live session that is absent from <see cref="ActiveSessions"/> and that downgrade, revoke and
@@ -82,6 +89,46 @@ public sealed partial class HostSessionService(
 
         return session;
     }
+
+    /// <summary>
+    /// Takes a session slot before <c>AuthResult.Accepted</c> is sent. The count includes sessions whose reservation
+    /// has not become a row yet, so simultaneous handshakes cannot all pass a check that only looks at
+    /// <see cref="_hosted"/>.
+    /// </summary>
+    private bool TryReserveSession(DeviceId controller)
+    {
+        lock (_hostedGate)
+        {
+            var active = _hosted.Count + _reservedSessions;
+            if (active >= MaxSessions)
+            {
+                LogTooManySessions(logger, controller, active);
+                return false;
+            }
+
+            _reservedSessions++;
+            return true;
+        }
+    }
+
+    private void ReleaseSessionReservation()
+    {
+        lock (_hostedGate)
+        {
+            ReleaseSessionReservationLocked();
+        }
+    }
+
+    /// <summary>Called while <see cref="_hostedGate"/> is held, when the reservation becomes a row or is abandoned.</summary>
+    private void ReleaseSessionReservationLocked()
+    {
+        if (_reservedSessions > 0)
+        {
+            _reservedSessions--;
+        }
+    }
+
+    private readonly record struct AuthenticationOutcome(SessionContext? Session, bool Reserved);
 
     public event EventHandler<HostSessionEventArgs>? SessionStarted;
 
@@ -135,18 +182,20 @@ public sealed partial class HostSessionService(
         {
             IChannel? control = null;
             SessionId? runningSession = null;
+            var reserved = false;
+            var committed = false;
             try
             {
-                SessionContext? session;
+                AuthenticationOutcome authentication;
                 using (var handshakeTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken))
                 {
                     handshakeTimeout.CancelAfter(HandshakeTimeout);
                     try
                     {
                         control = await connection.AcceptChannelAsync(handshakeTimeout.Token).ConfigureAwait(false);
-                        session = control?.Type == ChannelType.Control
+                        authentication = control?.Type == ChannelType.Control
                             ? await AuthenticateAsync(connection, control, handshakeTimeout.Token).ConfigureAwait(false)
-                            : null;
+                            : default;
                     }
                     finally
                     {
@@ -155,26 +204,20 @@ public sealed partial class HostSessionService(
                     }
                 }
 
+                var session = authentication.Session;
+                reserved = authentication.Reserved;
                 if (session is null)
                 {
                     return;
                 }
 
-                // Every session holds its own channels and buffers, and each of those costs this machine memory for
-                // as long as it lives. A password is all it takes to get this far, so without a ceiling one
-                // controller — or somebody who was given the password — can open sessions until the machine gives up.
-                // AuthenticateAsync has already turned away the ordinary case with a reason; this is the authoritative
-                // check for the controllers that were all admitted below the limit at the same time.
+                // AuthenticateAsync reserved this slot before it sent AuthResult, so the ceiling decision was made
+                // before the controller could believe it had a session. Committing the reservation is now just the
+                // bookkeeping that turns the slot into a row.
                 using var end = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 HostedSession hosted;
                 lock (_hostedGate)
                 {
-                    if (_hosted.Count >= MaxSessions)
-                    {
-                        LogTooManySessions(logger, connection.RemoteDevice, _hosted.Count);
-                        return;
-                    }
-
                     // The id was checked for a collision during authentication, but another session may have claimed
                     // it since. Falling back to a fresh id here is what makes the check and the insert one decision;
                     // the controller learns the id from AuthResult and may end up reporting under a different one,
@@ -183,6 +226,15 @@ public sealed partial class HostSessionService(
                     hosted = new HostedSession(session, control!, end);
                     _hosted[session.Id] = hosted;
                     runningSession = session.Id;
+
+                    // Only now is the reservation consumed. If constructing or inserting the session throws, the
+                    // reservation is still held and the outer finally gives it back exactly once.
+                    if (reserved)
+                    {
+                        ReleaseSessionReservationLocked();
+                    }
+
+                    committed = true;
                 }
 
                 LogSessionStarted(logger, session.Id, connection.RemoteDevice, session.Grant.Mode, session.Grant.Permissions, connection.Path);
@@ -246,6 +298,11 @@ public sealed partial class HostSessionService(
             }
             finally
             {
+                if (reserved && !committed)
+                {
+                    ReleaseSessionReservation();
+                }
+
                 if (control is not null)
                 {
                     await control.DisposeAsync().ConfigureAwait(false);
@@ -277,7 +334,7 @@ public sealed partial class HostSessionService(
         }
     }
 
-    private async Task<SessionContext?> AuthenticateAsync(IPeerConnection connection, IChannel control, CancellationToken cancellationToken)
+    private async Task<AuthenticationOutcome> AuthenticateAsync(IPeerConnection connection, IChannel control, CancellationToken cancellationToken)
     {
         var hello = (await ControlMessages.ExpectAsync(control, ControlMessage.BodyOneofCase.Hello, cancellationToken).ConfigureAwait(false)).Hello;
 
@@ -285,7 +342,7 @@ public sealed partial class HostSessionService(
         if (!ProtocolVersion.Current.IsCompatibleWith(controllerVersion))
         {
             await RefuseAsync(control, AuthFailure.IncompatibleVersion, cancellationToken).ConfigureAwait(false);
-            return null;
+            return default;
         }
 
         var controller = connection.RemoteDevice;
@@ -298,7 +355,7 @@ public sealed partial class HostSessionService(
         if (attempt is null)
         {
             await RefuseAsync(control, AuthFailure.TooManyAttempts, cancellationToken).ConfigureAwait(false);
-            return null;
+            return default;
         }
 
         // Both slots are always challenged: the fixed slot gets a random dummy when no fixed password exists, so the
@@ -353,47 +410,55 @@ public sealed partial class HostSessionService(
             attempt.RecordFailure();
             LogBadPassword(logger, controller);
             await RefuseAsync(control, AuthFailure.BadPassword, cancellationToken).ConfigureAwait(false);
-            return null;
+            return default;
         }
 
         attempt.RecordSuccess();
 
-        // Say so before accepting: once AuthResult.Accepted has gone out the controller believes it has a session, and
-        // closing the connection afterwards looks like a network fault. This is only a courtesy check; the decision
-        // that counts is the one in ServeAsync, made under the lock, because several controllers can pass this point
-        // at the same moment.
-        if (_hosted.Count >= MaxSessions)
+        // Reserve the slot before saying Accepted. Once AuthResult.Accepted has gone out the controller believes it
+        // has a session, and closing the connection afterwards looks like a network fault; the reservation makes the
+        // ceiling decision here, before the answer, instead of racing the insert in ServeAsync.
+        if (!TryReserveSession(controller))
         {
-            LogTooManySessions(logger, controller, _hosted.Count);
             await RefuseAsync(control, AuthFailure.TooManySessions, cancellationToken).ConfigureAwait(false);
-            return null;
+            return default;
         }
 
-        var grant = AccessGrant.Create(
-            ControlMessages.FromMessage(hello.Mode),
-            ControlMessages.FromWire(hello.RequestedPermissions),
-            credentials.AllowedPermissions);
-
-        await ControlMessages.WriteAsync(control, new ControlMessage
+        try
         {
-            AuthResult = new AuthResult
+            var grant = AccessGrant.Create(
+                ControlMessages.FromMessage(hello.Mode),
+                ControlMessages.FromWire(hello.RequestedPermissions),
+                credentials.AllowedPermissions);
+
+            await ControlMessages.WriteAsync(control, new ControlMessage
             {
-                Accepted = true,
-                Mode = ControlMessages.ToMessage(grant.Mode),
-                GrantedPermissions = (uint)grant.Permissions,
-                ServerEvidence = ByteString.CopyFrom(serverEvidence),
-                CredentialIndex = (uint)matched.Value,
-            },
-        }, cancellationToken).ConfigureAwait(false);
+                AuthResult = new AuthResult
+                {
+                    Accepted = true,
+                    Mode = ControlMessages.ToMessage(grant.Mode),
+                    GrantedPermissions = (uint)grant.Permissions,
+                    ServerEvidence = ByteString.CopyFrom(serverEvidence),
+                    CredentialIndex = (uint)matched.Value,
+                },
+            }, cancellationToken).ConfigureAwait(false);
 
-        // The controller's id, adopted so both ends report under one session id. A collision — a controller picking an
-        // id another session already uses — falls back to a fresh one, which is the only case where the two ends
-        // disagree, and it is visible in the console as two rows rather than as one wrong one.
-        var id = SessionId.TryParse(hello.SessionId, out var announced) && !_hosted.ContainsKey(announced)
-            ? announced
-            : SessionId.New();
+            // The controller's id, adopted so both ends report under one session id. A collision — a controller
+            // picking an id another session already uses — falls back to a fresh one, which is the only case where
+            // the two ends disagree, and it is visible in the console as two rows rather than as one wrong one.
+            var id = SessionId.TryParse(hello.SessionId, out var announced) && !_hosted.ContainsKey(announced)
+                ? announced
+                : SessionId.New();
 
-        return new SessionContext(id, SessionRole.Host, connection, grant);
+            return new AuthenticationOutcome(new SessionContext(id, SessionRole.Host, connection, grant), Reserved: true);
+        }
+        catch
+        {
+            // The controller went away before it could learn about the session, or the grant could not be built; the
+            // reserved slot must not outlive this handshake.
+            ReleaseSessionReservation();
+            throw;
+        }
     }
 
     private async Task RunSessionAsync(HostedSession hosted)

@@ -23,6 +23,12 @@ public sealed partial class AlertService(
 {
     private readonly INotificationChannel[] _channels = [.. channels];
 
+    /// <summary>
+    /// Deliveries a single pass may retry per channel. Every send can wait out that channel's timeout, and a pass
+    /// holding the alert lease must not be dragged on by a backlog: the rest stay owed and are due again next pass.
+    /// </summary>
+    private const int MaxRetriesPerPass = 2;
+
     /// <summary>Runs one pass. Returns how many alerts were opened and how many resolved.</summary>
     public async Task<(int Opened, int Resolved)> EvaluateOnceAsync(CancellationToken cancellationToken)
     {
@@ -165,6 +171,7 @@ public sealed partial class AlertService(
                 continue;
             }
 
+            var retried = 0;
             foreach (var item in pending)
             {
                 if (!NotificationBackoff.IsDue(item.LastAttemptAt, item.Attempts, now))
@@ -181,6 +188,12 @@ public sealed partial class AlertService(
                         now.ToUnixTimeMilliseconds()))
                 {
                     continue;
+                }
+
+                if (retried >= MaxRetriesPerPass)
+                {
+                    // The rest are still owed; the next pass picks them up in the same order.
+                    break;
                 }
 
                 // The labels are not needed to notify and are not stored on the attempt row; the alert's dedupe key
@@ -209,6 +222,7 @@ public sealed partial class AlertService(
                     error,
                     now.ToUnixTimeMilliseconds(),
                     cancellationToken).ConfigureAwait(false);
+                retried++;
             }
         }
     }

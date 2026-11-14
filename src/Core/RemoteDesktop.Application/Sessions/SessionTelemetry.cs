@@ -1,3 +1,4 @@
+using RemoteDesktop.Abstractions.Platform;
 using RemoteDesktop.Application.Features;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling.Messages;
@@ -20,7 +21,11 @@ namespace RemoteDesktop.Application.Sessions;
 /// is down cannot slow a session down or make it fail.
 /// </para>
 /// </remarks>
-public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient? rendezvous, TimeProvider time)
+public sealed class SessionTelemetry(
+    TelemetryOptions options,
+    IRendezvousClient? rendezvous,
+    TimeProvider time,
+    IPlatformIdentity? platform = null)
 {
     /// <summary>How long the first report waits, so that an RTT exists to put in it.</summary>
     private static readonly TimeSpan FirstReportDelay = TimeSpan.FromSeconds(5);
@@ -85,7 +90,7 @@ public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient
         }
     }
 
-    private static TelemetryReport Build(SessionContext context, TimeSpan? roundTrip)
+    private TelemetryReport Build(SessionContext context, TimeSpan? roundTrip)
     {
         var isController = context.Role == SessionRole.Controller;
 
@@ -115,19 +120,12 @@ public sealed class SessionTelemetry(TelemetryOptions options, IRendezvousClient
         // about. A controller reporting its own would answer a different question under the same label.
         if (!isController)
         {
-            report.Platform = Platform();
+            // The platform layer registers the name. "unknown" is honest for a host whose composition did not
+            // register one; the old fallback called every such host Linux, which was a wrong answer rather than a
+            // missing one.
+            report.Platform = platform?.Name ?? "unknown";
         }
 
         return report;
-    }
-
-    private static string Platform()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return "windows";
-        }
-
-        return OperatingSystem.IsMacOS() ? "macos" : "linux";
     }
 }

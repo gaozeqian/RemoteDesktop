@@ -9,6 +9,57 @@ public class RollupTests(OpsHostFixture fixture) : IClassFixture<OpsHostFixture>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    /// <summary>
+    /// A pass continues from the newest bucket instead of re-aggregating the whole retention window. The first pass
+    /// on an empty rollup table is bounded to one day; an older sample is not rewritten into history, and the next
+    /// pass only revisits the newest bucket.
+    /// </summary>
+    [Fact]
+    public async Task Rollup_continues_from_the_newest_bucket_instead_of_rebuilding_all_history()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var nodeId = "node-rollup-window-" + Guid.NewGuid().ToString("N");
+        var metric = "cpu_rollup_window";
+        var now = fixture.Now.ToUnixTimeMilliseconds();
+        var ancient = now - (long)TimeSpan.FromDays(10).TotalMilliseconds;
+        var recent = now - 30_000;
+
+        await store.WriteSamplesAsync(nodeId, ancient, [new PrometheusSample(metric, metric, 1.0)], Ct);
+        await store.WriteSamplesAsync(nodeId, recent, [new PrometheusSample(metric, metric, 2.0)], Ct);
+
+        var first = await store.RollupSamplesIncrementallyAsync(now, 60, Ct);
+        Assert.True(first <= 2, $"The first pass rolled {first} buckets; it must be bounded, not the whole history.");
+
+        var ancientBucket = ancient / 60_000;
+        Assert.Empty(await store.GetMetricRollupsAsync(nodeId, metric, 60, ancientBucket, ancientBucket, Ct));
+
+        // The next pass only re-rolls the newest bucket (and possibly one preceding it for late samples).
+        var second = await store.RollupSamplesIncrementallyAsync(now, 60, Ct);
+        Assert.True(second <= 2, $"The incremental pass rolled {second} buckets.");
+    }
+
+    /// <summary>
+    /// A pass with no new samples must not rewrite the buckets it re-read: the incremental design exists because the
+    /// full pass rewrote history every ten minutes. One sample in the current bucket is one changed row.
+    /// </summary>
+    [Fact]
+    public async Task A_quiet_incremental_pass_writes_no_rows_and_one_new_sample_writes_one()
+    {
+        var store = fixture.Services.GetRequiredService<OpsStore>();
+        var nodeId = "node-rollup-quiet-" + Guid.NewGuid().ToString("N");
+        var metric = "cpu_rollup_quiet";
+        var now = fixture.Now.ToUnixTimeMilliseconds();
+        var bucketStart = now / 60_000 * 60_000;
+
+        await store.WriteSamplesAsync(nodeId, bucketStart + 10_000, [new PrometheusSample(metric, metric, 1.0)], Ct);
+
+        Assert.True(await store.RollupSamplesIncrementallyAsync(now, 60, Ct) > 0, "the first pass has to write the bucket");
+        Assert.Equal(0, await store.RollupSamplesIncrementallyAsync(now, 60, Ct));
+
+        await store.WriteSamplesAsync(nodeId, bucketStart + 20_000, [new PrometheusSample(metric, metric, 2.0)], Ct);
+        Assert.Equal(1, await store.RollupSamplesIncrementallyAsync(now, 60, Ct));
+    }
+
     [Fact]
     public async Task Rollup_aggregates_metric_samples_into_time_buckets()
     {

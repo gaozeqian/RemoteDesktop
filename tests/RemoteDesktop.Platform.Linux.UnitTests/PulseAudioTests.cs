@@ -173,6 +173,23 @@ public sealed class PulseAudioTests
         }
     }
 
+    /// <summary>Disposal is final; the check runs before PulseAudio is connected.</summary>
+    [Fact]
+    public async Task A_disposed_capturer_refuses_a_later_capture()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var capturer = new PulseAudioCapturer();
+        await capturer.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+        {
+            await foreach (var _ in capturer.CaptureAsync(TestContext.Current.CancellationToken))
+            {
+            }
+        });
+    }
+
     /// <summary>
     /// Talks to the sound server directly, for the one test that needs to change which output is the default.
     /// </summary>

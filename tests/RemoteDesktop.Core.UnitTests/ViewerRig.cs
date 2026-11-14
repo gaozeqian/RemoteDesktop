@@ -6,8 +6,8 @@ namespace RemoteDesktop.Core.UnitTests;
 
 /// <summary>
 /// A viewer under test plus the host it talks to, played by the other end of a pipe: it sends frames, and counts the
-/// key frame requests that come back. The viewer runs on a <see cref="SteppedTime"/>, so its watchdog only ticks when
-/// the test says so. What the stall judgement measures is real monotonic time and cannot be stepped from here.
+/// key frame requests that come back. The viewer, its watchdog and its stall judgement run on one
+/// <see cref="SteppedTime"/>, so both silence and ticks move only when the test says so.
 /// </summary>
 public abstract class ViewerRig : IAsyncDisposable
 {

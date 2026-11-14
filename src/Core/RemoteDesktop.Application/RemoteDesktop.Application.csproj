@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="RemoteDesktop.Core.UnitTests" />
     <InternalsVisibleTo Include="RemoteDesktop.Transport.IntegrationTests" />
     <!-- The Windows pipe identity tests exercise the service-control-manager decision without a running service;
          the interop itself is internal, the rules are not. -->

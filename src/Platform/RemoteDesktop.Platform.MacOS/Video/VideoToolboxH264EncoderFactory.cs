@@ -21,7 +21,7 @@ namespace RemoteDesktop.Platform.MacOS.Video;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class VideoToolboxH264EncoderFactory : IVideoEncoderFactory
+internal sealed class VideoToolboxH264EncoderFactory : IVideoEncoderFactory
 {
     public VideoToolboxH264EncoderFactory(bool hardware)
     {
@@ -60,7 +60,7 @@ public sealed class VideoToolboxH264EncoderFactory : IVideoEncoderFactory
 
 /// <summary>Decodes H.264 access units back into NV12 pictures.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class VideoToolboxH264DecoderFactory : IVideoDecoderFactory
+internal sealed class VideoToolboxH264DecoderFactory : IVideoDecoderFactory
 {
     public string Name => "VideoToolbox H.264 decoder";
 
@@ -78,7 +78,15 @@ public sealed class VideoToolboxH264DecoderFactory : IVideoDecoderFactory
         }
 
         var decoder = new VideoToolboxH264Decoder();
-        decoder.Open();
-        return decoder;
+        try
+        {
+            decoder.Open();
+            return decoder;
+        }
+        catch
+        {
+            decoder.Dispose();
+            throw;
+        }
     }
 }

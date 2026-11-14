@@ -16,34 +16,18 @@ namespace RemoteDesktop.Platform.Windows.UnitTests;
 [SupportedOSPlatform("windows")]
 public sealed class HostInstallerPackageTests
 {
-    private static readonly string? Msi = FindInstaller();
+    private static readonly InstallerCandidate Found = InstallerLocator.Find(
+        "RemoteDesktop-Host-Windows-*.msi",
+        "RD_INSTALLER_MSI",
+        "No host installer has been built (run build\\installer\\windows\\host\\Build-HostInstaller.ps1).");
 
-    private static string? FindInstaller()
-    {
-        var given = Environment.GetEnvironmentVariable("RD_INSTALLER_MSI");
-        if (!string.IsNullOrEmpty(given))
-        {
-            // The build script points this at the package it has just produced, whichever role that was.
-            return File.Exists(given) ? given : null;
-        }
-
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RemoteDesktop.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        var artifacts = directory is null ? null : Path.Combine(directory.FullName, "artifacts", "installer", "windows");
-        return artifacts is null || !Directory.Exists(artifacts)
-            ? null
-            : Directory.GetFiles(artifacts, "RemoteDesktop-Host-Windows-*.msi").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-    }
+    private static string? Msi => Found.Path;
 
     [Fact]
     public void The_package_installs_the_service_and_the_agent_without_the_client()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows Installer is Windows only.");
-        Assert.SkipWhen(Msi is null, "No host installer has been built (run build\\installer\\windows\\host\\Build-HostInstaller.ps1).");
+        Assert.SkipWhen(Msi is null, Found.SkipReason);
 
         using var package = new MsiPackage(Msi!);
 

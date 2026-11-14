@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 namespace RemoteDesktop.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public static partial class WindowsProcess
+internal static partial class WindowsProcess
 {
     private static readonly nint PerMonitorAwareV2 = -4;
 

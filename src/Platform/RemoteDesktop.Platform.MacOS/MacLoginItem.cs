@@ -17,7 +17,7 @@ namespace RemoteDesktop.Platform.MacOS;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacLoginItem : ILoginItem
+internal sealed class MacLoginItem : ILoginItem
 {
     public bool IsRegistered => MacNativeInterop.rd_login_item_is_registered() != 0;
 

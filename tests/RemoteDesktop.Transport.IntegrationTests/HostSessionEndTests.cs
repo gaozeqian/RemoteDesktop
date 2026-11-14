@@ -5,6 +5,7 @@ using RemoteDesktop.Application.Sessions;
 using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -55,15 +56,8 @@ public sealed class HostSessionEndTests(ServerFixture server) : IClassFixture<Se
         Assert.Single(reports.Ends);
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(20));
 
     /// <summary>A clock whose timers only fire when the test moves it, so an interval costs no time.</summary>
     private sealed class TimerClock : TimeProvider

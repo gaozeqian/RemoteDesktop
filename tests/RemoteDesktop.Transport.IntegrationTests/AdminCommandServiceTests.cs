@@ -7,6 +7,7 @@ using RemoteDesktop.Domain;
 using RemoteDesktop.Signaling;
 using RemoteDesktop.Signaling.Messages;
 using RemoteDesktop.Transport.Rendezvous;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Transport.IntegrationTests;
 
@@ -41,9 +42,9 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
         // line; wait for the line rather than assuming it is already there.
         await WaitForAsync(() => log.Messages.Any(m => m.Level == LogLevel.Information), "the command to be logged");
         var line = Assert.Single(log.Messages, m => m.Level == LogLevel.Information);
-        Assert.Contains("cmd-1", line.Text, StringComparison.Ordinal);
-        Assert.Contains(id.ToString(), line.Text, StringComparison.Ordinal);
-        Assert.Contains("True", line.Text, StringComparison.Ordinal);
+        Assert.Equal("cmd-1", line.Field("CommandId"));
+        Assert.Equal(id, Assert.IsType<SessionId>(line.Field("SessionId")));
+        Assert.Equal(true, line.Field("WasOpen"));
         await WaitForAsync(() => commands.Results.Count == 1, "the command acknowledgment");
         Assert.True(commands.Results.Single().Succeeded);
         Assert.Equal("cmd-1", commands.Results.Single().CommandId);
@@ -80,8 +81,8 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
         Assert.False(closed.Task.IsCompleted);
         Assert.Single(host.HostSessions.ActiveSessions);
         Assert.All(log.Messages, m => Assert.Equal(LogLevel.Warning, m.Level));
-        Assert.Contains("c1", log.Messages[0].Text, StringComparison.Ordinal);
-        Assert.Contains("reboot", log.Messages[0].Text, StringComparison.Ordinal);
+        Assert.Equal("c1", log.Messages[0].Field("CommandId"));
+        Assert.Equal("reboot", log.Messages[0].Field("Command"));
 
         // The loop is still reading.
         commands.Send(Disconnect("c7", id.ToString()));
@@ -107,7 +108,7 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
         Assert.All(log.Messages, m =>
         {
             Assert.Equal(LogLevel.Information, m.Level);
-            Assert.Contains("False", m.Text, StringComparison.Ordinal);
+            Assert.Equal(false, m.Field("WasOpen"));
         });
         Assert.False(service.ExecuteTask!.IsCompleted);
 
@@ -128,29 +129,34 @@ public sealed class AdminCommandServiceTests(ServerFixture server) : IClassFixtu
     private static AdminCommand Disconnect(string commandId, string sessionId) =>
         new() { CommandId = commandId, Command = ClientCapabilities.Commands.DisconnectSession, SessionId = sessionId };
 
-    private static async Task WaitForAsync(Func<bool> condition, string what)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
-            await Task.Delay(50, Ct);
-        }
-    }
+    private static Task WaitForAsync(Func<bool> condition, string what) =>
+        TestWait.UntilAsync(condition, what, TimeSpan.FromSeconds(20));
 
     private sealed class CapturingLogger : ILogger<AdminCommandService>
     {
-        private readonly ConcurrentQueue<(LogLevel Level, string Text)> _messages = new();
+        private readonly ConcurrentQueue<LogEntry> _messages = new();
 
-        public IReadOnlyList<(LogLevel Level, string Text)> Messages => [.. _messages];
+        public IReadOnlyList<LogEntry> Messages => [.. _messages];
 
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            _messages.Enqueue((logLevel, formatter(state, exception)));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            // The structured fields are the contract; the rendered text is only how a particular sink shows them.
+            var fields = state is IEnumerable<KeyValuePair<string, object?>> pairs
+                ? pairs.ToDictionary(pair => pair.Key, pair => pair.Value)
+                : new Dictionary<string, object?>();
+
+            _messages.Enqueue(new LogEntry(logLevel, fields));
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, IReadOnlyDictionary<string, object?> Fields)
+    {
+        public object? Field(string name) => Fields.TryGetValue(name, out var value) ? value : null;
     }
 
     /// <summary>Only the admin command stream does anything; the rest of the client is never called.</summary>

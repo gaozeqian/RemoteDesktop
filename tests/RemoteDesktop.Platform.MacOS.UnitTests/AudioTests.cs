@@ -180,6 +180,23 @@ public class MacAudioCapturerTests
         return capturer.DisposeAsync().AsTask();
     }
 
+    /// <summary>Disposal is final; the check runs before ScreenCaptureKit is started, so no grant is needed.</summary>
+    [Fact]
+    public async Task A_disposed_capturer_refuses_a_later_capture()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "ScreenCaptureKit is macOS only.");
+
+        var capturer = new MacAudioCapturer();
+        await capturer.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+        {
+            await foreach (var _ in capturer.CaptureAsync(TestContext.Current.CancellationToken))
+            {
+            }
+        });
+    }
+
     [Fact]
     public async Task Cancelling_ends_the_capture()
     {

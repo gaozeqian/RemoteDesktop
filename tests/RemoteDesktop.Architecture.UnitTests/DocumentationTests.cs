@@ -51,6 +51,9 @@ public class DocumentationTests
         "CHANGELOG.md",
         "THIRD-PARTY-NOTICES.md",
         "CODE_OF_CONDUCT.md",
+        // The guidance file Claude Code reads at the start of every session. Its name is fixed by that tool, like
+        // PULL_REQUEST_TEMPLATE.md is fixed by GitHub, so it cannot be kebab-cased into docs/.
+        "CLAUDE.md",
     ];
 
     /// <summary>The index and the style guide, and nothing else (“放哪：按读者分目录” in docs/STYLE.md).</summary>

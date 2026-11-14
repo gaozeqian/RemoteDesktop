@@ -10,7 +10,7 @@ using RemoteDesktop.Abstractions.Audio;
 namespace RemoteDesktop.Platform.Windows.Audio;
 
 [SupportedOSPlatform("windows")]
-public sealed class WasapiAudioCapturerFactory : IAudioCapturerFactory
+internal sealed class WasapiAudioCapturerFactory : IAudioCapturerFactory
 {
     public IAudioCapturer Create() => new WasapiLoopbackAudioCapturer();
 }
@@ -25,10 +25,15 @@ internal sealed class WasapiLoopbackAudioCapturer : IAudioCapturer
 {
     private static readonly TimeSpan BufferedLimit = TimeSpan.FromMilliseconds(500);
 
+    private readonly CancellationTokenSource _dispose = new();
+    private int _disposed;
+
     public AudioFormat Format => AudioFormat.Standard;
 
     public async IAsyncEnumerable<ReadOnlyMemory<float>> CaptureAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         var chunks = Channel.CreateBounded<float[]>(new BoundedChannelOptions(128) { FullMode = BoundedChannelFullMode.DropOldest });
         // Loopback cannot follow the default device by itself, so it is pinned to the current one and a watcher ends
         // the capture when the user switches outputs; the caller then starts over on the new device.
@@ -60,11 +65,11 @@ internal sealed class WasapiLoopbackAudioCapturer : IAudioCapturer
         capture.RecordingStopped += (_, e) => chunks.Writer.TryComplete(e.Exception);
 
         capture.StartRecording();
-        using var watcherStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var watcherStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _dispose.Token);
         var watcher = WatchDefaultDeviceAsync(enumerator, deviceId, chunks.Writer, watcherStop.Token);
         try
         {
-            await foreach (var chunk in chunks.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var chunk in chunks.Reader.ReadAllAsync(watcherStop.Token).ConfigureAwait(false))
             {
                 yield return chunk;
             }
@@ -104,7 +109,17 @@ internal sealed class WasapiLoopbackAudioCapturer : IAudioCapturer
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>Stops every running enumeration; a later <see cref="CaptureAsync"/> is refused.</summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            // The iteration's finally stops WASAPI and releases the endpoint.
+            _dispose.Cancel();
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     private static ISampleProvider ToStandard(ISampleProvider source)
     {
@@ -157,7 +172,7 @@ internal sealed class WasapiLoopbackAudioCapturer : IAudioCapturer
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class WasapiAudioPlayerFactory : IAudioPlayerFactory
+internal sealed class WasapiAudioPlayerFactory : IAudioPlayerFactory
 {
     public IAudioPlayer Create() => new WasapiAudioPlayer();
 }

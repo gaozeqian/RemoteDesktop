@@ -758,6 +758,20 @@ for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesk
     # interrupted earlier run can leave one behind) and bootstrap would fail with "already loaded".
     launchctl bootout system "$plist" 2>/dev/null || true
 
+    # bootout is asynchronous. The old process can still hold its fixed port for a moment, and the replacement then
+    # loses the bind race: launchd restarts it with "address already in use" until the old one finally exits, while
+    # the readiness check below sees a job that never settles and aborts the installation. Wait for the old job to
+    # leave the domain before starting the new one. A stuck job is reported rather than silently retried forever.
+    unload_waits=0
+    while launchctl print "system/$label" >/dev/null 2>&1; do
+        unload_waits=$((unload_waits + 1))
+        if [ "$unload_waits" -ge 80 ]; then
+            echo "Remote Desktop Server: $label is still loaded after bootout; starting it anyway." >&2
+            break
+        fi
+        sleep 0.25
+    done
+
     # enable before bootstrap: a job an administrator disabled would otherwise be loaded but never started.
     launchctl enable "system/$label" 2>/dev/null || true
 
@@ -767,7 +781,7 @@ for label in com.remotedesktop.rendezvous com.remotedesktop.relay com.remotedesk
     fi
 
     service_status=""
-    for attempt in 1 2 3 4 5; do
+    for attempt in $(seq 1 30); do
         service_status="$(launchctl print "system/$label" 2>/dev/null || true)"
         if printf '%s\n' "$service_status" | grep -Eq '^[[:space:]]*state = running'; then
             break
@@ -792,7 +806,7 @@ esac
 health_url="$scheme://127.0.0.1:$port/health"
 
 healthy=false
-for attempt in {1..20}; do
+for attempt in {1..40}; do
     if [ "$scheme" = https ]; then
         /usr/bin/curl -kfsS --max-time 2 "$health_url" >/dev/null 2>&1 && healthy=true
     else

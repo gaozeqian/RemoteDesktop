@@ -2,5 +2,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Core\RemoteDesktop.Application\RemoteDesktop.Application.csproj" />
     <ProjectReference Include="..\..\Media\RemoteDesktop.Media\RemoteDesktop.Media.csproj" />
+    <ProjectReference Include="..\RemoteDesktop.Features.Shared\RemoteDesktop.Features.Shared.csproj" />
   </ItemGroup>
 </Project>

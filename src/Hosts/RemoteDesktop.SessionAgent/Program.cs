@@ -7,10 +7,7 @@ using Microsoft.Extensions.Logging;
 using RemoteDesktop.Abstractions.Display;
 using RemoteDesktop.Abstractions.Input;
 using RemoteDesktop.Application.Hosting;
-using RemoteDesktop.Features.Camera;
-using RemoteDesktop.Features.Desktop;
-using RemoteDesktop.Features.FileTransfer;
-using RemoteDesktop.Features.Terminal;
+using RemoteDesktop.Hosts.Composition;
 using RemoteDesktop.Media;
 using RemoteDesktop.Platform.Windows;
 using RemoteDesktop.Platform.Windows.Agent;
@@ -86,10 +83,7 @@ await using (link.ConfigureAwait(false))
         .AddSingleton(TimeProvider.System)
         .AddWindowsPlatform(dataDirectory, DataProtectionScope.CurrentUser)
         .AddRemoteDesktopMedia()
-        .AddDesktopFeature()
-        .AddFileTransferFeature(partialFileLedgerPath: Path.Combine(dataDirectory, "partial-files.log"))
-        .AddTerminalFeature()
-        .AddCameraFeature()
+        .AddRemoteDesktopHostFeatures(dataDirectory)
         .AddSingleton(link)
         // Last registration wins: Ctrl+Alt+Del goes through the service instead of SendInput.
         .AddSingleton<IInputInjector>(sp => new AgentInputInjector(

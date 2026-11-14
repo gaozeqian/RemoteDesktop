@@ -33,7 +33,7 @@ namespace RemoteDesktop.Platform.Posix.Terminal;
 /// </para>
 /// </remarks>
 [UnsupportedOSPlatform("windows")]
-public sealed class PosixPtySession : IPtySession
+internal sealed class PosixPtySession : IPtySession
 {
     private const int SlaveNameCapacity = 256;
 

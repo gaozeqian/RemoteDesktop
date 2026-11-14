@@ -249,6 +249,22 @@ public sealed partial class FileTransferModule(
             await RespondAsync(stream, new FileResponse { Complete = new TransferComplete { Status = StatusOf(ex) } }, cancellationToken).ConfigureAwait(false);
             LogTransferFailed(logger, session.Id, "upload", finalPath, ex.Message);
         }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            // The receiver/disk/stream failed after UploadAccepted went out. Without a Complete the controller waits
+            // for the final verdict until its finish timeout (up to an hour) instead of showing the error.
+            await RespondAsync(
+                stream,
+                new FileResponse
+                {
+                    Complete = new TransferComplete
+                    {
+                        Status = new FileStatus { Error = FileError.Io, Message = "The upload did not finish: " + ex.Message },
+                    },
+                },
+                cancellationToken).ConfigureAwait(false);
+            LogTransferFailed(logger, session.Id, "upload", finalPath, ex.Message);
+        }
     }
 
     /// <summary>

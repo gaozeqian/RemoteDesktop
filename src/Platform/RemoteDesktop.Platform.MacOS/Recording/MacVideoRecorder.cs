@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Threading.Channels;
 using RemoteDesktop.Abstractions.Media;
 using RemoteDesktop.Platform.MacOS.Interop;
+using RemoteDesktop.Platform.Shared;
 
 namespace RemoteDesktop.Platform.MacOS.Recording;
 
@@ -17,7 +17,7 @@ namespace RemoteDesktop.Platform.MacOS.Recording;
 /// top-row-first, and CVPixelBuffer memory is too, so they go in without the bottom-up flip Media Foundation needs.
 /// </remarks>
 [SupportedOSPlatform("macos")]
-public sealed class MacVideoRecorder : IVideoRecorder
+internal sealed class MacVideoRecorder : IVideoRecorder
 {
     private readonly Lock _lock = new();
     private readonly Stopwatch _clock = new();
@@ -25,12 +25,9 @@ public sealed class MacVideoRecorder : IVideoRecorder
     private int _width;
     private int _height;
     private int _frameRate;
-    private Channel<QueuedFrame>? _channel;
-    private Task? _worker;
+    private RecorderFrameQueue<QueuedFrame>? _queue;
     private volatile bool _isRecording;
     private string? _filePath;
-    private long _writtenFrames;
-    private int _failure;
 
     public bool IsRecording => _isRecording;
 
@@ -38,9 +35,9 @@ public sealed class MacVideoRecorder : IVideoRecorder
 
     public TimeSpan Duration => _clock.Elapsed;
 
-    public long WrittenFrames => Interlocked.Read(ref _writtenFrames);
+    public long WrittenFrames => _queue?.WrittenFrames ?? 0;
 
-    public VideoRecorderFailure Failure => (VideoRecorderFailure)Volatile.Read(ref _failure);
+    public VideoRecorderFailure Failure => _queue?.Failure ?? VideoRecorderFailure.None;
 
     public void Start(string filePath, int width, int height, int frameRate = 30, int bitrateKbps = 4000)
     {
@@ -57,6 +54,9 @@ public sealed class MacVideoRecorder : IVideoRecorder
                 throw new InvalidOperationException("Recording is already in progress.");
             }
 
+            // A start that fails must report no failure from the previous, already-stopped recording.
+            _queue = null;
+
             var dir = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(dir))
             {
@@ -67,8 +67,6 @@ public sealed class MacVideoRecorder : IVideoRecorder
             _width = width;
             _height = height;
             _frameRate = Math.Clamp(frameRate, 1, 60);
-            Interlocked.Exchange(ref _writtenFrames, 0);
-            Volatile.Write(ref _failure, (int)VideoRecorderFailure.None);
 
             var error = new byte[MacNativeInterop.ErrorBufferSize];
             int status;
@@ -97,25 +95,44 @@ public sealed class MacVideoRecorder : IVideoRecorder
 
             _recorder = recorder;
 
-            var channel = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(30)
+            // The worker captures the handle it started with: a stop clears the field, and the frames still queued
+            // must drain into the writer that was opened for them.
+            _queue = new RecorderFrameQueue<QueuedFrame>(frame =>
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            });
-            _channel = channel;
+                var status = MacNativeInterop.Ok;
+                unsafe
+                {
+                    fixed (byte* pixels = frame.Pixels)
+                    {
+                        var error = new byte[MacNativeInterop.ErrorBufferSize];
+                        fixed (byte* errorPointer = error)
+                        {
+                            status = MacNativeInterop.rd_recorder_append(
+                                recorder,
+                                pixels,
+                                (nuint)frame.Pixels.Length,
+                                frame.RowBytes,
+                                frame.Width,
+                                frame.Height,
+                                errorPointer,
+                                (nuint)error.Length);
+                        }
+                    }
+                }
 
+                // Disk full, encoder error, backpressure that would not clear: the recording cannot go on. The
+                // caller finds out through Failure rather than by noticing the file stopped growing.
+                return status == MacNativeInterop.Ok ? null : VideoRecorderFailure.WriteFailed;
+            });
             _isRecording = true;
             _clock.Restart();
-            // The channel and the handle are cleared the moment a stop begins, so the worker must hold its own copies.
-            _worker = Task.Run(() => ProcessQueueAsync(channel, recorder));
         }
     }
 
     public void RecordFrame(ReadOnlySpan<byte> bgraPixels, int stride, int width, int height)
     {
-        var channel = _channel;
-        if (!_isRecording || channel is null)
+        var queue = _queue;
+        if (!_isRecording || queue is null)
         {
             return;
         }
@@ -130,8 +147,10 @@ public sealed class MacVideoRecorder : IVideoRecorder
 
         var rowBytes = width * 4;
         var totalBytes = rowBytes * height;
-        if (bgraPixels.Length < ((height - 1) * stride) + rowBytes)
+        if (stride < rowBytes || bgraPixels.Length < ((height - 1) * stride) + rowBytes)
         {
+            // A malformed frame is dropped, not reported as a write failure: the encoder never saw it, and the next
+            // well-formed frame still goes into the same file. Windows and Linux behave the same way.
             return;
         }
 
@@ -143,13 +162,12 @@ public sealed class MacVideoRecorder : IVideoRecorder
             bgraPixels.Slice(y * stride, rowBytes).CopyTo(buffer.AsSpan(y * rowBytes, rowBytes));
         }
 
-        channel.Writer.TryWrite(new QueuedFrame(buffer, rowBytes, width, height));
+        queue.TryEnqueue(new QueuedFrame(buffer, rowBytes, width, height));
     }
 
     public async Task<string> StopAsync()
     {
-        Channel<QueuedFrame>? channel;
-        Task? worker;
+        RecorderFrameQueue<QueuedFrame>? queue;
         nint recorder;
         var resultPath = _filePath ?? string.Empty;
 
@@ -162,31 +180,17 @@ public sealed class MacVideoRecorder : IVideoRecorder
 
             _isRecording = false;
             _clock.Stop();
-            channel = _channel;
-            _channel = null;
-            worker = _worker;
-            _worker = null;
+            queue = _queue;
             recorder = _recorder;
             _recorder = 0;
         }
 
-        // Drain before finalizing: the worker holds the handle and the channel it is draining, so the still-queued
-        // frames are the last moments of the recording — discarding them would silently truncate it.
-        if (channel is not null)
+        // Drain before finalizing: the frames still queued are the last moments of the recording — discarding them
+        // would silently truncate it. The queue is kept after the stop so WrittenFrames and Failure still answer.
+        if (queue is not null)
         {
-            channel.Writer.TryComplete();
-        }
-
-        if (worker is not null)
-        {
-            try
-            {
-                await worker.ConfigureAwait(false);
-            }
-            catch
-            {
-                // Ignore worker drain errors on shutdown.
-            }
+            queue.Complete();
+            await queue.DrainAsync().ConfigureAwait(false);
         }
 
         if (recorder != 0)
@@ -208,14 +212,14 @@ public sealed class MacVideoRecorder : IVideoRecorder
             {
                 // Nothing ever reached the writer: there is no recording, so take the file away rather than leave an
                 // unplayable stub behind.
-                Fail(VideoRecorderFailure.NothingRecorded);
-                TryDeleteFile(resultPath);
+                queue?.Fail(VideoRecorderFailure.NothingRecorded);
+                RecorderFile.TryDelete(resultPath);
                 throw new InvalidOperationException("No frame reached the encoder, so there is no recording to save.");
             }
 
             if (status != MacNativeInterop.Ok)
             {
-                TryDeleteFile(resultPath);
+                RecorderFile.TryDelete(resultPath);
                 string? detail = null;
                 unsafe
                 {
@@ -232,81 +236,28 @@ public sealed class MacVideoRecorder : IVideoRecorder
         return resultPath;
     }
 
+    /// <summary>
+    /// Stops a running recording, discarding the "nothing was recorded" error: disposal has no one to report it to,
+    /// and the file has already been removed. The same shape as the Windows and Linux recorders.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (_isRecording)
         {
-            await StopAsync().ConfigureAwait(false);
-        }
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (!string.IsNullOrEmpty(path))
+            try
             {
-                File.Delete(path);
+                await StopAsync().ConfigureAwait(false);
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Leaving an unplayable file behind is better than throwing while closing one that never started.
-        }
-    }
-
-    private async Task ProcessQueueAsync(Channel<QueuedFrame> channel, nint recorder)
-    {
-        var reader = channel.Reader;
-        while (await reader.WaitToReadAsync().ConfigureAwait(false))
-        {
-            while (reader.TryRead(out var frame))
+            catch (InvalidOperationException)
             {
-                try
-                {
-                    var status = MacNativeInterop.Ok;
-                    unsafe
-                    {
-                        fixed (byte* pixels = frame.Pixels)
-                        {
-                            var error = new byte[MacNativeInterop.ErrorBufferSize];
-                            fixed (byte* errorPointer = error)
-                            {
-                                status = MacNativeInterop.rd_recorder_append(
-                                    recorder,
-                                    pixels,
-                                    (nuint)frame.Pixels.Length,
-                                    frame.RowBytes,
-                                    frame.Width,
-                                    frame.Height,
-                                    errorPointer,
-                                    (nuint)error.Length);
-                            }
-                        }
-                    }
-
-                    if (status != MacNativeInterop.Ok)
-                    {
-                        // Disk full, encoder error, backpressure that would not clear: the recording cannot go on. The
-                        // caller finds out through Failure rather than by noticing the file stopped growing.
-                        Fail(VideoRecorderFailure.WriteFailed);
-                        return;
-                    }
-
-                    Interlocked.Increment(ref _writtenFrames);
-                }
-                catch (Exception)
-                {
-                    Fail(VideoRecorderFailure.WriteFailed);
-                    return;
-                }
             }
         }
     }
+
+
 
     /// <summary>The first reason wins: it is the one that explains where the file ends.</summary>
-    private void Fail(VideoRecorderFailure failure) =>
-        Interlocked.CompareExchange(ref _failure, (int)failure, (int)VideoRecorderFailure.None);
+    private void Fail(VideoRecorderFailure failure) => _queue?.Fail(failure);
 
     /// <summary>
     /// The pixels are already repacked to <c>RowBytes = Width * 4</c>, so that is the stride the native call must be

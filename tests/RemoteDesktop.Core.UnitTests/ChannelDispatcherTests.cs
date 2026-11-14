@@ -76,13 +76,33 @@ public class ChannelDispatcherTests
     private static SessionContext CreateSession(SessionRole role, SessionMode mode) =>
         new(SessionId.New(), role, connection: null!, AccessGrant.Create(mode, Permissions.All, Permissions.All));
 
+    [Fact]
+    public async Task An_accepted_channel_is_handed_to_its_module_exactly_once()
+    {
+        var module = new FakeModule(ChannelType.Video, Permissions.ViewScreen);
+        var dispatcher = new ChannelDispatcher([module]);
+        var session = CreateSession(SessionRole.Host, SessionMode.Control);
+        var channel = new FakeChannel(ChannelType.Video);
+
+        var result = await dispatcher.DispatchAsync(channel, session, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DispatchResult.Accepted, result);
+        Assert.Equal(1, module.Handled);
+    }
+
     private sealed class FakeModule(ChannelType type, Permissions permission) : IFeatureModule
     {
         public ChannelType ChannelType => type;
 
         public Permissions RequiredPermission => permission;
 
-        public Task HandleAsync(IChannel channel, SessionContext session, CancellationToken cancellationToken) => Task.CompletedTask;
+        public int Handled { get; private set; }
+
+        public Task HandleAsync(IChannel channel, SessionContext session, CancellationToken cancellationToken)
+        {
+            Handled++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeChannel(ChannelType type) : IChannel

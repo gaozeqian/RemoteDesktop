@@ -3,4 +3,8 @@
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Ops.Core\RemoteDesktop.Server.Ops.Core.csproj" />
     <ProjectReference Include="..\..\src\Server\RemoteDesktop.Server.Shared\RemoteDesktop.Server.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Test-only helpers shared by several suites; see the files for why they are linked. -->
+    <Compile Include="..\RemoteDesktop.Transport.IntegrationTests\TestSupport\TestClock.cs" Link="TestSupport\TestClock.cs" />
+  </ItemGroup>
 </Project>

@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteDesktop.Features.FileTransfer;
+using RemoteDesktop.TestSupport;
 
 namespace RemoteDesktop.Core.UnitTests;
 
@@ -11,7 +13,7 @@ namespace RemoteDesktop.Core.UnitTests;
 public sealed class PartialFileSweeperTests : IDisposable
 {
     private readonly string _folder = Directory.CreateTempSubdirectory("rd-partial-").FullName;
-    private readonly ManualTime _time = new();
+    private readonly TestClock _time = new();
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 
@@ -22,6 +24,27 @@ public sealed class PartialFileSweeperTests : IDisposable
         Ledger().Record(partial);
 
         Assert.Equal([partial], Ledger().Entries());
+    }
+
+    /// <summary>
+    /// Unix paths are case-sensitive. An OrdinalIgnoreCase ledger treats these as one record: the second one is not
+    /// recorded (so the sweeper never sees it) and forgetting one removes the other.
+    /// </summary>
+    [Fact]
+    public void On_a_case_sensitive_filesystem_paths_that_differ_only_in_case_are_separate()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows paths are case-insensitive.");
+
+        var lower = Path.Combine(_folder, "movie.1-a.rdpart");
+        var upper = Path.Combine(_folder, "MOVIE.1-a.rdpart");
+        var ledger = Ledger();
+        ledger.Record(lower);
+        ledger.Record(upper);
+
+        var entries = Ledger().Entries();
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(lower, entries);
+        Assert.Contains(upper, entries);
     }
 
     [Fact]
@@ -101,6 +124,82 @@ public sealed class PartialFileSweeperTests : IDisposable
         System.IO.File.WriteAllLines(Path.Combine(_folder, "partial-files.log"), records);
 
         Assert.Equal(records[^3..], Ledger(maxEntries: 3).Entries());
+    }
+
+    /// <summary>
+    /// The service is what a host actually starts. Its contract is wider than <see cref="PartialFileSweeper.Sweep"/>:
+    /// one pass on start, another every <see cref="PartialFileSweeper.Interval"/>, and a stop that ends the wait.
+    /// </summary>
+    [Fact]
+    public async Task The_service_sweeps_on_start_without_waiting_for_the_interval()
+    {
+        var clock = new SteppedTime();
+        var abandoned = WriteOldPartial(clock, "startup.iso.1-a.rdpart");
+        var ledger = Ledger();
+        ledger.Record(abandoned);
+
+        var sweeper = new PartialFileSweeper(ledger, clock, NullLogger<PartialFileSweeper>.Instance);
+        try
+        {
+            await sweeper.StartAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(
+                await ViewerRig.WaitUntilAsync(() => !File.Exists(abandoned)),
+                "the pass on start should delete the abandoned file");
+            Assert.Empty(ledger.Entries());
+        }
+        finally
+        {
+            await sweeper.StopAsync(TestContext.Current.CancellationToken);
+            sweeper.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// A pass that throws is logged and the loop waits for the next interval. If it instead ended the loop, cleanup
+    /// would stop for the life of the process after one unlucky file.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_pass_does_not_stop_the_next_interval()
+    {
+        var clock = new SteppedTime();
+        var abandoned = WriteOldPartial(clock, "retry.iso.1-a.rdpart");
+        var ledger = Ledger();
+        ledger.Record(abandoned);
+
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sweeper = new PartialFileSweeper(
+            ledger,
+            new FailOnceTime(clock),
+            new SweepFailureLogger(failed));
+        try
+        {
+            await sweeper.StartAsync(TestContext.Current.CancellationToken);
+            await failed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(File.Exists(abandoned), "the failed pass must not have deleted the file");
+
+            clock.Advance(PartialFileSweeper.Interval);
+
+            Assert.True(
+                await ViewerRig.WaitUntilAsync(() => !File.Exists(abandoned)),
+                "the next interval should run another pass");
+        }
+        finally
+        {
+            await sweeper.StopAsync(TestContext.Current.CancellationToken);
+            sweeper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Stopping_the_service_ends_its_wait()
+    {
+        var sweeper = new PartialFileSweeper(Ledger(), new SteppedTime(), NullLogger<PartialFileSweeper>.Instance);
+        await sweeper.StartAsync(TestContext.Current.CancellationToken);
+        await sweeper.StopAsync(TestContext.Current.CancellationToken).WaitAsync(
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        sweeper.Dispose();
     }
 
     /// <summary>The transfer itself must not be able to notice the list: a file it cannot write is not its problem.</summary>
@@ -291,5 +390,55 @@ public sealed class PartialFileSweeperTests : IDisposable
         System.IO.File.WriteAllText(path, contents);
         System.IO.File.SetLastWriteTimeUtc(path, _time.GetUtcNow().UtcDateTime);
         return path;
+    }
+
+    /// <summary>A partial file old enough for any pass to remove, measured against the clock the service uses.</summary>
+    private string WriteOldPartial(TimeProvider clock, string name)
+    {
+        var path = Path.Combine(_folder, name);
+        System.IO.File.WriteAllText(path, "half a file");
+        System.IO.File.SetLastWriteTimeUtc(
+            path,
+            clock.GetUtcNow().UtcDateTime - PartialFileSweeper.Retention - TimeSpan.FromDays(1));
+        return path;
+    }
+
+    /// <summary>The first wall-clock read fails, which is the first thing a pass does with a file on its list.</summary>
+    private sealed class FailOnceTime(TimeProvider inner) : TimeProvider
+    {
+        private int _failuresLeft = 1;
+
+        public override DateTimeOffset GetUtcNow() =>
+            Interlocked.Decrement(ref _failuresLeft) >= 0
+                ? throw new InvalidOperationException("The clock failed on purpose.")
+                : inner.GetUtcNow();
+
+        public override long GetTimestamp() => inner.GetTimestamp();
+
+        public override long TimestampFrequency => inner.TimestampFrequency;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(callback, state, dueTime, period);
+    }
+
+    private sealed class SweepFailureLogger(TaskCompletionSource failed) : ILogger<PartialFileSweeper>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                failed.TrySetResult();
+            }
+        }
     }
 }
