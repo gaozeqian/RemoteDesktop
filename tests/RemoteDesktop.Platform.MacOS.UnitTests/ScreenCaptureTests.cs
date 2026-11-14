@@ -479,6 +479,34 @@ public class ScreenCaptureKitCapturerTests
         Assert.Contains("4294967294", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Reset_starts_a_fresh_capture_instead_of_leaving_a_dead_stream()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "ScreenCaptureKit is macOS only.");
+        Assert.SkipUnless(
+            TccGrants.IsGranted(TccGrant.ScreenRecording),
+            "Screen Recording is not granted to this process, so no capture can start.");
+
+        var display = PrimaryDisplay();
+        await using var capturer = new ScreenCaptureKitCapturerFactory().Create(display);
+
+        // The stream has to be running before the reset: replacing a capture that never started would only test the
+        // constructor twice.
+        using (var first = await Capture(capturer))
+        {
+            Assert.SkipWhen(first is null, "ScreenCaptureKit delivered no frame; the display is probably unchanged.");
+        }
+
+        capturer.Reset();
+
+        Assert.False(capturer.IsFaulted, "A reset on a healthy display left the capturer reported as faulted.");
+
+        // A static screen may produce nothing after the reset; the assertion is about the new stream being alive and
+        // not faulted, which is what the capture loop acts on.
+        using var second = await capturer.CaptureAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        Assert.False(capturer.IsFaulted);
+    }
+
     private static DisplayInfo PrimaryDisplay()
     {
         var displays = new CoreGraphicsDisplays().GetDisplays();

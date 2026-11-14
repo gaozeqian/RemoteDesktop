@@ -46,8 +46,13 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
 
     private readonly ScreenCaptureKitFrameSink _sink;
     private readonly GCHandle _sinkHandle;
+    private readonly uint _displayId;
+    private readonly int _pixelWidth;
+    private readonly int _pixelHeight;
     private nint _capture;
     private bool _disposed;
+    private bool _faulted;
+    private bool _pendingCreateOwnsSink;
     private CursorPosition _lastCursorPosition;
     private bool _hasCursorPosition;
 
@@ -74,67 +79,25 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
                 $"Display {display.Id} is not available: CoreGraphics reports no current mode for it.");
         }
 
+        _displayId = displayId;
+        _pixelWidth = pixelWidth;
+        _pixelHeight = pixelHeight;
+
         _sink = new ScreenCaptureKitFrameSink();
         _sinkHandle = GCHandle.Alloc(_sink);
 
-        var pendingCreateOwnsSink = false;
         try
         {
-            // Not on the calling thread: rd_capture_create blocks while ScreenCaptureKit answers its asynchronous
-            // shareable-content request, and a caller that happens to be the UI thread must not be parked by it.
-            // The timeout is the only bound on a wedged answer; the continuation takes over the handle if the
-            // helper eventually returns after we have given up, so neither the native capture nor the callback
-            // handle is leaked.
-            var creation = Task.Run(() => CreateNative(displayId, pixelWidth, pixelHeight));
-            try
-            {
-                _capture = creation.WaitAsync(StartupTimeout).GetAwaiter().GetResult();
-            }
-            catch (TimeoutException)
-            {
-                pendingCreateOwnsSink = true;
-                _ = creation.ContinueWith(
-                    completed =>
-                    {
-                        if (completed.Status == TaskStatus.RanToCompletion)
-                        {
-                            MacNativeInterop.rd_capture_destroy(completed.Result);
-                        }
-                        else
-                        {
-                            // The caller has already been told the capture timed out. Observe the late failure
-                            // instead of letting it resurface as an unobserved task exception.
-                            _ = completed.Exception;
-                        }
-
-                        _sinkHandle.Free();
-                        _sink.Dispose();
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-
-                throw new ScreenCaptureUnavailableException(
-                    $"ScreenCaptureKit did not answer within {StartupTimeout.TotalSeconds:0} seconds.");
-            }
-
-            unsafe
-            {
-                var error = stackalloc byte[MacNativeInterop.ErrorBufferSize];
-                var status = MacNativeInterop.rd_capture_start(_capture, error, MacNativeInterop.ErrorBufferSize);
-                if (status != MacNativeInterop.Ok)
-                {
-                    MacNativeInterop.rd_capture_destroy(_capture);
-                    _capture = 0;
-                    throw new ScreenCaptureUnavailableException(DescribeFailure(status, error));
-                }
-            }
+            OpenCapture(ownsSinkOnTimeout: true);
         }
         catch
         {
-            if (!pendingCreateOwnsSink)
+            // A timeout on the construction path leaves the late continuation owning the sink; every other
+            // failure still has it here. Reset must not take it down: the object stays alive and retries.
+            if (!_pendingCreateOwnsSink)
             {
                 _sinkHandle.Free();
+                _sink.Dispose();
             }
 
             throw;
@@ -151,6 +114,14 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
     {
         get
         {
+            if (_faulted)
+            {
+                // The last rebuild failed. The stream is gone and the sink holds nothing; reporting a fault is
+                // what keeps the capture loop retrying instead of waiting for frames from a capture that is not
+                // running.
+                return true;
+            }
+
             var capture = _capture;
             if (capture == 0)
             {
@@ -161,6 +132,39 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
             {
                 return MacNativeInterop.rd_capture_stopped(capture, null, 0) != 0;
             }
+        }
+    }
+
+    /// <summary>Throws the stopped stream away and starts a fresh one on the same sink.</summary>
+    /// <remarks>
+    /// ScreenCaptureKit's stream cannot be resumed after it stops, so retrying on the same object is not enough:
+    /// the native capture is destroyed and created again. A failed rebuild leaves the object marked faulted, and the
+    /// capture loop tries again at its recovery interval rather than tearing the session down.
+    /// </remarks>
+    public void Reset()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_capture != 0)
+        {
+            MacNativeInterop.rd_capture_stop(_capture);
+            MacNativeInterop.rd_capture_destroy(_capture);
+            _capture = 0;
+        }
+
+        try
+        {
+            OpenCapture(ownsSinkOnTimeout: false);
+            _faulted = false;
+        }
+#pragma warning disable CA1031 // A rebuild that fails must leave the capturer retryable, not end the session.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            _faulted = true;
         }
     }
 
@@ -224,6 +228,66 @@ internal sealed class ScreenCaptureKitCapturer : IScreenCapturer
 
         _sink.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Creates and starts one native capture. The caller owns the failure path's cleanup of the sink.</summary>
+    /// <param name="ownsSinkOnTimeout">
+    /// True during construction, where a late helper answer must release the sink because the object will never be
+    /// handed to a caller; false during <see cref="Reset"/>, where the sink outlives the failed attempt.
+    /// </param>
+    private void OpenCapture(bool ownsSinkOnTimeout)
+    {
+        _pendingCreateOwnsSink = false;
+
+        // Not on the calling thread: rd_capture_create blocks while ScreenCaptureKit answers its asynchronous
+        // shareable-content request, and a caller that happens to be the UI thread must not be parked by it.
+        var creation = Task.Run(() => CreateNative(_displayId, _pixelWidth, _pixelHeight));
+        try
+        {
+            _capture = creation.WaitAsync(StartupTimeout).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            _pendingCreateOwnsSink = ownsSinkOnTimeout;
+            _ = creation.ContinueWith(
+                completed =>
+                {
+                    if (completed.Status == TaskStatus.RanToCompletion)
+                    {
+                        MacNativeInterop.rd_capture_destroy(completed.Result);
+                    }
+                    else
+                    {
+                        // The caller has already been told the capture timed out. Observe the late failure
+                        // instead of letting it resurface as an unobserved task exception.
+                        _ = completed.Exception;
+                    }
+
+                    if (ownsSinkOnTimeout)
+                    {
+                        _sinkHandle.Free();
+                        _sink.Dispose();
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            throw new ScreenCaptureUnavailableException(
+                $"ScreenCaptureKit did not answer within {StartupTimeout.TotalSeconds:0} seconds.");
+        }
+
+        unsafe
+        {
+            var error = stackalloc byte[MacNativeInterop.ErrorBufferSize];
+            var status = MacNativeInterop.rd_capture_start(_capture, error, MacNativeInterop.ErrorBufferSize);
+            if (status != MacNativeInterop.Ok)
+            {
+                MacNativeInterop.rd_capture_destroy(_capture);
+                _capture = 0;
+                throw new ScreenCaptureUnavailableException(DescribeFailure(status, error));
+            }
+        }
     }
 
     private unsafe nint CreateNative(uint displayId, int pixelWidth, int pixelHeight)
