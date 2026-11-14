@@ -130,8 +130,10 @@ internal sealed class MacVideoRecorder : IVideoRecorder
 
         var rowBytes = width * 4;
         var totalBytes = rowBytes * height;
-        if (bgraPixels.Length < ((height - 1) * stride) + rowBytes)
+        if (stride < rowBytes || bgraPixels.Length < ((height - 1) * stride) + rowBytes)
         {
+            // A malformed frame is dropped, not reported as a write failure: the encoder never saw it, and the next
+            // well-formed frame still goes into the same file. Windows and Linux behave the same way.
             return;
         }
 
@@ -232,11 +234,21 @@ internal sealed class MacVideoRecorder : IVideoRecorder
         return resultPath;
     }
 
+    /// <summary>
+    /// Stops a running recording, discarding the "nothing was recorded" error: disposal has no one to report it to,
+    /// and the file has already been removed. The same shape as the Windows and Linux recorders.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (_isRecording)
         {
-            await StopAsync().ConfigureAwait(false);
+            try
+            {
+                await StopAsync().ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
     }
 

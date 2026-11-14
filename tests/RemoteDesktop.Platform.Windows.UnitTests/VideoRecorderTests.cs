@@ -269,4 +269,88 @@ public class VideoRecorderTests
             }
         }
     }
+
+    /// <summary>
+    /// The three recorders share this contract; the Linux and macOS suites assert the same three facts.
+    /// </summary>
+    [Fact]
+    public async Task Duration_is_kept_after_the_stop_so_the_length_can_be_reported()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+        var recorder = new MfVideoRecorder();
+        try
+        {
+            recorder.Start(tempPath, 64, 64, frameRate: 30, bitrateKbps: 500);
+            recorder.RecordFrame(new byte[64 * 64 * 4], 64 * 4, 64, 64);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+
+            var beforeStop = recorder.Duration;
+            await recorder.StopAsync();
+
+            Assert.True(beforeStop > TimeSpan.Zero, "The recording clock never ran.");
+            Assert.True(recorder.Duration >= beforeStop, "Stopping reset the recording length.");
+        }
+        finally
+        {
+            await recorder.DisposeAsync();
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+    }
+
+    /// <summary>A malformed frame is dropped and the recording continues; it is not a write failure.</summary>
+    [Fact]
+    public async Task A_short_frame_is_dropped_without_failing_the_recording()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+        var recorder = new MfVideoRecorder();
+        try
+        {
+            const int width = 64;
+            const int height = 64;
+            recorder.Start(tempPath, width, height, frameRate: 30, bitrateKbps: 500);
+
+            var frame = new byte[width * height * 4];
+            var shortLength = ((height - 1) * width * 4) + (width * 4) - 4;
+            recorder.RecordFrame(frame, width * 4, width, height);
+            recorder.RecordFrame(frame.AsSpan(0, shortLength), width * 4, width, height);
+            recorder.RecordFrame(frame, width * 4, width, height);
+
+            await recorder.StopAsync();
+
+            Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+            Assert.True(recorder.WrittenFrames >= 2, "The valid frames around the short one were not written.");
+        }
+        finally
+        {
+            await recorder.DisposeAsync();
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Disposing a recording that never received a frame is quiet, like StopAsync is not.</summary>
+    [Fact]
+    public async Task Disposing_a_recording_without_frames_does_not_throw()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Media Foundation is Windows only.");
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"rec_test_{Guid.NewGuid():N}.mp4");
+        var recorder = new MfVideoRecorder();
+        recorder.Start(tempPath, 64, 64, frameRate: 30, bitrateKbps: 500);
+
+        await recorder.DisposeAsync();
+
+        Assert.False(recorder.IsRecording);
+        Assert.Equal(VideoRecorderFailure.NothingRecorded, recorder.Failure);
+        Assert.False(File.Exists(tempPath), "an empty recording must not be left behind");
+    }
 }

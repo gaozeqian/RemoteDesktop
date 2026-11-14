@@ -39,18 +39,19 @@ internal sealed class FfmpegVideoRecorder : IVideoRecorder
     private unsafe AVPacket* _packet;
     private unsafe byte*[]? _destinationData;
     private int[]? _destinationStride;
+    private readonly System.Diagnostics.Stopwatch _clock = new();
     private long _written;
     private int _width;
     private int _height;
     private int _failure;
-    private DateTime _started;
     private string? _outputPath;
 
     public bool IsRecording => _channel is not null;
 
     public string? OutputFilePath => _outputPath;
 
-    public TimeSpan Duration => _channel is null ? TimeSpan.Zero : DateTime.UtcNow - _started;
+    /// <summary>The length of this recording, kept after the stop so the caller can report it.</summary>
+    public TimeSpan Duration => _clock.Elapsed;
 
     public long WrittenFrames => Interlocked.Read(ref _written);
 
@@ -76,7 +77,7 @@ internal sealed class FfmpegVideoRecorder : IVideoRecorder
             Volatile.Write(ref _failure, (int)VideoRecorderFailure.None);
             Interlocked.Exchange(ref _written, 0);
             _outputPath = filePath;
-            _started = DateTime.UtcNow;
+            _clock.Restart();
 
             // Kept as plain numbers: RecordFrame runs on the caller's thread and must not read the native encoder
             // context, which Close frees when a stop on another thread finishes.
@@ -113,11 +114,13 @@ internal sealed class FfmpegVideoRecorder : IVideoRecorder
             return;
         }
 
-        // The last row needs only its visible bytes, not the padding after it, which is all the other recorders ask for.
+        // The last row needs only its visible bytes, not the padding after it, which is all the other recorders ask
+        // for. A buffer shorter than that is a malformed frame, not an encoder failure: drop it and keep recording,
+        // which is what the Windows and macOS recorders do. Reporting WriteFailed would tell the caller the file is
+        // broken when the next well-formed frame still goes in.
         var required = ((height - 1) * stride) + (width * 4);
         if (stride < width * 4 || bgraPixels.Length < required)
         {
-            Fail(VideoRecorderFailure.WriteFailed);
             return;
         }
 
@@ -139,6 +142,7 @@ internal sealed class FfmpegVideoRecorder : IVideoRecorder
             worker = _worker;
             _channel = null;
             _worker = null;
+            _clock.Stop();
         }
 
         if (channel is null || worker is null)

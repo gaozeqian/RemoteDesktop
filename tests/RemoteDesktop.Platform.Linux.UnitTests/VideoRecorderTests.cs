@@ -216,7 +216,50 @@ public sealed class VideoRecorderTests : IDisposable
         Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
 
         recorder.RecordFrame(Frame(0x40), Stride, Width, Height);
+        var beforeStop = recorder.Duration;
         await recorder.StopAsync();
+
+        // The UI reports the length after saving; stopping must not reset it to zero. Windows and macOS keep it too.
+        Assert.True(recorder.Duration >= beforeStop, "Stopping reset the recording length.");
+    }
+
+    /// <summary>A malformed frame is dropped and the recording continues; it is not a write failure.</summary>
+    [Fact]
+    public async Task A_short_frame_is_dropped_without_failing_the_recording()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var path = PathFor("short-frame");
+        await using var recorder = new FfmpegVideoRecorder();
+        recorder.Start(path, Width, Height);
+
+        var frame = Frame(0x40);
+        var shortLength = ((Height - 1) * Stride) + (Width * 4) - 4;
+        recorder.RecordFrame(frame, Stride, Width, Height);
+        recorder.RecordFrame(frame.AsSpan(0, shortLength), Stride, Width, Height);
+        recorder.RecordFrame(frame, Stride, Width, Height);
+
+        await recorder.StopAsync();
+
+        Assert.Equal(VideoRecorderFailure.None, recorder.Failure);
+        Assert.True(recorder.WrittenFrames >= 2, "The valid frames around the short one were not written.");
+    }
+
+    /// <summary>Disposing a recording that never received a frame is quiet, like StopAsync is not.</summary>
+    [Fact]
+    public async Task Disposing_a_recording_without_frames_does_not_throw()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), LinuxOnly);
+
+        var path = PathFor("dispose-empty");
+        var recorder = new FfmpegVideoRecorder();
+        recorder.Start(path, Width, Height);
+
+        await recorder.DisposeAsync();
+
+        Assert.False(recorder.IsRecording);
+        Assert.Equal(VideoRecorderFailure.NothingRecorded, recorder.Failure);
+        Assert.False(File.Exists(path), "an empty recording must not be left behind");
     }
 
     [Fact]
