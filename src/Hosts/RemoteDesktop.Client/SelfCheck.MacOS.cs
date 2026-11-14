@@ -198,6 +198,11 @@ internal static partial class SelfCheck
         try
         {
             var services = new ServiceCollection();
+
+            // ClientHost gets logging from Host.CreateApplicationBuilder; this plain collection has to ask for it.
+            // Several platform ports take an ILogger<T> (the clipboard is one), and without a provider resolving them
+            // throws — which used to abort the whole report at the first such port.
+            services.AddLogging();
             services.AddClientPlatform(dataDirectory);
 
             // The media layer as well: codec selection lives above the platform ports, and the video probe cannot

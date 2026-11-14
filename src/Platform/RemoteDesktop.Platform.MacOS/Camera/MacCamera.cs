@@ -19,21 +19,37 @@ namespace RemoteDesktop.Platform.MacOS.Camera;
 [SupportedOSPlatform("macos")]
 internal sealed class MacCameraEnumerator : ICameraEnumerator
 {
+    /// <summary>
+    /// Serializes every enumeration in this process, because the helper's list storage is one buffer per process.
+    /// </summary>
+    /// <remarks>
+    /// The helper hands out library-owned memory that the next listing call frees. Its own lock covers each call, not
+    /// the managed code reading the result: a second caller entering <c>rd_camera_list</c> between the first caller's
+    /// return and its <see cref="Marshal.PtrToStringUTF8"/> frees the array it is about to read. That is a real crash
+    /// (<c>AccessViolationException</c> inside <c>PtrToStringUTF8</c>) whenever two tests — or two sessions — enumerate
+    /// cameras at once. A static lock is the right scope: the buffer is static in the helper, so per-instance
+    /// exclusion does not protect it.
+    /// </remarks>
+    private static readonly Lock Gate = new();
+
     public IReadOnlyList<CameraInfo> GetCameras()
     {
-        // Every id and name is copied out of the helper's storage before the first mode query. That is not
-        // defensive style: rd_camera_modes is itself a listing call, and a listing call resets the storage the
-        // previous one handed out — so a loop that read a camera's name after asking for its modes would be reading
-        // freed memory from the second camera onwards.
-        var listed = ReadCameras();
-
-        var cameras = new List<CameraInfo>(listed.Count);
-        foreach (var (id, name) in listed)
+        lock (Gate)
         {
-            cameras.Add(new CameraInfo(id, name, ReadModes(id)));
-        }
+            // Every id and name is copied out of the helper's storage before the first mode query. That is not
+            // defensive style: rd_camera_modes is itself a listing call, and a listing call resets the storage the
+            // previous one handed out — so a loop that read a camera's name after asking for its modes would be
+            // reading freed memory from the second camera onwards.
+            var listed = ReadCameras();
 
-        return cameras;
+            var cameras = new List<CameraInfo>(listed.Count);
+            foreach (var (id, name) in listed)
+            {
+                cameras.Add(new CameraInfo(id, name, ReadModes(id)));
+            }
+
+            return cameras;
+        }
     }
 
     private static unsafe List<(string Id, string Name)> ReadCameras()
