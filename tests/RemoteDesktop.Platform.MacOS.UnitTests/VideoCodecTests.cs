@@ -120,6 +120,23 @@ public class VideoToolboxH264EncoderTests
 public class VideoToolboxH264DecoderTests
 {
     /// <summary>
+    /// A configuration the native side rejects has to reach the caller with the native sentence, not a status code.
+    /// </summary>
+    [Fact]
+    public void A_configuration_the_native_encoder_refuses_keeps_its_reason()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "VideoToolbox is macOS only.");
+
+        // VideoToolbox rejects an odd dimension at creation; the helper puts the sentence in the error buffer and the
+        // port has to carry it through instead of reporting a bare status code.
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            new VideoToolboxH264EncoderFactory(hardware: true).Create(
+                new VideoEncoderOptions(VideoCodec.H264, 3, 3, 30, 4000)));
+
+        Assert.Contains("even dimensions", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Encode and decode in the same test, which is the only way to check the two halves against each other.
     /// </summary>
     [Fact]
