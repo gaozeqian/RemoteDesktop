@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Platform.Shared;
 using RemoteDesktop.Platform.MacOS.Interop;
 
 namespace RemoteDesktop.Platform.MacOS.Video;
@@ -49,12 +50,7 @@ internal sealed class VideoToolboxH264Encoder : IVideoEncoder
         ArgumentNullException.ThrowIfNull(frame);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (frame.Format != PixelFormat.Nv12 || frame.Width != Options.Width || frame.Height != Options.Height)
-        {
-            throw new ArgumentException(
-                $"Expected NV12 {Options.Width}x{Options.Height}, got {frame.Format} {frame.Width}x{frame.Height}.",
-                nameof(frame));
-        }
+        EncoderInput.Validate(frame, Options, message => new ArgumentException(message, nameof(frame)));
 
         var pixels = frame.GetPixels(out var stride);
         if (stride != frame.Width)

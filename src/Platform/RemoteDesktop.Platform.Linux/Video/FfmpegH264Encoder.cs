@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using FFmpeg.AutoGen;
 using RemoteDesktop.Abstractions.Media;
+using RemoteDesktop.Platform.Shared;
 using RemoteDesktop.Platform.Linux.Interop;
 
 namespace RemoteDesktop.Platform.Linux.Video;
@@ -133,11 +134,7 @@ public sealed unsafe class FfmpegH264Encoder : IVideoEncoder
         ArgumentNullException.ThrowIfNull(frame);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (frame.Format != PixelFormat.Nv12 || frame.Width != Options.Width || frame.Height != Options.Height)
-        {
-            throw new InvalidDataException(
-                $"This encoder takes NV12 at {Options.Width}x{Options.Height}; got {frame.Format} at {frame.Width}x{frame.Height}.");
-        }
+        EncoderInput.Validate(frame, Options, message => new InvalidDataException(message));
 
         var pixels = frame.GetPixels(out var stride);
         if (stride != frame.Width)
